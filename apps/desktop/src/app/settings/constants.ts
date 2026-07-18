@@ -41,8 +41,8 @@ export const PROVIDER_GROUPS: ProviderPrefix[] = [
   {
     prefix: 'NOUS_',
     name: 'Nous Portal',
-    description: 'Hosted Hermes & Nous-trained models',
-    docsUrl: 'https://portal.nousresearch.com',
+    description: 'Configured by Electric Sheep',
+    docsUrl: 'https://www.electricsheephq.com',
     priority: 0
   },
   {

@@ -144,6 +144,14 @@ export function GatewayConnectingOverlay() {
     }
   }, [phase, previewing])
 
+  // Managed Eva intentionally stops boot before a gateway exists when there is
+  // no Electric Sheep session yet. The router opens Settings → Gateway for the
+  // device-code flow; do not leave the initial connecting scrim over that
+  // enrollment surface.
+  if (boot.phase === 'renderer.enrollment' && !previewing) {
+    return null
+  }
+
   // Boot failed — BootFailureOverlay owns the screen; don't linger behind it.
   if (boot.error && !previewing) {
     return null

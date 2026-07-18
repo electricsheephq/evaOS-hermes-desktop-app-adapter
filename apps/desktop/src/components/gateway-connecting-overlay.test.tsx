@@ -125,6 +125,27 @@ describe('connecting overlay vs recovery surface', () => {
     expect(isRecoveryShown()).toBe(false)
   })
 
+  it('managed Eva enrollment leaves Settings reachable before a gateway exists', () => {
+    setGatewayState('idle')
+    $desktopBoot.set({
+      ...$desktopBoot.get(),
+      phase: 'renderer.enrollment',
+      progress: 100,
+      running: false,
+      visible: false
+    })
+
+    render(
+      <>
+        <GatewayConnectingOverlay />
+        <BootFailureOverlay />
+      </>
+    )
+
+    expect(isConnectingShown()).toBe(false)
+    expect(isRecoveryShown()).toBe(false)
+  })
+
   it('FIX: once the prolonged reconnect raises a recoverable boot error, the recovery overlay takes over', () => {
     // Mirrors what useGatewayBoot.scheduleReconnect() now does after ~45s of
     // failed post-boot reconnects: it calls failDesktopBoot(), flipping the UI

@@ -347,6 +347,7 @@ export function CommandPalette() {
   }, [open, pendingPage])
 
   const go = useCallback((path: string) => () => navigate(path), [navigate])
+  const managedEva = Boolean(window.hermesDesktop?.eva)
 
   // Step up one nested page (or back to the root list), clearing the filter so
   // the parent page doesn't reopen mid-search.
@@ -408,14 +409,18 @@ export function CommandPalette() {
             label: cc.nav.newChat.title,
             run: go(NEW_CHAT_ROUTE)
           },
-          {
-            action: 'view.showTerminal',
-            icon: Terminal,
-            id: 'nav-terminal',
-            keywords: ['terminal', 'shell', 'console'],
-            label: t.keybinds.actions['view.showTerminal'],
-            run: () => setTerminalTakeover(true)
-          },
+          ...(managedEva
+            ? []
+            : [
+                {
+                  action: 'view.showTerminal',
+                  icon: Terminal,
+                  id: 'nav-terminal',
+                  keywords: ['terminal', 'shell', 'console'],
+                  label: t.keybinds.actions['view.showTerminal'],
+                  run: () => setTerminalTakeover(true)
+                }
+              ]),
           {
             action: 'nav.settings',
             icon: Settings,
@@ -561,7 +566,7 @@ export function CommandPalette() {
         ]
       }
     ]
-  }, [go, settingsSectionLabel, t, worktrees])
+  }, [go, managedEva, settingsSectionLabel, t, worktrees])
 
   // The long, granular lists (settings fields, API keys, MCP servers, archived
   // chats) only surface once the user types — otherwise they'd bury the
