@@ -148,7 +148,10 @@ export function GatewayConnectingOverlay() {
   // no Electric Sheep session yet. The router opens Settings → Gateway for the
   // device-code flow; do not leave the initial connecting scrim over that
   // enrollment surface.
-  if (boot.phase === 'renderer.enrollment' && !previewing) {
+  const managedEnrollmentPending =
+    boot.phase === 'renderer.enrollment' || boot.phase === 'eva.sign-in-required'
+
+  if (managedEnrollmentPending && !previewing) {
     return null
   }
 

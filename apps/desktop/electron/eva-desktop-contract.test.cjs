@@ -85,6 +85,7 @@ test('Nous updater and editable gateway paths fail closed in the managed build',
   assert.match(gatewayBoot, /Sign in to Eva from Settings → Gateway/)
   assert.match(gatewayBoot, /navigate\(`\$\{SETTINGS_ROUTE\}\?tab=gateway`/)
   assert.match(connectingOverlay, /boot\.phase === 'renderer\.enrollment'/)
+  assert.match(connectingOverlay, /boot\.phase === 'eva\.sign-in-required'/)
   assert.match(onboarding, /if \(window\.hermesDesktop\?\.eva\)/)
   assert.match(gateway, /Local backends, custom/)
   assert.match(settings, /managedViews/)
