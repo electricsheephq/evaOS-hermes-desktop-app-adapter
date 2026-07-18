@@ -181,6 +181,7 @@ export function DesktopController() {
   const queryClient = useQueryClient()
   const location = useLocation()
   const navigate = useNavigate()
+  const managedEva = Boolean(window.hermesDesktop?.eva)
 
   const busyRef = useRef(false)
   const creatingSessionRef = useRef(false)
@@ -230,7 +231,7 @@ export function DesktopController() {
     toggleCommandCenter
   } = useOverlayRouting()
 
-  const terminalSidebarOpen = chatOpen && terminalTakeover
+  const terminalSidebarOpen = !managedEva && chatOpen && terminalTakeover
 
   const titlebarToolGroups = useGroupRegistry<TitlebarTool>()
   const statusbarItemGroups = useGroupRegistry<StatusbarItem>()
@@ -1041,7 +1042,9 @@ export function DesktopController() {
   // layer) so pane resize handles still paint above it. Terminals own their state
   // (incl. a snapshotted cwd) independent of the session, so switching sessions
   // never rebuilds or closes them; toggling the pane never rebuilds the shells.
-  const mainOverlays = <PersistentTerminal onAddSelectionToChat={composer.addTerminalSelectionAttachment} />
+  const mainOverlays = managedEva ? null : (
+    <PersistentTerminal onAddSelectionToChat={composer.addTerminalSelectionAttachment} />
+  )
 
   const overlays = (
     <>

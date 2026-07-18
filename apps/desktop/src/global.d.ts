@@ -55,6 +55,12 @@ declare global {
       probeConnectionConfig: (remoteUrl: string) => Promise<DesktopConnectionProbeResult>
       oauthLoginConnectionConfig: (remoteUrl: string) => Promise<DesktopOauthLoginResult>
       oauthLogoutConnectionConfig: (remoteUrl?: string) => Promise<DesktopOauthLogoutResult>
+      eva: {
+        status: () => Promise<EvaManagedStatus>
+        signIn: () => Promise<EvaManagedStatus>
+        signOut: () => Promise<{ ok: boolean }>
+        refresh: () => Promise<EvaManagedStatus>
+      }
       profile: {
         get: () => Promise<DesktopActiveProfile>
         // Persists the desktop's profile choice and relaunches the local
@@ -210,6 +216,20 @@ export interface DesktopMarketplaceSearchItem {
   publisher: string
   description: string
   installs: number
+}
+
+export interface EvaManagedStatus {
+  managed: true
+  productName: string
+  signedOut: boolean
+  customerId: string
+  email: string | null
+  desktopSessionExpiresAt: string | null
+  desktopSessionActive: boolean
+  runtimeSessionExpiresAt: string | null
+  runtimeSessionActive: boolean
+  agentId: string | null
+  updateChannel: string
 }
 
 export interface DesktopMarketplaceThemeFile {

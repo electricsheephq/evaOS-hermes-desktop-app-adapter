@@ -1,10 +1,10 @@
 {
-  "name": "hermes",
-  "productName": "Hermes",
+  "name": "eva-electric-sheep",
+  "productName": "Eva by Electric Sheep",
   "private": true,
-  "version": "0.17.0",
-  "description": "Native desktop shell for Hermes Agent.",
-  "author": "Nous Research",
+  "version": "0.1.0-beta.1",
+  "description": "Managed business desktop client for Electric Sheep Hermes agents.",
+  "author": "Electric Sheep",
   "type": "module",
   "main": "electron/main.cjs",
   "engines": {
@@ -37,7 +37,7 @@
     "test:desktop:nsis": "node scripts/test-desktop.mjs nsis",
     "test:desktop:existing": "node scripts/test-desktop.mjs existing",
     "test:desktop:fresh": "node scripts/test-desktop.mjs fresh",
-    "test:desktop:platforms": "node --test electron/bootstrap-platform.test.cjs electron/hardening.test.cjs electron/backend-env.test.cjs electron/backend-probes.test.cjs electron/backend-ready.test.cjs electron/bootstrap-runner.test.cjs electron/connection-config.test.cjs electron/dashboard-token.test.cjs electron/gateway-ws-probe.test.cjs electron/oauth-net-request.test.cjs electron/desktop-uninstall.test.cjs electron/session-windows.test.cjs electron/link-title-window.test.cjs electron/workspace-cwd.test.cjs electron/fs-read-dir.test.cjs electron/git-root.test.cjs electron/git-worktree-ops.test.cjs electron/windows-child-process.test.cjs electron/update-remote.test.cjs electron/update-count.test.cjs electron/update-rebuild.test.cjs electron/update-marker.test.cjs electron/update-relaunch.test.cjs electron/windows-user-env.test.cjs electron/wsl-clipboard-image.test.cjs electron/titlebar-overlay-width.test.cjs electron/window-state.test.cjs electron/zoom.test.cjs electron/windows-hermes-resolution.test.cjs electron/oauth-session-request.test.cjs",
+    "test:desktop:platforms": "node --test electron/bootstrap-platform.test.cjs electron/hardening.test.cjs electron/backend-env.test.cjs electron/backend-probes.test.cjs electron/backend-ready.test.cjs electron/bootstrap-runner.test.cjs electron/connection-config.test.cjs electron/dashboard-token.test.cjs electron/eva-desktop-contract.test.cjs electron/eva-managed.test.cjs electron/eva-ws-relay.test.cjs electron/gateway-ws-probe.test.cjs electron/oauth-net-request.test.cjs electron/desktop-uninstall.test.cjs electron/session-windows.test.cjs electron/link-title-window.test.cjs electron/workspace-cwd.test.cjs electron/fs-read-dir.test.cjs electron/git-root.test.cjs electron/git-worktree-ops.test.cjs electron/windows-child-process.test.cjs electron/update-remote.test.cjs electron/update-count.test.cjs electron/update-rebuild.test.cjs electron/update-marker.test.cjs electron/update-relaunch.test.cjs electron/windows-user-env.test.cjs electron/wsl-clipboard-image.test.cjs electron/titlebar-overlay-width.test.cjs electron/window-state.test.cjs electron/zoom.test.cjs electron/windows-hermes-resolution.test.cjs electron/oauth-session-request.test.cjs",
     "typecheck": "tsc -p . --noEmit",
     "lint": "eslint src/ electron/",
     "lint:fix": "eslint src/ electron/ --fix",
@@ -148,19 +148,19 @@
   },
   "build": {
     "electronVersion": "40.10.2",
-    "appId": "com.nousresearch.hermes",
-    "productName": "Hermes",
-    "executableName": "Hermes",
+    "appId": "com.electricsheephq.eva.desktop",
+    "productName": "Eva",
+    "executableName": "Eva",
     "protocols": [
       {
-        "name": "Hermes Protocol",
+        "name": "Eva Protocol",
         "schemes": [
-          "hermes"
+          "eva"
         ]
       }
     ],
-    "artifactName": "Hermes-${version}-${os}-${arch}.${ext}",
-    "icon": "assets/icon",
+    "artifactName": "Eva-Electric-Sheep-${version}-${arch}.${ext}",
+    "icon": "assets/eva",
     "directories": {
       "output": "release"
     },
@@ -186,25 +186,28 @@
       {
         "from": "assets/icon.ico",
         "to": "icon.ico"
+      },
+      {
+        "from": "../../LICENSE",
+        "to": "licenses/Hermes-Agent-MIT-LICENSE.txt"
       }
     ],
     "asar": true,
-    "afterSign": "scripts/notarize.cjs",
     "asarUnpack": [
       "**/*.node",
       "**/prebuilds/**",
       "dist/**"
     ],
     "mac": {
-      "category": "public.app-category.developer-tools",
+      "category": "public.app-category.productivity",
       "entitlements": "electron/entitlements.mac.plist",
       "entitlementsInherit": "electron/entitlements.mac.inherit.plist",
       "extendInfo": {
-        "CFBundleDisplayName": "Hermes",
-        "CFBundleExecutable": "Hermes",
-        "CFBundleName": "Hermes",
-        "NSAudioCaptureUsageDescription": "Hermes uses audio capture for voice conversations.",
-        "NSMicrophoneUsageDescription": "Hermes uses the microphone for voice input and voice conversations."
+        "CFBundleDisplayName": "Eva by Electric Sheep",
+        "CFBundleExecutable": "Eva",
+        "CFBundleName": "Eva",
+        "NSAudioCaptureUsageDescription": "Eva uses audio capture for voice conversations.",
+        "NSMicrophoneUsageDescription": "Eva uses the microphone for voice input and voice conversations."
       },
       "gatekeeperAssess": false,
       "hardenedRuntime": true,
@@ -214,7 +217,7 @@
       ]
     },
     "dmg": {
-      "title": "Install Hermes",
+      "title": "Install Eva by Electric Sheep",
       "backgroundColor": "#f5f5f7",
       "iconSize": 96,
       "window": {
@@ -236,7 +239,7 @@
       ]
     },
     "win": {
-      "legalTrademarks": "Hermes",
+      "legalTrademarks": "Eva by Electric Sheep",
       "target": [
         "nsis",
         "msi"
@@ -244,9 +247,9 @@
       "signAndEditExecutable": false
     },
     "linux": {
-      "category": "Development",
-      "maintainer": "Nous Research <support@nousresearch.com>",
-      "synopsis": "Native desktop shell for Hermes Agent.",
+      "category": "Office",
+      "maintainer": "Electric Sheep",
+      "synopsis": "Managed business client for Electric Sheep Hermes agents.",
       "target": [
         "AppImage",
         "deb",
@@ -257,8 +260,8 @@
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "perMachine": false,
-      "shortcutName": "Hermes",
-      "uninstallDisplayName": "Hermes",
+      "shortcutName": "Eva",
+      "uninstallDisplayName": "Eva by Electric Sheep",
       "warningsAsErrors": false
     }
   }
