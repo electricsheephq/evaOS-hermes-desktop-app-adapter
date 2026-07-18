@@ -155,7 +155,19 @@ function useApiKeyCatalog(): ApiKeyOption[] {
 // → surface-out (520ms, held back by [transition-delay:660ms]). Finalize after.
 const ONBOARDING_EXIT_MS = 1180
 
-export function DesktopOnboardingOverlay({ enabled, onCompleted, requestGateway }: DesktopOnboardingOverlayProps) {
+export function DesktopOnboardingOverlay(props: DesktopOnboardingOverlayProps) {
+  // Managed Eva authenticates through Electric Sheep and connects to the
+  // administrator-bound remote agent. The upstream provider picker is a local
+  // runtime flow, so mounting it here would cover the managed Gateway sign-in
+  // surface before a remote session exists.
+  if (window.hermesDesktop?.eva) {
+    return null
+  }
+
+  return <UnmanagedDesktopOnboardingOverlay {...props} />
+}
+
+function UnmanagedDesktopOnboardingOverlay({ enabled, onCompleted, requestGateway }: DesktopOnboardingOverlayProps) {
   const { t } = useI18n()
   const onboarding = useStore($desktopOnboarding)
   const boot = useStore($desktopBoot)
