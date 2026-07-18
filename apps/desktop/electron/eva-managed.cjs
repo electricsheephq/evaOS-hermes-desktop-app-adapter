@@ -1,4 +1,5 @@
 const crypto = require('node:crypto')
+const path = require('node:path')
 
 const EVA_MANAGED_POLICY = Object.freeze({
   schemaVersion: 'evaos.eva_desktop_managed.v1',
@@ -136,6 +137,19 @@ function validateEvaManagedQueryValue(key, value, options = {}) {
     if (!value.startsWith('/') || value.length > 4096 || value.includes('\\') || hasAsciiControl(value)) {
       throw new EvaBrokerError('Eva blocked an invalid managed file path.', 400, 'managed-policy')
     }
+    const agentId = String(options.agentId || '')
+    if (!EVA_MANAGED_POLICY.allowedAgentIds.includes(agentId)) {
+      throw new EvaBrokerError('Eva could not bind this file request to an assigned agent.', 403, 'managed-policy')
+    }
+    const resolved = path.posix.resolve(value)
+    const roots = [`/srv/evaos/agents/${agentId}`, `/srv/evaos/hermes-managed/${agentId}`]
+    if (!roots.some(root => resolved === root || resolved.startsWith(`${root}/`))) {
+      throw new EvaBrokerError(
+        'Eva blocked a file request outside the assigned agent workspace.',
+        403,
+        'managed-policy'
+      )
+    }
     return
   }
   if (!value || value.length > 512 || hasAsciiControl(value)) {
@@ -168,7 +182,7 @@ function assertPlainManagedBody(body) {
   }
 }
 
-function assertEvaManagedApiRequestAllowed(request) {
+function assertEvaManagedApiRequestAllowed(request, options = {}) {
   const method = String(request?.method || 'GET').toUpperCase()
   if (!['DELETE', 'GET', 'HEAD', 'PATCH'].includes(method)) {
     throw new EvaBrokerError(
@@ -194,7 +208,10 @@ function assertEvaManagedApiRequestAllowed(request) {
     if (request?.body !== undefined && request.body !== null) {
       throw new EvaBrokerError('Eva blocked a body on a read-only request.', 400, 'managed-policy')
     }
-    const query = normalizeEvaManagedQuery(parsed, route.query, route)
+    if (/^\/api\/fs\/(?:list|read-data-url|read-text)$/.test(pathname) && !parsed.searchParams.has('path')) {
+      throw new EvaBrokerError('Eva requires an assigned workspace path for file reads.', 400, 'managed-policy')
+    }
+    const query = normalizeEvaManagedQuery(parsed, route.query, { ...route, agentId: options.agentId })
     return { method, pathname, path: `${pathname}${query ? `?${query}` : ''}` }
   }
 
@@ -468,7 +485,7 @@ async function pollEvaDeviceCode(deviceCode, options = {}) {
     try {
       return await claimEvaDeviceCode(deviceCode, { ...options, now: now() })
     } catch (error) {
-      if (!(error instanceof EvaBrokerError) || error.statusCode !== 401) {
+      if (!(error instanceof EvaBrokerError) || error.statusCode !== 401 || error.code !== 'broker-rejected') {
         throw error
       }
     }

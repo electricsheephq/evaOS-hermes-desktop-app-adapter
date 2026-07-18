@@ -35,6 +35,7 @@ export function BootFailureOverlay() {
   const [logs, setLogs] = useState<string[]>([])
   const [showLogs, setShowLogs] = useState(false)
   const [remoteReauth, setRemoteReauth] = useState<RemoteReauth | null>(null)
+  const managedEva = Boolean(window.hermesDesktop?.eva)
 
   const visible = Boolean(boot.error) && !boot.running
   // While first-run onboarding owns the picker/flow we let it surface its own
@@ -47,17 +48,22 @@ export function BootFailureOverlay() {
       return
     }
 
-    void window.hermesDesktop
-      ?.getRecentLogs()
+    const getRecentLogs = window.hermesDesktop?.getRecentLogs
+
+    if (!getRecentLogs || managedEva) {
+      return
+    }
+
+    void getRecentLogs()
       .then(res => setLogs(res.lines ?? []))
       .catch(() => undefined)
-  }, [visible])
+  }, [managedEva, visible])
 
   // Resolve whether this boot failure is a remote-gateway reauth so we can
   // offer the actionable "Sign in" path instead of the local-only recovery
   // buttons. Runs whenever the overlay becomes visible.
   useEffect(() => {
-    if (!visible) {
+    if (!visible || managedEva) {
       setRemoteReauth(null)
 
       return
@@ -104,7 +110,7 @@ export function BootFailureOverlay() {
     return () => {
       cancelled = true
     }
-  }, [visible])
+  }, [managedEva, visible])
 
   if (!visible || suppressed) {
     return null
@@ -112,20 +118,32 @@ export function BootFailureOverlay() {
 
   const retry = async () => {
     setBusy('retry')
-    await window.hermesDesktop?.resetBootstrap().catch(() => undefined)
+
+    if (managedEva) {
+      await window.hermesDesktop.eva.refresh().catch(() => undefined)
+    } else {
+      await window.hermesDesktop?.resetBootstrap?.().catch(() => undefined)
+    }
+
+    window.location.reload()
+  }
+
+  const signInManaged = async () => {
+    setBusy('signin')
+    await window.hermesDesktop.eva.signIn().catch(() => undefined)
     window.location.reload()
   }
 
   const repair = async () => {
     setBusy('repair')
-    await window.hermesDesktop?.repairBootstrap().catch(() => undefined)
+    await window.hermesDesktop?.repairBootstrap?.().catch(() => undefined)
     window.location.reload()
   }
 
   const switchToLocalGateway = async () => {
     setBusy('local')
     // applyConnectionConfig reloads the window from the main process.
-    await window.hermesDesktop?.applyConnectionConfig({ mode: 'local' }).catch(() => undefined)
+    await window.hermesDesktop?.applyConnectionConfig?.({ mode: 'local' }).catch(() => undefined)
     setBusy(null)
   }
 
@@ -163,7 +181,7 @@ export function BootFailureOverlay() {
     }
   }
 
-  const openLogs = () => void window.hermesDesktop?.revealLogs().catch(() => undefined)
+  const openLogs = () => void window.hermesDesktop?.revealLogs?.().catch(() => undefined)
   const copy = t.boot.failure
 
   const label = signInLabel(remoteReauth, {
@@ -205,20 +223,29 @@ export function BootFailureOverlay() {
                   {copy.retry}
                 </Button>
               )}
-              {!remoteReauth ? (
+              {managedEva ? (
+                <Button disabled={Boolean(busy)} onClick={() => void signInManaged()} variant="secondary">
+                  {busy === 'signin' ? <Loader2 className="animate-spin" /> : <LogIn />}
+                  {copy.signInToRemoteGateway}
+                </Button>
+              ) : !remoteReauth ? (
                 <Button disabled={Boolean(busy)} onClick={() => void repair()} variant="secondary">
                   {busy === 'repair' ? <Loader2 className="animate-spin" /> : <Wrench />}
                   {copy.repairInstall}
                 </Button>
               ) : null}
-              <Button disabled={Boolean(busy)} onClick={() => void switchToLocalGateway()} variant="secondary">
-                {busy === 'local' ? <Loader2 className="animate-spin" /> : null}
-                {copy.useLocalGateway}
-              </Button>
-              <Button onClick={openLogs} variant="ghost">
-                <FileText />
-                {copy.openLogs}
-              </Button>
+              {!managedEva ? (
+                <>
+                  <Button disabled={Boolean(busy)} onClick={() => void switchToLocalGateway()} variant="secondary">
+                    {busy === 'local' ? <Loader2 className="animate-spin" /> : null}
+                    {copy.useLocalGateway}
+                  </Button>
+                  <Button onClick={openLogs} variant="ghost">
+                    <FileText />
+                    {copy.openLogs}
+                  </Button>
+                </>
+              ) : null}
             </div>
             <p className="text-xs text-muted-foreground">{remoteReauth ? copy.remoteSignInHint : copy.repairHint}</p>
           </div>

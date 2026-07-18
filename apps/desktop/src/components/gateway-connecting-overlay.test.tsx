@@ -168,6 +168,58 @@ describe('connecting overlay vs recovery surface', () => {
     expect(isRecoveryShown()).toBe(false)
   })
 
+  it('managed Eva hard failures expose only managed retry and sign-in recovery', () => {
+    const originalDesktop = window.hermesDesktop
+    window.hermesDesktop = {
+      eva: {
+        refresh: async () => ({
+          managed: true,
+          productName: 'Eva by Electric Sheep',
+          signedOut: false,
+          customerId: 'jackie-david',
+          email: null,
+          desktopSessionExpiresAt: null,
+          desktopSessionActive: false,
+          runtimeSessionExpiresAt: null,
+          runtimeSessionActive: false,
+          agentId: null,
+          updateChannel: 'managed-beta'
+        }),
+        signIn: async () => ({
+          managed: true,
+          productName: 'Eva by Electric Sheep',
+          signedOut: false,
+          customerId: 'jackie-david',
+          email: null,
+          desktopSessionExpiresAt: null,
+          desktopSessionActive: false,
+          runtimeSessionExpiresAt: null,
+          runtimeSessionActive: false,
+          agentId: null,
+          updateChannel: 'managed-beta'
+        })
+      }
+    } as unknown as Window['hermesDesktop']
+    $desktopBoot.set({
+      ...$desktopBoot.get(),
+      error: 'Managed backend unavailable',
+      running: false,
+      visible: true
+    })
+
+    try {
+      render(<BootFailureOverlay />)
+      expect(screen.getByRole('button', { name: /retry/i })).toBeTruthy()
+      expect(screen.getByRole('button', { name: /sign in/i })).toBeTruthy()
+      expect(screen.queryByRole('button', { name: /use local gateway/i })).toBeNull()
+      expect(screen.queryByRole('button', { name: /repair/i })).toBeNull()
+      expect(screen.queryByRole('button', { name: /open logs/i })).toBeNull()
+    } finally {
+      cleanup()
+      window.hermesDesktop = originalDesktop
+    }
+  })
+
   it('FIX: once the prolonged reconnect raises a recoverable boot error, the recovery overlay takes over', () => {
     // Mirrors what useGatewayBoot.scheduleReconnect() now does after ~45s of
     // failed post-boot reconnects: it calls failDesktopBoot(), flipping the UI

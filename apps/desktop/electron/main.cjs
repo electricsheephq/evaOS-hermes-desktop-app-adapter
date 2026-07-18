@@ -3967,6 +3967,9 @@ async function waitForHermes(baseUrl, token) {
       await fetchJson(`${baseUrl}/api/status`, token)
       return
     } catch (error) {
+      if (error?.statusCode === 401 || error?.statusCode === 403) {
+        throw error
+      }
       lastError = error
       await new Promise(resolve => setTimeout(resolve, 500))
     }
@@ -5012,8 +5015,17 @@ async function ensureEvaRuntimeEnrollment(options = {}) {
 }
 
 async function resolveEvaManagedBackend(options = {}) {
-  const runtime = await ensureEvaRuntimeEnrollment(options)
-  await waitForHermes(runtime.baseUrl, runtime.token)
+  let runtime = await ensureEvaRuntimeEnrollment(options)
+  try {
+    await waitForHermes(runtime.baseUrl, runtime.token)
+  } catch (error) {
+    if (error?.statusCode !== 401) {
+      throw error
+    }
+    clearEvaRuntimeEnrollment()
+    runtime = await ensureEvaRuntimeEnrollment({ force: true })
+    await waitForHermes(runtime.baseUrl, runtime.token)
+  }
   return {
     authMode: 'token',
     baseUrl: 'eva-managed://jackie-david',
@@ -5085,8 +5097,8 @@ async function resetEvaRendererSessions() {
 }
 
 async function requestEvaManagedApi(request, retry = true) {
-  const allowed = assertEvaManagedApiRequestAllowed(request)
   const runtime = await ensureEvaRuntimeEnrollment()
+  const allowed = assertEvaManagedApiRequestAllowed(request, { agentId: runtime.agentId })
   const timeoutMs = resolveTimeoutMs(request?.timeoutMs, DEFAULT_FETCH_TIMEOUT_MS)
   try {
     return await fetchJson(`${runtime.baseUrl}${allowed.path}`, runtime.token, {
@@ -5100,8 +5112,9 @@ async function requestEvaManagedApi(request, retry = true) {
     }
     clearEvaRuntimeEnrollment()
     const refreshed = await ensureEvaRuntimeEnrollment({ force: true })
-    return fetchJson(`${refreshed.baseUrl}${allowed.path}`, refreshed.token, {
-      method: allowed.method,
+    const refreshedAllowed = assertEvaManagedApiRequestAllowed(request, { agentId: refreshed.agentId })
+    return fetchJson(`${refreshed.baseUrl}${refreshedAllowed.path}`, refreshed.token, {
+      method: refreshedAllowed.method,
       body: request?.body,
       timeoutMs
     })

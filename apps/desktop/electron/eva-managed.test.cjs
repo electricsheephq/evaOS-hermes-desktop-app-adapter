@@ -72,6 +72,30 @@ test('device-code polling treats an unregistered code as pending and then accept
   assert.equal(result.email, 'employee@example.invalid')
 })
 
+test('device-code polling fails immediately on a malformed successful claim', async () => {
+  let requests = 0
+  let sleeps = 0
+  await assert.rejects(
+    pollEvaDeviceCode('A'.repeat(32), {
+      now: () => 1000,
+      timeoutMs: 30,
+      sleep: async () => {
+        sleeps += 1
+      },
+      fetchImpl: async () => {
+        requests += 1
+        return new Response(JSON.stringify({ desktop_session_expires_at: FUTURE }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' }
+        })
+      }
+    }),
+    error => error instanceof EvaBrokerError && error.code === 'invalid-session'
+  )
+  assert.equal(requests, 1)
+  assert.equal(sleeps, 0)
+})
+
 test('runtime launch sends the fixed canary contract and never submits an agent id', async () => {
   let observed = null
   const result = await launchEvaHermesRuntime('eds_desktop_session', {
@@ -150,6 +174,45 @@ test('managed backend allows ordinary agent traffic and read-only capability ins
       pathname: '/api/sessions/session-1'
     }
   )
+})
+
+test('managed file reads stay inside the assigned agent workspace and admin-files roots', () => {
+  assert.deepEqual(
+    assertEvaManagedApiRequestAllowed(
+      { path: '/api/fs/read-text?path=%2Fsrv%2Fevaos%2Fagents%2Fjane%2FWelcome.md' },
+      { agentId: 'jane' }
+    ),
+    {
+      method: 'GET',
+      path: '/api/fs/read-text?path=%2Fsrv%2Fevaos%2Fagents%2Fjane%2FWelcome.md',
+      pathname: '/api/fs/read-text'
+    }
+  )
+  assert.deepEqual(
+    assertEvaManagedApiRequestAllowed(
+      { path: '/api/fs/list?path=%2Fsrv%2Fevaos%2Fhermes-managed%2Fjackie' },
+      { agentId: 'jackie' }
+    ),
+    {
+      method: 'GET',
+      path: '/api/fs/list?path=%2Fsrv%2Fevaos%2Fhermes-managed%2Fjackie',
+      pathname: '/api/fs/list'
+    }
+  )
+
+  const denied = [
+    [{ path: '/api/fs/read-text?path=%2Fvar%2Flib%2Fevaos%2Fhermes%2Fjane%2F.env' }, { agentId: 'jane' }],
+    [{ path: '/api/fs/read-text?path=%2Fsrv%2Fevaos%2Fagents%2Fjackie%2FWelcome.md' }, { agentId: 'jane' }],
+    [{ path: '/api/fs/read-text?path=%2Fsrv%2Fevaos%2Fagents%2Fjane%2F..%2Fjackie%2FWelcome.md' }, { agentId: 'jane' }],
+    [{ path: '/api/fs/read-text?path=%2Fsrv%2Fevaos%2Fagents%2Fjane%2FWelcome.md' }, {}],
+    [{ path: '/api/fs/read-text' }, { agentId: 'jane' }]
+  ]
+  for (const [request, options] of denied) {
+    assert.throws(
+      () => assertEvaManagedApiRequestAllowed(request, options),
+      error => error instanceof EvaBrokerError && error.code === 'managed-policy'
+    )
+  }
 })
 
 test('managed backend blocks employee capability and runtime-policy mutations', () => {
@@ -257,9 +320,7 @@ test('managed enrollment rejects wrong customers, unknown agents, and untrusted 
 })
 
 test('Eva deep-link callback requires the exact in-flight auth state', () => {
-  const raw =
-    `eva://auth/callback?device_code=${'A'.repeat(32)}` +
-    '&desktop_auth_state=state-12345678'
+  const raw = `eva://auth/callback?device_code=${'A'.repeat(32)}` + '&desktop_auth_state=state-12345678'
   assert.equal(parseEvaDesktopAuthCallback(raw, 'state-12345678').deviceCode, 'A'.repeat(32))
   assert.throws(
     () => parseEvaDesktopAuthCallback(raw, 'state-other-123'),
