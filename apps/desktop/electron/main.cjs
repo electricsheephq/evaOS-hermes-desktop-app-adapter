@@ -4943,26 +4943,27 @@ async function beginEvaDesktopSignIn() {
   return signInTask
 }
 
+function requireEvaDesktopSignIn() {
+  writeEvaManagedState(emptyEvaManagedState(true))
+  updateBootProgress(
+    {
+      phase: 'eva.sign-in-required',
+      message: 'Sign in to Eva from Settings → Gateway.',
+      progress: 8,
+      running: false,
+      error: null
+    },
+    { allowDecrease: true }
+  )
+  throw new EvaBrokerError('Sign in to Eva from Settings → Gateway.', 401, 'sign-in-required')
+}
+
 async function ensureEvaDesktopSession() {
   const state = readEvaManagedState()
   if (state.desktop && !expiresSoon(state.desktop.expiresAt, 0)) {
     return state.desktop
   }
-  if (state.signedOut) {
-    updateBootProgress(
-      {
-        phase: 'eva.sign-in-required',
-        message: 'Sign in to Eva from Settings → Gateway.',
-        progress: 8,
-        running: false,
-        error: null
-      },
-      { allowDecrease: true }
-    )
-    throw new EvaBrokerError('Sign in to Eva from Settings → Gateway.', 401, 'sign-in-required')
-  }
-  writeEvaManagedState(emptyEvaManagedState())
-  return beginEvaDesktopSignIn()
+  return requireEvaDesktopSignIn()
 }
 
 async function ensureEvaRuntimeEnrollment(options = {}) {
@@ -4985,7 +4986,7 @@ async function ensureEvaRuntimeEnrollment(options = {}) {
   }
 
   const enrollmentTask = (async () => {
-    let desktop = await ensureEvaDesktopSession()
+    const desktop = await ensureEvaDesktopSession()
     assertEvaGeneration(authGeneration, runtimeGeneration)
     await advanceBootProgress('eva.enroll', 'Resolving your assigned Hermes agent', 26)
     let runtime
@@ -4996,10 +4997,7 @@ async function ensureEvaRuntimeEnrollment(options = {}) {
         throw error
       }
       assertEvaGeneration(authGeneration, runtimeGeneration)
-      writeEvaManagedState(emptyEvaManagedState())
-      desktop = await beginEvaDesktopSignIn()
-      assertEvaGeneration(authGeneration, runtimeGeneration)
-      runtime = await launchEvaHermesRuntime(desktop.token)
+      return requireEvaDesktopSignIn()
     }
     assertEvaGeneration(authGeneration, runtimeGeneration)
     writeEvaManagedState({ desktop, runtime })

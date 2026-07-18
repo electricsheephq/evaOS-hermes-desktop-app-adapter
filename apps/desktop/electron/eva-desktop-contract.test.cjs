@@ -31,6 +31,17 @@ test('managed build makes local startup unreachable and consumes auth callbacks 
   assert.match(start, /resolveEvaManagedBackend/)
   assert.doesNotMatch(start, /resolveHermesBackend|ensureRuntime|spawn/)
   assert.match(main, /phase: 'eva\.sign-in-required'/)
+  const ensureSession = main.slice(
+    main.indexOf('async function ensureEvaDesktopSession()'),
+    main.indexOf('async function ensureEvaRuntimeEnrollment')
+  )
+  const explicitSignIn = main.slice(
+    main.indexOf('async function signInEvaManagedDesktop()'),
+    main.indexOf('async function resetEvaRendererSessions')
+  )
+  assert.match(ensureSession, /requireEvaDesktopSignIn\(\)/)
+  assert.doesNotMatch(ensureSession, /beginEvaDesktopSignIn\(\)/)
+  assert.match(explicitSignIn, /beginEvaDesktopSignIn\(\)/)
   assert.match(main, /parsed\.hostname === 'auth'/)
   assert.match(main, /completeEvaDesktopCallback/)
   assert.match(main, /wsUrl: await getEvaWsRelay\(\)\.mintTicket\(\)/)
