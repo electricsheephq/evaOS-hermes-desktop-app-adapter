@@ -107,7 +107,7 @@ test('runtime launch sends the fixed canary contract and never submits an agent 
           runtime: 'hermes',
           customer_id: 'jackie-david',
           remote_backend: {
-            base_url: 'https://jackie-david.ecs.electricsheephq.com/',
+            base_url: 'https://hermes-jackie-david.ecs.electricsheephq.com/',
             session_token: 'opaque-runtime-session',
             expires_at: FUTURE,
             agent_id: 'jane'
@@ -129,11 +129,11 @@ test('runtime launch sends the fixed canary contract and never submits an agent 
   })
   assert.equal(Object.hasOwn(observed.body, 'agent_id'), false)
   assert.equal(result.agentId, 'jane')
-  assert.equal(result.baseUrl, 'https://jackie-david.ecs.electricsheephq.com')
+  assert.equal(result.baseUrl, 'https://hermes-jackie-david.ecs.electricsheephq.com')
 })
 
 test('managed WebSocket transport uses only the ws-proxy Eva session parameter', () => {
-  const url = new URL(buildEvaManagedWsUrl('https://jackie-david.ecs.electricsheephq.com', 'opaque-token'))
+  const url = new URL(buildEvaManagedWsUrl('https://hermes-jackie-david.ecs.electricsheephq.com', 'opaque-token'))
   assert.equal(url.protocol, 'wss:')
   assert.equal(url.pathname, '/api/ws')
   assert.equal(url.searchParams.get('eva_session'), 'opaque-token')
@@ -276,7 +276,7 @@ test('managed enrollment rejects wrong customers, unknown agents, and untrusted 
     runtime: 'hermes',
     customer_id: 'jackie-david',
     remote_backend: {
-      base_url: 'https://jackie-david.ecs.electricsheephq.com',
+      base_url: 'https://hermes-jackie-david.ecs.electricsheephq.com',
       session_token: 'opaque-runtime-session',
       expires_at: FUTURE,
       agent_id: 'jackie'
@@ -305,8 +305,8 @@ test('managed enrollment rejects wrong customers, unknown agents, and untrusted 
   )
   for (const baseUrl of [
     'https://other-customer.ecs.electricsheephq.com',
-    'https://jackie-david.ecs.electricsheephq.com/tenant',
-    'https://jackie-david.ecs.electricsheephq.com.evil.invalid'
+    'https://hermes-jackie-david.ecs.electricsheephq.com/tenant',
+    'https://hermes-jackie-david.ecs.electricsheephq.com.evil.invalid'
   ]) {
     assert.throws(
       () =>

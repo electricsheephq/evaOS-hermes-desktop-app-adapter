@@ -5,7 +5,7 @@ const test = require('node:test')
 
 const { createEvaWsRelay } = require('./eva-ws-relay.cjs')
 
-const BASE_URL = 'https://jackie-david.ecs.electricsheephq.com'
+const BASE_URL = 'https://hermes-jackie-david.ecs.electricsheephq.com'
 
 function fakeUpstream(statusCode = 101) {
   let observed = ''
