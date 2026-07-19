@@ -16,7 +16,7 @@ const EVA_MANAGED_POLICY = Object.freeze({
   loginTimeoutMs: 180_000,
   runtimeRefreshSkewMs: 60_000,
   allowedAgentIds: Object.freeze(['jane', 'jackie']),
-  allowedRuntimeOrigins: Object.freeze(['https://jackie-david.ecs.electricsheephq.com'])
+  allowedRuntimeOrigins: Object.freeze(['https://hermes-jackie-david.ecs.electricsheephq.com'])
 })
 
 const EVA_MANAGED_READ_ROUTES = Object.freeze([
