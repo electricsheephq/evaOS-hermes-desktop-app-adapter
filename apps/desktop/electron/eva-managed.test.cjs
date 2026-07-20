@@ -9,6 +9,7 @@ const {
   buildEvaManagedWsUrl,
   launchEvaHermesRuntime,
   makeDeviceCode,
+  managedUpdateResponse,
   normalizeHermesEnrollment,
   parseEvaDesktopAuthCallback,
   pollEvaDeviceCode,
@@ -22,15 +23,16 @@ test('managed policy is a remote-only Electric Sheep canary with no Nous endpoin
   assert.equal(EVA_MANAGED_POLICY.customerId, 'jackie-david')
   assert.equal(EVA_MANAGED_POLICY.runtime, 'hermes')
   assert.equal(EVA_MANAGED_POLICY.updateChannel, 'managed-beta')
+  assert.deepEqual(EVA_MANAGED_POLICY.allowedAgentIds, ['jane', 'louis', 'regan'])
   assert.doesNotMatch(serialized, /nousresearch|portal\.nous|github\.com/i)
 })
 
-test('Eva auth URL carries a high-entropy fallback code and state but no agent selector', () => {
+test('evaOS Agent auth URL carries a high-entropy fallback code and state but no agent selector', () => {
   const deviceCode = makeDeviceCode({ randomUUID: () => '12345678-1234-4abc-9def-1234567890ab' })
   const url = new URL(buildEvaDesktopAuthUrl(deviceCode, 'state-12345678'))
   assert.equal(deviceCode, '1234567812344ABC9DEF1234567890AB')
   assert.equal(url.origin + url.pathname, EVA_MANAGED_POLICY.dashboardAuthUrl)
-  assert.equal(url.searchParams.get('callback_scheme'), 'eva')
+  assert.equal(url.searchParams.get('callback_scheme'), 'evaos-agent')
   assert.equal(url.searchParams.get('fresh'), deviceCode)
   assert.equal(url.searchParams.get('desktop_auth_state'), 'state-12345678')
   assert.equal(url.searchParams.get('switch_account'), '1')
@@ -190,12 +192,12 @@ test('managed file reads stay inside the assigned agent workspace and admin-file
   )
   assert.deepEqual(
     assertEvaManagedApiRequestAllowed(
-      { path: '/api/fs/list?path=%2Fsrv%2Fevaos%2Fhermes-managed%2Fjackie' },
-      { agentId: 'jackie' }
+      { path: '/api/fs/list?path=%2Fsrv%2Fevaos%2Fhermes-managed%2Flouis' },
+      { agentId: 'louis' }
     ),
     {
       method: 'GET',
-      path: '/api/fs/list?path=%2Fsrv%2Fevaos%2Fhermes-managed%2Fjackie',
+      path: '/api/fs/list?path=%2Fsrv%2Fevaos%2Fhermes-managed%2Flouis',
       pathname: '/api/fs/list'
     }
   )
@@ -279,10 +281,10 @@ test('managed enrollment rejects wrong customers, unknown agents, and untrusted 
       base_url: 'https://hermes-jackie-david.ecs.electricsheephq.com',
       session_token: 'opaque-runtime-session',
       expires_at: FUTURE,
-      agent_id: 'jackie'
+      agent_id: 'louis'
     }
   }
-  assert.equal(normalizeHermesEnrollment(payload).agentId, 'jackie')
+  assert.equal(normalizeHermesEnrollment(payload).agentId, 'louis')
   assert.throws(
     () => normalizeHermesEnrollment({ ...payload, customer_id: 'another-customer' }),
     error => error instanceof EvaBrokerError && error.code === 'wrong-customer'
@@ -319,8 +321,8 @@ test('managed enrollment rejects wrong customers, unknown agents, and untrusted 
   }
 })
 
-test('Eva deep-link callback requires the exact in-flight auth state', () => {
-  const raw = `eva://auth/callback?device_code=${'A'.repeat(32)}` + '&desktop_auth_state=state-12345678'
+test('evaOS Agent deep-link callback requires the exact in-flight auth state', () => {
+  const raw = `evaos-agent://auth/callback?device_code=${'A'.repeat(32)}` + '&desktop_auth_state=state-12345678'
   assert.equal(parseEvaDesktopAuthCallback(raw, 'state-12345678').deviceCode, 'A'.repeat(32))
   assert.throws(
     () => parseEvaDesktopAuthCallback(raw, 'state-other-123'),
@@ -329,7 +331,7 @@ test('Eva deep-link callback requires the exact in-flight auth state', () => {
   assert.throws(
     () =>
       parseEvaDesktopAuthCallback(
-        `eva://auth/callback?device_code=${'A'.repeat(32)}&desktop_session=leaked&desktop_auth_state=state-12345678`,
+        `evaos-agent://auth/callback?device_code=${'A'.repeat(32)}&desktop_session=leaked&desktop_auth_state=state-12345678`,
         'state-12345678'
       ),
     error => error instanceof EvaBrokerError && error.code === 'invalid-callback'
@@ -337,6 +339,28 @@ test('Eva deep-link callback requires the exact in-flight auth state', () => {
   assert.throws(
     () => parseEvaDesktopAuthCallback(`${raw}&blueprint=unexpected`, 'state-12345678'),
     error => error instanceof EvaBrokerError && error.code === 'invalid-callback'
+  )
+})
+
+test('managed updater responses are static and cannot call network, Git, or process APIs', () => {
+  const check = managedUpdateResponse('check', 1234)
+  const apply = managedUpdateResponse('apply', 1234)
+  const implementation = managedUpdateResponse.toString()
+
+  assert.deepEqual(check, {
+    supported: false,
+    branch: 'managed-beta',
+    message: 'Updates are managed by Electric Sheep.',
+    fetchedAt: 1234
+  })
+  assert.deepEqual(apply, {
+    ok: false,
+    error: 'managed-beta',
+    message: 'Updates are managed by Electric Sheep.'
+  })
+  assert.doesNotMatch(
+    implementation,
+    /fetch\s*\(|https?:|spawn\s*\(|exec(?:File|Sync)?\s*\(|\bgit\b|ls-remote|nousresearch/i
   )
 })
 

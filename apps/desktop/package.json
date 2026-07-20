@@ -1,9 +1,9 @@
 {
-  "name": "eva-electric-sheep",
-  "productName": "Eva by Electric Sheep",
+  "name": "evaos-agent",
+  "productName": "evaOS Agent",
   "private": true,
-  "version": "0.1.0-beta.1",
-  "description": "Managed business desktop client for Electric Sheep Hermes agents.",
+  "version": "0.2.0-beta.1",
+  "description": "Managed business agent client by Electric Sheep.",
   "author": "Electric Sheep",
   "type": "module",
   "main": "electron/main.cjs",
@@ -148,18 +148,18 @@
   },
   "build": {
     "electronVersion": "40.10.2",
-    "appId": "com.electricsheephq.eva.desktop",
-    "productName": "Eva",
-    "executableName": "Eva",
+    "appId": "com.electricsheephq.evaos.agent",
+    "productName": "evaOS Agent",
+    "executableName": "evaOS Agent",
     "protocols": [
       {
-        "name": "Eva Protocol",
+        "name": "evaOS Agent Protocol",
         "schemes": [
-          "eva"
+          "evaos-agent"
         ]
       }
     ],
-    "artifactName": "Eva-Electric-Sheep-${version}-${arch}.${ext}",
+    "artifactName": "evaOS-Agent-${version}-${arch}.${ext}",
     "icon": "assets/eva",
     "directories": {
       "output": "release"
@@ -203,11 +203,11 @@
       "entitlements": "electron/entitlements.mac.plist",
       "entitlementsInherit": "electron/entitlements.mac.inherit.plist",
       "extendInfo": {
-        "CFBundleDisplayName": "Eva by Electric Sheep",
-        "CFBundleExecutable": "Eva",
-        "CFBundleName": "Eva",
-        "NSAudioCaptureUsageDescription": "Eva uses audio capture for voice conversations.",
-        "NSMicrophoneUsageDescription": "Eva uses the microphone for voice input and voice conversations."
+        "CFBundleDisplayName": "evaOS Agent",
+        "CFBundleExecutable": "evaOS Agent",
+        "CFBundleName": "evaOS Agent",
+        "NSAudioCaptureUsageDescription": "evaOS Agent uses audio capture for voice conversations.",
+        "NSMicrophoneUsageDescription": "evaOS Agent uses the microphone for voice input and voice conversations."
       },
       "gatekeeperAssess": false,
       "hardenedRuntime": true,
@@ -217,7 +217,7 @@
       ]
     },
     "dmg": {
-      "title": "Install Eva by Electric Sheep",
+      "title": "Install evaOS Agent",
       "backgroundColor": "#f5f5f7",
       "iconSize": 96,
       "window": {
@@ -239,7 +239,7 @@
       ]
     },
     "win": {
-      "legalTrademarks": "Eva by Electric Sheep",
+      "legalTrademarks": "evaOS Agent by Electric Sheep",
       "target": [
         "nsis",
         "msi"
@@ -249,7 +249,7 @@
     "linux": {
       "category": "Office",
       "maintainer": "Electric Sheep",
-      "synopsis": "Managed business client for Electric Sheep Hermes agents.",
+      "synopsis": "Managed business agent client by Electric Sheep.",
       "target": [
         "AppImage",
         "deb",
@@ -260,8 +260,8 @@
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "perMachine": false,
-      "shortcutName": "Eva",
-      "uninstallDisplayName": "Eva by Electric Sheep",
+      "shortcutName": "evaOS Agent",
+      "uninstallDisplayName": "evaOS Agent",
       "warningsAsErrors": false
     }
   }

@@ -6,14 +6,14 @@ const test = require('node:test')
 const desktopRoot = path.resolve(__dirname, '..')
 const read = relativePath => fs.readFileSync(path.join(desktopRoot, relativePath), 'utf8')
 
-test('Eva package identity and internal artifact contract are exact', () => {
+test('evaOS Agent package identity and customer artifact contract are exact', () => {
   const pkg = JSON.parse(read('package.json'))
-  assert.equal(pkg.productName, 'Eva by Electric Sheep')
-  assert.equal(pkg.version, '0.1.0-beta.1')
-  assert.equal(pkg.build.appId, 'com.electricsheephq.eva.desktop')
-  assert.equal(pkg.build.executableName, 'Eva')
-  assert.deepEqual(pkg.build.protocols[0].schemes, ['eva'])
-  assert.equal(pkg.build.artifactName, 'Eva-Electric-Sheep-${version}-${arch}.${ext}')
+  assert.equal(pkg.productName, 'evaOS Agent')
+  assert.equal(pkg.version, '0.2.0-beta.1')
+  assert.equal(pkg.build.appId, 'com.electricsheephq.evaos.agent')
+  assert.equal(pkg.build.executableName, 'evaOS Agent')
+  assert.deepEqual(pkg.build.protocols[0].schemes, ['evaos-agent'])
+  assert.equal(pkg.build.artifactName, 'evaOS-Agent-${version}-${arch}.${ext}')
   assert.equal(pkg.build.icon, 'assets/eva')
   assert.equal(pkg.build.afterSign, undefined)
 })
@@ -51,7 +51,7 @@ test('managed build makes local startup unreachable and consumes auth callbacks 
   assert.match(main, /runtime = await ensureEvaRuntimeEnrollment\(\{ force: true \}\)/)
   assert.match(relay, /buildEvaManagedWsUrl\(upstream\.baseUrl, upstream\.token\)/)
   assert.doesNotMatch(preload, /terminal:|readFileDataUrl|selectPaths|uninstall:|saveImageFromUrl|themes:/)
-  assert.match(main, /APP_PROTOCOL = 'eva'/)
+  assert.match(main, /APP_PROTOCOL = EVA_MANAGED_POLICY\.callbackScheme/)
 })
 
 test('managed session persistence encrypts both tokens and restricts the state file', () => {
@@ -67,8 +67,9 @@ test('managed session persistence encrypts both tokens and restricts the state f
   assert.match(main, /resetEvaRendererSessions\(\)/)
 })
 
-test('Nous updater and editable gateway paths fail closed in the managed build', () => {
+test('updater and editable gateway paths fail closed in the managed build', () => {
   const main = read('electron/main.cjs')
+  const managed = read('electron/eva-managed.cjs')
   const about = read('src/app/settings/about-settings.tsx')
   const chat = read('src/app/chat/index.tsx')
   const controller = read('src/app/desktop-controller.tsx')
@@ -79,13 +80,17 @@ test('Nous updater and editable gateway paths fail closed in the managed build',
   const settings = read('src/app/settings/index.tsx')
   const updates = read('src/store/updates.ts')
   const smoke = read('scripts/test-desktop.mjs')
-  assert.match(main, /Updates are managed by Electric Sheep/)
+  assert.match(managed, /Updates are managed by Electric Sheep/)
   assert.match(main, /EVA_BLOCKED_INVOKE_CHANNELS/)
-  assert.match(main, /Eva gateway settings are managed by Electric Sheep/)
+  assert.doesNotMatch(
+    main.slice(main.indexOf('const EVA_BLOCKED_INVOKE_CHANNELS'), main.indexOf('function installEvaManagedIpcGuards')),
+    /hermes:updates:apply/
+  )
+  assert.match(main, /gateway settings are managed by Electric Sheep/)
   assert.match(about, /managed-beta · automatic updater disabled/)
   assert.doesNotMatch(about, /NousResearch\/hermes-agent\/releases/)
   assert.match(gatewayBoot, /evaSignInRequired/)
-  assert.match(gatewayBoot, /Sign in to Eva from Settings → Gateway/)
+  assert.match(gatewayBoot, /Sign in to evaOS Agent from Settings → Gateway/)
   assert.match(gatewayBoot, /navigate\(`\$\{SETTINGS_ROUTE\}\?tab=gateway`/)
   assert.match(connectingOverlay, /boot\.phase === 'renderer\.enrollment'/)
   assert.match(connectingOverlay, /boot\.phase === 'eva\.sign-in-required'/)
@@ -97,6 +102,6 @@ test('Nous updater and editable gateway paths fail closed in the managed build',
   assert.match(controller, /const terminalSidebarOpen = !managedEva/)
   assert.match(controller, /const mainOverlays = managedEva \? null/)
   assert.match(updates, /if \(isManagedEva\(\)\)/)
-  assert.match(smoke, /Eva-Electric-Sheep-/)
+  assert.match(smoke, /evaOS-Agent-/)
   assert.doesNotMatch(smoke, /Hermes\.app|Hermes-\$\{PACKAGE_JSON\.version\}/)
 })

@@ -73,7 +73,7 @@ function connectTls(upstreamUrl) {
 
 function createEvaWsRelay(options) {
   if (typeof options?.getUpstream !== 'function') {
-    throw new TypeError('Eva WebSocket relay requires getUpstream().')
+    throw new TypeError('evaOS Agent WebSocket relay requires getUpstream().')
   }
 
   const now = options.now ?? (() => Date.now())

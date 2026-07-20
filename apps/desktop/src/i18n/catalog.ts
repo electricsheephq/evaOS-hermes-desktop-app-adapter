@@ -1,5 +1,6 @@
 import { en } from './en'
 import { ja } from './ja'
+import { createManagedTranslations } from './managed-brand'
 import type { Locale, Translations } from './types'
 import { zh } from './zh'
 import { zhHant } from './zh-hant'
@@ -9,4 +10,11 @@ export const TRANSLATIONS: Record<Locale, Translations> = {
   zh,
   'zh-hant': zhHant,
   ja
+}
+
+export const MANAGED_TRANSLATIONS: Record<Locale, Translations> = {
+  en: createManagedTranslations(en),
+  zh: createManagedTranslations(zh),
+  'zh-hant': createManagedTranslations(zhHant),
+  ja: createManagedTranslations(ja)
 }
