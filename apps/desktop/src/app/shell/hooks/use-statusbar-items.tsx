@@ -46,6 +46,7 @@ interface StatusbarItemsOptions {
   extraRightItems: readonly StatusbarItem[]
   gatewayState: string
   inferenceStatus: RuntimeReadinessResult | null
+  managedEva: boolean
   openAgents: () => void
   openCommandCenterSection: (section: CommandCenterSection) => void
   freshDraftReady: boolean
@@ -62,6 +63,7 @@ export function useStatusbarItems({
   extraRightItems,
   gatewayState,
   inferenceStatus,
+  managedEva,
   openAgents,
   openCommandCenterSection,
   freshDraftReady,
@@ -319,6 +321,7 @@ export function useStatusbarItems({
             <Codicon name="hubot" size="0.75rem" />
           ),
         id: 'agents',
+        hidden: managedEva,
         label: copy.agents,
         onSelect: openAgents,
         title: agentsOpen ? copy.closeAgents : copy.openAgents,
@@ -327,6 +330,7 @@ export function useStatusbarItems({
       {
         icon: <Clock className="size-3" />,
         id: 'cron',
+        hidden: managedEva,
         label: copy.cron,
         title: copy.openCron,
         to: CRON_ROUTE,
@@ -343,6 +347,7 @@ export function useStatusbarItems({
       gatewayRestarting,
       inferenceReady,
       inferenceStatus?.reason,
+      managedEva,
       openAgents,
       subagentsFailed,
       subagentsRunning,

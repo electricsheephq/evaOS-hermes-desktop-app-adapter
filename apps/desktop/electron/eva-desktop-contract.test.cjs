@@ -67,6 +67,27 @@ test('managed session persistence encrypts both tokens and restricts the state f
   assert.match(main, /resetEvaRendererSessions\(\)/)
 })
 
+test('managed member UI exposes one server-bound agent context without profile or integration controls', () => {
+  const controller = read('src/app/desktop-controller.tsx')
+  const main = read('electron/main.cjs')
+  const preload = read('electron/preload.cjs')
+  const sidebar = read('src/app/chat/sidebar/index.tsx')
+  const statusbar = read('src/app/shell/hooks/use-statusbar-items.tsx')
+  const blocked = main.slice(
+    main.indexOf('const EVA_BLOCKED_INVOKE_CHANNELS'),
+    main.indexOf('function installEvaManagedIpcGuards')
+  )
+
+  assert.doesNotMatch(preload, /set: name => ipcRenderer\.invoke\('hermes:profile:set'/)
+  assert.match(blocked, /hermes:profile:set/)
+  assert.match(sidebar, /item\.id === 'new-session'.*item\.id === 'skills'.*item\.id === 'artifacts'/s)
+  assert.match(sidebar, /contentVisible && !managedEva/)
+  assert.match(statusbar, /id: 'agents',[\s\S]*?hidden: managedEva/)
+  assert.match(statusbar, /id: 'cron',[\s\S]*?hidden: managedEva/)
+  assert.match(controller, /managedEva \? \([\s\S]*?<Navigate replace to=\{NEW_CHAT_ROUTE\}/)
+  assert.match(controller, /!managedEva && profilesOpen/)
+})
+
 test('updater and editable gateway paths fail closed in the managed build', () => {
   const main = read('electron/main.cjs')
   const managed = read('electron/eva-managed.cjs')

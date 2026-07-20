@@ -8092,6 +8092,7 @@ const EVA_BLOCKED_INVOKE_CHANNELS = Object.freeze([
   'hermes:logs:reveal',
   'hermes:normalizePreviewTarget',
   'hermes:openPreviewInBrowser',
+  'hermes:profile:set',
   'hermes:readFileDataUrl',
   'hermes:readFileText',
   'hermes:requestMicrophoneAccess',
