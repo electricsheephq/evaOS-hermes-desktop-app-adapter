@@ -4,18 +4,19 @@ const path = require('node:path')
 const EVA_MANAGED_POLICY = Object.freeze({
   schemaVersion: 'evaos.eva_desktop_managed.v1',
   enrollmentSchemaVersion: 'evaos.hermes_desktop_enrollment.v1',
-  productName: 'Eva by Electric Sheep',
+  productName: 'evaOS Agent',
   dashboardAuthUrl: 'https://www.electricsheephq.com/desktop-auth',
   brokerUrl: 'https://rhfojelkgtwcxnrfhtlj.supabase.co/functions/v1/desktop-runtime-session',
   customerId: 'jackie-david',
   runtime: 'hermes',
   launchMode: 'dashboard_surface',
   clientSurface: 'eva_desktop',
+  callbackScheme: 'evaos-agent',
   updateChannel: 'managed-beta',
   deviceCodePollMs: 1_500,
   loginTimeoutMs: 180_000,
   runtimeRefreshSkewMs: 60_000,
-  allowedAgentIds: Object.freeze(['jane', 'jackie']),
+  allowedAgentIds: Object.freeze(['jane', 'louis', 'regan']),
   allowedRuntimeOrigins: Object.freeze(['https://hermes-jackie-david.ecs.electricsheephq.com'])
 })
 
@@ -52,6 +53,23 @@ const EVA_MANAGED_READ_ROUTES = Object.freeze([
   { pattern: /^\/api\/fs\/(?:default-cwd|git-root|list|read-data-url|read-text)$/, query: ['path'] }
 ])
 
+function managedUpdateResponse(action = 'check', now = Date.now()) {
+  if (action === 'apply') {
+    return {
+      ok: false,
+      error: 'managed-beta',
+      message: 'Updates are managed by Electric Sheep.'
+    }
+  }
+
+  return {
+    supported: false,
+    branch: EVA_MANAGED_POLICY.updateChannel,
+    message: 'Updates are managed by Electric Sheep.',
+    fetchedAt: now
+  }
+}
+
 class EvaBrokerError extends Error {
   constructor(message, statusCode = null, code = 'broker-error') {
     super(message)
@@ -64,17 +82,17 @@ class EvaBrokerError extends Error {
 function normalizeEvaManagedApiPath(value) {
   const rawPath = String(value || '')
   if (!rawPath.startsWith('/') || rawPath.startsWith('//') || rawPath.includes('\\')) {
-    throw new EvaBrokerError('Eva blocked an invalid managed-backend request.', 400, 'managed-policy')
+    throw new EvaBrokerError('evaOS Agent blocked an invalid managed-backend request.', 400, 'managed-policy')
   }
 
   let parsed
   try {
     parsed = new URL(rawPath, 'https://eva-managed.invalid')
   } catch {
-    throw new EvaBrokerError('Eva blocked an invalid managed-backend request.', 400, 'managed-policy')
+    throw new EvaBrokerError('evaOS Agent blocked an invalid managed-backend request.', 400, 'managed-policy')
   }
   if (parsed.origin !== 'https://eva-managed.invalid' || !parsed.pathname.startsWith('/api/')) {
-    throw new EvaBrokerError('Eva blocked a request outside the managed API.', 403, 'managed-policy')
+    throw new EvaBrokerError('evaOS Agent blocked a request outside the managed API.', 403, 'managed-policy')
   }
 
   let pathname = parsed.pathname
@@ -83,14 +101,14 @@ function normalizeEvaManagedApiPath(value) {
     try {
       decoded = decodeURIComponent(pathname)
     } catch {
-      throw new EvaBrokerError('Eva blocked an invalid managed-backend request.', 400, 'managed-policy')
+      throw new EvaBrokerError('evaOS Agent blocked an invalid managed-backend request.', 400, 'managed-policy')
     }
     if (decoded === pathname) break
     pathname = decoded
   }
   pathname = pathname.replace(/\/+/g, '/')
   if (pathname.includes('%') || pathname.includes('\\') || !pathname.startsWith('/api/')) {
-    throw new EvaBrokerError('Eva blocked an ambiguous managed-backend request.', 400, 'managed-policy')
+    throw new EvaBrokerError('evaOS Agent blocked an ambiguous managed-backend request.', 400, 'managed-policy')
   }
   return { parsed, pathname }
 }
@@ -105,47 +123,51 @@ function hasAsciiControl(value) {
 function validateEvaManagedQueryValue(key, value, options = {}) {
   if (key === 'profile') {
     if (!(options.profileValues ?? ['default']).includes(value)) {
-      throw new EvaBrokerError('Eva does not permit Desktop profile selection.', 403, 'managed-policy')
+      throw new EvaBrokerError('evaOS Agent does not permit Desktop profile selection.', 403, 'managed-policy')
     }
     return
   }
   if (['explicit_only', 'include_unconfigured', 'refresh'].includes(key)) {
     if (!['0', '1'].includes(value)) {
-      throw new EvaBrokerError('Eva blocked an invalid managed query.', 400, 'managed-policy')
+      throw new EvaBrokerError('evaOS Agent blocked an invalid managed query.', 400, 'managed-policy')
     }
     return
   }
   if (['limit', 'min_messages', 'offset'].includes(key)) {
     if (!/^\d{1,6}$/.test(value)) {
-      throw new EvaBrokerError('Eva blocked an invalid managed query.', 400, 'managed-policy')
+      throw new EvaBrokerError('evaOS Agent blocked an invalid managed query.', 400, 'managed-policy')
     }
     return
   }
   if (key === 'archived') {
     if (!['exclude', 'include', 'only'].includes(value)) {
-      throw new EvaBrokerError('Eva blocked an invalid managed query.', 400, 'managed-policy')
+      throw new EvaBrokerError('evaOS Agent blocked an invalid managed query.', 400, 'managed-policy')
     }
     return
   }
   if (key === 'order') {
     if (!['created', 'recent'].includes(value)) {
-      throw new EvaBrokerError('Eva blocked an invalid managed query.', 400, 'managed-policy')
+      throw new EvaBrokerError('evaOS Agent blocked an invalid managed query.', 400, 'managed-policy')
     }
     return
   }
   if (key === 'path') {
     if (!value.startsWith('/') || value.length > 4096 || value.includes('\\') || hasAsciiControl(value)) {
-      throw new EvaBrokerError('Eva blocked an invalid managed file path.', 400, 'managed-policy')
+      throw new EvaBrokerError('evaOS Agent blocked an invalid managed file path.', 400, 'managed-policy')
     }
     const agentId = String(options.agentId || '')
     if (!EVA_MANAGED_POLICY.allowedAgentIds.includes(agentId)) {
-      throw new EvaBrokerError('Eva could not bind this file request to an assigned agent.', 403, 'managed-policy')
+      throw new EvaBrokerError(
+        'evaOS Agent could not bind this file request to an assigned agent.',
+        403,
+        'managed-policy'
+      )
     }
     const resolved = path.posix.resolve(value)
     const roots = [`/srv/evaos/agents/${agentId}`, `/srv/evaos/hermes-managed/${agentId}`]
     if (!roots.some(root => resolved === root || resolved.startsWith(`${root}/`))) {
       throw new EvaBrokerError(
-        'Eva blocked a file request outside the assigned agent workspace.',
+        'evaOS Agent blocked a file request outside the assigned agent workspace.',
         403,
         'managed-policy'
       )
@@ -153,7 +175,7 @@ function validateEvaManagedQueryValue(key, value, options = {}) {
     return
   }
   if (!value || value.length > 512 || hasAsciiControl(value)) {
-    throw new EvaBrokerError('Eva blocked an invalid managed query.', 400, 'managed-policy')
+    throw new EvaBrokerError('evaOS Agent blocked an invalid managed query.', 400, 'managed-policy')
   }
 }
 
@@ -163,7 +185,7 @@ function normalizeEvaManagedQuery(parsed, allowedKeys, options = {}) {
   const seen = new Set()
   for (const [key, value] of parsed.searchParams.entries()) {
     if (!allowed.has(key) || seen.has(key)) {
-      throw new EvaBrokerError('Eva blocked an unsupported managed query.', 403, 'managed-policy')
+      throw new EvaBrokerError('evaOS Agent blocked an unsupported managed query.', 403, 'managed-policy')
     }
     seen.add(key)
     validateEvaManagedQueryValue(key, value, options)
@@ -175,41 +197,33 @@ function normalizeEvaManagedQuery(parsed, allowedKeys, options = {}) {
 
 function assertPlainManagedBody(body) {
   if (!body || typeof body !== 'object' || Array.isArray(body) || Object.getPrototypeOf(body) !== Object.prototype) {
-    throw new EvaBrokerError('Eva blocked an invalid managed request body.', 400, 'managed-policy')
+    throw new EvaBrokerError('evaOS Agent blocked an invalid managed request body.', 400, 'managed-policy')
   }
   if (Buffer.byteLength(JSON.stringify(body), 'utf8') > 16 * 1024) {
-    throw new EvaBrokerError('Eva blocked an oversized managed request body.', 413, 'managed-policy')
+    throw new EvaBrokerError('evaOS Agent blocked an oversized managed request body.', 413, 'managed-policy')
   }
 }
 
 function assertEvaManagedApiRequestAllowed(request, options = {}) {
   const method = String(request?.method || 'GET').toUpperCase()
   if (!['DELETE', 'GET', 'HEAD', 'PATCH'].includes(method)) {
-    throw new EvaBrokerError(
-      'This capability is managed by an Electric Sheep administrator.',
-      403,
-      'managed-policy'
-    )
+    throw new EvaBrokerError('This capability is managed by an Electric Sheep administrator.', 403, 'managed-policy')
   }
   if (request?.profile && request.profile !== 'default') {
-    throw new EvaBrokerError('Eva does not permit Desktop profile selection.', 403, 'managed-policy')
+    throw new EvaBrokerError('evaOS Agent does not permit Desktop profile selection.', 403, 'managed-policy')
   }
 
   const { parsed, pathname } = normalizeEvaManagedApiPath(request?.path)
   if (method === 'GET' || method === 'HEAD') {
     const route = EVA_MANAGED_READ_ROUTES.find(candidate => candidate.pattern.test(pathname))
     if (!route) {
-      throw new EvaBrokerError(
-        'This capability is managed by an Electric Sheep administrator.',
-        403,
-        'managed-policy'
-      )
+      throw new EvaBrokerError('This capability is managed by an Electric Sheep administrator.', 403, 'managed-policy')
     }
     if (request?.body !== undefined && request.body !== null) {
-      throw new EvaBrokerError('Eva blocked a body on a read-only request.', 400, 'managed-policy')
+      throw new EvaBrokerError('evaOS Agent blocked a body on a read-only request.', 400, 'managed-policy')
     }
     if (/^\/api\/fs\/(?:list|read-data-url|read-text)$/.test(pathname) && !parsed.searchParams.has('path')) {
-      throw new EvaBrokerError('Eva requires an assigned workspace path for file reads.', 400, 'managed-policy')
+      throw new EvaBrokerError('evaOS Agent requires an assigned workspace path for file reads.', 400, 'managed-policy')
     }
     const query = normalizeEvaManagedQuery(parsed, route.query, { ...route, agentId: options.agentId })
     return { method, pathname, path: `${pathname}${query ? `?${query}` : ''}` }
@@ -217,16 +231,12 @@ function assertEvaManagedApiRequestAllowed(request, options = {}) {
 
   const sessionMatch = /^\/api\/sessions\/[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/.test(pathname)
   if (!sessionMatch) {
-    throw new EvaBrokerError(
-      'This capability is managed by an Electric Sheep administrator.',
-      403,
-      'managed-policy'
-    )
+    throw new EvaBrokerError('This capability is managed by an Electric Sheep administrator.', 403, 'managed-policy')
   }
   const query = normalizeEvaManagedQuery(parsed, ['profile'])
   if (method === 'DELETE') {
     if (request?.body !== undefined && request.body !== null) {
-      throw new EvaBrokerError('Eva blocked a body on a delete request.', 400, 'managed-policy')
+      throw new EvaBrokerError('evaOS Agent blocked a body on a delete request.', 400, 'managed-policy')
     }
     return { method, pathname, path: `${pathname}${query ? `?${query}` : ''}` }
   }
@@ -235,19 +245,19 @@ function assertEvaManagedApiRequestAllowed(request, options = {}) {
   const keys = Object.keys(request.body).sort()
   const allowedKeys = new Set(['archived', 'profile', 'title'])
   if (keys.some(key => !allowedKeys.has(key)) || keys.filter(key => key !== 'profile').length !== 1) {
-    throw new EvaBrokerError('Eva blocked an unsupported session update.', 403, 'managed-policy')
+    throw new EvaBrokerError('evaOS Agent blocked an unsupported session update.', 403, 'managed-policy')
   }
   if (Object.hasOwn(request.body, 'profile') && request.body.profile !== 'default') {
-    throw new EvaBrokerError('Eva does not permit Desktop profile selection.', 403, 'managed-policy')
+    throw new EvaBrokerError('evaOS Agent does not permit Desktop profile selection.', 403, 'managed-policy')
   }
   if (Object.hasOwn(request.body, 'archived') && typeof request.body.archived !== 'boolean') {
-    throw new EvaBrokerError('Eva blocked an invalid archive update.', 400, 'managed-policy')
+    throw new EvaBrokerError('evaOS Agent blocked an invalid archive update.', 400, 'managed-policy')
   }
   if (
     Object.hasOwn(request.body, 'title') &&
     (typeof request.body.title !== 'string' || !request.body.title.trim() || request.body.title.length > 200)
   ) {
-    throw new EvaBrokerError('Eva blocked an invalid session title.', 400, 'managed-policy')
+    throw new EvaBrokerError('evaOS Agent blocked an invalid session title.', 400, 'managed-policy')
   }
   return { method, pathname, path: `${pathname}${query ? `?${query}` : ''}` }
 }
@@ -257,7 +267,7 @@ function makeDeviceCode(cryptoApi = crypto) {
     .toUpperCase()
     .replace(/[^A-Z0-9]/g, '')
   if (value.length < 24 || value.length > 40) {
-    throw new Error('Could not create a valid Eva device code.')
+    throw new Error('Could not create a valid evaOS Agent device code.')
   }
   return value
 }
@@ -271,16 +281,16 @@ function buildEvaDesktopAuthUrl(deviceCode, authState, policy = EVA_MANAGED_POLI
     .toUpperCase()
     .replace(/[^A-Z0-9]/g, '')
   if (normalizedCode.length < 24 || normalizedCode.length > 40) {
-    throw new Error('Eva device code must contain 24 to 40 letters or digits.')
+    throw new Error('evaOS Agent device code must contain 24 to 40 letters or digits.')
   }
   if (!/^[A-Za-z0-9._:-]{8,128}$/.test(String(authState || ''))) {
-    throw new Error('Eva desktop auth state is invalid.')
+    throw new Error('evaOS Agent desktop auth state is invalid.')
   }
 
   const url = new URL(policy.dashboardAuthUrl)
   url.searchParams.set('desktop_app', '1')
   url.searchParams.set('fresh', normalizedCode)
-  url.searchParams.set('callback_scheme', 'eva')
+  url.searchParams.set('callback_scheme', policy.callbackScheme)
   url.searchParams.set('desktop_auth_state', String(authState))
   url.searchParams.set('switch_account', '1')
   url.searchParams.set('prompt', 'select_account')
@@ -327,10 +337,14 @@ function parseEvaDesktopAuthCallback(rawUrl, expectedState) {
   try {
     url = new URL(String(rawUrl || ''))
   } catch {
-    throw new EvaBrokerError('Eva received an invalid sign-in callback.', 400, 'invalid-callback')
+    throw new EvaBrokerError('evaOS Agent received an invalid sign-in callback.', 400, 'invalid-callback')
   }
-  if (url.protocol !== 'eva:' || url.hostname !== 'auth' || url.pathname !== '/callback') {
-    throw new EvaBrokerError('Eva received an unexpected sign-in callback.', 400, 'invalid-callback')
+  if (
+    url.protocol !== `${EVA_MANAGED_POLICY.callbackScheme}:` ||
+    url.hostname !== 'auth' ||
+    url.pathname !== '/callback'
+  ) {
+    throw new EvaBrokerError('evaOS Agent received an unexpected sign-in callback.', 400, 'invalid-callback')
   }
   const callbackKeys = [...url.searchParams.keys()]
   if (
@@ -339,19 +353,23 @@ function parseEvaDesktopAuthCallback(rawUrl, expectedState) {
     !callbackKeys.includes('desktop_auth_state') ||
     !callbackKeys.includes('device_code')
   ) {
-    throw new EvaBrokerError('Eva received an unexpected sign-in callback shape.', 400, 'invalid-callback')
+    throw new EvaBrokerError('evaOS Agent received an unexpected sign-in callback shape.', 400, 'invalid-callback')
   }
   if (!expectedState || url.searchParams.get('desktop_auth_state') !== expectedState) {
-    throw new EvaBrokerError('Eva sign-in state did not match.', 400, 'state-mismatch')
+    throw new EvaBrokerError('evaOS Agent sign-in state did not match.', 400, 'state-mismatch')
   }
   if (url.searchParams.has('desktop_session') || url.searchParams.has('session_token')) {
-    throw new EvaBrokerError('Eva sign-in callbacks may not carry session tokens.', 400, 'token-in-callback')
+    throw new EvaBrokerError('evaOS Agent sign-in callbacks may not carry session tokens.', 400, 'token-in-callback')
   }
   const deviceCode = String(url.searchParams.get('device_code') || '')
     .toUpperCase()
     .replace(/[^A-Z0-9]/g, '')
   if (deviceCode.length < 24 || deviceCode.length > 40) {
-    throw new EvaBrokerError('Eva sign-in callback did not contain a valid device code.', 400, 'invalid-callback')
+    throw new EvaBrokerError(
+      'evaOS Agent sign-in callback did not contain a valid device code.',
+      400,
+      'invalid-callback'
+    )
   }
   return { deviceCode }
 }
@@ -382,7 +400,7 @@ function buildEvaManagedWsUrl(baseUrl, token) {
   const scheme = parsed.protocol === 'https:' ? 'wss' : 'ws'
   const prefix = parsed.pathname.replace(/\/+$/, '')
   return `${scheme}://${parsed.host}${prefix}/api/ws?eva_session=${encodeURIComponent(
-    normalizeOpaqueToken(token, 'Eva runtime session')
+    normalizeOpaqueToken(token, 'evaOS Agent runtime session')
   )}`
 }
 
@@ -390,7 +408,11 @@ function normalizeHermesEnrollment(payload, options = {}) {
   const policy = options.policy ?? EVA_MANAGED_POLICY
   const now = options.now ?? Date.now()
   if (!payload || typeof payload !== 'object' || payload.schema_version !== policy.enrollmentSchemaVersion) {
-    throw new EvaBrokerError('Electric Sheep returned an unsupported Eva enrollment.', 502, 'invalid-enrollment')
+    throw new EvaBrokerError(
+      'Electric Sheep returned an unsupported evaOS Agent enrollment.',
+      502,
+      'invalid-enrollment'
+    )
   }
   if (payload.runtime !== policy.runtime || payload.customer_id !== policy.customerId) {
     throw new EvaBrokerError('Electric Sheep returned an enrollment outside this managed beta.', 403, 'wrong-customer')
@@ -398,7 +420,7 @@ function normalizeHermesEnrollment(payload, options = {}) {
 
   const remote = payload.remote_backend
   if (!remote || typeof remote !== 'object') {
-    throw new EvaBrokerError('Electric Sheep returned an incomplete Eva enrollment.', 502, 'invalid-enrollment')
+    throw new EvaBrokerError('Electric Sheep returned an incomplete evaOS Agent enrollment.', 502, 'invalid-enrollment')
   }
   const agentId = String(remote.agent_id || '').trim()
   if (!policy.allowedAgentIds.includes(agentId)) {
@@ -411,8 +433,8 @@ function normalizeHermesEnrollment(payload, options = {}) {
     runtime: policy.runtime,
     agentId,
     baseUrl: normalizeRemoteBaseUrl(remote.base_url),
-    token: normalizeOpaqueToken(remote.session_token, 'Eva runtime session'),
-    expiresAt: parseFutureTimestamp(remote.expires_at, 'Eva runtime session', now)
+    token: normalizeOpaqueToken(remote.session_token, 'evaOS Agent runtime session'),
+    expiresAt: parseFutureTimestamp(remote.expires_at, 'evaOS Agent runtime session', now)
   }
 }
 
@@ -420,7 +442,11 @@ async function brokerPost(body, options = {}) {
   const policy = options.policy ?? EVA_MANAGED_POLICY
   const fetchImpl = options.fetchImpl ?? globalThis.fetch
   if (typeof fetchImpl !== 'function') {
-    throw new EvaBrokerError('Eva cannot reach Electric Sheep from this runtime.', null, 'transport-unavailable')
+    throw new EvaBrokerError(
+      'evaOS Agent cannot reach Electric Sheep from this runtime.',
+      null,
+      'transport-unavailable'
+    )
   }
 
   let response
@@ -432,16 +458,16 @@ async function brokerPost(body, options = {}) {
       signal: options.signal,
       headers: {
         'Content-Type': 'application/json',
-        'X-Client-Info': 'eva-by-electric-sheep/0.1.0-beta.1',
+        'X-Client-Info': 'evaos-agent/0.2.0-beta.1',
         ...(options.desktopSession ? { Authorization: `Bearer ${options.desktopSession}` } : {})
       },
       body: JSON.stringify(body)
     })
   } catch (error) {
     if (error?.name === 'AbortError') {
-      throw new EvaBrokerError('Eva sign-in timed out.', 408, 'timeout')
+      throw new EvaBrokerError('evaOS Agent sign-in timed out.', 408, 'timeout')
     }
-    throw new EvaBrokerError('Eva could not reach Electric Sheep.', null, 'transport-error')
+    throw new EvaBrokerError('evaOS Agent could not reach Electric Sheep.', null, 'transport-error')
   }
 
   const payload = await response.json().catch(() => null)
@@ -491,7 +517,7 @@ async function pollEvaDeviceCode(deviceCode, options = {}) {
     }
     await sleep(options.pollMs ?? policy.deviceCodePollMs)
   }
-  throw new EvaBrokerError('Eva sign-in timed out.', 408, 'timeout')
+  throw new EvaBrokerError('evaOS Agent sign-in timed out.', 408, 'timeout')
 }
 
 async function launchEvaHermesRuntime(desktopSession, options = {}) {
@@ -556,6 +582,7 @@ module.exports = {
   launchEvaHermesRuntime,
   makeAuthState,
   makeDeviceCode,
+  managedUpdateResponse,
   normalizeDesktopSession,
   normalizeHermesEnrollment,
   parseEvaDesktopAuthCallback,

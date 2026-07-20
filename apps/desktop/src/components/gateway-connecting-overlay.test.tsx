@@ -151,7 +151,7 @@ describe('connecting overlay vs recovery surface', () => {
     $desktopBoot.set({
       ...$desktopBoot.get(),
       phase: 'eva.sign-in-required',
-      message: 'Sign in to Eva from Settings → Gateway.',
+      message: 'Sign in to evaOS Agent from Settings → Gateway.',
       progress: 8,
       running: false,
       visible: true
@@ -174,7 +174,7 @@ describe('connecting overlay vs recovery surface', () => {
       eva: {
         refresh: async () => ({
           managed: true,
-          productName: 'Eva by Electric Sheep',
+          productName: 'evaOS Agent',
           signedOut: false,
           customerId: 'jackie-david',
           email: null,
@@ -187,7 +187,7 @@ describe('connecting overlay vs recovery surface', () => {
         }),
         signIn: async () => ({
           managed: true,
-          productName: 'Eva by Electric Sheep',
+          productName: 'evaOS Agent',
           signedOut: false,
           customerId: 'jackie-david',
           email: null,

@@ -156,7 +156,7 @@ function useApiKeyCatalog(): ApiKeyOption[] {
 const ONBOARDING_EXIT_MS = 1180
 
 export function DesktopOnboardingOverlay(props: DesktopOnboardingOverlayProps) {
-  // Managed Eva authenticates through Electric Sheep and connects to the
+  // Managed evaOS Agent authenticates through Electric Sheep and connects to the
   // administrator-bound remote agent. The upstream provider picker is a local
   // runtime flow, so mounting it here would cover the managed Gateway sign-in
   // surface before a remote session exists.

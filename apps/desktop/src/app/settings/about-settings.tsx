@@ -18,7 +18,7 @@ export function AboutSettings() {
       <div className="flex flex-col items-center gap-3 pt-6 pb-2 text-center">
         <BrandMark className="size-20 rounded-2xl" />
         <div>
-          <h2 className="text-lg font-semibold tracking-tight">Eva by Electric Sheep</h2>
+          <h2 className="text-lg font-semibold tracking-tight">evaOS Agent</h2>
           <p className="mt-1 text-xs text-muted-foreground">
             {version?.appVersion ? `Version ${version.appVersion}` : 'Version unavailable'}
           </p>
@@ -32,11 +32,11 @@ export function AboutSettings() {
         />
         <ListRow description="managed-beta · automatic updater disabled" title="Update channel" />
         <ListRow
-          description="Eva includes Hermes Agent, copyright Nous Research, under the MIT License. Electric Sheep product changes and branding are maintained separately."
+          description="Built on Hermes Agent by Nous Research, used under the MIT License."
           title="Open-source attribution"
         />
         <ListRow
-          description="This internal Apple Silicon beta is unsigned and is not a public release."
+          description="Signed Apple Silicon pilot for the Dorman business account. This is not a public release."
           title="Distribution"
         />
       </div>

@@ -141,7 +141,7 @@ function EvaManagedGatewaySettings() {
   }
 
   if (!status && !error) {
-    return <LoadingState label="Loading managed Eva access…" />
+    return <LoadingState label="Loading managed evaOS Agent access…" />
   }
 
   return (
@@ -153,7 +153,7 @@ function EvaManagedGatewaySettings() {
             <div>
               <h2 className="font-semibold">Managed by Electric Sheep</h2>
               <p className="mt-1 text-sm text-muted-foreground">
-                Eva connects only to the Hermes agent assigned by your business administrator. Local backends, custom
+                evaOS Agent connects only to the agent assigned by your business administrator. Local backends, custom
                 gateway URLs, raw session tokens, and profile-based agent switching are disabled.
               </p>
             </div>
@@ -179,7 +179,7 @@ function EvaManagedGatewaySettings() {
           {status?.signedOut || !status?.desktopSessionActive ? (
             <Button disabled={busy !== null} onClick={() => void run('sign-in')}>
               {busy === 'sign-in' ? <Loader2 className="size-4 animate-spin" /> : <LogIn className="size-4" />}
-              Sign in to Eva
+              Sign in to evaOS Agent
             </Button>
           ) : (
             <>

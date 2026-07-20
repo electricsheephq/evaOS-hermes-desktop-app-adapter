@@ -901,7 +901,7 @@ export function DesktopController() {
   // in the background (advancing next-run/state and creating runs), so poll the
   // job list on an interval (and on tab re-focus) while connected.
   useEffect(() => {
-    if (gatewayState !== 'open') {
+    if (managedEva || gatewayState !== 'open') {
       return
     }
 
@@ -918,13 +918,13 @@ export function DesktopController() {
       window.clearInterval(intervalId)
       document.removeEventListener('visibilitychange', tick)
     }
-  }, [gatewayState, refreshCronJobs])
+  }, [gatewayState, managedEva, refreshCronJobs])
 
   // Keep messaging-platform session lists live: inbound Telegram/WeChat/Discord
   // turns are written by the gateway, not the desktop websocket, so they won't
   // appear without polling.
   useEffect(() => {
-    if (gatewayState !== 'open') {
+    if (managedEva || gatewayState !== 'open') {
       return
     }
 
@@ -941,7 +941,7 @@ export function DesktopController() {
       window.clearInterval(intervalId)
       document.removeEventListener('visibilitychange', tick)
     }
-  }, [gatewayState, refreshMessagingSessions])
+  }, [gatewayState, managedEva, refreshMessagingSessions])
 
   // Only the open messaging transcript needs a poll — local chats are already
   // live over the websocket, so arming a timer for them would just no-op every
@@ -1005,6 +1005,7 @@ export function DesktopController() {
     extraRightItems: statusbarItemGroups.flat.right,
     gatewayState,
     inferenceStatus,
+    managedEva,
     openAgents,
     freshDraftReady,
     openCommandCenterSection,
@@ -1106,13 +1107,13 @@ export function DesktopController() {
         </Suspense>
       )}
 
-      {agentsOpen && (
+      {!managedEva && agentsOpen && (
         <Suspense fallback={null}>
           <AgentsView onClose={closeOverlayToPreviousRoute} />
         </Suspense>
       )}
 
-      {cronOpen && (
+      {!managedEva && cronOpen && (
         <Suspense fallback={null}>
           <CronView
             onClose={closeOverlayToPreviousRoute}
@@ -1121,7 +1122,7 @@ export function DesktopController() {
         </Suspense>
       )}
 
-      {profilesOpen && (
+      {!managedEva && profilesOpen && (
         <Suspense fallback={null}>
           <ProfilesView onClose={closeOverlayToPreviousRoute} />
         </Suspense>
@@ -1326,9 +1327,13 @@ export function DesktopController() {
           />
           <Route
             element={
-              <Suspense fallback={null}>
-                <MessagingView setStatusbarItemGroup={setStatusbarItemGroup} />
-              </Suspense>
+              managedEva ? (
+                <Navigate replace to={NEW_CHAT_ROUTE} />
+              ) : (
+                <Suspense fallback={null}>
+                  <MessagingView setStatusbarItemGroup={setStatusbarItemGroup} />
+                </Suspense>
+              )
             }
             path="messaging"
           />
@@ -1340,11 +1345,11 @@ export function DesktopController() {
             }
             path="artifacts"
           />
-          <Route element={null} path="cron" />
-          <Route element={null} path="profiles" />
+          <Route element={managedEva ? <Navigate replace to={NEW_CHAT_ROUTE} /> : null} path="cron" />
+          <Route element={managedEva ? <Navigate replace to={NEW_CHAT_ROUTE} /> : null} path="profiles" />
           <Route element={null} path="settings" />
           <Route element={null} path="command-center" />
-          <Route element={null} path="agents" />
+          <Route element={managedEva ? <Navigate replace to={NEW_CHAT_ROUTE} /> : null} path="agents" />
           <Route element={<Navigate replace to={NEW_CHAT_ROUTE} />} path="new" />
           <Route element={<LegacySessionRedirect />} path="sessions/:sessionId" />
           <Route element={<Navigate replace to={NEW_CHAT_ROUTE} />} path="*" />

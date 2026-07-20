@@ -24,8 +24,7 @@ const managedBridge = {
     refresh: () => ipcRenderer.invoke('hermes:eva:refresh')
   },
   profile: {
-    get: () => ipcRenderer.invoke('hermes:profile:get'),
-    set: name => ipcRenderer.invoke('hermes:profile:set', name)
+    get: () => ipcRenderer.invoke('hermes:profile:get')
   },
   api: request => ipcRenderer.invoke('hermes:api', request),
   notify: payload => ipcRenderer.invoke('hermes:notify', payload),

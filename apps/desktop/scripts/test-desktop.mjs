@@ -13,7 +13,7 @@ const RELEASE_ROOT = path.join(DESKTOP_ROOT, 'release')
 const PLATFORM = process.platform
 const PRODUCT_NAME = PACKAGE_JSON.build?.productName || PACKAGE_JSON.productName
 const EXECUTABLE_NAME = PACKAGE_JSON.build?.executableName || PRODUCT_NAME
-const ARTIFACT_PREFIX = `Eva-Electric-Sheep-${PACKAGE_JSON.version}-${ARCH}`
+const ARTIFACT_PREFIX = `evaOS-Agent-${PACKAGE_JSON.version}-${ARCH}`
 
 // Platform-specific packaged-app layout for the remote-first managed Eva beta.
 const APP = (() => {

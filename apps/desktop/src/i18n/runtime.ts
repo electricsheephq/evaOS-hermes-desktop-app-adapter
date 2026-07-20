@@ -1,5 +1,6 @@
 import { TRANSLATIONS } from './catalog'
 import { DEFAULT_LOCALE } from './languages'
+import { isManagedEvaosAgent, sanitizeManagedBrandText } from './managed-brand'
 import type { Locale, Translations } from './types'
 
 let runtimeLocale: Locale = DEFAULT_LOCALE
@@ -38,14 +39,14 @@ export function translateNow(key: string, ...args: unknown[]): string {
   const active = renderTranslation(resolvePath(TRANSLATIONS[runtimeLocale], key), args)
 
   if (active !== null) {
-    return active
+    return isManagedEvaosAgent() ? sanitizeManagedBrandText(active) : active
   }
 
   if (runtimeLocale !== DEFAULT_LOCALE) {
     const fallback = renderTranslation(resolvePath(TRANSLATIONS[DEFAULT_LOCALE], key), args)
 
     if (fallback !== null) {
-      return fallback
+      return isManagedEvaosAgent() ? sanitizeManagedBrandText(fallback) : fallback
     }
   }
 

@@ -406,12 +406,12 @@ export function useGatewayBoot({
           const message = err instanceof Error ? err.message : String(err)
 
           const evaSignInRequired =
-            Boolean(window.hermesDesktop.eva) && message.includes('Sign in to Eva from Settings')
+            Boolean(window.hermesDesktop.eva) && message.includes('Sign in to evaOS Agent from Settings')
 
           if (evaSignInRequired) {
             setDesktopBootStep({
               phase: 'renderer.enrollment',
-              message: 'Sign in to Eva from Settings → Gateway.',
+              message: 'Sign in to evaOS Agent from Settings → Gateway.',
               progress: 100,
               running: false
             })

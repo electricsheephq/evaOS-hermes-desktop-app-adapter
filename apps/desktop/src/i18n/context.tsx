@@ -2,8 +2,9 @@ import { createContext, type ReactNode, useCallback, useContext, useEffect, useM
 
 import { getHermesConfigRecord, type HermesConfigRecord, saveHermesConfig } from '@/hermes'
 
-import { TRANSLATIONS } from './catalog'
+import { MANAGED_TRANSLATIONS, TRANSLATIONS } from './catalog'
 import { DEFAULT_LOCALE, localeConfigValue, normalizeLocale } from './languages'
+import { isManagedEvaosAgent } from './managed-brand'
 import { setRuntimeI18nLocale } from './runtime'
 import type { Locale, Translations } from './types'
 
@@ -82,6 +83,7 @@ export interface I18nProviderProps {
 }
 
 export function I18nProvider({ children, configClient = defaultConfigClient, initialLocale }: I18nProviderProps) {
+  const managed = isManagedEvaosAgent()
   const [locale, setLocaleState] = useState<Locale>(() => normalizeLocale(initialLocale))
   const [isLoadingConfig, setIsLoadingConfig] = useState(false)
   const [isSavingLocale, setIsSavingLocale] = useState(false)
@@ -108,7 +110,7 @@ export function I18nProvider({ children, configClient = defaultConfigClient, ini
       .getConfig()
       .then(config => {
         if (!cancelled) {
-          setLocaleState(normalizeLocale(getConfigDisplayLanguage(config)))
+          setLocaleState(managed ? DEFAULT_LOCALE : normalizeLocale(getConfigDisplayLanguage(config)))
         }
       })
       .catch(error => {
@@ -126,7 +128,7 @@ export function I18nProvider({ children, configClient = defaultConfigClient, ini
     return () => {
       cancelled = true
     }
-  }, [configClient, initialLocale])
+  }, [configClient, initialLocale, managed])
 
   const setLocale = useCallback(
     async (next: Locale) => {
@@ -170,9 +172,9 @@ export function I18nProvider({ children, configClient = defaultConfigClient, ini
       locale,
       saveError,
       setLocale,
-      t: TRANSLATIONS[locale]
+      t: managed ? MANAGED_TRANSLATIONS[DEFAULT_LOCALE] : TRANSLATIONS[locale]
     }),
-    [configLoadError, isLoadingConfig, isSavingLocale, locale, saveError, setLocale]
+    [configLoadError, isLoadingConfig, isSavingLocale, locale, managed, saveError, setLocale]
   )
 
   return <I18nContext.Provider value={value}>{children}</I18nContext.Provider>

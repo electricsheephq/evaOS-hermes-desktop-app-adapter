@@ -36,11 +36,7 @@ const {
   SESSION_WINDOW_MIN_WIDTH
 } = require('./session-windows.cjs')
 const { canImportHermesCli, verifyHermesCli } = require('./backend-probes.cjs')
-const {
-  createLinkTitleWindow,
-  guardLinkTitleSession,
-  readLinkTitleWindowTitle
-} = require('./link-title-window.cjs')
+const { createLinkTitleWindow, guardLinkTitleSession, readLinkTitleWindowTitle } = require('./link-title-window.cjs')
 const { probeGatewayWebSocket } = require('./gateway-ws-probe.cjs')
 const { adoptServedDashboardToken } = require('./dashboard-token.cjs')
 const { waitForDashboardPortAnnouncement } = require('./backend-ready.cjs')
@@ -137,6 +133,7 @@ const {
   launchEvaHermesRuntime,
   makeAuthState,
   makeDeviceCode,
+  managedUpdateResponse,
   normalizeDesktopSession,
   normalizeHermesEnrollment,
   parseEvaDesktopAuthCallback,
@@ -436,8 +433,8 @@ const BOOT_FAKE_STEP_MS = (() => {
   if (!Number.isFinite(raw) || raw <= 0) return 650
   return Math.max(120, raw)
 })()
-const APP_NAME = 'Eva'
-const APP_ID = 'com.electricsheephq.eva.desktop'
+const APP_NAME = 'evaOS Agent'
+const APP_ID = 'com.electricsheephq.evaos.agent'
 const TITLEBAR_HEIGHT = 34
 const MACOS_TRAFFIC_LIGHTS_HEIGHT = 14
 const WINDOW_BUTTON_POSITION = {
@@ -732,7 +729,7 @@ if (IS_WINDOWS) {
 app.setAboutPanelOptions({
   applicationName: APP_NAME,
   applicationVersion: app.getVersion(),
-  copyright: 'Eva by Electric Sheep. Hermes Agent is MIT-licensed software from Nous Research.'
+  copyright: 'Built on Hermes Agent by Nous Research, used under the MIT License.'
 })
 
 // Custom scheme for streaming local media (video/audio) into the renderer.
@@ -984,12 +981,7 @@ function openExternalUrl(rawUrl) {
 
   if (EVA_MANAGED_BUILD) {
     const allowedHosts = new Set(['electricsheephq.com', 'www.electricsheephq.com'])
-    if (
-      parsed.protocol !== 'https:' ||
-      parsed.username ||
-      parsed.password ||
-      !allowedHosts.has(parsed.hostname)
-    ) {
+    if (parsed.protocol !== 'https:' || parsed.username || parsed.password || !allowedHosts.has(parsed.hostname)) {
       return false
     }
     shell.openExternal(parsed.toString()).catch(error => rememberLog(`[link] openExternal failed: ${error.message}`))
@@ -1388,7 +1380,9 @@ function unwrapWindowsVenvHermesCommand(command, backendArgs) {
   if (
     !canImportHermesCli(python, {
       env: {
-        PYTHONPATH: [...(directoryExists(root) ? [root] : []), process.env.PYTHONPATH].filter(Boolean).join(path.delimiter)
+        PYTHONPATH: [...(directoryExists(root) ? [root] : []), process.env.PYTHONPATH]
+          .filter(Boolean)
+          .join(path.delimiter)
       }
     })
   ) {
@@ -2243,7 +2237,9 @@ async function releaseBackendLock(updateRoot, tag) {
   // imports broken (the July 2026 brotlicffi/_sodium.pyd incidents). Failing
   // the update loudly and keeping the app running is strictly better than a
   // bricked install that needs manual venv surgery.
-  rememberLog(`[${tag}] venv shim still locked after 15s; aborting hand-off (something outside this app holds the venv)`)
+  rememberLog(
+    `[${tag}] venv shim still locked after 15s; aborting hand-off (something outside this app holds the venv)`
+  )
   return { unlocked: false }
 }
 
@@ -4072,7 +4068,7 @@ function buildApplicationMenu() {
       label: APP_NAME,
       submenu: [
         { label: `About ${APP_NAME}`, click: () => showAboutPanelFresh() },
-        checkForUpdatesItem,
+        ...(EVA_MANAGED_BUILD ? [] : [checkForUpdatesItem]),
         { type: 'separator' },
         { role: 'services' },
         { type: 'separator' },
@@ -4161,7 +4157,7 @@ function buildApplicationMenu() {
   template.push({
     label: 'Help',
     role: 'help',
-    submenu: [checkForUpdatesItem]
+    submenu: EVA_MANAGED_BUILD ? [] : [checkForUpdatesItem]
   })
 
   return Menu.buildFromTemplate(template)
@@ -4898,7 +4894,7 @@ function assertEvaGeneration(authGeneration, runtimeGeneration = null) {
     authGeneration !== evaAuthGeneration ||
     (runtimeGeneration !== null && runtimeGeneration !== evaRuntimeGeneration)
   ) {
-    throw new EvaBrokerError('Eva ignored a stale sign-in response.', 409, 'stale-auth')
+    throw new EvaBrokerError('evaOS Agent ignored a stale sign-in response.', 409, 'stale-auth')
   }
 }
 
@@ -4920,7 +4916,7 @@ async function beginEvaDesktopSignIn() {
     evaPendingAuth = { authState, controller, deviceCode, generation, resolve: resolveCallback }
 
     try {
-      await advanceBootProgress('eva.sign-in', 'Complete Eva sign-in in your browser', 14)
+      await advanceBootProgress('eva.sign-in', 'Complete evaOS Agent sign-in in your browser', 14)
       await shell.openExternal(authUrl)
       const desktop = await Promise.race([
         pollEvaDeviceCode(deviceCode, { signal: controller.signal }),
@@ -4939,9 +4935,11 @@ async function beginEvaDesktopSignIn() {
     }
   })()
   evaSignInPromise = signInTask
-  void signInTask.finally(() => {
-    if (evaSignInPromise === signInTask) evaSignInPromise = null
-  }).catch(() => undefined)
+  void signInTask
+    .finally(() => {
+      if (evaSignInPromise === signInTask) evaSignInPromise = null
+    })
+    .catch(() => undefined)
 
   return signInTask
 }
@@ -4951,14 +4949,14 @@ function requireEvaDesktopSignIn() {
   updateBootProgress(
     {
       phase: 'eva.sign-in-required',
-      message: 'Sign in to Eva from Settings → Gateway.',
+      message: 'Sign in to evaOS Agent from Settings → Gateway.',
       progress: 8,
       running: false,
       error: null
     },
     { allowDecrease: true }
   )
-  throw new EvaBrokerError('Sign in to Eva from Settings → Gateway.', 401, 'sign-in-required')
+  throw new EvaBrokerError('Sign in to evaOS Agent from Settings → Gateway.', 401, 'sign-in-required')
 }
 
 async function ensureEvaDesktopSession() {
@@ -4991,7 +4989,7 @@ async function ensureEvaRuntimeEnrollment(options = {}) {
   const enrollmentTask = (async () => {
     const desktop = await ensureEvaDesktopSession()
     assertEvaGeneration(authGeneration, runtimeGeneration)
-    await advanceBootProgress('eva.enroll', 'Resolving your assigned Hermes agent', 26)
+    await advanceBootProgress('eva.enroll', 'Resolving your assigned evaOS agent', 26)
     let runtime
     try {
       runtime = await launchEvaHermesRuntime(desktop.token)
@@ -5007,9 +5005,11 @@ async function ensureEvaRuntimeEnrollment(options = {}) {
     return runtime
   })()
   evaRuntimeEnrollmentPromise = enrollmentTask
-  void enrollmentTask.finally(() => {
-    if (evaRuntimeEnrollmentPromise === enrollmentTask) evaRuntimeEnrollmentPromise = null
-  }).catch(() => undefined)
+  void enrollmentTask
+    .finally(() => {
+      if (evaRuntimeEnrollmentPromise === enrollmentTask) evaRuntimeEnrollmentPromise = null
+    })
+    .catch(() => undefined)
 
   return enrollmentTask
 }
@@ -5043,11 +5043,11 @@ async function completeEvaDesktopCallback(rawUrl) {
   }
   const callback = parseEvaDesktopAuthCallback(rawUrl, pending.authState)
   if (callback.deviceCode !== pending.deviceCode) {
-    throw new EvaBrokerError('Eva sign-in device code did not match.', 400, 'device-code-mismatch')
+    throw new EvaBrokerError('evaOS Agent sign-in device code did not match.', 400, 'device-code-mismatch')
   }
   const desktop = await claimEvaDeviceCode(callback.deviceCode)
   if (evaPendingAuth !== pending) {
-    throw new EvaBrokerError('Eva ignored a stale sign-in callback.', 409, 'stale-auth')
+    throw new EvaBrokerError('evaOS Agent ignored a stale sign-in callback.', 409, 'stale-auth')
   }
   assertEvaGeneration(pending.generation)
   writeEvaManagedState({ desktop, runtime: null })
@@ -5952,12 +5952,12 @@ async function prepareProfileDeleteRequest(request) {
 
 async function startHermes() {
   if (EVA_MANAGED_BUILD) {
-    await advanceBootProgress('backend.resolve', 'Resolving your managed Eva agent', 8)
+    await advanceBootProgress('backend.resolve', 'Resolving your managed evaOS agent', 8)
     const remote = await resolveEvaManagedBackend()
-    await advanceBootProgress('backend.remote', 'Connecting to your managed Hermes agent', 30)
+    await advanceBootProgress('backend.remote', 'Connecting to your managed evaOS agent', 30)
     updateBootProgress({
       phase: 'backend.ready',
-      message: 'Eva is connected',
+      message: 'evaOS Agent is connected',
       progress: 94,
       running: true,
       error: null
@@ -6820,19 +6820,19 @@ ipcMain.handle('hermes:connection-config:get', async (_event, profile) => {
 })
 ipcMain.handle('hermes:connection-config:test', async (_event, payload) => {
   if (EVA_MANAGED_BUILD) {
-    throw new Error('Eva gateway settings are managed by Electric Sheep.')
+    throw new Error('evaOS Agent gateway settings are managed by Electric Sheep.')
   }
   return testDesktopConnectionConfig(payload)
 })
 ipcMain.handle('hermes:connection-config:probe', async (_event, rawUrl) => {
   if (EVA_MANAGED_BUILD) {
-    throw new Error('Eva gateway settings are managed by Electric Sheep.')
+    throw new Error('evaOS Agent gateway settings are managed by Electric Sheep.')
   }
   return probeRemoteAuthMode(rawUrl)
 })
 ipcMain.handle('hermes:connection-config:oauth-login', async (_event, rawUrl) => {
   if (EVA_MANAGED_BUILD) {
-    throw new Error('Eva gateway settings are managed by Electric Sheep.')
+    throw new Error('evaOS Agent gateway settings are managed by Electric Sheep.')
   }
   // Open the gateway's OAuth login window and wait for the session cookie to
   // land in the OAuth partition. The caller (settings UI) typically saves the
@@ -6844,7 +6844,7 @@ ipcMain.handle('hermes:connection-config:oauth-login', async (_event, rawUrl) =>
 })
 ipcMain.handle('hermes:connection-config:oauth-logout', async (_event, rawUrl) => {
   if (EVA_MANAGED_BUILD) {
-    throw new Error('Eva gateway settings are managed by Electric Sheep.')
+    throw new Error('evaOS Agent gateway settings are managed by Electric Sheep.')
   }
   const baseUrl = rawUrl ? normalizeRemoteBaseUrl(rawUrl) : ''
   await clearOauthSession(baseUrl || undefined)
@@ -6855,7 +6855,7 @@ ipcMain.handle('hermes:connection-config:oauth-logout', async (_event, rawUrl) =
 })
 ipcMain.handle('hermes:connection-config:save', async (_event, payload) => {
   if (EVA_MANAGED_BUILD) {
-    throw new Error('Eva gateway settings are managed by Electric Sheep.')
+    throw new Error('evaOS Agent gateway settings are managed by Electric Sheep.')
   }
   const config = coerceDesktopConnectionConfig(payload)
   writeDesktopConnectionConfig(config)
@@ -6864,7 +6864,7 @@ ipcMain.handle('hermes:connection-config:save', async (_event, payload) => {
 })
 ipcMain.handle('hermes:connection-config:apply', async (_event, payload) => {
   if (EVA_MANAGED_BUILD) {
-    throw new Error('Eva gateway settings are managed by Electric Sheep.')
+    throw new Error('evaOS Agent gateway settings are managed by Electric Sheep.')
   }
   const config = coerceDesktopConnectionConfig(payload)
   writeDesktopConnectionConfig(config)
@@ -6913,7 +6913,7 @@ ipcMain.handle('hermes:profile:set', async (_event, name) => {
     if (!name || name === 'default') {
       return { profile: 'default' }
     }
-    throw new Error('Eva uses the agent assigned by Electric Sheep; Desktop profiles cannot change it.')
+    throw new Error('evaOS Agent uses the agent assigned by Electric Sheep; Desktop profiles cannot change it.')
   }
   const next = writeActiveDesktopProfile(name)
 
@@ -7770,12 +7770,7 @@ ipcMain.handle('hermes:terminal:dispose', (_event, id) => disposeTerminalSession
 
 ipcMain.handle('hermes:updates:check', async () => {
   if (EVA_MANAGED_BUILD) {
-    return {
-      supported: false,
-      branch: EVA_MANAGED_POLICY.updateChannel,
-      message: 'Updates are managed by Electric Sheep.',
-      fetchedAt: Date.now()
-    }
+    return managedUpdateResponse('check')
   }
   return checkUpdates().catch(error => ({
     supported: true,
@@ -7788,11 +7783,7 @@ ipcMain.handle('hermes:updates:check', async () => {
 
 ipcMain.handle('hermes:updates:apply', async (_event, payload) => {
   if (EVA_MANAGED_BUILD) {
-    return {
-      ok: false,
-      error: 'managed-beta',
-      message: 'Updates are managed by Electric Sheep.'
-    }
+    return managedUpdateResponse('apply')
   }
   return applyUpdates(payload || {}).catch(error => ({
     ok: false,
@@ -7844,7 +7835,7 @@ function showAboutPanelFresh() {
   app.setAboutPanelOptions({
     applicationName: APP_NAME,
     applicationVersion: app.getVersion(),
-    copyright: 'Eva by Electric Sheep. Hermes Agent is MIT-licensed software from Nous Research.'
+    copyright: 'Built on Hermes Agent by Nous Research, used under the MIT License.'
   })
   app.showAboutPanel()
 }
@@ -8101,6 +8092,7 @@ const EVA_BLOCKED_INVOKE_CHANNELS = Object.freeze([
   'hermes:logs:reveal',
   'hermes:normalizePreviewTarget',
   'hermes:openPreviewInBrowser',
+  'hermes:profile:set',
   'hermes:readFileDataUrl',
   'hermes:readFileText',
   'hermes:requestMicrophoneAccess',
@@ -8118,7 +8110,6 @@ const EVA_BLOCKED_INVOKE_CHANNELS = Object.freeze([
   'hermes:terminal:write',
   'hermes:uninstall:run',
   'hermes:uninstall:summary',
-  'hermes:updates:apply',
   'hermes:updates:branch:set',
   'hermes:vscode-theme:fetch',
   'hermes:vscode-theme:search',
@@ -8131,7 +8122,7 @@ function installEvaManagedIpcGuards() {
   for (const channel of EVA_BLOCKED_INVOKE_CHANNELS) {
     ipcMain.removeHandler(channel)
     ipcMain.handle(channel, () => {
-      throw new Error('This local capability is unavailable in managed Eva.')
+      throw new Error('This local capability is unavailable in managed evaOS Agent.')
     })
   }
 }
@@ -8139,13 +8130,13 @@ function installEvaManagedIpcGuards() {
 installEvaManagedIpcGuards()
 
 // ---------------------------------------------------------------------------
-// eva:// deep links. The managed sign-in callback is consumed in the main
+// evaOS Agent deep links. The managed sign-in callback is consumed in the main
 // process so session tokens are never forwarded into renderer state.
 // A docs/dashboard "Send to App" button opens this URL; we route it into the
 // running app's chat composer. Three delivery paths: macOS 'open-url',
 // Win/Linux running-app 'second-instance' (argv), Win/Linux cold-start argv.
 // ---------------------------------------------------------------------------
-const APP_PROTOCOL = 'eva'
+const APP_PROTOCOL = EVA_MANAGED_POLICY.callbackScheme
 let _pendingDeepLink = null
 let _rendererReadyForDeepLink = false
 
@@ -8164,11 +8155,7 @@ function handleDeepLink(url) {
     return
   }
   if (EVA_MANAGED_BUILD) {
-    if (
-      parsed.protocol === `${APP_PROTOCOL}:` &&
-      parsed.hostname === 'auth' &&
-      parsed.pathname === '/callback'
-    ) {
+    if (parsed.protocol === `${APP_PROTOCOL}:` && parsed.hostname === 'auth' && parsed.pathname === '/callback') {
       void completeEvaDesktopCallback(url).catch(error => {
         rememberLog(`[eva-auth] callback rejected: ${error?.code || 'invalid-callback'}`)
       })
