@@ -30,6 +30,10 @@ test('managed build makes local startup unreachable and consumes auth callbacks 
   assert.match(start, /if \(EVA_MANAGED_BUILD\)/)
   assert.match(start, /resolveEvaManagedBackend/)
   assert.doesNotMatch(start, /resolveHermesBackend|ensureRuntime|spawn/)
+  const managedStart = start.slice(0, start.indexOf('// Latched-failure short-circuit'))
+  assert.match(managedStart, /Connecting to your managed evaOS agent/)
+  assert.match(managedStart, /evaOS Agent is connected/)
+  assert.doesNotMatch(managedStart, /managed Hermes agent|Eva is connected/)
   assert.match(main, /phase: 'eva\.sign-in-required'/)
   const ensureSession = main.slice(
     main.indexOf('async function ensureEvaDesktopSession()'),

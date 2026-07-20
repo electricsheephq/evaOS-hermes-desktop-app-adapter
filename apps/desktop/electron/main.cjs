@@ -5954,10 +5954,10 @@ async function startHermes() {
   if (EVA_MANAGED_BUILD) {
     await advanceBootProgress('backend.resolve', 'Resolving your managed evaOS agent', 8)
     const remote = await resolveEvaManagedBackend()
-    await advanceBootProgress('backend.remote', 'Connecting to your managed Hermes agent', 30)
+    await advanceBootProgress('backend.remote', 'Connecting to your managed evaOS agent', 30)
     updateBootProgress({
       phase: 'backend.ready',
-      message: 'Eva is connected',
+      message: 'evaOS Agent is connected',
       progress: 94,
       running: true,
       error: null
@@ -6820,19 +6820,19 @@ ipcMain.handle('hermes:connection-config:get', async (_event, profile) => {
 })
 ipcMain.handle('hermes:connection-config:test', async (_event, payload) => {
   if (EVA_MANAGED_BUILD) {
-    throw new Error('Eva gateway settings are managed by Electric Sheep.')
+    throw new Error('evaOS Agent gateway settings are managed by Electric Sheep.')
   }
   return testDesktopConnectionConfig(payload)
 })
 ipcMain.handle('hermes:connection-config:probe', async (_event, rawUrl) => {
   if (EVA_MANAGED_BUILD) {
-    throw new Error('Eva gateway settings are managed by Electric Sheep.')
+    throw new Error('evaOS Agent gateway settings are managed by Electric Sheep.')
   }
   return probeRemoteAuthMode(rawUrl)
 })
 ipcMain.handle('hermes:connection-config:oauth-login', async (_event, rawUrl) => {
   if (EVA_MANAGED_BUILD) {
-    throw new Error('Eva gateway settings are managed by Electric Sheep.')
+    throw new Error('evaOS Agent gateway settings are managed by Electric Sheep.')
   }
   // Open the gateway's OAuth login window and wait for the session cookie to
   // land in the OAuth partition. The caller (settings UI) typically saves the
@@ -6844,7 +6844,7 @@ ipcMain.handle('hermes:connection-config:oauth-login', async (_event, rawUrl) =>
 })
 ipcMain.handle('hermes:connection-config:oauth-logout', async (_event, rawUrl) => {
   if (EVA_MANAGED_BUILD) {
-    throw new Error('Eva gateway settings are managed by Electric Sheep.')
+    throw new Error('evaOS Agent gateway settings are managed by Electric Sheep.')
   }
   const baseUrl = rawUrl ? normalizeRemoteBaseUrl(rawUrl) : ''
   await clearOauthSession(baseUrl || undefined)
@@ -6855,7 +6855,7 @@ ipcMain.handle('hermes:connection-config:oauth-logout', async (_event, rawUrl) =
 })
 ipcMain.handle('hermes:connection-config:save', async (_event, payload) => {
   if (EVA_MANAGED_BUILD) {
-    throw new Error('Eva gateway settings are managed by Electric Sheep.')
+    throw new Error('evaOS Agent gateway settings are managed by Electric Sheep.')
   }
   const config = coerceDesktopConnectionConfig(payload)
   writeDesktopConnectionConfig(config)
@@ -6864,7 +6864,7 @@ ipcMain.handle('hermes:connection-config:save', async (_event, payload) => {
 })
 ipcMain.handle('hermes:connection-config:apply', async (_event, payload) => {
   if (EVA_MANAGED_BUILD) {
-    throw new Error('Eva gateway settings are managed by Electric Sheep.')
+    throw new Error('evaOS Agent gateway settings are managed by Electric Sheep.')
   }
   const config = coerceDesktopConnectionConfig(payload)
   writeDesktopConnectionConfig(config)
@@ -6913,7 +6913,7 @@ ipcMain.handle('hermes:profile:set', async (_event, name) => {
     if (!name || name === 'default') {
       return { profile: 'default' }
     }
-    throw new Error('Eva uses the agent assigned by Electric Sheep; Desktop profiles cannot change it.')
+    throw new Error('evaOS Agent uses the agent assigned by Electric Sheep; Desktop profiles cannot change it.')
   }
   const next = writeActiveDesktopProfile(name)
 
