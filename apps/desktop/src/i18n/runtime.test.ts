@@ -61,7 +61,7 @@ describe('desktop i18n runtime translator', () => {
       boot.ready = undefined
       setRuntimeI18nLocale('ja')
 
-      expect(translateNow('boot.ready')).toBe('Eva is ready')
+      expect(translateNow('boot.ready')).toBe('evaOS Agent is ready')
     } finally {
       boot.ready = originalReady
     }
