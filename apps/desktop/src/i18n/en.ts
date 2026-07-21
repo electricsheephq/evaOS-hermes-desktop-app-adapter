@@ -824,8 +824,9 @@ export const en: Translations = {
       needsSignIn: 'Needs sign-in',
       needsSetup: 'Needs setup',
       nousIncluded: 'Included with an Electric Sheep plan — sign in to your Electric Sheep account to activate.',
-      nousAuthNeededTitle: 'Sign in to Electric Sheep account',
-      nousAuthNeededMessage: provider => `${provider} is saved but won't activate until you sign in to Electric Sheep account.`,
+      nousAuthNeededTitle: 'Sign in to your Electric Sheep account',
+      nousAuthNeededMessage: provider =>
+        `${provider} is saved but won't activate until you sign in to your Electric Sheep account.`,
       nousAuthSignIn: 'Sign in',
       nousAuthDoneTitle: 'Electric Sheep account connected',
       nousAuthDoneMessage: 'Your subscription backends are now active.',
