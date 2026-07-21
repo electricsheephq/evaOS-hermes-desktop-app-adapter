@@ -86,7 +86,16 @@ export async function ensureDefaultWorkspaceCwd(): Promise<void> {
   // sanitize local project-directory settings during managed boot: branded
   // builds deliberately block those local filesystem IPC channels.
   if ($connection.get()?.mode === 'remote') {
-    seedLiveCwd(remembered)
+    // A connection switch can leave the previous local/backend cwd live even
+    // when this remote has never remembered a workspace. Clear that stale
+    // value so seedDefaultCwd() can adopt the remote backend default.
+    if (!$activeSessionId.get()) {
+      setCurrentCwdTransient(remembered)
+
+      if (!remembered) {
+        setCurrentBranch('')
+      }
+    }
 
     return
   }

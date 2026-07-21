@@ -267,6 +267,15 @@ describe('workspaceCwdForNewSession', () => {
     expect(getDefaultProjectDir).not.toHaveBeenCalled()
     expect(sanitizeWorkspaceCwd).not.toHaveBeenCalled()
   })
+
+  it('clears a stale local cwd when a remote backend has no remembered workspace', async () => {
+    $currentCwd.set('/Users/test/local-project')
+    $connection.set({ baseUrl: 'https://managed.example', mode: 'remote' } as never)
+
+    await ensureDefaultWorkspaceCwd()
+
+    expect($currentCwd.get()).toBe('')
+  })
 })
 
 function makeState(over: Partial<ClientSessionState> = {}): ClientSessionState {
