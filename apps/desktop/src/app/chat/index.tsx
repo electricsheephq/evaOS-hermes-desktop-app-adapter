@@ -265,6 +265,7 @@ export function ChatView({
   const gatewayState = useStore($gatewayState)
   const gatewaySwapTarget = useStore($gatewaySwapTarget)
   const gatewayOpen = gatewayState === 'open'
+  const managedEva = Boolean(window.hermesDesktop?.eva)
   const introPersonality = useStore($introPersonality)
   const introSeed = useStore($introSeed)
   // PERF: ChatView must not subscribe to the view's $messages — the atom is
@@ -513,17 +514,17 @@ export function ChatView({
               maxRecordingSeconds={maxVoiceRecordingSeconds}
               onAddContextRef={onAddContextRef}
               onAddUrl={onAddUrl}
-              onAttachDroppedItems={onAttachDroppedItems}
-              onAttachImageBlob={onAttachImageBlob}
+              onAttachDroppedItems={managedEva ? undefined : onAttachDroppedItems}
+              onAttachImageBlob={managedEva ? undefined : onAttachImageBlob}
               onCancel={onCancel}
-              onPasteClipboardImage={onPasteClipboardImage}
-              onPickFiles={onPickFiles}
-              onPickFolders={onPickFolders}
-              onPickImages={onPickImages}
+              onPasteClipboardImage={managedEva ? undefined : onPasteClipboardImage}
+              onPickFiles={managedEva ? undefined : onPickFiles}
+              onPickFolders={managedEva ? undefined : onPickFolders}
+              onPickImages={managedEva ? undefined : onPickImages}
               onRemoveAttachment={onRemoveAttachment}
               onSteer={onSteer}
               onSubmit={onSubmit}
-              onTranscribeAudio={onTranscribeAudio}
+              onTranscribeAudio={managedEva ? undefined : onTranscribeAudio}
               queueSessionKey={selectedSessionId}
               sessionId={activeSessionId}
               state={chatBarState}

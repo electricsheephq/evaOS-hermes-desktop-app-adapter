@@ -86,6 +86,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup()
   vi.clearAllMocks()
+  Reflect.deleteProperty(window, 'hermesDesktop')
   // Shared singleton client — drop cached skills/toolsets so each test refetches.
   queryClient.clear()
 })
@@ -152,5 +153,31 @@ describe('SkillsView toolset management', () => {
     // Internal route change into the Models section with the aux slot target —
     // consumed by ModelSettings' deep-link highlight. Never an external URL.
     await waitFor(() => expect(navigateSpy).toHaveBeenCalledWith('/settings?tab=config:model&aux=vision'))
+  })
+})
+
+describe('Eva managed capabilities', () => {
+  it('shows approved capabilities read-only without Hub, MCP, toggles, or configuration controls', async () => {
+    Object.defineProperty(window, 'hermesDesktop', {
+      configurable: true,
+      value: { eva: {} }
+    })
+    getSkills.mockResolvedValue([
+      {
+        name: 'electric-sheep-demo',
+        description: 'Approved demo capability',
+        category: 'managed',
+        enabled: true
+      }
+    ])
+
+    await renderSkills()
+
+    expect((await screen.findAllByText('Web Search')).length).toBeGreaterThan(0)
+    expect(screen.getByText('Installed and managed by Electric Sheep')).toBeTruthy()
+    expect(screen.queryByRole('switch')).toBeNull()
+    expect(screen.queryByText('MCP')).toBeNull()
+    expect(screen.queryByText('Hub')).toBeNull()
+    expect(getToolsetConfig).not.toHaveBeenCalled()
   })
 })

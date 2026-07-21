@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { $desktopOnboarding, type DesktopOnboardingState, type OnboardingContext } from '@/store/onboarding'
 import type { OAuthProvider } from '@/types/hermes'
 
-import { Picker } from '.'
+import { DesktopOnboardingOverlay, Picker } from '.'
 
 function provider(id: string, name = id): OAuthProvider {
   return {
@@ -35,6 +35,7 @@ const ctx: OnboardingContext = { requestGateway: async () => undefined as never 
 
 afterEach(() => {
   cleanup()
+  Reflect.deleteProperty(window, 'hermesDesktop')
 
   try {
     window.localStorage.clear()
@@ -56,6 +57,24 @@ afterEach(() => {
 })
 
 describe('onboarding Picker', () => {
+  it('does not cover managed Eva enrollment with the local provider picker', () => {
+    Object.defineProperty(window, 'hermesDesktop', {
+      configurable: true,
+      value: { eva: {} },
+      writable: true
+    })
+
+    render(
+      <DesktopOnboardingOverlay
+        enabled={false}
+        requestGateway={async () => undefined as never}
+      />
+    )
+
+    expect(screen.queryByText("Let's connect Eva to your assigned agent")).toBeNull()
+    expect(screen.queryByText('Starting Eva…')).toBeNull()
+  })
+
   it('features Nous Portal and hides other providers behind a disclosure', () => {
     setProviders([provider('anthropic', 'Anthropic Claude'), provider('nous', 'Nous Portal')])
     render(<Picker ctx={ctx} />)

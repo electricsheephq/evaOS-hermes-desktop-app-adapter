@@ -77,6 +77,17 @@ export function SettingsView({ onClose, onConfigSaved, onMainModelChanged }: Set
   }, [navigate, search])
 
   const [activeView, setActiveView] = useRouteEnumParam('tab', SETTINGS_VIEWS, 'config:model' as SettingsViewId)
+  const managedEva = Boolean(window.hermesDesktop?.eva)
+
+  const managedViews = new Set<SettingsViewId>([
+    'about',
+    'config:appearance',
+    'gateway',
+    'notifications',
+    'sessions'
+  ])
+
+  const effectiveView = managedEva && !managedViews.has(activeView) ? ('gateway' as SettingsViewId) : activeView
   // Providers subnav (Accounts vs API keys) lives in its own param so each
   // sub-view is deep-linkable and survives a refresh.
   const [providerView, setProviderView] = useRouteEnumParam<ProviderView>('pview', PROVIDER_VIEWS, 'accounts')
@@ -134,7 +145,7 @@ export function SettingsView({ onClose, onConfigSaved, onMainModelChanged }: Set
     }
   }
 
-  const navGroups: OverlayNavGroup[] = [
+  const allNavGroups: OverlayNavGroup[] = [
     ...SECTIONS.map(s => {
       const view = `config:${s.id}` as SettingsViewId
 
@@ -252,7 +263,11 @@ export function SettingsView({ onClose, onConfigSaved, onMainModelChanged }: Set
     }
   ]
 
-  const navFooter = (
+  const navGroups = managedEva
+    ? allNavGroups.filter(group => managedViews.has(group.id as SettingsViewId))
+    : allNavGroups
+
+  const navFooter = managedEva ? null : (
     <>
       <Tip label={t.settings.exportConfig}>
         <OverlayIconButton onClick={() => void exportConfig()}>
@@ -289,22 +304,22 @@ export function SettingsView({ onClose, onConfigSaved, onMainModelChanged }: Set
         <OverlayNav footer={navFooter} groups={navGroups} />
 
         <OverlayMain className="px-0 pb-0 pt-[calc(var(--titlebar-height)+1rem)]">
-          {activeView === 'config:appearance' ? (
+          {effectiveView === 'config:appearance' ? (
             <AppearanceSettings />
-          ) : activeView === 'about' ? (
+          ) : effectiveView === 'about' ? (
             <AboutSettings />
-          ) : activeView === 'gateway' ? (
+          ) : effectiveView === 'gateway' ? (
             <GatewaySettings />
-          ) : activeView === 'keybinds' ? (
+          ) : effectiveView === 'keybinds' ? (
             <KeybindSettings />
-          ) : activeView.startsWith('config:') ? (
+          ) : effectiveView.startsWith('config:') ? (
             <ConfigSettings
-              activeSectionId={activeView.slice('config:'.length)}
+              activeSectionId={effectiveView.slice('config:'.length)}
               importInputRef={importInputRef}
               onConfigSaved={onConfigSaved}
               onMainModelChanged={onMainModelChanged}
             />
-          ) : activeView === 'providers' ? (
+          ) : effectiveView === 'providers' ? (
             <ProvidersSettings
               onClose={onClose}
               onConfigSaved={onConfigSaved}
@@ -312,13 +327,13 @@ export function SettingsView({ onClose, onConfigSaved, onMainModelChanged }: Set
               onViewChange={setProviderView}
               view={providerView}
             />
-          ) : activeView === 'keys' ? (
+          ) : effectiveView === 'keys' ? (
             <KeysSettings view={keysView} />
-          ) : activeView === 'notifications' ? (
+          ) : effectiveView === 'notifications' ? (
             <NotificationsSettings />
-          ) : activeView === 'billing' ? (
+          ) : effectiveView === 'billing' ? (
             <BillingSettings />
-          ) : activeView === 'plugins' ? (
+          ) : effectiveView === 'plugins' ? (
             <PluginsSettings />
           ) : (
             <SessionsSettings />

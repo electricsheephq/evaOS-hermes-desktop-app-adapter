@@ -87,6 +87,7 @@ export const StatusbarSurface = memo(function StatusbarSurface({
     freshDraftReady,
     gatewayState,
     inferenceStatus,
+    managedEva: Boolean(window.hermesDesktop?.eva),
     openAgents: actions.openAgents,
     openCommandCenterSection: actions.openCommandCenterSection,
     requestGateway: actions.requestGateway,
