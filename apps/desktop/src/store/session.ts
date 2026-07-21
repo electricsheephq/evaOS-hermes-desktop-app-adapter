@@ -74,15 +74,6 @@ export async function syncConfiguredDefaultProjectDir(): Promise<string> {
  *  packaged, optional Settings override). Clears stale install-dir paths that
  *  PR #37586's localStorage stickiness can preserve across the #37536 fix. */
 export async function ensureDefaultWorkspaceCwd(): Promise<void> {
-  const sanitize = window.hermesDesktop?.sanitizeWorkspaceCwd
-
-  if (!sanitize) {
-    return
-  }
-
-  await syncConfiguredDefaultProjectDir()
-  const configured = getConfiguredDefaultProjectDir()
-
   const seedLiveCwd = (cwd: string) => {
     if (cwd && !$activeSessionId.get()) {
       setCurrentCwd(cwd)
@@ -91,11 +82,23 @@ export async function ensureDefaultWorkspaceCwd(): Promise<void> {
 
   const remembered = getRememberedWorkspaceCwd()
 
+  // Remote workspaces belong to the assigned backend. Do not consult or
+  // sanitize local project-directory settings during managed boot: branded
+  // builds deliberately block those local filesystem IPC channels.
   if ($connection.get()?.mode === 'remote') {
     seedLiveCwd(remembered)
 
     return
   }
+
+  const sanitize = window.hermesDesktop?.sanitizeWorkspaceCwd
+
+  if (!sanitize) {
+    return
+  }
+
+  await syncConfiguredDefaultProjectDir()
+  const configured = getConfiguredDefaultProjectDir()
 
   if (configured) {
     const { cwd } = await sanitize(configured)
