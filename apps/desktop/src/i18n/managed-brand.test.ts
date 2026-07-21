@@ -52,6 +52,7 @@ describe('managed evaOS Agent branding', () => {
       'Timed out waiting for the gateway. Is `hermes gateway` running?'
     ]
 
-    expect(visibleCopy.filter(value => /\b(?:Hermes|Nous)\b/i.test(value))).toEqual(allowedTechnicalCopy)
+    expect(visibleCopy.filter(value => /\b(?:Hermes|Nous|Eva)\b/i.test(value))).toEqual(allowedTechnicalCopy)
+    expect(visibleCopy.filter(value => /evaOS Agent agent/i.test(value))).toEqual([])
   })
 })

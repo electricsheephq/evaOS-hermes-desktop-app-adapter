@@ -62,14 +62,14 @@ export const en: Translations = {
   },
 
   boot: {
-    ready: 'Eva is ready',
+    ready: 'evaOS Agent is ready',
     desktopBootFailedWithMessage: message => `Desktop boot failed: ${message}`,
     steps: {
       connectingGateway: 'Connecting live desktop gateway',
       loadingSettings: 'Loading evaOS Agent settings',
       loadingSessions: 'Loading recent sessions',
       startingDesktopConnection: 'Starting desktop connection',
-      startingHermesDesktop: 'Starting Eva…'
+      startingHermesDesktop: 'Starting evaOS Agent…'
     },
     errors: {
       backgroundExited: 'evaOS Agent background process exited.',
@@ -132,7 +132,7 @@ export const en: Translations = {
     errors: {
       elevenLabsNeedsKey: 'ElevenLabs STT needs ELEVENLABS_API_KEY.',
       elevenLabsRejectedKey: 'ElevenLabs rejected the API key (401).',
-      methodNotAllowed: 'The managed agent rejected that request (405 Method Not Allowed). Try restarting Eva.',
+      methodNotAllowed: 'The managed agent rejected that request (405 Method Not Allowed). Try restarting evaOS Agent.',
       microphonePermission: 'Microphone permission was denied.',
       openaiRejectedApiKey: 'OpenAI rejected the API key.',
       openaiRejectedApiKeyWithStatus: status => `OpenAI rejected the API key (${status} invalid_api_key).`,
@@ -389,7 +389,7 @@ export const en: Translations = {
       advanced: 'Advanced'
     },
     searchPlaceholder: {
-      about: 'About Eva',
+      about: 'About evaOS Agent',
       config: 'Search settings...',
       gateway: 'Gateway connection...',
       keys: 'Search API keys...',
@@ -483,7 +483,7 @@ export const en: Translations = {
     fieldLabels: FIELD_LABELS,
     fieldDescriptions: FIELD_DESCRIPTIONS,
     about: {
-      heading: 'Eva by Electric Sheep',
+      heading: 'evaOS Agent',
       version: value => `Version ${value}`,
       versionUnavailable: 'Version unavailable',
       updates: 'Updates',
@@ -1722,7 +1722,7 @@ export const en: Translations = {
   composer: {
     message: 'Message',
     wakingProfile: profile => `Waking up ${profile}…`,
-    placeholderStarting: 'Starting Eva...',
+    placeholderStarting: 'Starting evaOS Agent...',
     placeholderReconnecting: 'Reconnecting to evaOS Agent…',
     placeholderFollowUp: 'Send follow-up',
     newSessionPlaceholders: [
@@ -1982,7 +1982,7 @@ export const en: Translations = {
     installTo: 'Will install to',
     retryAfterRun: 'I’ve run it -- retry',
     failedTitle: 'Installation failed',
-    settingUpTitle: 'Connecting Eva',
+    settingUpTitle: 'Connecting evaOS Agent',
     finishingTitle: 'Finishing up',
     failedDesc:
       'One of the install steps failed. On Windows, this can happen if another evaOS Agent CLI or desktop instance is running. Stop any running evaOS Agent instances, then retry. Check the details below or the desktop log for the full transcript.',
@@ -2005,11 +2005,11 @@ export const en: Translations = {
   },
 
   onboarding: {
-    headerTitle: "Let's connect Eva to your assigned agent",
+    headerTitle: 'Connect evaOS Agent to your assigned agent',
     headerDesc:
-      'Sign in with your Electric Sheep business account to connect to the evaOS Agent agent assigned by your administrator.',
+      'Sign in with your Electric Sheep business account to connect to the agent assigned by your administrator.',
     preparingInstall: 'evaOS Agent is finishing install. This usually takes under a minute on first run.',
-    starting: 'Starting Eva…',
+    starting: 'Starting evaOS Agent…',
     lookingUpProviders: 'Looking up providers...',
     collapse: 'Collapse',
     otherProviders: 'Other providers',
@@ -2164,7 +2164,7 @@ export const en: Translations = {
       update: 'update',
       updateInProgress: 'Update in progress',
       commitsBehind: (count, branch) => `${count} commit${count === 1 ? '' : 's'} behind ${branch}`,
-      desktopVersion: version => `Eva v${version}`,
+      desktopVersion: version => `evaOS Agent v${version}`,
       backendVersion: version => `Backend v${version}`,
       clientLabel: version => `client v${version}`,
       backendLabel: version => `backend v${version}`,
@@ -2614,8 +2614,8 @@ export const en: Translations = {
     sessionExportFailed: 'Could not export session',
     imageSaved: 'Image saved',
     downloadStarted: 'Download started',
-    restartToUseSaveImage: 'Restart Eva to use Save Image.',
-    restartToSaveImages: 'Restart Eva to save images',
+    restartToUseSaveImage: 'Restart evaOS Agent to use Save Image.',
+    restartToSaveImages: 'Restart evaOS Agent to save images',
     imageDownloadFailed: 'Image download failed',
     openImage: 'Open image',
     downloadImage: 'Download image',
