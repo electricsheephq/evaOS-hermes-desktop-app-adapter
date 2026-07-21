@@ -7,7 +7,6 @@ const EVA_MANAGED_POLICY = Object.freeze({
   productName: 'evaOS Agent',
   dashboardAuthUrl: 'https://www.electricsheephq.com/desktop-auth',
   brokerUrl: 'https://rhfojelkgtwcxnrfhtlj.supabase.co/functions/v1/desktop-runtime-session',
-  customerId: 'jackie-david',
   runtime: 'hermes',
   launchMode: 'dashboard_surface',
   clientSurface: 'eva_desktop',
@@ -16,8 +15,7 @@ const EVA_MANAGED_POLICY = Object.freeze({
   deviceCodePollMs: 1_500,
   loginTimeoutMs: 180_000,
   runtimeRefreshSkewMs: 60_000,
-  allowedAgentIds: Object.freeze(['jane', 'louis', 'regan']),
-  allowedRuntimeOrigins: Object.freeze(['https://hermes-jackie-david.ecs.electricsheephq.com'])
+  runtimeHostSuffix: '.ecs.electricsheephq.com'
 })
 
 const EVA_MANAGED_READ_ROUTES = Object.freeze([
@@ -156,7 +154,7 @@ function validateEvaManagedQueryValue(key, value, options = {}) {
       throw new EvaBrokerError('evaOS Agent blocked an invalid managed file path.', 400, 'managed-policy')
     }
     const agentId = String(options.agentId || '')
-    if (!EVA_MANAGED_POLICY.allowedAgentIds.includes(agentId)) {
+    if (!/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/.test(agentId)) {
       throw new EvaBrokerError(
         'evaOS Agent could not bind this file request to an assigned agent.',
         403,
@@ -381,6 +379,7 @@ function normalizeRemoteBaseUrl(value, policy = EVA_MANAGED_POLICY) {
   } catch {
     throw new EvaBrokerError('Electric Sheep returned an invalid managed backend.', 502, 'invalid-enrollment')
   }
+  const hostname = url.hostname.toLowerCase()
   if (
     url.protocol !== 'https:' ||
     url.username ||
@@ -388,7 +387,10 @@ function normalizeRemoteBaseUrl(value, policy = EVA_MANAGED_POLICY) {
     url.search ||
     url.hash ||
     url.pathname !== '/' ||
-    !policy.allowedRuntimeOrigins.includes(url.origin)
+    !hostname.endsWith(policy.runtimeHostSuffix) ||
+    !/^hermes-[a-z0-9](?:[a-z0-9-]{0,126}[a-z0-9])?$/.test(
+      hostname.slice(0, -policy.runtimeHostSuffix.length)
+    )
   ) {
     throw new EvaBrokerError('Electric Sheep returned an untrusted managed backend.', 502, 'invalid-enrollment')
   }
@@ -414,8 +416,9 @@ function normalizeHermesEnrollment(payload, options = {}) {
       'invalid-enrollment'
     )
   }
-  if (payload.runtime !== policy.runtime || payload.customer_id !== policy.customerId) {
-    throw new EvaBrokerError('Electric Sheep returned an enrollment outside this managed beta.', 403, 'wrong-customer')
+  const customerId = String(payload.customer_id || '').trim().toLowerCase()
+  if (payload.runtime !== policy.runtime || !/^[a-z0-9](?:[a-z0-9-]{0,126}[a-z0-9])?$/.test(customerId)) {
+    throw new EvaBrokerError('Electric Sheep returned an invalid managed account.', 403, 'wrong-customer')
   }
 
   const remote = payload.remote_backend
@@ -423,16 +426,22 @@ function normalizeHermesEnrollment(payload, options = {}) {
     throw new EvaBrokerError('Electric Sheep returned an incomplete evaOS Agent enrollment.', 502, 'invalid-enrollment')
   }
   const agentId = String(remote.agent_id || '').trim()
-  if (!policy.allowedAgentIds.includes(agentId)) {
-    throw new EvaBrokerError('Electric Sheep returned an unapproved managed agent.', 403, 'wrong-agent')
+  if (!/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/.test(agentId)) {
+    throw new EvaBrokerError('Electric Sheep returned an invalid assigned agent.', 403, 'wrong-agent')
+  }
+
+  const baseUrl = normalizeRemoteBaseUrl(remote.base_url, policy)
+  const expectedOrigin = `https://hermes-${customerId}${policy.runtimeHostSuffix}`
+  if (baseUrl !== expectedOrigin) {
+    throw new EvaBrokerError('Electric Sheep returned a backend for a different managed account.', 403, 'wrong-customer')
   }
 
   return {
     schemaVersion: policy.enrollmentSchemaVersion,
-    customerId: policy.customerId,
+    customerId,
     runtime: policy.runtime,
     agentId,
-    baseUrl: normalizeRemoteBaseUrl(remote.base_url),
+    baseUrl,
     token: normalizeOpaqueToken(remote.session_token, 'evaOS Agent runtime session'),
     expiresAt: parseFutureTimestamp(remote.expires_at, 'evaOS Agent runtime session', now)
   }
@@ -458,7 +467,7 @@ async function brokerPost(body, options = {}) {
       signal: options.signal,
       headers: {
         'Content-Type': 'application/json',
-        'X-Client-Info': 'evaos-agent/0.2.0-beta.1',
+        'X-Client-Info': 'evaos-agent/2026.7.20-es.1',
         ...(options.desktopSession ? { Authorization: `Bearer ${options.desktopSession}` } : {})
       },
       body: JSON.stringify(body)
@@ -525,7 +534,6 @@ async function launchEvaHermesRuntime(desktopSession, options = {}) {
   const payload = await brokerPost(
     {
       action: 'runtime_launch',
-      customer_id: policy.customerId,
       runtime: policy.runtime,
       launch_mode: policy.launchMode,
       client_surface: policy.clientSurface
@@ -559,7 +567,7 @@ function publicEvaEnrollmentStatus(state, now = Date.now()) {
     managed: true,
     productName: EVA_MANAGED_POLICY.productName,
     signedOut: state?.signedOut === true,
-    customerId: runtime?.customerId ?? EVA_MANAGED_POLICY.customerId,
+    customerId: runtime?.customerId ?? null,
     email: desktop?.email ?? null,
     desktopSessionExpiresAt: desktop?.expiresAt ?? null,
     desktopSessionActive: Boolean(desktop && !expiresSoon(desktop.expiresAt, 0, now)),

@@ -18,12 +18,13 @@ const {
 
 const FUTURE = '2099-07-19T12:00:00.000Z'
 
-test('managed policy is a remote-only Electric Sheep canary with no Nous endpoint', () => {
+test('managed policy is remote-only, account-neutral, and has no Nous endpoint', () => {
   const serialized = JSON.stringify(EVA_MANAGED_POLICY)
-  assert.equal(EVA_MANAGED_POLICY.customerId, 'jackie-david')
+  assert.equal(Object.hasOwn(EVA_MANAGED_POLICY, 'customerId'), false)
   assert.equal(EVA_MANAGED_POLICY.runtime, 'hermes')
   assert.equal(EVA_MANAGED_POLICY.updateChannel, 'managed-beta')
-  assert.deepEqual(EVA_MANAGED_POLICY.allowedAgentIds, ['jane', 'louis', 'regan'])
+  assert.equal(Object.hasOwn(EVA_MANAGED_POLICY, 'allowedAgentIds'), false)
+  assert.equal(EVA_MANAGED_POLICY.runtimeHostSuffix, '.ecs.electricsheephq.com')
   assert.doesNotMatch(serialized, /nousresearch|portal\.nous|github\.com/i)
 })
 
@@ -98,7 +99,7 @@ test('device-code polling fails immediately on a malformed successful claim', as
   assert.equal(sleeps, 0)
 })
 
-test('runtime launch sends the fixed canary contract and never submits an agent id', async () => {
+test('runtime launch lets the broker select the account and assigned agent', async () => {
   let observed = null
   const result = await launchEvaHermesRuntime('eds_desktop_session', {
     fetchImpl: async (url, init) => {
@@ -124,11 +125,11 @@ test('runtime launch sends the fixed canary contract and never submits an agent 
   assert.equal(observed.init.headers.Authorization, 'Bearer eds_desktop_session')
   assert.deepEqual(observed.body, {
     action: 'runtime_launch',
-    customer_id: 'jackie-david',
     runtime: 'hermes',
     launch_mode: 'dashboard_surface',
     client_surface: 'eva_desktop'
   })
+  assert.equal(Object.hasOwn(observed.body, 'customer_id'), false)
   assert.equal(Object.hasOwn(observed.body, 'agent_id'), false)
   assert.equal(result.agentId, 'jane')
   assert.equal(result.baseUrl, 'https://hermes-jackie-david.ecs.electricsheephq.com')
@@ -272,7 +273,7 @@ test('managed backend validates query, profile, and session mutation shapes', ()
   }
 })
 
-test('managed enrollment rejects wrong customers, unknown agents, and untrusted backend URLs', () => {
+test('managed enrollment accepts server-selected accounts and rejects mismatched or malformed identities', () => {
   const payload = {
     schema_version: 'evaos.hermes_desktop_enrollment.v1',
     runtime: 'hermes',
@@ -285,6 +286,17 @@ test('managed enrollment rejects wrong customers, unknown agents, and untrusted 
     }
   }
   assert.equal(normalizeHermesEnrollment(payload).agentId, 'louis')
+  const benjamin = normalizeHermesEnrollment({
+    ...payload,
+    customer_id: 'benjamin-kennedy',
+    remote_backend: {
+      ...payload.remote_backend,
+      base_url: 'https://hermes-benjamin-kennedy.ecs.electricsheephq.com',
+      agent_id: 'benjamin-agent'
+    }
+  })
+  assert.equal(benjamin.customerId, 'benjamin-kennedy')
+  assert.equal(benjamin.agentId, 'benjamin-agent')
   assert.throws(
     () => normalizeHermesEnrollment({ ...payload, customer_id: 'another-customer' }),
     error => error instanceof EvaBrokerError && error.code === 'wrong-customer'
@@ -293,7 +305,7 @@ test('managed enrollment rejects wrong customers, unknown agents, and untrusted 
     () =>
       normalizeHermesEnrollment({
         ...payload,
-        remote_backend: { ...payload.remote_backend, agent_id: 'client-selected-agent' }
+        remote_backend: { ...payload.remote_backend, agent_id: '../client-selected-agent' }
       }),
     error => error instanceof EvaBrokerError && error.code === 'wrong-agent'
   )
@@ -316,7 +328,7 @@ test('managed enrollment rejects wrong customers, unknown agents, and untrusted 
           ...payload,
           remote_backend: { ...payload.remote_backend, base_url: baseUrl }
         }),
-      error => error instanceof EvaBrokerError && error.code === 'invalid-enrollment'
+      error => error instanceof EvaBrokerError && ['invalid-enrollment', 'wrong-customer'].includes(error.code)
     )
   }
 })
