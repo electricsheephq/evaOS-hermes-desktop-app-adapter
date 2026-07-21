@@ -156,7 +156,7 @@ describe('deriveBillingView', () => {
     expect(view.status).toBe('logged_out')
     expect(view.summary.map(item => item.value)).toEqual(['—', '—', '—'])
     expect(view.notice).toMatchObject({
-      title: 'Connect your Nous account'
+      title: 'Connect your Electric Sheep account'
     })
     expect(view.accountRows).toEqual([])
     expect(view.usageRows).toEqual([])

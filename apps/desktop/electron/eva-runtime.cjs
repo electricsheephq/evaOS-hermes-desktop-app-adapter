@@ -136,7 +136,8 @@ function createEvaManagedRuntime(options) {
           const runtime = await ensureRuntimeEnrollment()
           return { baseUrl: runtime.baseUrl, token: runtime.token }
         },
-        onAuthRejected: clearRuntimeEnrollment
+        onAuthRejected: clearRuntimeEnrollment,
+        onEvent: event => rememberLog(`[eva-managed] websocket relay ${event}`)
       })
     }
     return wsRelay

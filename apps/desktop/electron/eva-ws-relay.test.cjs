@@ -145,3 +145,27 @@ test('an upstream reset after the WebSocket handshake closes the relay without c
   }
   assert.equal(result.socket.destroyed, true)
 })
+
+test('relay emits only coarse handshake events', async t => {
+  const events = []
+  const upstream = fakeUpstream(403)
+  await upstream.start()
+  const relay = createEvaWsRelay({
+    getUpstream: async () => ({ baseUrl: BASE_URL, token: 'secret-runtime-token' }),
+    connectUpstream: () => upstream.connect(),
+    onEvent: event => events.push(event)
+  })
+  t.after(async () => {
+    await relay.close()
+    await upstream.stop()
+  })
+
+  const result = await upgrade(await relay.mintTicket())
+  assert.match(result.response, /^HTTP\/1\.1 401/)
+  result.socket.destroy()
+  await new Promise(resolve => setImmediate(resolve))
+
+  assert.ok(events.some(event => /^upstream_handshake status=/.test(event)))
+  assert.equal(events.join(' ').includes('secret-runtime-token'), false)
+  assert.equal(events.join(' ').includes('ecs.electricsheephq.com'), false)
+})
