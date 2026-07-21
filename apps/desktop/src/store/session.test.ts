@@ -11,6 +11,7 @@ import {
   $selectedStoredSessionId,
   $unreadFinishedSessionIds,
   applyConfiguredDefaultProjectDir,
+  ensureDefaultWorkspaceCwd,
   mergeSessionPage,
   sessionPinId,
   setCurrentCwd,
@@ -197,6 +198,7 @@ describe('workspaceCwdForNewSession', () => {
     window.localStorage.removeItem('hermes.desktop.workspace-cwd')
     window.localStorage.removeItem('hermes.desktop.workspace-cwd.remote.http%3A%2F%2Fbackend-a.default')
     window.localStorage.removeItem('hermes.desktop.workspace-cwd.remote.http%3A%2F%2Fbackend-b.default')
+    delete (window as unknown as { hermesDesktop?: unknown }).hermesDesktop
   })
 
   it('prefers the configured default over the sticky remembered workspace', () => {
@@ -245,6 +247,34 @@ describe('workspaceCwdForNewSession', () => {
     // never reads the remote keys (nor inherits the sticky local workspace).
     $connection.set(null)
     expect(workspaceCwdForNewSession()).toBe('')
+  })
+
+  it('does not call local project-directory IPC while booting a remote backend', async () => {
+    const getDefaultProjectDir = vi.fn(async () => ({
+      defaultLabel: '/Users/test',
+      dir: '/Users/test/local-project',
+      resolvedCwd: '/Users/test/local-project'
+    }))
+    const sanitizeWorkspaceCwd = vi.fn(async (cwd: string) => ({ cwd, sanitized: false }))
+    ;(window as unknown as { hermesDesktop: unknown }).hermesDesktop = {
+      sanitizeWorkspaceCwd,
+      settings: { getDefaultProjectDir }
+    }
+    $connection.set({ baseUrl: 'https://managed.example', mode: 'remote' } as never)
+
+    await ensureDefaultWorkspaceCwd()
+
+    expect(getDefaultProjectDir).not.toHaveBeenCalled()
+    expect(sanitizeWorkspaceCwd).not.toHaveBeenCalled()
+  })
+
+  it('clears a stale local cwd when a remote backend has no remembered workspace', async () => {
+    $currentCwd.set('/Users/test/local-project')
+    $connection.set({ baseUrl: 'https://managed.example', mode: 'remote' } as never)
+
+    await ensureDefaultWorkspaceCwd()
+
+    expect($currentCwd.get()).toBe('')
   })
 })
 

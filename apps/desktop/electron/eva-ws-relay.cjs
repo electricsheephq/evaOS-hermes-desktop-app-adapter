@@ -79,6 +79,7 @@ function createEvaWsRelay(options) {
   const now = options.now ?? (() => Date.now())
   const randomBytes = options.randomBytes ?? crypto.randomBytes
   const connectUpstream = options.connectUpstream ?? connectTls
+  const onEvent = options.onEvent ?? (() => undefined)
   const tickets = new Map()
   const liveSockets = new Set()
   let server = null
@@ -134,7 +135,8 @@ function createEvaWsRelay(options) {
       const upstreamUrl = new URL(buildEvaManagedWsUrl(upstream.baseUrl, upstream.token))
       upstreamSocket = track(await connectUpstream(upstreamUrl))
       upstreamSocket.write(buildUpgradeRequest(request, upstreamUrl))
-    } catch {
+    } catch (error) {
+      onEvent(`upstream_connect_failed code=${String(error?.code || error?.name || 'unknown')}`)
       writeFailure(clientSocket, 502, 'Bad Gateway')
       safeDestroy(upstreamSocket)
       return
@@ -160,6 +162,7 @@ function createEvaWsRelay(options) {
       const responseTail = header.subarray(boundary + 4)
       const statusMatch = /^HTTP\/1\.[01]\s+(\d{3})\b/.exec(responseHead.toString('latin1'))
       const statusCode = Number(statusMatch?.[1] || 0)
+      onEvent(`upstream_handshake status=${statusCode || 'invalid'}`)
 
       if (statusCode === 401 || statusCode === 403) {
         Promise.resolve(options.onAuthRejected?.()).catch(() => undefined)
@@ -179,6 +182,7 @@ function createEvaWsRelay(options) {
       // listener would turn one into an uncaught exception in Electron's main
       // process and terminate Eva.
       const closeUpgradedPair = () => {
+        onEvent('upstream_disconnected')
         safeDestroy(clientSocket)
         safeDestroy(upstreamSocket)
       }
