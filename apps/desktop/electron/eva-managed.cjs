@@ -376,7 +376,6 @@ async function brokerPost(body, options = {}) {
   const abortFromExternal = () => requestController.abort(externalSignal?.reason)
   const timeoutMs = options.timeoutMs ?? policy.brokerRequestTimeoutMs
   const timeout = setTimeout(() => requestController.abort(), timeoutMs)
-  timeout.unref?.()
   if (externalSignal?.aborted) {
     abortFromExternal()
   } else {
