@@ -114,4 +114,65 @@ describe('useGatewayRequest', () => {
     expect(requestCount).toBe(2)
     expect(gateway.connect).toHaveBeenCalledWith('wss://agent.example/api/ws?ticket=fresh')
   })
+
+  it('waits for an in-flight boot reconnect before retrying the failed request', async () => {
+    let transportState: 'connecting' | 'open' = 'connecting'
+    let requestCount = 0
+    const stateHandlers = new Set<(state: 'connecting' | 'open') => void>()
+
+    const gateway = {
+      get connectionState() {
+        return transportState
+      },
+      connect: vi.fn(async () => {
+        // Match JsonRpcGatewayClient.connect(): an existing "connecting"
+        // attempt returns without waiting for the socket open event.
+        window.setTimeout(() => {
+          transportState = 'open'
+
+          for (const handler of stateHandlers) {
+            handler(transportState)
+          }
+        }, 10)
+      }),
+      onState: vi.fn((handler: (state: 'connecting' | 'open') => void) => {
+        stateHandlers.add(handler)
+        handler(transportState)
+
+        return () => stateHandlers.delete(handler)
+      }),
+      request: vi.fn(async () => {
+        requestCount += 1
+
+        if (transportState !== 'open') {
+          throw new Error('evaOS Agent gateway is not connected')
+        }
+
+        return { ok: true }
+      })
+    } as unknown as HermesGateway
+
+    ;(window as { hermesDesktop?: unknown }).hermesDesktop = {
+      getConnection: vi.fn(async () => ({
+        authMode: 'oauth',
+        baseUrl: 'https://agent.example',
+        profile: 'default',
+        token: '',
+        wsUrl: 'wss://agent.example/api/ws?ticket=stale'
+      })),
+      getGatewayWsUrl: vi.fn(async () => 'wss://agent.example/api/ws?ticket=fresh')
+    }
+
+    $gateway.set(gateway)
+    $gatewayState.set('open')
+
+    const { result } = renderHook(() => useGatewayRequest())
+
+    await act(async () => {
+      await expect(result.current.requestGateway('prompt.submit', { text: 'hello' })).resolves.toEqual({ ok: true })
+    })
+
+    expect(requestCount).toBe(2)
+    expect(stateHandlers.size).toBe(0)
+  })
 })

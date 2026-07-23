@@ -7,6 +7,52 @@ import { $gateway, ensureActiveGatewayOpen, isActivePrimary } from '@/store/gate
 import { $activeGatewayProfile } from '@/store/profile'
 import { $gatewayState, setConnection } from '@/store/session'
 
+function waitForGatewayOpen(gateway: HermesGateway, timeoutMs = 15_000): Promise<void> {
+  if (gateway.connectionState === 'open') {
+    return Promise.resolve()
+  }
+
+  return new Promise((resolve, reject) => {
+    let settled = false
+    let offState = () => {}
+
+    const finish = (error?: Error) => {
+      if (settled) {
+        return
+      }
+
+      settled = true
+      clearTimeout(timer)
+      offState()
+
+      if (error) {
+        reject(error)
+      } else {
+        resolve()
+      }
+    }
+
+    const timer = window.setTimeout(
+      () => finish(new Error('Could not connect to evaOS Agent gateway')),
+      timeoutMs
+    )
+
+    offState = gateway.onState(state => {
+      if (state === 'open') {
+        finish()
+      } else if (state === 'closed' || state === 'error') {
+        finish(new Error('Could not connect to evaOS Agent gateway'))
+      }
+    })
+
+    // onState reports the current state synchronously. If that completed the
+    // promise before it returned its unsubscribe function, detach now.
+    if (settled) {
+      offState()
+    }
+  })
+}
+
 export function useGatewayRequest() {
   const gatewayState = useStore($gatewayState)
   const gatewayRef = useRef<HermesGateway | null>(null)
@@ -79,6 +125,10 @@ export function useGatewayRequest() {
         // the actionable "sign in again" message.
         const wsUrl = await resolveGatewayWsUrl(desktop, conn)
         await existing.connect(wsUrl)
+        // The boot reconnect loop may already own an in-flight connect().
+        // JsonRpcGatewayClient.connect() returns immediately in that case, so
+        // wait for its state transition before retrying the failed request.
+        await waitForGatewayOpen(existing)
 
         return existing
       } catch (error) {
