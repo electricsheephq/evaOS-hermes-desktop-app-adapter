@@ -43,7 +43,12 @@ export function useGatewayRequest() {
       return null
     }
 
-    if (gatewayStateRef.current === 'open') {
+    // The nanostore is UI projection, not transport truth. During a remote
+    // relay drop it can briefly remain "open" after the actual socket has
+    // closed; trusting it here returns the dead client and makes the retry
+    // fail with the same "gateway is not connected" error. Read the live
+    // gateway state before deciding that no reconnect is needed.
+    if (existing.connectionState === 'open') {
       return existing
     }
 

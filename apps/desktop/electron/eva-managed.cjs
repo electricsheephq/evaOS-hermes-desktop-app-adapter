@@ -14,6 +14,7 @@ const EVA_MANAGED_POLICY = Object.freeze({
   updateChannel: 'managed-beta',
   deviceCodePollMs: 1_500,
   loginTimeoutMs: 180_000,
+  brokerRequestTimeoutMs: 15_000,
   runtimeRefreshSkewMs: 60_000,
   runtimeHostSuffix: '.ecs.electricsheephq.com'
 })
@@ -459,12 +460,23 @@ async function brokerPost(body, options = {}) {
   }
 
   let response
+  const requestController = new AbortController()
+  const externalSignal = options.signal
+  const abortFromExternal = () => requestController.abort(externalSignal?.reason)
+  const timeoutMs = options.timeoutMs ?? policy.brokerRequestTimeoutMs
+  const timeout = setTimeout(() => requestController.abort(), timeoutMs)
+  timeout.unref?.()
+  if (externalSignal?.aborted) {
+    abortFromExternal()
+  } else {
+    externalSignal?.addEventListener('abort', abortFromExternal, { once: true })
+  }
   try {
     response = await fetchImpl(policy.brokerUrl, {
       method: 'POST',
       redirect: 'error',
       cache: 'no-store',
-      signal: options.signal,
+      signal: requestController.signal,
       headers: {
         'Content-Type': 'application/json',
         'X-Client-Info': 'evaos-agent/2026.7.20-es.2',
@@ -477,6 +489,9 @@ async function brokerPost(body, options = {}) {
       throw new EvaBrokerError('evaOS Agent sign-in timed out.', 408, 'timeout')
     }
     throw new EvaBrokerError('evaOS Agent could not reach Electric Sheep.', null, 'transport-error')
+  } finally {
+    clearTimeout(timeout)
+    externalSignal?.removeEventListener('abort', abortFromExternal)
   }
 
   const payload = await response.json().catch(() => null)
