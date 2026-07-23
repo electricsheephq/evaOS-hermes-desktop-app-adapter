@@ -253,7 +253,6 @@ export function ChatSidebar({
   onManageCronJob,
   onTriggerCronJob
 }: ChatSidebarProps) {
-  const managedEva = Boolean(window.hermesDesktop?.eva)
   const { t } = useI18n()
   const s = t.sidebar
   const { pathname } = useLocation()
@@ -1099,9 +1098,7 @@ export function ChatSidebar({
         <SidebarGroup className="shrink-0 p-0 pb-2 pt-[calc(var(--titlebar-height)+0.375rem)]">
           <SidebarGroupContent>
             <SidebarMenu className="gap-px">
-              {[...SIDEBAR_NAV, ...contributedNav].filter(
-                item => !managedEva || item.id === 'new-session' || item.id === 'skills' || item.id === 'artifacts'
-              ).map(item => {
+              {[...SIDEBAR_NAV, ...contributedNav].map(item => {
                 const isInteractive = Boolean(item.action) || Boolean(item.route)
 
                 const active =
@@ -1354,7 +1351,7 @@ export function ChatSidebar({
                         </Button>
                       ) : null}
                       <div className="grid size-6 place-items-center">
-                        {!managedEva && !showAllProfiles && agentSessions.length > 0 ? (
+                        {!showAllProfiles && agentSessions.length > 0 ? (
                           <Button
                             aria-label={agentsGrouped ? s.showSessions : s.showProjects}
                             className={cn(
@@ -1479,15 +1476,11 @@ export function ChatSidebar({
           </div>
         )}
 
-        {!showSessionSections && !managedEva ? (
-          <SidebarBlankState onNewProject={openProjectCreate} />
-        ) : null}
+        {!showSessionSections ? <SidebarBlankState onNewProject={openProjectCreate} /> : null}
 
-        {!managedEva && (
-          <div className="shrink-0 px-0.5 pb-1 pt-0.5">
-            <ProfileRail />
-          </div>
-        )}
+        <div className="shrink-0 px-0.5 pb-1 pt-0.5">
+          <ProfileRail />
+        </div>
       </SidebarContent>
       <ProjectDialog />
     </Sidebar>

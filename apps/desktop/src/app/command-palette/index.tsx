@@ -308,7 +308,7 @@ export function CommandPalette() {
   const configQuery = useQuery({
     queryKey: ['command-palette', 'config'],
     queryFn: getHermesConfigRecord,
-    enabled: open && !managedEva
+    enabled: open
   })
 
   const sessionsQuery = useQuery({
@@ -345,10 +345,10 @@ export function CommandPalette() {
   // Deep-link into a nested page (e.g. `/pet list` → pets picker).
   useEffect(() => {
     if (open && pendingPage) {
-      setPage(managedEva && ['install-theme', 'pets'].includes(pendingPage) ? null : pendingPage)
+      setPage(pendingPage)
       $commandPalettePage.set(null)
     }
-  }, [managedEva, open, pendingPage])
+  }, [open, pendingPage])
 
   const go = useCallback((path: string) => () => navigate(path), [navigate])
 
@@ -383,7 +383,7 @@ export function CommandPalette() {
     // session anchored to that worktree's checkout (requestStartWorkSession),
     // so git is the source of truth and edits land in the right tree.
     const branchGroup: PaletteGroup[] =
-      !managedEva && worktrees.length > 0
+      worktrees.length > 0
         ? [
             {
               heading: cc.branches,
@@ -414,18 +414,14 @@ export function CommandPalette() {
             label: cc.nav.newChat.title,
             run: go(NEW_CHAT_ROUTE)
           },
-          ...(managedEva
-            ? []
-            : [
-                {
-                  action: 'view.showTerminal',
-                  icon: Terminal,
-                  id: 'nav-terminal',
-                  keywords: ['terminal', 'shell', 'console'],
-                  label: t.keybinds.actions['view.showTerminal'],
-                  run: () => setTerminalTakeover(true)
-                }
-              ]),
+          {
+            action: 'view.showTerminal',
+            icon: Terminal,
+            id: 'nav-terminal',
+            keywords: ['terminal', 'shell', 'console'],
+            label: t.keybinds.actions['view.showTerminal'],
+            run: () => setTerminalTakeover(true)
+          },
           {
             action: 'nav.settings',
             icon: Settings,
@@ -441,40 +437,36 @@ export function CommandPalette() {
             label: cc.nav.skills.title,
             run: go(SKILLS_ROUTE)
           },
-          ...(!managedEva
-            ? [
-                {
-                  action: 'nav.messaging',
-                  icon: MessageCircle,
-                  id: 'nav-messaging',
-                  label: cc.nav.messaging.title,
-                  run: go(MESSAGING_ROUTE)
-                },
-                {
-                  action: 'nav.artifacts',
-                  icon: Package,
-                  id: 'nav-artifacts',
-                  label: cc.nav.artifacts.title,
-                  run: go(ARTIFACTS_ROUTE)
-                },
-                {
-                  action: 'nav.cron',
-                  icon: Clock,
-                  id: 'nav-cron',
-                  keywords: ['schedule', 'jobs'],
-                  label: t.shell.statusbar.cron,
-                  run: go(CRON_ROUTE)
-                },
-                {
-                  action: 'nav.profiles',
-                  icon: Users,
-                  id: 'nav-profiles',
-                  label: t.profiles.title,
-                  run: go(PROFILES_ROUTE)
-                },
-                { action: 'nav.agents', icon: Cpu, id: 'nav-agents', label: t.agents.title, run: go(AGENTS_ROUTE) }
-              ]
-            : []),
+          {
+            action: 'nav.messaging',
+            icon: MessageCircle,
+            id: 'nav-messaging',
+            label: cc.nav.messaging.title,
+            run: go(MESSAGING_ROUTE)
+          },
+          {
+            action: 'nav.artifacts',
+            icon: Package,
+            id: 'nav-artifacts',
+            label: cc.nav.artifacts.title,
+            run: go(ARTIFACTS_ROUTE)
+          },
+          {
+            action: 'nav.cron',
+            icon: Clock,
+            id: 'nav-cron',
+            keywords: ['schedule', 'jobs'],
+            label: t.shell.statusbar.cron,
+            run: go(CRON_ROUTE)
+          },
+          {
+            action: 'nav.profiles',
+            icon: Users,
+            id: 'nav-profiles',
+            label: t.profiles.title,
+            run: go(PROFILES_ROUTE)
+          },
+          { action: 'nav.agents', icon: Cpu, id: 'nav-agents', label: t.agents.title, run: go(AGENTS_ROUTE) },
           {
             icon: Starmap,
             id: 'nav-starmap',
@@ -485,32 +477,32 @@ export function CommandPalette() {
         ]
       },
       ...branchGroup,
-      ...(!managedEva
-        ? [
-            {
-              heading: cc.commandCenter,
-              items: [
-                {
-                  icon: Archive,
-                  id: 'cc-sessions',
-                  keywords: ['command center', 'sessions', 'pin'],
-                  label: cc.sections.sessions,
-                  run: go(`${COMMAND_CENTER_ROUTE}?section=sessions`)
-                },
-                {
-                  icon: Activity,
-                  id: 'cc-system',
-                  keywords: ['command center', 'system', 'status', 'logs'],
-                  label: cc.sections.system,
-                  run: go(`${COMMAND_CENTER_ROUTE}?section=system`)
-                },
-                {
-                  icon: BarChart3,
-                  id: 'cc-usage',
-                  keywords: ['command center', 'usage', 'tokens', 'cost'],
-                  label: cc.sections.usage,
-                  run: go(`${COMMAND_CENTER_ROUTE}?section=usage`)
-                },
+      {
+        heading: cc.commandCenter,
+        items: [
+          {
+            icon: Archive,
+            id: 'cc-sessions',
+            keywords: ['command center', 'sessions', 'pin'],
+            label: cc.sections.sessions,
+            run: go(`${COMMAND_CENTER_ROUTE}?section=sessions`)
+          },
+          {
+            icon: Activity,
+            id: 'cc-system',
+            keywords: ['command center', 'system', 'status', 'logs'],
+            label: cc.sections.system,
+            run: go(`${COMMAND_CENTER_ROUTE}?section=system`)
+          },
+          {
+            icon: BarChart3,
+            id: 'cc-usage',
+            keywords: ['command center', 'usage', 'tokens', 'cost'],
+            label: cc.sections.usage,
+            run: go(`${COMMAND_CENTER_ROUTE}?section=usage`)
+          },
+          ...(!managedEva
+            ? [
                 {
                   icon: RefreshCw,
                   id: 'cc-restart-gateway',
@@ -526,9 +518,9 @@ export function CommandPalette() {
                   run: () => void applyBackendUpdate()
                 }
               ]
-            }
-          ]
-        : []),
+            : [])
+        ]
+      },
       {
         // Declared before Settings: cmdk keeps group order, so this keeps the
         // theme/mode pickers on top for "theme"/"color" queries instead of
@@ -549,39 +541,33 @@ export function CommandPalette() {
             label: cc.changeColorMode,
             to: 'color-mode'
           },
-          ...(!managedEva
-            ? [
-                {
-                  icon: PawPrint,
-                  id: 'appearance-pets',
-                  keywords: ['pet', 'petdex', 'mascot', 'pets', '/pet', 'paw'],
-                  label: cc.pets.title,
-                  to: 'pets'
-                },
-                {
-                  icon: Egg,
-                  id: 'appearance-generate-pet',
-                  keywords: ['pet', 'generate', 'create', 'make', 'new pet', 'mascot', 'hatch', 'ai'],
-                  label: cc.generatePet.title,
-                  run: () => openPetGenerate()
-                }
-              ]
-            : [])
+          {
+            icon: PawPrint,
+            id: 'appearance-pets',
+            keywords: ['pet', 'petdex', 'mascot', 'pets', '/pet', 'paw'],
+            label: cc.pets.title,
+            to: 'pets'
+          },
+          {
+            icon: Egg,
+            id: 'appearance-generate-pet',
+            keywords: ['pet', 'generate', 'create', 'make', 'new pet', 'mascot', 'hatch', 'ai'],
+            label: cc.generatePet.title,
+            run: () => openPetGenerate()
+          }
         ]
       },
       {
         heading: cc.settings,
         items: [
-          ...SECTIONS.filter(section => !managedEva || section.id === 'appearance').map(section => ({
+          ...SECTIONS.map(section => ({
             icon: section.icon,
             id: `set-config-${section.id}`,
             keywords: ['settings', section.label, settingsSectionLabel(section)],
             label: settingsSectionLabel(section),
             run: go(settingsTab(`config:${section.id}`))
           })),
-          ...NON_CONFIG_SETTINGS.filter(
-            entry => !managedEva || entry.tab === 'gateway' || entry.tab === 'sessions' || entry.tab === 'about'
-          ).map(entry => ({
+          ...NON_CONFIG_SETTINGS.map(entry => ({
             icon: entry.icon,
             id: `set-${entry.tab}`,
             keywords: ['settings', ...(entry.keywords ?? [])],
@@ -660,17 +646,13 @@ export function CommandPalette() {
           label: `${capLabel}: ${t.skills.tabToolsets}`,
           run: go(`${SKILLS_ROUTE}?tab=toolsets`)
         },
-        ...(!managedEva
-          ? [
-              {
-                icon: Layers3,
-                id: 'cap-mcp',
-                keywords: ['mcp', 'servers', 'tools', 'capabilities', 'model context protocol'],
-                label: `${capLabel}: ${t.skills.tabMcp}`,
-                run: go(`${SKILLS_ROUTE}?tab=mcp`)
-              }
-            ]
-          : [])
+        {
+          icon: Layers3,
+          id: 'cap-mcp',
+          keywords: ['mcp', 'servers', 'tools', 'capabilities', 'model context protocol'],
+          label: `${capLabel}: ${t.skills.tabMcp}`,
+          run: go(`${SKILLS_ROUTE}?tab=mcp`)
+        }
       ]
     })
 
@@ -727,7 +709,7 @@ export function CommandPalette() {
       })
     }
 
-    const fieldItems = SECTIONS.filter(section => !managedEva || section.id === 'appearance').flatMap(section =>
+    const fieldItems = SECTIONS.flatMap(section =>
       section.keys.map(key => ({
         icon: section.icon,
         id: `field-${key}`,
@@ -739,7 +721,7 @@ export function CommandPalette() {
 
     result.push({ heading: t.commandCenter.settingsFields, items: fieldItems })
 
-    if (!managedEva && mcpServers.length > 0) {
+    if (mcpServers.length > 0) {
       result.push({
         heading: t.commandCenter.mcpServers,
         items: mcpServers.map(name => ({
@@ -778,7 +760,6 @@ export function CommandPalette() {
     configFieldLabel,
     go,
     mcpServers,
-    managedEva,
     resolvedMode,
     search,
     sessions,
@@ -801,17 +782,13 @@ export function CommandPalette() {
           // Pinned at the top: drills into the Marketplace browser.
           {
             items: [
-              ...(!managedEva
-                ? [
-                    {
-                      icon: Download,
-                      id: 'theme-install',
-                      keywords: ['install', 'marketplace', 'vscode', 'vs code', 'download', 'new', 'color'],
-                      label: t.commandCenter.installTheme.title,
-                      to: 'install-theme'
-                    }
-                  ]
-                : [])
+              {
+                icon: Download,
+                id: 'theme-install',
+                keywords: ['install', 'marketplace', 'vscode', 'vs code', 'download', 'new', 'color'],
+                label: t.commandCenter.installTheme.title,
+                to: 'install-theme'
+              }
             ]
           },
           // Built-ins and imported families list under the mode(s) they support;
@@ -867,7 +844,7 @@ export function CommandPalette() {
         groups: []
       }
     }),
-    [availableThemes, managedEva, resolvedMode, setMode, setTheme, t, themeName]
+    [availableThemes, resolvedMode, setMode, setTheme, t, themeName]
   )
 
   const activePage = page ? subPages[page] : null

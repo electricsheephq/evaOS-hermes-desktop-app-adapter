@@ -74,7 +74,6 @@ type HandlerMap = Record<string, () => void>
 export function useKeybinds(deps: KeybindRuntimeDeps): void {
   const navigate = useNavigate()
   const { resolvedMode, setMode } = useTheme()
-  const managedEva = Boolean(window.hermesDesktop?.eva)
 
   // Keep the latest closures without re-subscribing the listener.
   const handlersRef = useRef<HandlerMap>({})
@@ -120,18 +119,16 @@ export function useKeybinds(deps: KeybindRuntimeDeps): void {
     setTerminalTakeover(false)
   }
 
-  const terminalHandlers: HandlerMap = managedEva
-    ? {}
-    : {
-        'view.showTerminal': () => setTerminalTakeover(!$terminalTakeover.get()),
-        'view.newTerminal': () => {
-          createTerminal()
-          setTerminalTakeover(true)
-        },
-        'view.nextTerminal': () => $terminalTakeover.get() && cycleTerminal(1),
-        'view.prevTerminal': () => $terminalTakeover.get() && cycleTerminal(-1),
-        'view.closeTerminal': () => $terminalTakeover.get() && closeActiveTerminal()
-      }
+  const terminalHandlers: HandlerMap = {
+    'view.showTerminal': () => setTerminalTakeover(!$terminalTakeover.get()),
+    'view.newTerminal': () => {
+      createTerminal()
+      setTerminalTakeover(true)
+    },
+    'view.nextTerminal': () => $terminalTakeover.get() && cycleTerminal(1),
+    'view.prevTerminal': () => $terminalTakeover.get() && cycleTerminal(-1),
+    'view.closeTerminal': () => $terminalTakeover.get() && closeActiveTerminal()
+  }
 
   handlersRef.current = {
     'keybinds.openPanel': () => navigate(`${SETTINGS_ROUTE}?tab=keybinds`),

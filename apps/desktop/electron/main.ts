@@ -1165,13 +1165,6 @@ function openExternalUrl(rawUrl) {
     return false
   }
 
-  if (EVA_MANAGED_BUILD) {
-    const allowedHosts = new Set(['electricsheephq.com', 'www.electricsheephq.com'])
-    if (parsed.protocol !== 'https:' || parsed.username || parsed.password || !allowedHosts.has(parsed.hostname)) {
-      return false
-    }
-  }
-
   // `file://` URLs come from the artifacts panel (the renderer can't open
   // them itself because Chromium blocks file:// navigation from the app
   // origin). Hand them to `shell.openPath`, which dispatches to the OS
@@ -8025,6 +8018,9 @@ ipcMain.on('hermes:pet-overlay:control', (_event, payload) => {
   mainWindow.webContents.send('hermes:pet-overlay:control', payload)
 })
 ipcMain.handle('hermes:bootstrap:reset', async () => {
+  if (EVA_MANAGED_BUILD) {
+    throw new Error('evaOS Agent uses a managed remote runtime; local repair is unavailable.')
+  }
   // Renderer's "Reload and retry" path. Clear the latched failure and
   // reset connection state so the next startHermes() call restarts the
   // full backend flow (including a fresh runBootstrap pass).
@@ -8046,6 +8042,9 @@ ipcMain.handle('hermes:bootstrap:reset', async () => {
   return { ok: true }
 })
 ipcMain.handle('hermes:bootstrap:repair', async () => {
+  if (EVA_MANAGED_BUILD) {
+    throw new Error('evaOS Agent uses a managed remote runtime; local repair is unavailable.')
+  }
   // Forceful repair: drop the bootstrap-complete marker so the next
   // startHermes() re-runs the full installer (refreshing a broken/partial
   // venv), and clear any latched failure + live connection. The renderer
@@ -8067,6 +8066,9 @@ ipcMain.handle('hermes:bootstrap:repair', async () => {
   return { ok: true }
 })
 ipcMain.handle('hermes:bootstrap:cancel', async () => {
+  if (EVA_MANAGED_BUILD) {
+    throw new Error('evaOS Agent uses a managed remote runtime; local installation is unavailable.')
+  }
   // Renderer's Cancel button during first-launch install. Abort the running
   // install script (SIGTERM via the runner's abortSignal). runBootstrap
   // resolves with { cancelled: true }, which surfaces the recovery overlay.
@@ -9578,8 +9580,16 @@ async function runDesktopUninstall(mode) {
   return { ok: true, mode, willRemoveAppBundle: Boolean(removeBundle), scriptPath }
 }
 
-ipcMain.handle('hermes:uninstall:summary', async () => getUninstallSummary())
+ipcMain.handle('hermes:uninstall:summary', async () => {
+  if (EVA_MANAGED_BUILD) {
+    return { available: false, managed: true, message: 'evaOS Agent does not install a local Hermes runtime.' }
+  }
+  return getUninstallSummary()
+})
 ipcMain.handle('hermes:uninstall:run', async (_event, payload) => {
+  if (EVA_MANAGED_BUILD) {
+    throw new Error('evaOS Agent does not install a local Hermes runtime.')
+  }
   const mode = payload && typeof payload === 'object' ? payload.mode : payload
 
   return runDesktopUninstall(String(mode || ''))
@@ -9591,89 +9601,6 @@ ipcMain.handle('hermes:vscode-theme:fetch', async (_event, id) => fetchMarketpla
 
 // Search the Marketplace for color-theme extensions (empty query = top installs).
 ipcMain.handle('hermes:vscode-theme:search', async (_event, query) => searchMarketplaceThemes(String(query || ''), 20))
-
-const EVA_BLOCKED_INVOKE_CHANNELS = Object.freeze([
-  'hermes:bootstrap:cancel',
-  'hermes:bootstrap:repair',
-  'hermes:bootstrap:reset',
-  'hermes:cloud:agent-sign-in',
-  'hermes:cloud:discover',
-  'hermes:cloud:login',
-  'hermes:cloud:logout',
-  'hermes:connection-config:apply',
-  'hermes:connection-config:oauth-login',
-  'hermes:connection-config:oauth-logout',
-  'hermes:connection-config:probe',
-  'hermes:connection-config:save',
-  'hermes:connection-config:test',
-  'hermes:fetchLinkTitle',
-  'hermes:fs:gitRoot',
-  'hermes:fs:openDir',
-  'hermes:fs:readDir',
-  'hermes:fs:rename',
-  'hermes:fs:reveal',
-  'hermes:fs:trash',
-  'hermes:fs:writeText',
-  'hermes:git:branchList',
-  'hermes:git:branchSwitch',
-  'hermes:git:fileDiff',
-  'hermes:git:repoStatus',
-  'hermes:git:review:commit',
-  'hermes:git:review:commitContext',
-  'hermes:git:review:createPr',
-  'hermes:git:review:diff',
-  'hermes:git:review:list',
-  'hermes:git:review:push',
-  'hermes:git:review:revert',
-  'hermes:git:review:revParse',
-  'hermes:git:review:shipInfo',
-  'hermes:git:review:stage',
-  'hermes:git:review:unstage',
-  'hermes:git:scanRepos',
-  'hermes:git:worktreeAdd',
-  'hermes:git:worktreeList',
-  'hermes:git:worktreeRemove',
-  'hermes:logs:recent',
-  'hermes:logs:reveal',
-  'hermes:normalizePreviewTarget',
-  'hermes:openPreviewInBrowser',
-  'hermes:profile:set',
-  'hermes:readFileDataUrl',
-  'hermes:readFileText',
-  'hermes:requestMicrophoneAccess',
-  'hermes:saveClipboardImage',
-  'hermes:saveImageBuffer',
-  'hermes:saveImageFromUrl',
-  'hermes:selectPaths',
-  'hermes:setting:defaultProjectDir:get',
-  'hermes:setting:defaultProjectDir:pick',
-  'hermes:setting:defaultProjectDir:set',
-  'hermes:stopPreviewFileWatch',
-  'hermes:terminal:cwd',
-  'hermes:terminal:dispose',
-  'hermes:terminal:resize',
-  'hermes:terminal:start',
-  'hermes:terminal:write',
-  'hermes:uninstall:run',
-  'hermes:uninstall:summary',
-  'hermes:updates:branch:set',
-  'hermes:vscode-theme:fetch',
-  'hermes:vscode-theme:search',
-  'hermes:watchPreviewFile',
-  'hermes:workspace:sanitize'
-])
-
-function installEvaManagedIpcGuards() {
-  if (!EVA_MANAGED_BUILD) return
-  for (const channel of EVA_BLOCKED_INVOKE_CHANNELS) {
-    ipcMain.removeHandler(channel)
-    ipcMain.handle(channel, () => {
-      throw new Error('This local capability is unavailable in managed evaOS Agent.')
-    })
-  }
-}
-
-installEvaManagedIpcGuards()
 
 // ---------------------------------------------------------------------------
 // hermes:// deep links (e.g. hermes://blueprint/morning-brief?time=08:00).

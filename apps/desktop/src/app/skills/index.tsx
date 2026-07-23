@@ -45,7 +45,7 @@ import {
   MasterDetail,
   ToolChip
 } from '../master-detail'
-import { PanelEmpty, PanelListRow, PanelPill } from '../overlays/panel'
+import { PanelEmpty, PanelPill } from '../overlays/panel'
 import { PageSearchShell } from '../page-search-shell'
 import { SETTINGS_ROUTE } from '../routes'
 import { ComputerUsePanel } from '../settings/computer-use-panel'
@@ -59,7 +59,6 @@ import { McpTab } from './mcp-tab'
 import { $skillsSortDesc, $toolsetsSortDesc } from './store'
 
 const SKILLS_MODES = ['skills', 'toolsets', 'mcp', 'hub'] as const
-const EVA_MANAGED_SKILLS_MODES = ['skills', 'toolsets'] as const
 
 // Skills + toolsets live in the RQ cache so switching tabs/pages paints the
 // cached lists instantly (no reload flash) and mount only fires a deduped
@@ -183,178 +182,7 @@ interface SkillsViewProps extends React.ComponentProps<'section'> {
 }
 
 export function SkillsView(props: SkillsViewProps) {
-  return window.hermesDesktop?.eva ? <EvaManagedCapabilitiesView {...props} /> : <UnmanagedSkillsView {...props} />
-}
-
-function EvaManagedCapabilitiesView({
-  setStatusbarItemGroup: _setStatusbarItemGroup,
-  ...props
-}: SkillsViewProps) {
-  const { t } = useI18n()
-  const [mode, setMode] = useRouteEnumParam('tab', EVA_MANAGED_SKILLS_MODES, 'skills')
-  const [query, setQuery] = useState('')
-  const [selectedSkill, setSelectedSkill] = useState<string | null>(null)
-  const [selectedToolset, setSelectedToolset] = useState<string | null>(null)
-
-  const {
-    data: skills,
-    isError: skillsFailed,
-    error: skillsError
-  } = useQuery({
-    queryKey: SKILLS_QUERY_KEY,
-    queryFn: getSkills,
-    staleTime: 0
-  })
-
-  const {
-    data: toolsets,
-    isError: toolsetsFailed,
-    error: toolsetsError
-  } = useQuery({
-    queryKey: TOOLSETS_QUERY_KEY,
-    queryFn: getToolsets,
-    staleTime: 0
-  })
-
-  const refreshCapabilities = useCallback(async () => {
-    await Promise.all([
-      queryClient.invalidateQueries({ queryKey: SKILLS_QUERY_KEY }),
-      queryClient.invalidateQueries({ queryKey: TOOLSETS_QUERY_KEY })
-    ])
-  }, [])
-
-  useRefreshHotkey(refreshCapabilities)
-
-  const visibleSkills = useMemo(() => filteredSkills(skills ?? [], query, false), [query, skills])
-
-  const visibleToolsets = useMemo(
-    () => filteredToolsets(toolsets ?? [], query, {}, false),
-    [query, toolsets]
-  )
-
-  const activeSkill = useMemo(
-    () => visibleSkills.find(skill => skill.name === selectedSkill) ?? visibleSkills[0] ?? null,
-    [selectedSkill, visibleSkills]
-  )
-
-  const activeToolset = useMemo(
-    () => visibleToolsets.find(toolset => toolset.name === selectedToolset) ?? visibleToolsets[0] ?? null,
-    [selectedToolset, visibleToolsets]
-  )
-
-  const failed = skillsFailed || toolsetsFailed
-  const loaded = Boolean(skills && toolsets)
-  const error = skillsError instanceof Error ? skillsError : toolsetsError instanceof Error ? toolsetsError : null
-
-  return (
-    <PageSearchShell
-      {...props}
-      activeTab={mode}
-      onSearchChange={setQuery}
-      onTabChange={id => setMode(id as (typeof EVA_MANAGED_SKILLS_MODES)[number])}
-      searchPlaceholder={mode === 'skills' ? t.skills.searchSkills : t.skills.searchToolsets}
-      searchValue={query}
-      tabs={[
-        { id: 'skills', label: t.skills.tabSkills, meta: skills?.length ?? null },
-        { id: 'toolsets', label: t.skills.tabToolsets, meta: toolsets ? visibleToolsetCount(toolsets) : null }
-      ]}
-    >
-      {failed && !loaded ? (
-        <PanelEmpty
-          action={
-            <Button onClick={() => void refreshCapabilities()} size="sm">
-              {t.skills.refresh}
-            </Button>
-          }
-          description={error?.message}
-          icon="error"
-          title={t.skills.skillsLoadFailed}
-        />
-      ) : !loaded ? (
-        <PageLoader label={t.skills.loading} />
-      ) : mode === 'skills' ? (
-        visibleSkills.length === 0 ? (
-          <PanelEmpty
-            description={query.trim() ? t.skills.emptyNothingMatches(query.trim()) : t.skills.emptyNoneAvailable('skills')}
-            icon="search"
-            title={t.skills.emptyNoneFound('skills')}
-          />
-        ) : (
-          <MasterDetail split="wide">
-            <ListColumn>
-              {visibleSkills.map(skill => (
-                <PanelListRow
-                  active={activeSkill?.name === skill.name}
-                  key={skill.name}
-                  meta={skill.enabled ? 'enabled' : 'disabled'}
-                  onSelect={() => setSelectedSkill(skill.name)}
-                  rowKey={skill.name}
-                  title={skill.name}
-                />
-              ))}
-            </ListColumn>
-            <DetailColumn footer="Installed and managed by Electric Sheep">
-              {activeSkill && (
-                <DetailHeader
-                  description={asText(activeSkill.description) || t.skills.noDescription}
-                  pills={
-                    <>
-                      <PanelPill>read only</PanelPill>
-                      <PanelPill>{prettyName(categoryFor(activeSkill))}</PanelPill>
-                    </>
-                  }
-                  title={activeSkill.name}
-                />
-              )}
-            </DetailColumn>
-          </MasterDetail>
-        )
-      ) : visibleToolsets.length === 0 ? (
-        <PanelEmpty
-          description={query.trim() ? t.skills.emptyNothingMatches(query.trim()) : t.skills.emptyNoneAvailable('tools')}
-          icon="search"
-          title={t.skills.emptyNoneFound('tools')}
-        />
-      ) : (
-        <MasterDetail split="wide">
-          <ListColumn>
-            {visibleToolsets.map(toolset => {
-              const label = toolsetDisplayLabel(toolset)
-
-              return (
-                <PanelListRow
-                  active={activeToolset?.name === toolset.name}
-                  key={toolset.name}
-                  meta={toolset.enabled ? 'enabled' : 'disabled'}
-                  onSelect={() => setSelectedToolset(toolset.name)}
-                  rowKey={toolset.name}
-                  title={label}
-                />
-              )
-            })}
-          </ListColumn>
-          <DetailColumn footer="Installed and managed by Electric Sheep">
-            {activeToolset && (
-              <>
-                <DetailHeader
-                  description={asText(activeToolset.description) || t.skills.noDescription}
-                  pills={<PanelPill>read only</PanelPill>}
-                  title={toolsetDisplayLabel(activeToolset)}
-                />
-                {toolNames(activeToolset).length > 0 && (
-                  <div className="flex flex-wrap gap-1">
-                    {toolNames(activeToolset).map(name => (
-                      <ToolChip key={name}>{name}</ToolChip>
-                    ))}
-                  </div>
-                )}
-              </>
-            )}
-          </DetailColumn>
-        </MasterDetail>
-      )}
-    </PageSearchShell>
-  )
+  return <UnmanagedSkillsView {...props} />
 }
 
 function UnmanagedSkillsView({ setStatusbarItemGroup: _setStatusbarItemGroup, ...props }: SkillsViewProps) {

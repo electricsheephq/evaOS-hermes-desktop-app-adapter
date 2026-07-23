@@ -332,22 +332,24 @@ function createEvaManagedRuntime(options) {
 
   async function requestApi(request, retry = true) {
     const runtime = await ensureRuntimeEnrollment()
-    const allowed = assertEvaManagedApiRequestAllowed(request, { agentId: runtime.agentId })
+    const allowed = assertEvaManagedApiRequestAllowed(request)
     const timeoutMs = options.resolveTimeoutMs(request?.timeoutMs)
     try {
       return await options.fetchJson(`${runtime.baseUrl}${allowed.path}`, runtime.token, {
         method: allowed.method,
         body: request?.body,
+        upload: request?.upload,
         timeoutMs
       })
     } catch (error) {
       if (!retry || error?.statusCode !== 401) throw error
       clearRuntimeEnrollment()
       const refreshed = await ensureRuntimeEnrollment({ force: true })
-      const next = assertEvaManagedApiRequestAllowed(request, { agentId: refreshed.agentId })
+      const next = assertEvaManagedApiRequestAllowed(request)
       return options.fetchJson(`${refreshed.baseUrl}${next.path}`, refreshed.token, {
         method: next.method,
         body: request?.body,
+        upload: request?.upload,
         timeoutMs
       })
     }
