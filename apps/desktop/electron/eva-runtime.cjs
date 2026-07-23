@@ -30,6 +30,8 @@ function createEvaManagedRuntime(options) {
   const updateBootProgress = options.updateBootProgress ?? (() => undefined)
   const resetConnection = options.resetConnection ?? (() => undefined)
   const resetRenderer = options.resetRenderer ?? (async () => undefined)
+  const launchRuntime = options.launchRuntime ?? launchEvaHermesRuntime
+  const createWsRelay = options.createWsRelay ?? createEvaWsRelay
   const statePath = options.statePath
 
   let signInPromise = null
@@ -131,7 +133,7 @@ function createEvaManagedRuntime(options) {
 
   function getWsRelay() {
     if (!wsRelay) {
-      wsRelay = createEvaWsRelay({
+      wsRelay = createWsRelay({
         getUpstream: async () => {
           const runtime = await ensureRuntimeEnrollment()
           return { baseUrl: runtime.baseUrl, token: runtime.token }
@@ -248,7 +250,7 @@ function createEvaManagedRuntime(options) {
       await advanceBootProgress('eva.enroll', 'Resolving your assigned evaOS agent', 26)
       let enrollment
       try {
-        enrollment = await launchEvaHermesRuntime(desktop.token)
+        enrollment = await launchRuntime(desktop.token)
       } catch (error) {
         if (!(error instanceof EvaBrokerError) || error.statusCode !== 401) throw error
         assertGeneration(auth, runtime)
