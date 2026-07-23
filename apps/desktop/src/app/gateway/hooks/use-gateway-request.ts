@@ -36,7 +36,7 @@ export function useGatewayRequest() {
     []
   )
 
-  const ensureGatewayOpen = useCallback(async () => {
+  const ensureGatewayOpen = useCallback(async (force = false) => {
     const existing = gatewayRef.current
 
     if (!existing) {
@@ -48,7 +48,7 @@ export function useGatewayRequest() {
     // closed; trusting it here returns the dead client and makes the retry
     // fail with the same "gateway is not connected" error. Read the live
     // gateway state before deciding that no reconnect is needed.
-    if (existing.connectionState === 'open') {
+    if (!force && existing.connectionState === 'open') {
       return existing
     }
 
@@ -118,7 +118,7 @@ export function useGatewayRequest() {
         // Primary keeps the OAuth-aware reconnect (remote gateways re-mint a
         // single-use ticket); background profiles are always local pool
         // backends, so the registry handles their reconnect with no reauth.
-        const recovered = isActivePrimary() ? await ensureGatewayOpen() : await ensureActiveGatewayOpen()
+        const recovered = isActivePrimary() ? await ensureGatewayOpen(true) : await ensureActiveGatewayOpen()
 
         if (!recovered) {
           // Prefer the reauth error from the failed reconnect (OAuth session
