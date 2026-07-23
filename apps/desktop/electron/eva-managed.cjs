@@ -479,7 +479,7 @@ async function brokerPost(body, options = {}) {
       signal: requestController.signal,
       headers: {
         'Content-Type': 'application/json',
-        'X-Client-Info': 'evaos-agent/2026.7.20-es.2',
+        'X-Client-Info': 'evaos-agent/2026.7.20-es.3',
         ...(options.desktopSession ? { Authorization: `Bearer ${options.desktopSession}` } : {})
       },
       body: JSON.stringify(body)
