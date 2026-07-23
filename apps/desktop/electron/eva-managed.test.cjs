@@ -144,109 +144,67 @@ test('managed WebSocket transport uses only the ws-proxy Eva session parameter',
   assert.equal(url.searchParams.has('agent_id'), false)
 })
 
-test('managed backend allows ordinary agent traffic and read-only capability inspection', () => {
-  assert.deepEqual(assertEvaManagedApiRequestAllowed({ path: '/api/sessions?limit=20&archived=exclude' }), {
-    method: 'GET',
-    path: '/api/sessions?archived=exclude&limit=20',
-    pathname: '/api/sessions'
-  })
-  assert.deepEqual(assertEvaManagedApiRequestAllowed({ path: '/api/skills?profile=default' }), {
-    method: 'GET',
-    path: '/api/skills?profile=default',
-    pathname: '/api/skills'
-  })
-  assert.deepEqual(assertEvaManagedApiRequestAllowed({ path: '/api/tools/toolsets' }), {
-    method: 'GET',
-    path: '/api/tools/toolsets',
-    pathname: '/api/tools/toolsets'
-  })
-  assert.deepEqual(assertEvaManagedApiRequestAllowed({ path: '/api/profiles/sessions?profile=all&limit=20' }), {
-    method: 'GET',
-    path: '/api/profiles/sessions?limit=20&profile=all',
-    pathname: '/api/profiles/sessions'
-  })
-  assert.deepEqual(
-    assertEvaManagedApiRequestAllowed({
-      path: '/api/sessions/session-1',
-      method: 'PATCH',
-      body: { archived: true }
-    }),
-    {
-      method: 'PATCH',
-      path: '/api/sessions/session-1',
-      pathname: '/api/sessions/session-1'
-    }
-  )
-})
-
-test('managed file reads stay inside the assigned agent workspace and admin-files roots', () => {
-  assert.deepEqual(
-    assertEvaManagedApiRequestAllowed(
-      { path: '/api/fs/read-text?path=%2Fsrv%2Fevaos%2Fagents%2Fjane%2FWelcome.md' },
-      { agentId: 'jane' }
-    ),
-    {
-      method: 'GET',
-      path: '/api/fs/read-text?path=%2Fsrv%2Fevaos%2Fagents%2Fjane%2FWelcome.md',
-      pathname: '/api/fs/read-text'
-    }
-  )
-  assert.deepEqual(
-    assertEvaManagedApiRequestAllowed(
-      { path: '/api/fs/list?path=%2Fsrv%2Fevaos%2Fhermes-managed%2Flouis' },
-      { agentId: 'louis' }
-    ),
-    {
-      method: 'GET',
-      path: '/api/fs/list?path=%2Fsrv%2Fevaos%2Fhermes-managed%2Flouis',
-      pathname: '/api/fs/list'
-    }
-  )
-
-  const denied = [
-    [{ path: '/api/fs/read-text?path=%2Fvar%2Flib%2Fevaos%2Fhermes%2Fjane%2F.env' }, { agentId: 'jane' }],
-    [{ path: '/api/fs/read-text?path=%2Fsrv%2Fevaos%2Fagents%2Fjackie%2FWelcome.md' }, { agentId: 'jane' }],
-    [{ path: '/api/fs/read-text?path=%2Fsrv%2Fevaos%2Fagents%2Fjane%2F..%2Fjackie%2FWelcome.md' }, { agentId: 'jane' }],
-    [{ path: '/api/fs/read-text?path=%2Fsrv%2Fevaos%2Fagents%2Fjane%2FWelcome.md' }, {}],
-    [{ path: '/api/fs/read-text' }, { agentId: 'jane' }]
+test('managed backend passes existing and unknown future API features through unchanged', () => {
+  const requests = [
+    { path: '/api/future-feature?mode=alpha', method: 'GET' },
+    { path: '/api/future-feature', method: 'POST', body: { future: true } },
+    { path: '/api/future-feature', method: 'PUT', body: { future: true } },
+    { path: '/api/future-feature', method: 'DELETE' },
+    { path: '/api/image/attach-bytes', method: 'POST', body: { bytes: 'opaque' } },
+    { path: '/api/config', method: 'PUT', body: { model: 'configured-remotely' } },
+    { path: '/api/cron/jobs', method: 'POST', body: { schedule: '0 9 * * *' } },
+    { path: '/api/mcp/servers', method: 'PUT', body: { name: 'example' } }
   ]
-  for (const [request, options] of denied) {
-    assert.throws(
-      () => assertEvaManagedApiRequestAllowed(request, options),
-      error => error instanceof EvaBrokerError && error.code === 'managed-policy'
-    )
+
+  for (const request of requests) {
+    const allowed = assertEvaManagedApiRequestAllowed(request)
+    assert.equal(allowed.method, request.method)
+    assert.equal(allowed.path, request.path)
   }
 })
 
-test('managed backend blocks employee capability and runtime-policy mutations', () => {
+test('managed backend leaves file authorization to the assigned OS-isolated Hermes instance', () => {
+  assert.deepEqual(
+    assertEvaManagedApiRequestAllowed({
+      path: '/api/fs/read-text?path=%2Fsrv%2Fevaos%2Fagents%2Fmain%2FWelcome.md'
+    }),
+    {
+      method: 'GET',
+      path: '/api/fs/read-text?path=%2Fsrv%2Fevaos%2Fagents%2Fmain%2FWelcome.md',
+      pathname: '/api/fs/read-text'
+    }
+  )
+})
+
+test('managed backend blocks only connection, assignment, and updater escape hatches', () => {
   const denied = [
-    { path: '/api/skills/hub/install', method: 'POST' },
-    { path: '/api/skills/toggle', method: 'PUT' },
-    { path: '/api/%2573kills/hub/install', method: 'POST' },
-    { path: '/api/learning/node', method: 'DELETE' },
-    { path: '/api/mcp/servers', method: 'PUT' },
-    { path: '/api/tools/toolsets/web', method: 'PUT' },
-    { path: '/api/config', method: 'PUT' },
-    { path: '/api/model/set', method: 'POST' },
-    { path: '/api/gateway/restart', method: 'POST' },
+    { path: '/api/future-feature', method: 'POST', agentId: 'another-agent' },
+    { path: '/api/future-feature', method: 'POST', customer_id: 'another-customer' },
+    { path: '/api/future-feature', gatewayUrl: 'https://example.invalid' },
+    { path: '/api/future-feature', token: 'raw-token' },
+    { path: '/api/future-feature?agent_id=another-agent' },
+    { path: '/api/future-feature?eva_session=raw-token' },
+    { path: '/api/future-feature?gateway_url=https%3A%2F%2Fexample.invalid' },
     { path: '/api/hermes/update', method: 'POST' },
-    { path: '/api/profiles', method: 'POST' },
-    { path: '/api/env/reveal', method: 'GET' },
-    { path: '/api/files/upload', method: 'POST' },
-    { path: '/api/cron/jobs', method: 'POST' },
-    { path: '/api/sessions', method: 'POST' },
-    { path: '/api/git/status?path=%2Fsrv%2Fagent', method: 'GET' }
+    { path: '/api/hermes/update/check?force=true', method: 'GET' }
   ]
   for (const request of denied) {
     assert.throws(
       () => assertEvaManagedApiRequestAllowed(request),
-      error => error instanceof EvaBrokerError && error.statusCode === 403 && error.code === 'managed-policy'
+      error => error instanceof EvaBrokerError && error.statusCode === 403 && error.code === 'managed-escape'
     )
   }
 })
 
 test('managed backend rejects absolute, non-API, and ambiguous request paths', () => {
-  for (const path of ['https://example.invalid/api/skills', '//example.invalid/api/skills', '/health', '/api/%zz']) {
+  for (const path of [
+    'https://example.invalid/api/skills',
+    '//example.invalid/api/skills',
+    '/health',
+    '/api/%zz',
+    '/api/%252e%252e/admin',
+    '/api/future%253fagent_id=another-agent'
+  ]) {
     assert.throws(
       () => assertEvaManagedApiRequestAllowed({ path }),
       error => error instanceof EvaBrokerError && error.code === 'managed-policy'
@@ -254,23 +212,25 @@ test('managed backend rejects absolute, non-API, and ambiguous request paths', (
   }
 })
 
-test('managed backend validates query, profile, and session mutation shapes', () => {
-  const denied = [
-    { path: '/api/sessions?limit=20&limit=40' },
-    { path: '/api/sessions?agent_id=jackie' },
-    { path: '/api/fs/read-text?path=relative' },
-    { path: '/api/skills?profile=all' },
-    { path: '/api/skills', profile: 'jackie' },
-    { path: '/api/sessions/session-1', method: 'PATCH', body: { title: 'ok', archived: true } },
-    { path: '/api/sessions/session-1', method: 'PATCH', body: { agent_id: 'jane' } },
-    { path: '/api/sessions/session-1', method: 'DELETE', body: {} }
-  ]
-  for (const request of denied) {
-    assert.throws(
-      () => assertEvaManagedApiRequestAllowed(request),
-      error => error instanceof EvaBrokerError && error.code === 'managed-policy'
-    )
-  }
+test('managed backend supports Hermes profiles within one assigned backend', () => {
+  assert.deepEqual(assertEvaManagedApiRequestAllowed({ path: '/api/skills', profile: 'research' }), {
+    method: 'GET',
+    path: '/api/skills?profile=research',
+    pathname: '/api/skills'
+  })
+  assert.deepEqual(assertEvaManagedApiRequestAllowed({ path: '/api/skills?profile=research', profile: 'research' }), {
+    method: 'GET',
+    path: '/api/skills?profile=research',
+    pathname: '/api/skills'
+  })
+  assert.throws(
+    () => assertEvaManagedApiRequestAllowed({ path: '/api/skills?profile=default', profile: 'research' }),
+    error => error instanceof EvaBrokerError && error.code === 'managed-policy'
+  )
+  assert.throws(
+    () => assertEvaManagedApiRequestAllowed({ path: '/api/skills', profile: '../other-agent' }),
+    error => error instanceof EvaBrokerError && error.code === 'managed-policy'
+  )
 })
 
 test('managed enrollment accepts server-selected accounts and rejects mismatched or malformed identities', () => {

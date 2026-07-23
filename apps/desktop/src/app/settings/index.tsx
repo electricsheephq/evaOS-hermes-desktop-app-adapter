@@ -77,17 +77,7 @@ export function SettingsView({ onClose, onConfigSaved, onMainModelChanged }: Set
   }, [navigate, search])
 
   const [activeView, setActiveView] = useRouteEnumParam('tab', SETTINGS_VIEWS, 'config:model' as SettingsViewId)
-  const managedEva = Boolean(window.hermesDesktop?.eva)
-
-  const managedViews = new Set<SettingsViewId>([
-    'about',
-    'config:appearance',
-    'gateway',
-    'notifications',
-    'sessions'
-  ])
-
-  const effectiveView = managedEva && !managedViews.has(activeView) ? ('gateway' as SettingsViewId) : activeView
+  const effectiveView = activeView
   // Providers subnav (Accounts vs API keys) lives in its own param so each
   // sub-view is deep-linkable and survives a refresh.
   const [providerView, setProviderView] = useRouteEnumParam<ProviderView>('pview', PROVIDER_VIEWS, 'accounts')
@@ -263,11 +253,9 @@ export function SettingsView({ onClose, onConfigSaved, onMainModelChanged }: Set
     }
   ]
 
-  const navGroups = managedEva
-    ? allNavGroups.filter(group => managedViews.has(group.id as SettingsViewId))
-    : allNavGroups
+  const navGroups = allNavGroups
 
-  const navFooter = managedEva ? null : (
+  const navFooter = (
     <>
       <Tip label={t.settings.exportConfig}>
         <OverlayIconButton onClick={() => void exportConfig()}>

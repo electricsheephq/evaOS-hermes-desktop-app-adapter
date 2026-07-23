@@ -9,6 +9,7 @@ const BASE_URL = 'https://hermes-jackie-david.ecs.electricsheephq.com'
 
 function fakeUpstream(statusCode = 101) {
   let observed = ''
+  const tunneled = []
   const server = net.createServer(socket => {
     socket.once('data', chunk => {
       observed = chunk.toString('latin1')
@@ -19,6 +20,7 @@ function fakeUpstream(statusCode = 101) {
             'Connection: Upgrade\r\n' +
             'Sec-WebSocket-Accept: test\r\n\r\n'
         )
+        socket.on('data', payload => tunneled.push(Buffer.from(payload)))
       } else {
         socket.end(`HTTP/1.1 ${statusCode} Unauthorized\r\nConnection: close\r\n\r\n`)
       }
@@ -34,6 +36,7 @@ function fakeUpstream(statusCode = 101) {
       })
     },
     observed: () => observed,
+    tunneled: () => Buffer.concat(tunneled),
     start: () => new Promise(resolve => server.listen(0, '127.0.0.1', resolve)),
     stop: () => new Promise(resolve => server.close(resolve))
   }
@@ -91,6 +94,30 @@ test('renderer gets a single-use loopback ticket and never the managed runtime s
   const second = await upgrade(localUrl)
   assert.match(second.response, /^HTTP\/1\.1 401/)
   second.socket.destroy()
+})
+
+test('relay passes an unknown future gateway RPC frame through unchanged', async t => {
+  const upstream = fakeUpstream()
+  await upstream.start()
+  const relay = createEvaWsRelay({
+    connectUpstream: () => upstream.connect(),
+    getUpstream: async () => ({ baseUrl: BASE_URL, token: 'runtime-secret' })
+  })
+  t.after(async () => {
+    await relay.close()
+    await upstream.stop()
+  })
+
+  const result = await upgrade(await relay.mintTicket())
+  assert.match(result.response, /^HTTP\/1\.1 101/)
+  const futureFrame = Buffer.from('future.gateway.rpc.v999:opaque-payload')
+  result.socket.write(futureFrame)
+
+  for (let attempt = 0; attempt < 20 && upstream.tunneled().length < futureFrame.length; attempt += 1) {
+    await new Promise(resolve => setTimeout(resolve, 5))
+  }
+  assert.deepEqual(upstream.tunneled(), futureFrame)
+  result.socket.destroy()
 })
 
 test('an upstream authentication rejection invalidates the managed enrollment', async t => {

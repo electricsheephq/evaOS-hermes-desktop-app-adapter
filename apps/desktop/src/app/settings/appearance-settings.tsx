@@ -242,7 +242,6 @@ function MarketplaceThemeResults({
 }
 
 export function AppearanceSettings() {
-  const managedEva = Boolean(window.hermesDesktop?.eva)
   const { t, isSavingLocale } = useI18n()
   const { themeName, mode, resolvedMode, availableThemes, setTheme, setMode } = useTheme()
   const toolViewMode = useStore($toolViewMode)
@@ -307,30 +306,26 @@ export function AppearanceSettings() {
         </p>
 
         <div className="mt-2">
-          {!managedEva ? (
-            <ListRow
-              action={<LanguageSwitcher />}
-              description={isSavingLocale ? t.language.saving : t.language.description}
-              title={t.language.label}
-            />
-          ) : null}
+          <ListRow
+            action={<LanguageSwitcher />}
+            description={isSavingLocale ? t.language.saving : t.language.description}
+            title={t.language.label}
+          />
 
           <ListRow
             below={
               <>
                 {/* One search box: filters your installed themes (the grid)
                     and live-searches the VS Code Marketplace below. */}
-                {!managedEva ? (
-                  <div className="mt-3">
-                    <input
-                      className="w-full rounded-lg border border-(--ui-stroke-tertiary) bg-(--ui-bg-quinary) px-3 py-1.5 text-[length:var(--conversation-caption-font-size)] outline-none placeholder:text-(--ui-text-tertiary) focus:border-(--ui-stroke-secondary)"
-                      onChange={event => setQuery(event.target.value)}
-                      placeholder="Search your themes or the VS Code Marketplace…"
-                      spellCheck={false}
-                      value={query}
-                    />
-                  </div>
-                ) : null}
+                <div className="mt-3">
+                  <input
+                    className="w-full rounded-lg border border-(--ui-stroke-tertiary) bg-(--ui-bg-quinary) px-3 py-1.5 text-[length:var(--conversation-caption-font-size)] outline-none placeholder:text-(--ui-text-tertiary) focus:border-(--ui-stroke-secondary)"
+                    onChange={event => setQuery(event.target.value)}
+                    placeholder="Search your themes or the VS Code Marketplace…"
+                    spellCheck={false}
+                    value={query}
+                  />
+                </div>
 
                 {/* Fixed-height scroll area so the (growing) theme list never
                     runs the page long; the grid scrolls inside it. */}
@@ -391,9 +386,7 @@ export function AppearanceSettings() {
                       })}
                     </div>
                   )}
-                  {!managedEva ? (
-                    <MarketplaceThemeResults installs={installs} onInstalled={name => setTheme(name)} query={query} />
-                  ) : null}
+                  <MarketplaceThemeResults installs={installs} onInstalled={name => setTheme(name)} query={query} />
                 </div>
                 {showProfileNote && (
                   <p className="mt-3 text-[length:var(--conversation-caption-font-size)] leading-(--conversation-caption-line-height) text-(--ui-text-tertiary)">

@@ -1,5 +1,4 @@
 const crypto = require('node:crypto')
-const path = require('node:path')
 
 const EVA_MANAGED_POLICY = Object.freeze({
   schemaVersion: 'evaos.eva_desktop_managed.v1',
@@ -19,38 +18,35 @@ const EVA_MANAGED_POLICY = Object.freeze({
   runtimeHostSuffix: '.ecs.electricsheephq.com'
 })
 
-const EVA_MANAGED_READ_ROUTES = Object.freeze([
-  { pattern: /^\/api\/status$/, query: [] },
-  { pattern: /^\/api\/config(?:\/(?:defaults|schema))?$/, query: ['profile'] },
-  { pattern: /^\/api\/model\/info$/, query: ['profile'] },
-  {
-    pattern: /^\/api\/model\/options$/,
-    query: ['explicit_only', 'include_unconfigured', 'profile', 'refresh']
-  },
-  { pattern: /^\/api\/model\/recommended-default$/, query: ['profile', 'provider'] },
-  { pattern: /^\/api\/model\/(?:auxiliary|moa)$/, query: ['profile'] },
-  {
-    pattern: /^\/api\/sessions$/,
-    query: ['archived', 'exclude_sources', 'limit', 'min_messages', 'offset', 'order', 'source']
-  },
-  { pattern: /^\/api\/sessions\/search$/, query: ['q'] },
-  { pattern: /^\/api\/sessions\/[A-Za-z0-9][A-Za-z0-9._:-]{0,255}(?:\/messages)?$/, query: ['profile'] },
-  {
-    pattern: /^\/api\/profiles\/sessions$/,
-    query: ['archived', 'exclude_sources', 'limit', 'min_messages', 'offset', 'order', 'profile', 'source'],
-    profileValues: ['all', 'default']
-  },
-  { pattern: /^\/api\/profiles\/active$/, query: [] },
-  { pattern: /^\/api\/skills$/, query: ['profile'] },
-  { pattern: /^\/api\/learning\/graph$/, query: ['profile'] },
-  { pattern: /^\/api\/learning\/node$/, query: ['id', 'profile'] },
-  { pattern: /^\/api\/tools\/toolsets$/, query: ['profile'] },
-  {
-    pattern: /^\/api\/tools\/toolsets\/[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\/(?:config|models)$/,
-    query: ['profile', 'provider']
-  },
-  { pattern: /^\/api\/fs\/(?:default-cwd|git-root|list|read-data-url|read-text)$/, query: ['path'] }
+const EVA_MANAGED_API_METHODS = new Set(['DELETE', 'GET', 'HEAD', 'OPTIONS', 'PATCH', 'POST', 'PUT'])
+const EVA_MANAGED_ESCAPE_FIELDS = new Set([
+  'agentId',
+  'agent_id',
+  'baseUrl',
+  'base_url',
+  'customerId',
+  'customer_id',
+  'gatewayUrl',
+  'gateway_url',
+  'sessionToken',
+  'session_token',
+  'token',
+  'url'
 ])
+const EVA_MANAGED_ESCAPE_QUERY_KEYS = new Set([
+  'agent',
+  'agent_id',
+  'base_url',
+  'customer',
+  'customer_id',
+  'eva_session',
+  'gateway',
+  'gateway_url',
+  'session_token',
+  'token'
+])
+const EVA_MANAGED_BLOCKED_BACKEND_PATHS = new Set(['/api/hermes/update', '/api/hermes/update/check'])
+const EVA_MANAGED_PROFILE_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
 
 function managedUpdateResponse(action = 'check', now = Date.now()) {
   if (action === 'apply') {
@@ -106,7 +102,16 @@ function normalizeEvaManagedApiPath(value) {
     pathname = decoded
   }
   pathname = pathname.replace(/\/+/g, '/')
-  if (pathname.includes('%') || pathname.includes('\\') || !pathname.startsWith('/api/')) {
+  const segments = pathname.split('/')
+  if (
+    pathname.includes('%') ||
+    pathname.includes('\\') ||
+    pathname.includes('?') ||
+    pathname.includes('#') ||
+    hasAsciiControl(pathname) ||
+    segments.some(segment => segment === '.' || segment === '..') ||
+    !pathname.startsWith('/api/')
+  ) {
     throw new EvaBrokerError('evaOS Agent blocked an ambiguous managed-backend request.', 400, 'managed-policy')
   }
   return { parsed, pathname }
@@ -119,145 +124,51 @@ function hasAsciiControl(value) {
   })
 }
 
-function validateEvaManagedQueryValue(key, value, options = {}) {
-  if (key === 'profile') {
-    if (!(options.profileValues ?? ['default']).includes(value)) {
-      throw new EvaBrokerError('evaOS Agent does not permit Desktop profile selection.', 403, 'managed-policy')
-    }
-    return
-  }
-  if (['explicit_only', 'include_unconfigured', 'refresh'].includes(key)) {
-    if (!['0', '1'].includes(value)) {
-      throw new EvaBrokerError('evaOS Agent blocked an invalid managed query.', 400, 'managed-policy')
-    }
-    return
-  }
-  if (['limit', 'min_messages', 'offset'].includes(key)) {
-    if (!/^\d{1,6}$/.test(value)) {
-      throw new EvaBrokerError('evaOS Agent blocked an invalid managed query.', 400, 'managed-policy')
-    }
-    return
-  }
-  if (key === 'archived') {
-    if (!['exclude', 'include', 'only'].includes(value)) {
-      throw new EvaBrokerError('evaOS Agent blocked an invalid managed query.', 400, 'managed-policy')
-    }
-    return
-  }
-  if (key === 'order') {
-    if (!['created', 'recent'].includes(value)) {
-      throw new EvaBrokerError('evaOS Agent blocked an invalid managed query.', 400, 'managed-policy')
-    }
-    return
-  }
-  if (key === 'path') {
-    if (!value.startsWith('/') || value.length > 4096 || value.includes('\\') || hasAsciiControl(value)) {
-      throw new EvaBrokerError('evaOS Agent blocked an invalid managed file path.', 400, 'managed-policy')
-    }
-    const agentId = String(options.agentId || '')
-    if (!/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/.test(agentId)) {
-      throw new EvaBrokerError(
-        'evaOS Agent could not bind this file request to an assigned agent.',
-        403,
-        'managed-policy'
-      )
-    }
-    const resolved = path.posix.resolve(value)
-    const roots = [`/srv/evaos/agents/${agentId}`, `/srv/evaos/hermes-managed/${agentId}`]
-    if (!roots.some(root => resolved === root || resolved.startsWith(`${root}/`))) {
-      throw new EvaBrokerError(
-        'evaOS Agent blocked a file request outside the assigned agent workspace.',
-        403,
-        'managed-policy'
-      )
-    }
-    return
-  }
-  if (!value || value.length > 512 || hasAsciiControl(value)) {
-    throw new EvaBrokerError('evaOS Agent blocked an invalid managed query.', 400, 'managed-policy')
-  }
-}
-
-function normalizeEvaManagedQuery(parsed, allowedKeys, options = {}) {
-  const allowed = new Set(allowedKeys)
-  const normalized = new URLSearchParams()
-  const seen = new Set()
-  for (const [key, value] of parsed.searchParams.entries()) {
-    if (!allowed.has(key) || seen.has(key)) {
-      throw new EvaBrokerError('evaOS Agent blocked an unsupported managed query.', 403, 'managed-policy')
-    }
-    seen.add(key)
-    validateEvaManagedQueryValue(key, value, options)
-    normalized.set(key, value)
-  }
-  normalized.sort()
-  return normalized.toString()
-}
-
-function assertPlainManagedBody(body) {
-  if (!body || typeof body !== 'object' || Array.isArray(body) || Object.getPrototypeOf(body) !== Object.prototype) {
-    throw new EvaBrokerError('evaOS Agent blocked an invalid managed request body.', 400, 'managed-policy')
-  }
-  if (Buffer.byteLength(JSON.stringify(body), 'utf8') > 16 * 1024) {
-    throw new EvaBrokerError('evaOS Agent blocked an oversized managed request body.', 413, 'managed-policy')
-  }
-}
-
-function assertEvaManagedApiRequestAllowed(request, options = {}) {
+function assertEvaManagedApiRequestAllowed(request) {
   const method = String(request?.method || 'GET').toUpperCase()
-  if (!['DELETE', 'GET', 'HEAD', 'PATCH'].includes(method)) {
-    throw new EvaBrokerError('This capability is managed by an Electric Sheep administrator.', 403, 'managed-policy')
+  if (!EVA_MANAGED_API_METHODS.has(method)) {
+    throw new EvaBrokerError('evaOS Agent blocked an invalid managed-backend method.', 400, 'managed-policy')
   }
-  if (request?.profile && request.profile !== 'default') {
-    throw new EvaBrokerError('evaOS Agent does not permit Desktop profile selection.', 403, 'managed-policy')
+  for (const key of EVA_MANAGED_ESCAPE_FIELDS) {
+    if (Object.hasOwn(request ?? {}, key)) {
+      throw new EvaBrokerError(
+        'evaOS Agent connection and assignment are managed by Electric Sheep.',
+        403,
+        'managed-escape'
+      )
+    }
   }
 
   const { parsed, pathname } = normalizeEvaManagedApiPath(request?.path)
-  if (method === 'GET' || method === 'HEAD') {
-    const route = EVA_MANAGED_READ_ROUTES.find(candidate => candidate.pattern.test(pathname))
-    if (!route) {
-      throw new EvaBrokerError('This capability is managed by an Electric Sheep administrator.', 403, 'managed-policy')
-    }
-    if (request?.body !== undefined && request.body !== null) {
-      throw new EvaBrokerError('evaOS Agent blocked a body on a read-only request.', 400, 'managed-policy')
-    }
-    if (/^\/api\/fs\/(?:list|read-data-url|read-text)$/.test(pathname) && !parsed.searchParams.has('path')) {
-      throw new EvaBrokerError('evaOS Agent requires an assigned workspace path for file reads.', 400, 'managed-policy')
-    }
-    const query = normalizeEvaManagedQuery(parsed, route.query, { ...route, agentId: options.agentId })
-    return { method, pathname, path: `${pathname}${query ? `?${query}` : ''}` }
+  if (EVA_MANAGED_BLOCKED_BACKEND_PATHS.has(pathname)) {
+    throw new EvaBrokerError('Updates are managed by Electric Sheep.', 403, 'managed-escape')
   }
 
-  const sessionMatch = /^\/api\/sessions\/[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/.test(pathname)
-  if (!sessionMatch) {
-    throw new EvaBrokerError('This capability is managed by an Electric Sheep administrator.', 403, 'managed-policy')
-  }
-  const query = normalizeEvaManagedQuery(parsed, ['profile'])
-  if (method === 'DELETE') {
-    if (request?.body !== undefined && request.body !== null) {
-      throw new EvaBrokerError('evaOS Agent blocked a body on a delete request.', 400, 'managed-policy')
+  for (const [key, value] of parsed.searchParams.entries()) {
+    if (EVA_MANAGED_ESCAPE_QUERY_KEYS.has(key)) {
+      throw new EvaBrokerError(
+        'evaOS Agent connection and assignment are managed by Electric Sheep.',
+        403,
+        'managed-escape'
+      )
     }
-    return { method, pathname, path: `${pathname}${query ? `?${query}` : ''}` }
+    if (hasAsciiControl(key) || hasAsciiControl(value)) {
+      throw new EvaBrokerError('evaOS Agent blocked an invalid managed query.', 400, 'managed-policy')
+    }
   }
 
-  assertPlainManagedBody(request?.body)
-  const keys = Object.keys(request.body).sort()
-  const allowedKeys = new Set(['archived', 'profile', 'title'])
-  if (keys.some(key => !allowedKeys.has(key)) || keys.filter(key => key !== 'profile').length !== 1) {
-    throw new EvaBrokerError('evaOS Agent blocked an unsupported session update.', 403, 'managed-policy')
+  const profile = request?.profile == null ? null : String(request.profile)
+  if (profile && !EVA_MANAGED_PROFILE_RE.test(profile)) {
+    throw new EvaBrokerError('evaOS Agent blocked an invalid Hermes profile.', 400, 'managed-policy')
   }
-  if (Object.hasOwn(request.body, 'profile') && request.body.profile !== 'default') {
-    throw new EvaBrokerError('evaOS Agent does not permit Desktop profile selection.', 403, 'managed-policy')
+  if (profile && parsed.searchParams.has('profile') && parsed.searchParams.get('profile') !== profile) {
+    throw new EvaBrokerError('evaOS Agent blocked conflicting Hermes profiles.', 400, 'managed-policy')
   }
-  if (Object.hasOwn(request.body, 'archived') && typeof request.body.archived !== 'boolean') {
-    throw new EvaBrokerError('evaOS Agent blocked an invalid archive update.', 400, 'managed-policy')
+  if (profile && !parsed.searchParams.has('profile')) {
+    parsed.searchParams.set('profile', profile)
   }
-  if (
-    Object.hasOwn(request.body, 'title') &&
-    (typeof request.body.title !== 'string' || !request.body.title.trim() || request.body.title.length > 200)
-  ) {
-    throw new EvaBrokerError('evaOS Agent blocked an invalid session title.', 400, 'managed-policy')
-  }
+
+  const query = parsed.searchParams.toString()
   return { method, pathname, path: `${pathname}${query ? `?${query}` : ''}` }
 }
 
@@ -465,7 +376,6 @@ async function brokerPost(body, options = {}) {
   const abortFromExternal = () => requestController.abort(externalSignal?.reason)
   const timeoutMs = options.timeoutMs ?? policy.brokerRequestTimeoutMs
   const timeout = setTimeout(() => requestController.abort(), timeoutMs)
-  timeout.unref?.()
   if (externalSignal?.aborted) {
     abortFromExternal()
   } else {
@@ -479,7 +389,7 @@ async function brokerPost(body, options = {}) {
       signal: requestController.signal,
       headers: {
         'Content-Type': 'application/json',
-        'X-Client-Info': 'evaos-agent/2026.7.20-es.3',
+        'X-Client-Info': 'evaos-agent/2026.7.20-es.4',
         ...(options.desktopSession ? { Authorization: `Bearer ${options.desktopSession}` } : {})
       },
       body: JSON.stringify(body)

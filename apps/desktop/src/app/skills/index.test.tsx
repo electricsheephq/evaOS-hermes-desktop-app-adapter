@@ -156,8 +156,8 @@ describe('SkillsView toolset management', () => {
   })
 })
 
-describe('Eva managed capabilities', () => {
-  it('shows approved capabilities read-only without Hub, MCP, toggles, or configuration controls', async () => {
+describe('evaOS managed upstream capabilities', () => {
+  it('keeps upstream Hub, MCP, toggles, and configuration controls available', async () => {
     Object.defineProperty(window, 'hermesDesktop', {
       configurable: true,
       value: { eva: {} }
@@ -174,10 +174,9 @@ describe('Eva managed capabilities', () => {
     await renderSkills()
 
     expect((await screen.findAllByText('Web Search')).length).toBeGreaterThan(0)
-    expect(screen.getByText('Installed and managed by Electric Sheep')).toBeTruthy()
-    expect(screen.queryByRole('switch')).toBeNull()
-    expect(screen.queryByText('MCP')).toBeNull()
-    expect(screen.queryByText('Hub')).toBeNull()
-    expect(getToolsetConfig).not.toHaveBeenCalled()
+    expect(screen.getByRole('switch', { name: 'Toggle Web Search toolset' })).toBeTruthy()
+    expect(screen.getByText('MCP')).toBeTruthy()
+    expect(screen.getByText('Browse Hub')).toBeTruthy()
+    await waitFor(() => expect(getToolsetConfig).toHaveBeenCalledWith('web'))
   })
 })

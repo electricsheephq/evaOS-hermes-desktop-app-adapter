@@ -33,6 +33,29 @@ function writeEnrollment(statePath) {
   )
 }
 
+function writeActiveEnrollment(statePath) {
+  fs.writeFileSync(
+    statePath,
+    JSON.stringify({
+      schema_version: 'evaos.eva_desktop_managed.v1',
+      signed_out: false,
+      desktop: {
+        token: 'desktop-token',
+        expires_at: FUTURE,
+        email: 'employee@example.invalid'
+      },
+      runtime: {
+        token: 'runtime-token',
+        expires_at: FUTURE,
+        base_url: 'https://hermes-customer-one.ecs.electricsheephq.com',
+        agent_id: 'main',
+        customer_id: 'customer-one',
+        runtime: 'hermes'
+      }
+    })
+  )
+}
+
 test('cold launch replaces an expired runtime enrollment before connecting', async t => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-expiry-'))
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
@@ -74,6 +97,53 @@ test('cold launch replaces an expired runtime enrollment before connecting', asy
   assert.equal(backend.baseUrl, 'eva-managed://customer-one')
   assert.equal(persisted.runtime.token, 'fresh-runtime-token')
   assert.equal(persisted.runtime.expires_at, FUTURE)
+})
+
+test('managed runtime forwards unknown APIs, bodies, uploads, and Hermes profiles to the assigned backend', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-passthrough-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeActiveEnrollment(statePath)
+
+  const calls = []
+  const runtime = createEvaManagedRuntime({
+    statePath,
+    encryptSecret: value => value,
+    decryptSecret: value => value,
+    fetchJson: async (url, token, options) => {
+      calls.push({ url, token, options })
+      return { ok: true }
+    },
+    createWsRelay: () => ({
+      mintTicket: async () => 'ws://127.0.0.1:12345/managed',
+      disconnectAll: () => undefined,
+      close: async () => undefined
+    }),
+    resolveTimeoutMs: () => 1_000
+  })
+
+  const upload = {
+    filename: 'future.bin',
+    contentType: 'application/octet-stream',
+    bytes: Buffer.from([1, 2, 3])
+  }
+  await runtime.requestApi({
+    path: '/api/future-feature?mode=alpha',
+    method: 'POST',
+    profile: 'research',
+    body: { future: true },
+    upload
+  })
+
+  assert.equal(calls.length, 1)
+  assert.equal(
+    calls[0].url,
+    'https://hermes-customer-one.ecs.electricsheephq.com/api/future-feature?mode=alpha&profile=research'
+  )
+  assert.equal(calls[0].token, 'runtime-token')
+  assert.equal(calls[0].options.method, 'POST')
+  assert.deepEqual(calls[0].options.body, { future: true })
+  assert.equal(calls[0].options.upload, upload)
 })
 
 test('broker requests time out instead of leaving managed launch unresolved', async () => {
