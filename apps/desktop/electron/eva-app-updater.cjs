@@ -89,9 +89,11 @@ function createEvaAppUpdater(options) {
   function configure() {
     autoUpdater.autoDownload = false
     autoUpdater.autoInstallOnAppQuit = false
-    autoUpdater.allowDowngrade = false
     autoUpdater.allowPrerelease = true
+    // electron-updater's channel setter enables allowDowngrade. Set the
+    // channel first, then restore the product's forward-only invariant.
     autoUpdater.channel = EVA_APP_UPDATE_CHANNEL
+    autoUpdater.allowDowngrade = false
     autoUpdater.setFeedURL({
       provider: 'generic',
       url: EVA_APP_UPDATE_FEED,

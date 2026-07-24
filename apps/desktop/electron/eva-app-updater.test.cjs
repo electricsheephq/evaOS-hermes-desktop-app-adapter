@@ -15,6 +15,18 @@ class FakeUpdater extends EventEmitter {
     this.checkCalls = 0
     this.downloadCalls = 0
     this.installCalls = []
+    this._channel = null
+  }
+
+  get channel() {
+    return this._channel
+  }
+
+  set channel(value) {
+    this._channel = value
+    // Match electron-updater AppUpdater: selecting a channel implicitly opts
+    // into downgrade unless the caller restores allowDowngrade afterwards.
+    this.allowDowngrade = true
   }
 
   setFeedURL(value) {
