@@ -20,6 +20,8 @@ const {
 } = require('./eva-managed.cjs')
 const { createEvaWsRelay } = require('./eva-ws-relay.cjs')
 
+const RUNTIME_ENROLLMENT_RETRY_DELAYS_MS = Object.freeze([2_000, 5_000, 10_000, 20_000, 30_000])
+
 function createEvaManagedRuntime(options) {
   if (!options?.statePath || typeof options.encryptSecret !== 'function' || typeof options.decryptSecret !== 'function') {
     throw new TypeError('evaOS Agent managed runtime requires statePath and secret custody functions.')
@@ -33,9 +35,11 @@ function createEvaManagedRuntime(options) {
   const launchRuntime = options.launchRuntime ?? launchEvaHermesRuntime
   const createWsRelay = options.createWsRelay ?? createEvaWsRelay
   const statePath = options.statePath
+  const now = options.now ?? Date.now
 
   let signInPromise = null
   let runtimeEnrollmentPromise = null
+  let runtimeEnrollmentFailure = null
   let pendingAuth = null
   let authGeneration = 0
   let runtimeGeneration = 0
@@ -146,12 +150,28 @@ function createEvaManagedRuntime(options) {
   }
 
   function clearRuntimeEnrollment() {
-    runtimeGeneration += 1
+    if (!runtimeEnrollmentPromise) runtimeGeneration += 1
     const state = readState()
     if (state.desktop) writeState({ desktop: state.desktop, runtime: null })
-    runtimeEnrollmentPromise = null
     resetConnection()
     wsRelay?.disconnectAll()
+  }
+
+  function resetRuntimeEnrollmentFailure() {
+    runtimeEnrollmentFailure = null
+  }
+
+  function recordRuntimeEnrollmentFailure(error) {
+    const attempts = (runtimeEnrollmentFailure?.attempts ?? 0) + 1
+    const delay =
+      RUNTIME_ENROLLMENT_RETRY_DELAYS_MS[
+        Math.min(attempts - 1, RUNTIME_ENROLLMENT_RETRY_DELAYS_MS.length - 1)
+      ]
+    runtimeEnrollmentFailure = {
+      attempts,
+      error,
+      nextRetryAt: now() + delay
+    }
   }
 
   function invalidateAuthWork() {
@@ -165,6 +185,7 @@ function createEvaManagedRuntime(options) {
     pendingAuth = null
     signInPromise = null
     runtimeEnrollmentPromise = null
+    resetRuntimeEnrollmentFailure()
     resetConnection()
     wsRelay?.disconnectAll()
   }
@@ -236,29 +257,40 @@ function createEvaManagedRuntime(options) {
 
   async function ensureRuntimeEnrollment(input = {}) {
     const force = input.force === true
+    if (runtimeEnrollmentPromise) return runtimeEnrollmentPromise
     if (force) runtimeGeneration += 1
     const auth = authGeneration
     const runtime = runtimeGeneration
     const current = readState()
     if (!force && current.runtime && !expiresSoon(current.runtime.expiresAt)) return current.runtime
-    if (runtimeEnrollmentPromise && !force) return runtimeEnrollmentPromise
+    if (!force && runtimeEnrollmentFailure && now() < runtimeEnrollmentFailure.nextRetryAt) {
+      throw runtimeEnrollmentFailure.error
+    }
     if (force && current.desktop) writeState({ desktop: current.desktop, runtime: null })
 
     const task = (async () => {
-      const desktop = await ensureDesktopSession()
-      assertGeneration(auth, runtime)
-      await advanceBootProgress('eva.enroll', 'Resolving your assigned evaOS agent', 26)
-      let enrollment
       try {
-        enrollment = await launchRuntime(desktop.token)
-      } catch (error) {
-        if (!(error instanceof EvaBrokerError) || error.statusCode !== 401) throw error
+        const desktop = await ensureDesktopSession()
         assertGeneration(auth, runtime)
-        return requireSignIn()
+        await advanceBootProgress('eva.enroll', 'Resolving your assigned evaOS agent', 26)
+        let enrollment
+        try {
+          enrollment = await launchRuntime(desktop.token)
+        } catch (error) {
+          if (!(error instanceof EvaBrokerError) || error.statusCode !== 401) throw error
+          assertGeneration(auth, runtime)
+          return requireSignIn()
+        }
+        assertGeneration(auth, runtime)
+        writeState({ desktop, runtime: enrollment })
+        resetRuntimeEnrollmentFailure()
+        return enrollment
+      } catch (error) {
+        if (error?.statusCode !== 401 && error?.code !== 'stale-auth') {
+          recordRuntimeEnrollmentFailure(error)
+        }
+        throw error
       }
-      assertGeneration(auth, runtime)
-      writeState({ desktop, runtime: enrollment })
-      return enrollment
     })()
 
     runtimeEnrollmentPromise = task
