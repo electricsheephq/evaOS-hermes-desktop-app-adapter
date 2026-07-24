@@ -181,7 +181,11 @@ interface SkillsViewProps extends React.ComponentProps<'section'> {
   setStatusbarItemGroup?: SetStatusbarItemGroup
 }
 
-export function SkillsView({ setStatusbarItemGroup: _setStatusbarItemGroup, ...props }: SkillsViewProps) {
+export function SkillsView(props: SkillsViewProps) {
+  return <UnmanagedSkillsView {...props} />
+}
+
+function UnmanagedSkillsView({ setStatusbarItemGroup: _setStatusbarItemGroup, ...props }: SkillsViewProps) {
   const { t } = useI18n()
   const gateway = useStore($gateway) as HermesGateway | null
   const [mode, setMode] = useRouteEnumParam('tab', SKILLS_MODES, 'skills')

@@ -119,6 +119,17 @@ export function useKeybinds(deps: KeybindRuntimeDeps): void {
     setTerminalTakeover(false)
   }
 
+  const terminalHandlers: HandlerMap = {
+    'view.showTerminal': () => setTerminalTakeover(!$terminalTakeover.get()),
+    'view.newTerminal': () => {
+      createTerminal()
+      setTerminalTakeover(true)
+    },
+    'view.nextTerminal': () => $terminalTakeover.get() && cycleTerminal(1),
+    'view.prevTerminal': () => $terminalTakeover.get() && cycleTerminal(-1),
+    'view.closeTerminal': () => $terminalTakeover.get() && closeActiveTerminal()
+  }
+
   handlersRef.current = {
     'keybinds.openPanel': () => navigate(`${SETTINGS_ROUTE}?tab=keybinds`),
 
@@ -166,18 +177,9 @@ export function useKeybinds(deps: KeybindRuntimeDeps): void {
       layoutHasRootSide('right') ? toggleFileBrowserOpen() : setTerminalTakeover(!$terminalTakeover.get()),
     'view.toggleReview': toggleReview,
     'view.showFiles': showFiles,
-    'view.showTerminal': () => setTerminalTakeover(!$terminalTakeover.get()),
-    // Create first so the pane's open-effect ensure sees a non-empty set and
-    // doesn't also spawn one — net effect is exactly one fresh terminal.
-    'view.newTerminal': () => {
-      createTerminal()
-      setTerminalTakeover(true)
-    },
-    // Switch / close only act while the pane is open (no focus-scoping here, so
-    // this stands in for "terminal is showing").
-    'view.nextTerminal': () => $terminalTakeover.get() && cycleTerminal(1),
-    'view.prevTerminal': () => $terminalTakeover.get() && cycleTerminal(-1),
-    'view.closeTerminal': () => $terminalTakeover.get() && closeActiveTerminal(),
+    // Managed Eva has no local shell bridge. Keep these actions out of the
+    // handler map so persisted hotkeys cannot open a dead terminal surface.
+    ...terminalHandlers,
     'view.flipPanes': togglePanesFlipped,
     // ⌘W: close the focused tab (terminal / preview target / zone tree tab).
     // On macOS the menu accelerator owns ⌘W and routes through the same

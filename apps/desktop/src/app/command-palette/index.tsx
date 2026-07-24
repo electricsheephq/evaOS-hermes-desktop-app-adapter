@@ -303,6 +303,7 @@ export function CommandPalette() {
   const { availableThemes, resolvedMode, setMode, setTheme, themeName } = useTheme()
   const [search, setSearch] = useState('')
   const [page, setPage] = useState<string | null>(null)
+  const managedEva = Boolean(window.hermesDesktop?.eva)
 
   // Server-backed sources for the type-to-search groups, fetched lazily while
   // the palette is open. react-query handles caching/dedup/staleness.
@@ -472,7 +473,13 @@ export function CommandPalette() {
             label: t.shell.statusbar.cron,
             run: go(CRON_ROUTE)
           },
-          { action: 'nav.profiles', icon: Users, id: 'nav-profiles', label: t.profiles.title, run: go(PROFILES_ROUTE) },
+          {
+            action: 'nav.profiles',
+            icon: Users,
+            id: 'nav-profiles',
+            label: t.profiles.title,
+            run: go(PROFILES_ROUTE)
+          },
           { action: 'nav.agents', icon: Cpu, id: 'nav-agents', label: t.agents.title, run: go(AGENTS_ROUTE) },
           {
             icon: Starmap,
@@ -508,20 +515,24 @@ export function CommandPalette() {
             label: cc.sections.usage,
             run: go(`${COMMAND_CENTER_ROUTE}?section=usage`)
           },
-          {
-            icon: RefreshCw,
-            id: 'cc-restart-gateway',
-            keywords: ['gateway', 'restart', 'messaging', 'reconnect', 'system'],
-            label: cc.restartGateway,
-            run: () => void runGatewayRestart()
-          },
-          {
-            icon: Download,
-            id: 'cc-update-hermes',
-            keywords: ['update', 'upgrade', 'hermes', 'version', 'system', 'restart'],
-            label: cc.updateHermes,
-            run: () => void applyBackendUpdate()
-          }
+          ...(!managedEva
+            ? [
+                {
+                  icon: RefreshCw,
+                  id: 'cc-restart-gateway',
+                  keywords: ['gateway', 'restart', 'messaging', 'reconnect', 'system'],
+                  label: cc.restartGateway,
+                  run: () => void runGatewayRestart()
+                },
+                {
+                  icon: Download,
+                  id: 'cc-update-hermes',
+                  keywords: ['update', 'upgrade', 'hermes', 'version', 'system', 'restart'],
+                  label: cc.updateHermes,
+                  run: () => void applyBackendUpdate()
+                }
+              ]
+            : [])
         ]
       },
       {
@@ -597,7 +608,7 @@ export function CommandPalette() {
           ]
         : [])
     ]
-  }, [contributedItems, go, settingsSectionLabel, t, worktrees])
+  }, [contributedItems, go, managedEva, settingsSectionLabel, t, worktrees])
 
   // The long, granular lists (settings fields, API keys, MCP servers, archived
   // chats) only surface once the user types — otherwise they'd bury the

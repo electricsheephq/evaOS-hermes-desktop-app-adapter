@@ -1,4 +1,5 @@
 import { act, cleanup, render } from '@testing-library/react'
+import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { $desktopBoot } from '@/store/boot'
@@ -128,6 +129,14 @@ function Harness({
   return null
 }
 
+function renderHarness() {
+  return render(
+    <MemoryRouter>
+      <Harness />
+    </MemoryRouter>
+  )
+}
+
 const originalWebSocket = globalThis.WebSocket
 
 beforeEach(() => {
@@ -191,7 +200,7 @@ describe('useGatewayBoot remote reconnect loop (real hook, fake socket)', () => 
     )
     ;(window as { hermesDesktop?: unknown }).hermesDesktop = desktop
 
-    render(<Harness />)
+    renderHarness()
     await flushAsync()
 
     // getConnection is still pending — the dead-VPS wait. No socket was ever
@@ -213,7 +222,11 @@ describe('useGatewayBoot remote reconnect loop (real hook, fake socket)', () => 
 
   it('resets the old machine context before connecting an applied gateway', async () => {
     const beforeConnectionSwitch = vi.fn()
-    render(<Harness beforeConnectionSwitch={beforeConnectionSwitch} />)
+    render(
+      <MemoryRouter>
+        <Harness beforeConnectionSwitch={beforeConnectionSwitch} />
+      </MemoryRouter>
+    )
     await flushAsync()
     expect(connectionApplied).not.toBeNull()
 
@@ -224,7 +237,7 @@ describe('useGatewayBoot remote reconnect loop (real hook, fake socket)', () => 
   })
 
   it('a remote that drops post-boot keeps looping with NO boot.error (the dead-end CONNECTING combo)', async () => {
-    render(<Harness />)
+    renderHarness()
     await flushAsync()
 
     // Initial boot connected.
@@ -252,7 +265,7 @@ describe('useGatewayBoot remote reconnect loop (real hook, fake socket)', () => 
   })
 
   it('FIX: after the prolonged drop the hook raises a recoverable boot error (the escape hatch)', async () => {
-    render(<Harness />)
+    renderHarness()
     await flushAsync()
     expect($desktopBoot.get().error).toBeNull()
 
@@ -271,7 +284,7 @@ describe('useGatewayBoot remote reconnect loop (real hook, fake socket)', () => 
   })
 
   it('FIX: a successful reconnect clears the recoverable error', async () => {
-    render(<Harness />)
+    renderHarness()
     await flushAsync()
 
     FakeWebSocket.mode = 'fail'
@@ -302,7 +315,11 @@ describe('useGatewayBoot remote reconnect loop (real hook, fake socket)', () => 
       throw new Error('404: {"detail":"No such API endpoint: /api/profiles/sessions/sidebar"}')
     })
 
-    render(<Harness refreshSessions={refreshSessions} />)
+    render(
+      <MemoryRouter>
+        <Harness refreshSessions={refreshSessions} />
+      </MemoryRouter>
+    )
     await flushAsync()
 
     expect(refreshSessions).toHaveBeenCalled()
