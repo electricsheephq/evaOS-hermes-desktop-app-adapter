@@ -73,7 +73,7 @@ function fixture(overrides = {}) {
 }
 
 test('managed app updater always restores the fixed Electric Sheep feed and forward-only policy', async () => {
-  const { service, updater } = fixture()
+  const { progress, service, updater } = fixture()
 
   const status = await service.check()
   assert.equal(status.supported, true)
@@ -90,6 +90,7 @@ test('managed app updater always restores the fixed Electric Sheep feed and forw
   assert.equal(updater.allowDowngrade, false)
   assert.equal(updater.allowPrerelease, true)
   assert.equal(updater.channel, 'latest')
+  assert.deepEqual(progress, [])
 })
 
 test('release notes become normal update-overlay entries without executable content', () => {

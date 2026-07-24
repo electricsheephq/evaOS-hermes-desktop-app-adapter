@@ -81,6 +81,7 @@ function createEvaAppUpdater(options) {
   let downloadedVersion = null
   let checkPromise = null
   let applyPromise = null
+  let applying = false
 
   function supported() {
     return Boolean(isPackaged) && platform === 'darwin'
@@ -101,10 +102,6 @@ function createEvaAppUpdater(options) {
     })
   }
 
-  autoUpdater.on('checking-for-update', () => {
-    emitProgress({ stage: 'prepare', message: 'Checking for an evaOS Agent update…', percent: null })
-  })
-
   autoUpdater.on('update-available', info => {
     lastStatus = statusFor(app, info, true, now)
   })
@@ -114,6 +111,10 @@ function createEvaAppUpdater(options) {
   })
 
   autoUpdater.on('download-progress', progress => {
+    if (!applying) {
+      return
+    }
+
     const percent = Number.isFinite(progress?.percent) ? Math.max(0, Math.min(100, progress.percent)) : null
     emitProgress({
       stage: 'fetch',
@@ -124,6 +125,10 @@ function createEvaAppUpdater(options) {
 
   autoUpdater.on('update-downloaded', info => {
     downloadedVersion = normalizeVersion(info)
+    if (!applying) {
+      return
+    }
+
     emitProgress({
       stage: 'restart',
       message: 'Installing the signed update and restarting evaOS Agent…',
@@ -132,6 +137,10 @@ function createEvaAppUpdater(options) {
   })
 
   autoUpdater.on('error', error => {
+    if (!applying) {
+      return
+    }
+
     const message = messageOf(error)
     emitProgress({ stage: 'error', message, error: 'app-update-failed', percent: null })
   })
@@ -186,6 +195,7 @@ function createEvaAppUpdater(options) {
     }
 
     applyPromise = (async () => {
+      applying = true
       configure()
 
       const status = lastStatus?.updateAvailable ? lastStatus : await check()
@@ -213,6 +223,7 @@ function createEvaAppUpdater(options) {
         emitProgress({ stage: 'error', message, error: 'app-update-failed', percent: null })
         return { ok: false, error: 'apply-failed', message }
       } finally {
+        applying = false
         applyPromise = null
       }
     })()
