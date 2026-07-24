@@ -91,7 +91,6 @@ test('managed member UI exposes upstream features inside one server-bound agent 
 
 test('signed app updater and editable gateway paths stay Electric Sheep managed', () => {
   const main = read('electron/main.ts')
-  const managed = read('electron/eva-managed.cjs')
   const about = read('src/app/settings/about-settings.tsx')
   const chat = read('src/app/chat/index.tsx')
   const gatewayBoot = read('src/app/gateway/hooks/use-gateway-boot.ts')
