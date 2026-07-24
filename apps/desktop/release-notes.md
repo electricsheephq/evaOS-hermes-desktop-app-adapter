@@ -1,5 +1,5 @@
-# evaOS Agent 2026.7.20-es.7
+# evaOS Agent 2026.7.20-es.8
 
-- Adds signed in-app updates from the fixed Electric Sheep release feed.
-- Keeps business enrollment and the server-selected remote agent after app replacement.
+- First signed target for the installed evaOS Agent in-app updater.
+- Keeps Electric Sheep enrollment and the server-selected remote agent across the update.
 - Keeps remote Hermes/backend updates separate from the desktop app update.
