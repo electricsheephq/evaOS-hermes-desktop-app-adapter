@@ -36,14 +36,14 @@ class FakeUpdater extends EventEmitter {
   async checkForUpdates() {
     this.checkCalls += 1
     this.emit('checking-for-update')
-    this.emit('update-available', { version: '2026.7.20-es.8' })
-    return { updateInfo: { version: '2026.7.20-es.8' } }
+    this.emit('update-available', { version: '2026.7.20-es.9' })
+    return { updateInfo: { version: '2026.7.20-es.9' } }
   }
 
   async downloadUpdate() {
     this.downloadCalls += 1
     this.emit('download-progress', { percent: 42.4 })
-    this.emit('update-downloaded', { version: '2026.7.20-es.8' })
+    this.emit('update-downloaded', { version: '2026.7.20-es.9' })
     return ['/tmp/evaos-agent.zip']
   }
 
@@ -57,7 +57,7 @@ function fixture(overrides = {}) {
   const progress = []
   const scheduled = []
   const service = createEvaAppUpdater({
-    app: { getVersion: () => '2026.7.20-es.7', isPackaged: true },
+    app: { getVersion: () => '2026.7.20-es.8', isPackaged: true },
     autoUpdater: updater,
     emitProgress: value => progress.push(value),
     isPackaged: true,
@@ -78,8 +78,8 @@ test('managed app updater always restores the fixed Electric Sheep feed and forw
   const status = await service.check()
   assert.equal(status.supported, true)
   assert.equal(status.updateAvailable, true)
-  assert.equal(status.currentSha, 'release:2026.7.20-es.7')
-  assert.equal(status.targetSha, 'release:2026.7.20-es.8')
+  assert.equal(status.currentSha, 'release:2026.7.20-es.8')
+  assert.equal(status.targetSha, 'release:2026.7.20-es.9')
   assert.deepEqual(updater.feedCalls.at(-1), {
     provider: 'generic',
     url: EVA_APP_UPDATE_FEED,
@@ -96,20 +96,20 @@ test('managed app updater always restores the fixed Electric Sheep feed and forw
 test('release notes become normal update-overlay entries without executable content', () => {
   const commits = releaseNoteCommits(
     {
-      version: '2026.7.20-es.8',
+      version: '2026.7.20-es.9',
       releaseNotes: '# evaOS Agent\n\n- Fixes remote attachments.\n- Adds signed updates.'
     },
     () => 1234
   )
   assert.deepEqual(commits, [
     {
-      sha: 'release-note:2026.7.20-es.8:1',
+      sha: 'release-note:2026.7.20-es.9:1',
       summary: 'Fixes remote attachments.',
       author: 'Electric Sheep',
       at: 1234
     },
     {
-      sha: 'release-note:2026.7.20-es.8:2',
+      sha: 'release-note:2026.7.20-es.9:2',
       summary: 'Adds signed updates.',
       author: 'Electric Sheep',
       at: 1234
@@ -124,7 +124,7 @@ test('apply downloads, reports progress, and schedules a signed restart handoff'
   assert.deepEqual(result, {
     ok: true,
     handedOff: true,
-    message: 'Installing evaOS Agent 2026.7.20-es.8.'
+    message: 'Installing evaOS Agent 2026.7.20-es.9.'
   })
   assert.equal(updater.checkCalls, 1)
   assert.equal(updater.downloadCalls, 1)
