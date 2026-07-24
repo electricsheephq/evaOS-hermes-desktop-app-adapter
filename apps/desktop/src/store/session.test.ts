@@ -292,6 +292,40 @@ describe('workspaceCwdForNewSession', () => {
 
     expect($currentCwd.get()).toBe('')
   })
+
+  it('adopts the remote workspace when the gateway switches during an async local settings read', async () => {
+    let resolveSettings: (value: { defaultLabel: string; dir: string; resolvedCwd: string }) => void = () => undefined
+    const getDefaultProjectDir = vi.fn(
+      () =>
+        new Promise<{ defaultLabel: string; dir: string; resolvedCwd: string }>(resolve => {
+          resolveSettings = resolve
+        })
+    )
+    const sanitizeWorkspaceCwd = vi.fn(async (cwd: string) => ({ cwd, sanitized: false }))
+    ;(window as unknown as { hermesDesktop: unknown }).hermesDesktop = {
+      sanitizeWorkspaceCwd,
+      settings: { getDefaultProjectDir }
+    }
+    $connection.set(null)
+    $currentCwd.set('/Users/test/local-project')
+
+    const pending = ensureDefaultWorkspaceCwd()
+    await Promise.resolve()
+    $connection.set({ baseUrl: 'https://managed.example', mode: 'remote' } as never)
+    window.localStorage.setItem(
+      'hermes.desktop.workspace-cwd.remote.https%3A%2F%2Fmanaged.example.default',
+      '/srv/evaos/agents/main'
+    )
+    resolveSettings({
+      defaultLabel: '/Users/test',
+      dir: '/Users/test/local-project',
+      resolvedCwd: '/Users/test/local-project'
+    })
+    await pending
+
+    expect(sanitizeWorkspaceCwd).not.toHaveBeenCalled()
+    expect($currentCwd.get()).toBe('/srv/evaos/agents/main')
+  })
 })
 
 function makeState(over: Partial<ClientSessionState> = {}): ClientSessionState {

@@ -143,6 +143,19 @@ test('an upstream authentication rejection invalidates the managed enrollment', 
   assert.equal(rejected, 1)
 })
 
+test('an upstream connection that never completes fails within the setup deadline', async t => {
+  const relay = createEvaWsRelay({
+    connectUpstream: () => new Promise(() => undefined),
+    getUpstream: async () => ({ baseUrl: BASE_URL, token: 'runtime-secret' }),
+    upstreamSetupTimeoutMs: 10
+  })
+  t.after(async () => relay.close())
+
+  const result = await upgrade(await relay.mintTicket())
+  assert.match(result.response, /^HTTP\/1\.1 502/)
+  result.socket.destroy()
+})
+
 test('an upstream reset after the WebSocket handshake closes the relay without crashing', async t => {
   class ResettingUpstream extends Duplex {
     _read() {}

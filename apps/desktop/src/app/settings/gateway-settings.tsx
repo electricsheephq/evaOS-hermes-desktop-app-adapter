@@ -150,7 +150,7 @@ function ScopeChip({ active, label, onSelect }: { active: boolean; label: string
 // card: the outer title/intro, the "Save for next restart" action, and the
 // Diagnostics row are redundant there (the card owns its header + a single
 // reconnect action), so only the connection controls render.
-function EvaManagedGatewaySettings() {
+function EvaManagedGatewaySettings({ embedded = false }: { embedded?: boolean } = {}) {
   const [status, setStatus] = useState<EvaManagedStatus | null>(null)
   const [busy, setBusy] = useState<'refresh' | 'sign-in' | 'sign-out' | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -201,7 +201,7 @@ function EvaManagedGatewaySettings() {
   }
 
   return (
-    <SettingsContent>
+    <SettingsContent bare={embedded}>
       <div className="mx-auto w-full max-w-2xl space-y-4 pt-4">
         <div className="rounded-xl border border-border/70 bg-muted/20 p-4">
           <div className="flex items-start gap-3">
@@ -219,7 +219,7 @@ function EvaManagedGatewaySettings() {
         {status ? (
           <div className="overflow-hidden rounded-xl border border-border/70">
             <ListRow description={status.email ?? 'Not signed in'} title="Electric Sheep account" />
-            <ListRow description={status.customerId} title="Business" />
+            <ListRow description={status.customerId ?? 'Assigned after sign-in'} title="Business" />
             <ListRow description={status.agentId ?? 'Assigned after sign-in'} title="Assigned agent" />
             <ListRow description={status.updateChannel} title="Update channel" />
           </div>
@@ -257,7 +257,7 @@ function EvaManagedGatewaySettings() {
 
 export function GatewaySettings({ embedded = false }: { embedded?: boolean } = {}) {
   if (window.hermesDesktop?.eva) {
-    return <EvaManagedGatewaySettings />
+    return <EvaManagedGatewaySettings embedded={embedded} />
   }
 
   return <UnmanagedGatewaySettings embedded={embedded} />

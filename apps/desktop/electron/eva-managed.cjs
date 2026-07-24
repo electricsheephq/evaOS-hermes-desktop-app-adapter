@@ -140,7 +140,8 @@ function assertEvaManagedApiRequestAllowed(request) {
   }
 
   const { parsed, pathname } = normalizeEvaManagedApiPath(request?.path)
-  if (EVA_MANAGED_BLOCKED_BACKEND_PATHS.has(pathname)) {
+  const policyPath = pathname.length > '/api/'.length ? pathname.replace(/\/+$/, '') : pathname
+  if (EVA_MANAGED_BLOCKED_BACKEND_PATHS.has(policyPath)) {
     throw new EvaBrokerError('Updates are managed by Electric Sheep.', 403, 'managed-escape')
   }
 
