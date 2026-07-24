@@ -48,23 +48,6 @@ const EVA_MANAGED_ESCAPE_QUERY_KEYS = new Set([
 const EVA_MANAGED_BLOCKED_BACKEND_PATHS = new Set(['/api/hermes/update', '/api/hermes/update/check'])
 const EVA_MANAGED_PROFILE_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
 
-function managedUpdateResponse(action = 'check', now = Date.now()) {
-  if (action === 'apply') {
-    return {
-      ok: false,
-      error: 'managed-beta',
-      message: 'Updates are managed by Electric Sheep.'
-    }
-  }
-
-  return {
-    supported: false,
-    branch: EVA_MANAGED_POLICY.updateChannel,
-    message: 'Updates are managed by Electric Sheep.',
-    fetchedAt: now
-  }
-}
-
 class EvaBrokerError extends Error {
   constructor(message, statusCode = null, code = 'broker-error') {
     super(message)
@@ -516,7 +499,6 @@ module.exports = {
   launchEvaHermesRuntime,
   makeAuthState,
   makeDeviceCode,
-  managedUpdateResponse,
   normalizeDesktopSession,
   normalizeHermesEnrollment,
   parseEvaDesktopAuthCallback,
