@@ -41,7 +41,7 @@ test.describe('managed signed-out boot', () => {
     await expect(page.getByRole('heading', { name: 'Managed by Electric Sheep' })).toBeVisible()
     await expect(page.getByRole('button', { name: 'Sign in to evaOS Agent' })).toBeVisible()
 
-    const status = await page.evaluate(() => window.hermes.eva.status())
+    const status = await page.evaluate(() => window.hermesDesktop.eva.status())
 
     expect(status).toMatchObject({
       managed: true,
