@@ -9,7 +9,6 @@ const {
   buildEvaManagedWsUrl,
   launchEvaHermesRuntime,
   makeDeviceCode,
-  managedUpdateResponse,
   normalizeHermesEnrollment,
   parseEvaDesktopAuthCallback,
   pollEvaDeviceCode,
@@ -313,28 +312,6 @@ test('evaOS Agent deep-link callback requires the exact in-flight auth state', (
   assert.throws(
     () => parseEvaDesktopAuthCallback(`${raw}&blueprint=unexpected`, 'state-12345678'),
     error => error instanceof EvaBrokerError && error.code === 'invalid-callback'
-  )
-})
-
-test('managed updater responses are static and cannot call network, Git, or process APIs', () => {
-  const check = managedUpdateResponse('check', 1234)
-  const apply = managedUpdateResponse('apply', 1234)
-  const implementation = managedUpdateResponse.toString()
-
-  assert.deepEqual(check, {
-    supported: false,
-    branch: 'managed-beta',
-    message: 'Updates are managed by Electric Sheep.',
-    fetchedAt: 1234
-  })
-  assert.deepEqual(apply, {
-    ok: false,
-    error: 'managed-beta',
-    message: 'Updates are managed by Electric Sheep.'
-  })
-  assert.doesNotMatch(
-    implementation,
-    /fetch\s*\(|https?:|spawn\s*\(|exec(?:File|Sync)?\s*\(|\bgit\b|ls-remote|nousresearch/i
   )
 })
 

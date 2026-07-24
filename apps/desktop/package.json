@@ -2,7 +2,7 @@
   "name": "evaos-agent",
   "productName": "evaOS Agent",
   "private": true,
-  "version": "2026.7.20-es.6",
+  "version": "2026.7.20-es.7",
   "description": "Managed business agent client by Electric Sheep.",
   "author": "Electric Sheep",
   "type": "module",
@@ -42,7 +42,8 @@
     "test:desktop:existing": "node scripts/test-desktop.mjs existing",
     "test:desktop:fresh": "node scripts/test-desktop.mjs fresh",
     "typecheck": "tsc -p . --noEmit && tsc -p tsconfig.electron.json --noEmit && tsc -p tsconfig.e2e.json --noEmit",
-    "test:managed": "node --test electron/eva-desktop-contract.test.cjs electron/eva-managed.test.cjs electron/eva-runtime.test.cjs electron/eva-ws-relay.test.cjs",
+    "test:managed": "node --test electron/eva-app-updater.test.cjs electron/eva-desktop-contract.test.cjs electron/eva-managed.test.cjs electron/eva-runtime.test.cjs electron/eva-ws-relay.test.cjs",
+    "release:verify:mac": "node scripts/verify-managed-update-release.mjs",
     "lint": "eslint src/ electron/",
     "lint:fix": "eslint src/ electron/ --fix",
     "fmt": "prettier --write 'src/**/*.{ts,tsx}' 'electron/**/*.ts' 'vite.config.ts'",
@@ -94,6 +95,7 @@
     "d3-force": "^3.0.0",
     "dnd-core": "^14.0.1",
     "dompurify": "^3.4.11",
+    "electron-updater": "6.8.9",
     "fflate": "^0.8.3",
     "hast-util-from-html-isomorphic": "^2.0.0",
     "hast-util-to-text": "^4.0.2",
@@ -174,6 +176,18 @@
       }
     ],
     "artifactName": "evaOS-Agent-${version}-${arch}.${ext}",
+    "detectUpdateChannel": false,
+    "electronUpdaterCompatibility": ">=2.16",
+    "publish": [
+      {
+        "provider": "generic",
+        "url": "https://github.com/electricsheephq/evaOS-hermes-desktop-app-adapter/releases/latest/download/",
+        "channel": "latest"
+      }
+    ],
+    "releaseInfo": {
+      "releaseNotesFile": "release-notes.md"
+    },
     "icon": "assets/eva",
     "directories": {
       "output": "release"
@@ -212,6 +226,7 @@
       "category": "public.app-category.productivity",
       "entitlements": "electron/entitlements.mac.plist",
       "entitlementsInherit": "electron/entitlements.mac.inherit.plist",
+      "forceCodeSigning": true,
       "extendInfo": {
         "CFBundleDisplayName": "evaOS Agent",
         "CFBundleExecutable": "evaOS Agent",

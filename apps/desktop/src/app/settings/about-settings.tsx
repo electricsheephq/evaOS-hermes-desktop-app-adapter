@@ -37,7 +37,7 @@ export function AboutSettings() {
           title="Managed business beta"
         />
         <ListRow
-          description={`${managedStatus?.updateChannel ?? 'managed'} · automatic updater disabled`}
+          description={`${managedStatus?.updateChannel ?? 'managed'} · Signed updates from Electric Sheep`}
           title="Update channel"
         />
         <ListRow

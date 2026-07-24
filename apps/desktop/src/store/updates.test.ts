@@ -51,6 +51,8 @@ const {
   applyUpdates,
   $updateApply,
   $updateOverlayOpen,
+  $updateOverlayTarget,
+  openUpdatesWindow,
   resetUpdateApplyState,
   startUpdatePoller,
   stopUpdatePoller,
@@ -68,6 +70,41 @@ const status = (over: Partial<DesktopUpdateStatus> = {}): DesktopUpdateStatus =>
 })
 
 const lastToast = () => notifySpy.mock.calls.at(-1)?.[0] as { onDismiss: () => void }
+
+describe('managed app update routing', () => {
+  afterEach(() => {
+    setConnection(null)
+    $updateOverlayOpen.set(false)
+    delete (globalThis as unknown as { window?: unknown }).window
+  })
+
+  it('opens the client updater in managed remote mode instead of the backend updater', () => {
+    ;(globalThis as unknown as { window: unknown }).window = {
+      hermesDesktop: {
+        eva: {},
+        updates: {
+          check: vi.fn().mockResolvedValue(status({ behind: 0, updateAvailable: false })),
+          onProgress: vi.fn()
+        }
+      }
+    }
+    setConnection({
+      baseUrl: 'eva-managed://customer',
+      isFullscreen: false,
+      mode: 'remote',
+      nativeOverlayWidth: 0,
+      token: '',
+      wsUrl: 'ws://127.0.0.1',
+      logs: [],
+      windowButtonPosition: null
+    })
+
+    openUpdatesWindow()
+
+    expect($updateOverlayTarget.get()).toBe('client')
+    expect($updateOverlayOpen.get()).toBe(true)
+  })
+})
 
 describe('maybeNotifyUpdateAvailable', () => {
   beforeEach(() => {

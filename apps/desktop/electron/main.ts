@@ -195,7 +195,8 @@ import { isPackagedInstallPath as isPackagedInstallPathUnderRoots } from './work
 import { readWslWindowsClipboardImage } from './wsl-clipboard-image'
 import { resolvePickerDefaultPath } from './wsl-path-bridge'
 
-const { EVA_MANAGED_POLICY, managedUpdateResponse } = require('./eva-managed.cjs')
+const { EVA_MANAGED_POLICY } = require('./eva-managed.cjs')
+const { createEvaAppUpdater } = require('./eva-app-updater.cjs')
 const { createEvaManagedRuntime } = require('./eva-runtime.cjs')
 
 const EVA_MANAGED_BUILD = true
@@ -2206,6 +2207,23 @@ function emitUpdateProgress(payload) {
   for (const window of BrowserWindow.getAllWindows()) {
     window.webContents.send('hermes:updates:progress', merged)
   }
+}
+
+let evaAppUpdater = null
+
+function getEvaAppUpdater() {
+  if (!evaAppUpdater) {
+    const { autoUpdater } = require('electron-updater')
+    evaAppUpdater = createEvaAppUpdater({
+      app,
+      autoUpdater,
+      emitProgress: emitUpdateProgress,
+      isPackaged: IS_PACKAGED,
+      platform: process.platform
+    })
+  }
+
+  return evaAppUpdater
 }
 
 // Self-heal the tracked update branch: if origin no longer publishes it (e.g.
@@ -10068,7 +10086,7 @@ ipcMain.handle('hermes:terminal:dispose', (_event, id) => disposeTerminalSession
 
 ipcMain.handle('hermes:updates:check', async () =>
   EVA_MANAGED_BUILD
-    ? managedUpdateResponse('check')
+    ? getEvaAppUpdater().check()
     : checkUpdates().catch(error => ({
         supported: true,
         branch: readDesktopUpdateConfig().branch,
@@ -10080,7 +10098,7 @@ ipcMain.handle('hermes:updates:check', async () =>
 
 ipcMain.handle('hermes:updates:apply', async (_event, payload) =>
   EVA_MANAGED_BUILD
-    ? managedUpdateResponse('apply')
+    ? getEvaAppUpdater().apply()
     : applyUpdates(payload || {}).catch(error => ({
         ok: false,
         error: 'apply-failed',

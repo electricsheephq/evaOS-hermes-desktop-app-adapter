@@ -9,12 +9,23 @@ const read = relativePath => fs.readFileSync(path.join(desktopRoot, relativePath
 test('evaOS Agent package identity and customer artifact contract are exact', () => {
   const pkg = JSON.parse(read('package.json'))
   assert.equal(pkg.productName, 'evaOS Agent')
-  assert.equal(pkg.version, '2026.7.20-es.6')
+  assert.equal(pkg.version, '2026.7.20-es.7')
   assert.equal(pkg.build.appId, 'com.electricsheephq.evaos.agent')
   assert.equal(pkg.build.executableName, 'evaOS Agent')
   assert.deepEqual(pkg.build.protocols[0].schemes, ['evaos-agent'])
   assert.equal(pkg.build.artifactName, 'evaOS-Agent-${version}-${arch}.${ext}')
+  assert.equal(pkg.build.detectUpdateChannel, false)
+  assert.equal(pkg.build.electronUpdaterCompatibility, '>=2.16')
+  assert.deepEqual(pkg.build.publish, [
+    {
+      provider: 'generic',
+      url: 'https://github.com/electricsheephq/evaOS-hermes-desktop-app-adapter/releases/latest/download/',
+      channel: 'latest'
+    }
+  ])
+  assert.deepEqual(pkg.build.releaseInfo, { releaseNotesFile: 'release-notes.md' })
   assert.equal(pkg.build.icon, 'assets/eva')
+  assert.equal(pkg.build.mac.forceCodeSigning, true)
   assert.equal(pkg.build.afterSign, 'scripts/notarize.mjs')
   assert.equal(
     pkg.build.extraResources.find(resource => resource.from === '../../LICENSE')?.to,
@@ -78,9 +89,8 @@ test('managed member UI exposes upstream features inside one server-bound agent 
   assert.doesNotMatch(statusbar, /id: 'cron',[\s\S]*?hidden: managedEva/)
 })
 
-test('updater and editable gateway paths fail closed in the managed build', () => {
+test('signed app updater and editable gateway paths stay Electric Sheep managed', () => {
   const main = read('electron/main.ts')
-  const managed = read('electron/eva-managed.cjs')
   const about = read('src/app/settings/about-settings.tsx')
   const chat = read('src/app/chat/index.tsx')
   const gatewayBoot = read('src/app/gateway/hooks/use-gateway-boot.ts')
@@ -90,11 +100,11 @@ test('updater and editable gateway paths fail closed in the managed build', () =
   const settings = read('src/app/settings/index.tsx')
   const updates = read('src/store/updates.ts')
   const smoke = read('scripts/test-desktop.mjs')
-  assert.match(managed, /Updates are managed by Electric Sheep/)
-  assert.match(main, /EVA_MANAGED_BUILD\s*\?\s*managedUpdateResponse\('check'\)/)
-  assert.match(main, /EVA_MANAGED_BUILD\s*\?\s*managedUpdateResponse\('apply'\)/)
+  assert.match(main, /createEvaAppUpdater/)
+  assert.match(main, /EVA_MANAGED_BUILD\s*\?\s*getEvaAppUpdater\(\)\.check\(\)/)
+  assert.match(main, /EVA_MANAGED_BUILD\s*\?\s*getEvaAppUpdater\(\)\.apply\(\)/)
   assert.match(main, /gateway settings are managed by Electric Sheep/)
-  assert.match(about, /automatic updater disabled/)
+  assert.match(about, /Signed updates from Electric Sheep/)
   assert.doesNotMatch(about, /Dorman/)
   assert.doesNotMatch(about, /NousResearch\/hermes-agent\/releases/)
   assert.match(gatewayBoot, /evaSignInRequired/)

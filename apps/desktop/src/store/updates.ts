@@ -236,7 +236,7 @@ export function maybeNotifyUpdateAvailable(status: DesktopUpdateStatus | null) {
 }
 
 export function openUpdatesWindow(): void {
-  openUpdateOverlayFor(isRemoteMode() ? 'backend' : 'client')
+  openUpdateOverlayFor(isManagedEva() ? 'client' : isRemoteMode() ? 'backend' : 'client')
 }
 
 /**
@@ -247,7 +247,7 @@ export function openUpdatesWindow(): void {
  * only be able to open the changelog overlay.
  */
 export function startActiveUpdate(): void {
-  const target: UpdateTarget = isRemoteMode() ? 'backend' : 'client'
+  const target: UpdateTarget = isManagedEva() ? 'client' : isRemoteMode() ? 'backend' : 'client'
   $updateOverlayTarget.set(target)
   $updateOverlayOpen.set(true)
   void (target === 'backend' ? applyBackendUpdate() : applyUpdates())
