@@ -9,13 +9,17 @@ const read = relativePath => fs.readFileSync(path.join(desktopRoot, relativePath
 test('evaOS Agent package identity and customer artifact contract are exact', () => {
   const pkg = JSON.parse(read('package.json'))
   assert.equal(pkg.productName, 'evaOS Agent')
-  assert.equal(pkg.version, '2026.7.20-es.5')
+  assert.equal(pkg.version, '2026.7.20-es.6')
   assert.equal(pkg.build.appId, 'com.electricsheephq.evaos.agent')
   assert.equal(pkg.build.executableName, 'evaOS Agent')
   assert.deepEqual(pkg.build.protocols[0].schemes, ['evaos-agent'])
   assert.equal(pkg.build.artifactName, 'evaOS-Agent-${version}-${arch}.${ext}')
   assert.equal(pkg.build.icon, 'assets/eva')
   assert.equal(pkg.build.afterSign, 'scripts/notarize.mjs')
+  assert.equal(
+    pkg.build.extraResources.find(resource => resource.from === '../../LICENSE')?.to,
+    'licenses/evaOS-Agent-MIT-LICENSE.txt'
+  )
 })
 
 test('managed build makes local startup unreachable and consumes auth callbacks in main', () => {
@@ -90,7 +94,8 @@ test('updater and editable gateway paths fail closed in the managed build', () =
   assert.match(main, /EVA_MANAGED_BUILD\s*\?\s*managedUpdateResponse\('check'\)/)
   assert.match(main, /EVA_MANAGED_BUILD\s*\?\s*managedUpdateResponse\('apply'\)/)
   assert.match(main, /gateway settings are managed by Electric Sheep/)
-  assert.match(about, /managed-beta · automatic updater disabled/)
+  assert.match(about, /automatic updater disabled/)
+  assert.doesNotMatch(about, /Dorman/)
   assert.doesNotMatch(about, /NousResearch\/hermes-agent\/releases/)
   assert.match(gatewayBoot, /evaSignInRequired/)
   assert.match(gatewayBoot, /Sign in to evaOS Agent from Settings → Gateway/)

@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Tip } from '@/components/ui/tooltip'
 import type {
   DesktopAuthProvider,
@@ -13,7 +14,19 @@ import type {
 } from '@/global'
 import { useI18n } from '@/i18n'
 import { ExternalLink } from '@/lib/external-link'
-import { AlertCircle, Check, Cloud, FileText, Globe, HelpCircle, Loader2, LogIn, Monitor, RefreshCw } from '@/lib/icons'
+import {
+  AlertCircle,
+  Check,
+  Cloud,
+  FileText,
+  Globe,
+  HelpCircle,
+  Loader2,
+  LogIn,
+  Monitor,
+  RefreshCw,
+  Terminal
+} from '@/lib/icons'
 import { selectableCardClass } from '@/lib/selectable-card'
 import { cn } from '@/lib/utils'
 import { notify, notifyError } from '@/store/notifications'
@@ -21,8 +34,9 @@ import { $profiles, refreshActiveProfile } from '@/store/profile'
 
 import { CONTROL_TEXT } from './constants'
 import { EmptyState, ListRow, LoadingState, Pill, SettingsContent } from './primitives'
+import { enrichSelectedSshHost, selectSshHost } from './ssh-host-selection'
 
-type Mode = 'local' | 'remote' | 'cloud'
+type Mode = 'local' | 'remote' | 'cloud' | 'ssh'
 type AuthMode = 'oauth' | 'token'
 type ProbeStatus = 'idle' | 'probing' | 'done' | 'error'
 // Hermes Cloud discovery lifecycle for the cloud-mode panel.
@@ -37,7 +51,14 @@ interface GatewaySettingsState {
   remoteTokenSet: boolean
   remoteUrl: string
   cloudOrg: string
+  sshHost: string
+  sshUser: string
+  sshPort: number | null
+  sshKeyPath: string
+  sshRemoteHermesPath: string
 }
+
+const SSH_HOST_CUSTOM = '__custom__'
 
 const EMPTY_STATE: GatewaySettingsState = {
   envOverride: false,
@@ -47,7 +68,12 @@ const EMPTY_STATE: GatewaySettingsState = {
   remoteTokenPreview: null,
   remoteTokenSet: false,
   remoteUrl: '',
-  cloudOrg: ''
+  cloudOrg: '',
+  sshHost: '',
+  sshUser: '',
+  sshPort: null,
+  sshKeyPath: '',
+  sshRemoteHermesPath: ''
 }
 
 export function savedCloudConnectionUrl(config: Pick<GatewaySettingsState, 'mode' | 'remoteUrl'>): string {
@@ -124,7 +150,7 @@ function ScopeChip({ active, label, onSelect }: { active: boolean; label: string
 // card: the outer title/intro, the "Save for next restart" action, and the
 // Diagnostics row are redundant there (the card owns its header + a single
 // reconnect action), so only the connection controls render.
-function EvaManagedGatewaySettings() {
+function EvaManagedGatewaySettings({ embedded = false }: { embedded?: boolean } = {}) {
   const [status, setStatus] = useState<EvaManagedStatus | null>(null)
   const [busy, setBusy] = useState<'refresh' | 'sign-in' | 'sign-out' | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -175,7 +201,7 @@ function EvaManagedGatewaySettings() {
   }
 
   return (
-    <SettingsContent>
+    <SettingsContent bare={embedded}>
       <div className="mx-auto w-full max-w-2xl space-y-4 pt-4">
         <div className="rounded-xl border border-border/70 bg-muted/20 p-4">
           <div className="flex items-start gap-3">
@@ -193,7 +219,7 @@ function EvaManagedGatewaySettings() {
         {status ? (
           <div className="overflow-hidden rounded-xl border border-border/70">
             <ListRow description={status.email ?? 'Not signed in'} title="Electric Sheep account" />
-            <ListRow description={status.customerId} title="Business" />
+            <ListRow description={status.customerId ?? 'Assigned after sign-in'} title="Business" />
             <ListRow description={status.agentId ?? 'Assigned after sign-in'} title="Assigned agent" />
             <ListRow description={status.updateChannel} title="Update channel" />
           </div>
@@ -231,7 +257,7 @@ function EvaManagedGatewaySettings() {
 
 export function GatewaySettings({ embedded = false }: { embedded?: boolean } = {}) {
   if (window.hermesDesktop?.eva) {
-    return <EvaManagedGatewaySettings />
+    return <EvaManagedGatewaySettings embedded={embedded} />
   }
 
   return <UnmanagedGatewaySettings embedded={embedded} />
@@ -247,6 +273,14 @@ function UnmanagedGatewaySettings({ embedded = false }: { embedded?: boolean } =
   const [state, setState] = useState<GatewaySettingsState>(EMPTY_STATE)
   const [remoteToken, setRemoteToken] = useState('')
   const [lastTest, setLastTest] = useState<null | string>(null)
+  const [sshHostSuggestions, setSshHostSuggestions] = useState<string[]>([])
+  const [sshCustomHost, setSshCustomHost] = useState(false)
+  const sshResolveSeq = useRef(0)
+  const sshTestSeq = useRef(0)
+  const saveSeq = useRef(0)
+  const signingSeq = useRef(0)
+  const cloudConnectSeq = useRef(0)
+  const contextSeq = useRef(0)
   const [connectedCloudUrl, setConnectedCloudUrl] = useState('')
 
   const acceptSavedConfig = (config: GatewaySettingsState) => {
@@ -456,6 +490,48 @@ function UnmanagedGatewaySettings({ embedded = false }: { embedded?: boolean } =
   // per-profile scopes are the named, non-default profiles.
   const namedProfiles = useMemo(() => profiles.filter(profile => profile.name !== 'default'), [profiles])
 
+  useEffect(() => {
+    // One-directional: a saved host that isn't in the suggestions must render
+    // the free-text input (rehydration). Never force custom OFF here — that
+    // instantly snapped the just-clicked-Custom (empty-host) input back to the
+    // dropdown, making a raw-IP host impossible to type. The way back to the
+    // dropdown is the input's onBlur (empty host + suggestions).
+    if (state.sshHost && !sshHostSuggestions.includes(state.sshHost)) {
+      setSshCustomHost(true)
+    }
+  }, [state.sshHost, sshHostSuggestions])
+
+  useEffect(() => {
+    if (state.mode !== 'ssh' || !window.hermesDesktop?.sshConfigHosts) {
+      return
+    }
+
+    let cancelled = false
+    void window.hermesDesktop
+      .sshConfigHosts()
+      .then(result => {
+        if (!cancelled) {
+          setSshHostSuggestions(result.hosts)
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setSshHostSuggestions([])
+        }
+      })
+
+    return () => void (cancelled = true)
+  }, [state.mode])
+
+  useEffect(() => {
+    contextSeq.current += 1
+    sshTestSeq.current += 1
+    saveSeq.current += 1
+    signingSeq.current += 1
+    cloudConnectSeq.current += 1
+    setLastTest(null)
+  }, [scope, state.mode, state.sshHost, state.sshUser, state.sshPort, state.sshKeyPath, state.sshRemoteHermesPath])
+
   const oauthConnected = state.remoteOauthConnected
 
   const canUseRemote = useMemo(() => {
@@ -475,10 +551,17 @@ function UnmanagedGatewaySettings({ embedded = false }: { embedded?: boolean } =
     profile: scope ?? undefined,
     remoteAuthMode: authMode,
     remoteToken: authMode === 'token' ? remoteToken.trim() || undefined : undefined,
-    remoteUrl: trimmedUrl
+    remoteUrl: trimmedUrl,
+    sshHost: state.sshHost.trim(),
+    sshUser: state.sshUser.trim() || undefined,
+    sshPort: state.sshPort,
+    sshKeyPath: state.sshKeyPath.trim() || undefined,
+    sshRemoteHermesPath: state.sshRemoteHermesPath.trim()
   })
 
   const save = async (apply: boolean) => {
+    const seq = ++saveSeq.current
+
     if (state.mode === 'remote' && !canUseRemote) {
       notify({
         kind: 'warning',
@@ -496,6 +579,10 @@ function UnmanagedGatewaySettings({ embedded = false }: { embedded?: boolean } =
         ? await window.hermesDesktop.applyConnectionConfig(payload())
         : await window.hermesDesktop.saveConnectionConfig(payload())
 
+      if (seq !== saveSeq.current) {
+        return
+      }
+
       acceptSavedConfig(next)
       setRemoteToken('')
       notify({
@@ -504,9 +591,35 @@ function UnmanagedGatewaySettings({ embedded = false }: { embedded?: boolean } =
         message: apply ? g.restartingMessage : g.savedMessage
       })
     } catch (err) {
-      notifyError(err, apply ? g.applyFailed : g.saveFailed)
+      if (seq !== saveSeq.current) {
+        return
+      }
+
+      const sshError = err && typeof err === 'object' && 'sshError' in err ? String(err.sshError) : ''
+
+      const errors = {
+        'auth-failed': g.sshErrAuth,
+        'hermes-not-found': g.sshErrNotInstalled,
+        'host-key-changed': g.sshErrHostKey,
+        timeout: g.sshErrTimeout,
+        unreachable: g.sshErrUnreachable,
+        'unsupported-platform': g.sshErrPlatform,
+        'update-required': g.sshErrUpdateRequired
+      }
+
+      if (state.mode === 'ssh' && sshError) {
+        notify({
+          kind: 'error',
+          title: apply ? g.applyFailed : g.saveFailed,
+          message: (errors as Record<string, string>)[sshError] || g.sshErrUnknown
+        })
+      } else {
+        notifyError(err, apply ? g.applyFailed : g.saveFailed)
+      }
     } finally {
-      setSaving(false)
+      if (seq === saveSeq.current) {
+        setSaving(false)
+      }
     }
   }
 
@@ -514,6 +627,8 @@ function UnmanagedGatewaySettings({ embedded = false }: { embedded?: boolean } =
   // the URL the login window needs), then open the gateway login window and
   // refresh the connection status from the saved config once it completes.
   const signIn = async () => {
+    const seq = ++signingSeq.current
+
     if (!trimmedUrl) {
       notify({ kind: 'warning', title: g.incompleteTitle, message: g.enterUrlFirst })
 
@@ -532,9 +647,17 @@ function UnmanagedGatewaySettings({ embedded = false }: { embedded?: boolean } =
         remoteUrl: trimmedUrl
       })
 
+      if (seq !== signingSeq.current) {
+        return
+      }
+
       acceptSavedConfig(saved)
 
       const result = await window.hermesDesktop.oauthLoginConnectionConfig(trimmedUrl)
+
+      if (seq !== signingSeq.current) {
+        return
+      }
 
       if (result.connected) {
         const refreshed = await window.hermesDesktop.getConnectionConfig(scope)
@@ -548,24 +671,38 @@ function UnmanagedGatewaySettings({ embedded = false }: { embedded?: boolean } =
         })
       }
     } catch (err) {
-      notifyError(err, g.signInFailed)
+      if (seq === signingSeq.current) {
+        notifyError(err, g.signInFailed)
+      }
     } finally {
-      setSigningIn(false)
+      if (seq === signingSeq.current) {
+        setSigningIn(false)
+      }
     }
   }
 
   const signOut = async () => {
+    const seq = ++signingSeq.current
     setSigningIn(true)
 
     try {
       await window.hermesDesktop.oauthLogoutConnectionConfig(trimmedUrl || undefined)
       const refreshed = await window.hermesDesktop.getConnectionConfig(scope)
+
+      if (seq !== signingSeq.current) {
+        return
+      }
+
       acceptSavedConfig(refreshed)
       notify({ kind: 'success', title: g.signedOutTitle, message: g.signedOutMessage })
     } catch (err) {
-      notifyError(err, g.signOutFailed)
+      if (seq === signingSeq.current) {
+        notifyError(err, g.signOutFailed)
+      }
     } finally {
-      setSigningIn(false)
+      if (seq === signingSeq.current) {
+        setSigningIn(false)
+      }
     }
   }
 
@@ -577,6 +714,7 @@ function UnmanagedGatewaySettings({ embedded = false }: { embedded?: boolean } =
   // needsOrgSelection we surface the org list and show a picker instead.
   const discoverCloud = async (org?: string) => {
     const desktop = window.hermesDesktop
+    const seq = contextSeq.current
 
     if (!desktop?.cloud) {
       return
@@ -586,6 +724,10 @@ function UnmanagedGatewaySettings({ embedded = false }: { embedded?: boolean } =
 
     try {
       const result = await desktop.cloud.discover(org)
+
+      if (seq !== contextSeq.current) {
+        return
+      }
 
       if ('needsOrgSelection' in result && result.needsOrgSelection) {
         // Multi-org user with no org chosen yet: show the picker. Don't clear a
@@ -614,6 +756,10 @@ function UnmanagedGatewaySettings({ embedded = false }: { embedded?: boolean } =
 
       setCloudDiscover('done')
     } catch (err) {
+      if (seq !== contextSeq.current) {
+        return
+      }
+
       setCloudAgents([])
       setCloudDiscover('error')
 
@@ -698,6 +844,7 @@ function UnmanagedGatewaySettings({ embedded = false }: { embedded?: boolean } =
 
   const cloudSignIn = async () => {
     const desktop = window.hermesDesktop
+    const seq = ++signingSeq.current
 
     if (!desktop?.cloud) {
       return
@@ -707,20 +854,30 @@ function UnmanagedGatewaySettings({ embedded = false }: { embedded?: boolean } =
 
     try {
       const result = await desktop.cloud.login()
+
+      if (seq !== signingSeq.current) {
+        return
+      }
+
       setCloudSignedIn(result.signedIn)
 
       if (result.signedIn) {
         await discoverCloud()
       }
     } catch (err) {
-      notifyError(err, g.cloudSignInFailed)
+      if (seq === signingSeq.current) {
+        notifyError(err, g.cloudSignInFailed)
+      }
     } finally {
-      setCloudSigningIn(false)
+      if (seq === signingSeq.current) {
+        setCloudSigningIn(false)
+      }
     }
   }
 
   const cloudSignOut = async () => {
     const desktop = window.hermesDesktop
+    const seq = ++signingSeq.current
 
     if (!desktop?.cloud) {
       return
@@ -730,6 +887,11 @@ function UnmanagedGatewaySettings({ embedded = false }: { embedded?: boolean } =
 
     try {
       await desktop.cloud.logout()
+
+      if (seq !== signingSeq.current) {
+        return
+      }
+
       setCloudSignedIn(false)
       setCloudAgents([])
       setCloudOrgs([])
@@ -737,9 +899,13 @@ function UnmanagedGatewaySettings({ embedded = false }: { embedded?: boolean } =
       setCloudDiscover('idle')
       notify({ kind: 'success', title: g.cloudSignedOutTitle, message: g.cloudSignedOutMessage })
     } catch (err) {
-      notifyError(err, g.signOutFailed)
+      if (seq === signingSeq.current) {
+        notifyError(err, g.signOutFailed)
+      }
     } finally {
-      setCloudSigningIn(false)
+      if (seq === signingSeq.current) {
+        setCloudSigningIn(false)
+      }
     }
   }
 
@@ -747,6 +913,8 @@ function UnmanagedGatewaySettings({ embedded = false }: { embedded?: boolean } =
   // prompt — the shared portal session auto-approves), then persist a cloud-mode
   // connection pointed at its dashboardUrl and apply it (soft-reconnects in place).
   const connectCloudAgent = async (agent: DesktopCloudAgent) => {
+    const seq = contextSeq.current
+
     if (!agent.dashboardUrl) {
       return
     }
@@ -761,6 +929,10 @@ function UnmanagedGatewaySettings({ embedded = false }: { embedded?: boolean } =
 
     try {
       const result = await desktop.cloud.agentSignIn(agent.dashboardUrl)
+
+      if (seq !== contextSeq.current) {
+        return
+      }
 
       if (!result.connected) {
         notify({
@@ -784,20 +956,113 @@ function UnmanagedGatewaySettings({ embedded = false }: { embedded?: boolean } =
         cloudOrg: cloudOrgRef.current ?? undefined
       })
 
+      if (seq !== contextSeq.current) {
+        return
+      }
+
       acceptSavedConfig(next)
       notify({ kind: 'success', title: g.cloudConnectedTitle, message: g.cloudConnectedTo(agent.name) })
     } catch (err) {
+      if (seq !== contextSeq.current) {
+        return
+      }
+
       if (err && typeof err === 'object' && 'needsCloudLogin' in err) {
         setCloudSignedIn(false)
       }
 
       notifyError(err, g.cloudConnectFailed)
     } finally {
-      setCloudConnectingId(null)
+      if (seq === contextSeq.current) {
+        setCloudConnectingId(null)
+      }
+    }
+  }
+
+  const resolveSshHost = async (host: string) => {
+    if (!host || !window.hermesDesktop?.sshResolveHost) {
+      return
+    }
+
+    const seq = ++sshResolveSeq.current
+
+    try {
+      const resolved = await window.hermesDesktop.sshResolveHost(host)
+
+      if (seq !== sshResolveSeq.current) {
+        return
+      }
+
+      setState(current => enrichSelectedSshHost(current, host, resolved))
+    } catch {
+      return
+    }
+  }
+
+  const selectHost = (value: string) => {
+    if (value === SSH_HOST_CUSTOM) {
+      setSshCustomHost(true)
+      setState(current => selectSshHost(current, ''))
+
+      return
+    }
+
+    setSshCustomHost(false)
+    setState(current => selectSshHost(current, value))
+    void resolveSshHost(value)
+  }
+
+  const testSsh = async () => {
+    const seq = ++sshTestSeq.current
+
+    if (!state.sshHost.trim()) {
+      notify({ kind: 'warning', title: g.incompleteTitle, message: g.sshIncompleteHost })
+
+      return
+    }
+
+    setTesting(true)
+    setLastTest(null)
+
+    try {
+      const result = await window.hermesDesktop.testConnectionConfig(payload())
+
+      if (seq !== sshTestSeq.current) {
+        return
+      }
+
+      if (!result.reachable) {
+        const errors = {
+          'auth-failed': g.sshErrAuth,
+          'hermes-not-found': g.sshErrNotInstalled,
+          'host-key-changed': g.sshErrHostKey,
+          timeout: g.sshErrTimeout,
+          unreachable: g.sshErrUnreachable,
+          'unsupported-platform': g.sshErrPlatform,
+          'update-required': g.sshErrUpdateRequired,
+          unknown: g.sshErrUnknown
+        }
+
+        throw new Error(errors[result.sshError || 'unknown'] || result.error || g.sshErrUnknown)
+      }
+
+      const message = g.sshReachable(result.host || state.sshHost, result.remotePlatform || '?')
+      setLastTest(message)
+      notify({ kind: 'success', title: g.reachableTitle, message })
+    } catch (err) {
+      if (seq === sshTestSeq.current) {
+        notifyError(err, g.testFailed)
+      }
+    } finally {
+      if (seq === sshTestSeq.current) {
+        setTesting(false)
+      }
     }
   }
 
   const testRemote = async () => {
+    const seq = ++sshTestSeq.current
+
     if (!canUseRemote) {
       notify({
         kind: 'warning',
@@ -820,13 +1085,21 @@ function UnmanagedGatewaySettings({ embedded = false }: { embedded?: boolean } =
         remoteUrl: trimmedUrl
       })
 
-      const message = g.connectedTo(result.baseUrl, result.version ?? undefined)
+      if (seq !== sshTestSeq.current) {
+        return
+      }
+
+      const message = g.connectedTo(result.baseUrl || trimmedUrl, result.version ?? undefined)
       setLastTest(message)
       notify({ kind: 'success', title: g.reachableTitle, message })
     } catch (err) {
-      notifyError(err, g.testFailed)
+      if (seq === sshTestSeq.current) {
+        notifyError(err, g.testFailed)
+      }
     } finally {
-      setTesting(false)
+      if (seq === sshTestSeq.current) {
+        setTesting(false)
+      }
     }
   }
 
@@ -889,7 +1162,7 @@ function UnmanagedGatewaySettings({ embedded = false }: { embedded?: boolean } =
         <div className="text-[length:var(--conversation-caption-font-size)] font-medium text-(--ui-text-secondary)">
           {g.modeTitle}
         </div>
-        <div className="grid auto-rows-fr grid-cols-1 gap-2 min-[42rem]:grid-cols-3">
+        <div className="grid auto-rows-fr grid-cols-1 gap-2 sm:grid-cols-2 min-[72rem]:grid-cols-4">
           <ModeCard
             active={state.mode === 'local'}
             description={g.localDesc}
@@ -914,6 +1187,15 @@ function UnmanagedGatewaySettings({ embedded = false }: { embedded?: boolean } =
             icon={Globe}
             onSelect={() => setState(current => ({ ...current, mode: 'remote' }))}
             title={g.remoteTitle}
+          />
+          <ModeCard
+            active={state.mode === 'ssh'}
+            description={g.sshDesc}
+            disabled={state.envOverride}
+            hint={g.sshTrustHint}
+            icon={Terminal}
+            onSelect={() => setState(current => ({ ...current, mode: 'ssh' }))}
+            title={g.sshTitle}
           />
         </div>
       </div>
@@ -1152,6 +1434,109 @@ function UnmanagedGatewaySettings({ embedded = false }: { embedded?: boolean } =
         </div>
       ) : null}
 
+      {state.mode === 'ssh' && !state.envOverride ? (
+        <div className="mt-5 grid gap-1">
+          {sshHostSuggestions.length > 0 && !sshCustomHost ? (
+            <ListRow
+              action={
+                <Select
+                  onValueChange={selectHost}
+                  value={sshHostSuggestions.includes(state.sshHost) ? state.sshHost : SSH_HOST_CUSTOM}
+                >
+                  <SelectTrigger className={cn('h-8', CONTROL_TEXT)}>
+                    <SelectValue placeholder={g.sshHostPick} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {sshHostSuggestions.map(host => (
+                      <SelectItem key={host} value={host}>
+                        {host}
+                      </SelectItem>
+                    ))}
+                    <SelectItem value={SSH_HOST_CUSTOM}>{g.sshHostCustom}</SelectItem>
+                  </SelectContent>
+                </Select>
+              }
+              description={g.sshHostPickDesc}
+              title={g.sshHostPickTitle}
+            />
+          ) : (
+            <ListRow
+              action={
+                <Input
+                  autoFocus={sshCustomHost}
+                  className={cn('h-8', CONTROL_TEXT)}
+                  onBlur={() => {
+                    // Empty host on blur with suggestions available = the user backed
+                    // out of Custom; return to the dropdown.
+                    if (!state.sshHost.trim() && sshHostSuggestions.length > 0) {
+                      setSshCustomHost(false)
+
+                      return
+                    }
+
+                    void resolveSshHost(state.sshHost)
+                  }}
+                  onChange={event => setState(current => selectSshHost(current, event.target.value))}
+                  value={state.sshHost}
+                />
+              }
+              description={g.sshHostDesc}
+              title={g.sshHostTitle}
+            />
+          )}
+          <ListRow
+            action={
+              <Input
+                className={cn('h-8', CONTROL_TEXT)}
+                onChange={event => setState(current => ({ ...current, sshUser: event.target.value }))}
+                placeholder={g.sshUserPlaceholder}
+                value={state.sshUser}
+              />
+            }
+            description={g.sshUserDesc}
+            title={g.sshUserTitle}
+          />
+          <ListRow
+            action={
+              <Input
+                className={cn('h-8', CONTROL_TEXT)}
+                inputMode="numeric"
+                onChange={event =>
+                  setState(current => ({ ...current, sshPort: event.target.value ? Number(event.target.value) : null }))
+                }
+                placeholder="22"
+                value={state.sshPort ?? ''}
+              />
+            }
+            description={g.sshPortDesc}
+            title={g.sshPortTitle}
+          />
+          <ListRow
+            action={
+              <Input
+                className={cn('h-8 font-mono', CONTROL_TEXT)}
+                onChange={event => setState(current => ({ ...current, sshKeyPath: event.target.value }))}
+                value={state.sshKeyPath}
+              />
+            }
+            description={g.sshKeyDesc}
+            title={g.sshKeyTitle}
+          />
+          <ListRow
+            action={
+              <Input
+                className={cn('h-8 font-mono', CONTROL_TEXT)}
+                onChange={event => setState(current => ({ ...current, sshRemoteHermesPath: event.target.value }))}
+                placeholder={g.sshHermesPathPlaceholder}
+                value={state.sshRemoteHermesPath}
+              />
+            }
+            description={g.sshHermesPathDesc}
+            title={g.sshHermesPathTitle}
+          />
+        </div>
+      ) : null}
+
       {lastTest ? <div className="mt-4 text-xs text-primary">{lastTest}</div> : null}
 
       {/* Test/Save apply to local + remote. Cloud connects via the agent picker
@@ -1169,6 +1554,17 @@ function UnmanagedGatewaySettings({ embedded = false }: { embedded?: boolean } =
             >
               {testing ? <Loader2 className="animate-spin" /> : null}
               {g.testRemote}
+            </Button>
+          ) : state.mode === 'ssh' ? (
+            <Button
+              className="mr-auto"
+              disabled={testing || !state.sshHost.trim()}
+              onClick={() => void testSsh()}
+              size="sm"
+              variant="text"
+            >
+              {testing ? <Loader2 className="animate-spin" /> : null}
+              {g.sshTestConnection}
             </Button>
           ) : null}
           {embedded ? null : (

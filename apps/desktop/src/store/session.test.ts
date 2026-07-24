@@ -13,6 +13,7 @@ import {
   applyConfiguredDefaultProjectDir,
   ensureDefaultWorkspaceCwd,
   mergeSessionPage,
+  resolveComposerSessionKey,
   sessionPinId,
   setCurrentCwd,
   setSelectedStoredSessionId,
@@ -83,6 +84,21 @@ describe('sessionPinId', () => {
     // After auto-compression the entry surfaces under a fresh tip id but keeps
     // the original root — pinning on the root keeps the pin stable.
     expect(sessionPinId(session({ id: 'tip', _lineage_root_id: 'root' }))).toBe('root')
+  })
+})
+
+describe('resolveComposerSessionKey', () => {
+  it('keeps the lineage root across compression tip rotation', () => {
+    const tipBefore = '20260720_062637_ad96b3'
+    const tipAfter = '20260720_071049_a28905'
+    const sessions = [session({ id: tipAfter, _lineage_root_id: tipBefore })]
+
+    expect(resolveComposerSessionKey(tipBefore, [session({ id: tipBefore })])).toBe(tipBefore)
+    expect(resolveComposerSessionKey(tipAfter, sessions)).toBe(tipBefore)
+  })
+
+  it('falls back to the live id when the tip row is not loaded yet', () => {
+    expect(resolveComposerSessionKey('tip-new', [])).toBe('tip-new')
   })
 })
 
@@ -275,6 +291,40 @@ describe('workspaceCwdForNewSession', () => {
     await ensureDefaultWorkspaceCwd()
 
     expect($currentCwd.get()).toBe('')
+  })
+
+  it('adopts the remote workspace when the gateway switches during an async local settings read', async () => {
+    let resolveSettings: (value: { defaultLabel: string; dir: string; resolvedCwd: string }) => void = () => undefined
+    const getDefaultProjectDir = vi.fn(
+      () =>
+        new Promise<{ defaultLabel: string; dir: string; resolvedCwd: string }>(resolve => {
+          resolveSettings = resolve
+        })
+    )
+    const sanitizeWorkspaceCwd = vi.fn(async (cwd: string) => ({ cwd, sanitized: false }))
+    ;(window as unknown as { hermesDesktop: unknown }).hermesDesktop = {
+      sanitizeWorkspaceCwd,
+      settings: { getDefaultProjectDir }
+    }
+    $connection.set(null)
+    $currentCwd.set('/Users/test/local-project')
+
+    const pending = ensureDefaultWorkspaceCwd()
+    await Promise.resolve()
+    $connection.set({ baseUrl: 'https://managed.example', mode: 'remote' } as never)
+    window.localStorage.setItem(
+      'hermes.desktop.workspace-cwd.remote.https%3A%2F%2Fmanaged.example.default',
+      '/srv/evaos/agents/main'
+    )
+    resolveSettings({
+      defaultLabel: '/Users/test',
+      dir: '/Users/test/local-project',
+      resolvedCwd: '/Users/test/local-project'
+    })
+    await pending
+
+    expect(sanitizeWorkspaceCwd).not.toHaveBeenCalled()
+    expect($currentCwd.get()).toBe('/srv/evaos/agents/main')
   })
 })
 

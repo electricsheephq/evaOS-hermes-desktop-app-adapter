@@ -1,3 +1,4 @@
+import type { ConnectionState } from '@hermes/shared'
 import { atom, computed } from 'nanostores'
 
 import { lastVisibleMessageIsUser } from '@/app/chat/thread-loading'
@@ -80,7 +81,16 @@ export async function ensureDefaultWorkspaceCwd(): Promise<void> {
     }
   }
 
-  const remembered = getRememberedWorkspaceCwd()
+  const alignRemoteWorkspace = () => {
+    const remoteRemembered = getRememberedWorkspaceCwd()
+    if (!$activeSessionId.get()) {
+      setCurrentCwdTransient(remoteRemembered)
+
+      if (!remoteRemembered) {
+        setCurrentBranch('')
+      }
+    }
+  }
 
   // Remote workspaces belong to the assigned backend. Do not consult or
   // sanitize local project-directory settings during managed boot: branded
@@ -89,13 +99,7 @@ export async function ensureDefaultWorkspaceCwd(): Promise<void> {
     // A connection switch can leave the previous local/backend cwd live even
     // when this remote has never remembered a workspace. Clear that stale
     // value so seedDefaultCwd() can adopt the remote backend default.
-    if (!$activeSessionId.get()) {
-      setCurrentCwdTransient(remembered)
-
-      if (!remembered) {
-        setCurrentBranch('')
-      }
-    }
+    alignRemoteWorkspace()
 
     return
   }
@@ -107,7 +111,14 @@ export async function ensureDefaultWorkspaceCwd(): Promise<void> {
   }
 
   await syncConfiguredDefaultProjectDir()
+  if ($connection.get()?.mode === 'remote') {
+    alignRemoteWorkspace()
+
+    return
+  }
+
   const configured = getConfiguredDefaultProjectDir()
+  const remembered = getRememberedWorkspaceCwd()
 
   if (configured) {
     const { cwd } = await sanitize(configured)
@@ -154,6 +165,27 @@ export const sessionMatchesStoredId = (
   session: Pick<SessionInfo, '_lineage_root_id' | 'id'>,
   storedSessionId: string
 ): boolean => session.id === storedSessionId || session._lineage_root_id === storedSessionId
+
+/**
+ * Stable composer + `/queue` scope for a selected stored session.
+ *
+ * Same durability rule as {@link sessionPinId}: prefer the lineage root so
+ * auto-compression tip rotation does not remount the composer onto an empty
+ * draft/queue key mid-keystroke. Falls back to the live id when the row is
+ * not in the in-memory list yet.
+ */
+export function resolveComposerSessionKey(
+  selectedSessionId: string | null | undefined,
+  sessions: readonly Pick<SessionInfo, '_lineage_root_id' | 'id'>[]
+): string | null {
+  if (!selectedSessionId) {
+    return null
+  }
+
+  const row = sessions.find(session => sessionMatchesStoredId(session, selectedSessionId))
+
+  return row ? sessionPinId(row) : selectedSessionId
+}
 
 /** Merge a fresh server session page into the in-memory list, keeping any
  *  row the server omitted that we still want visible — both still-"working"
@@ -225,7 +257,7 @@ export function mergeSessionPage(
 }
 
 export const $connection = atom<HermesConnection | null>(null)
-export const $gatewayState = atom('idle')
+export const $gatewayState = atom<ConnectionState>('idle')
 export const $sessions = atom<SessionInfo[]>([])
 export const $sessionsTotal = atom<number>(0)
 // Cron-job sessions (source === 'cron') are fetched as their own list so the
@@ -331,7 +363,7 @@ export const $modelPickerOpen = atom(false)
 export const $sessionPickerOpen = atom(false)
 
 export const setConnection = (next: Updater<HermesConnection | null>) => updateAtom($connection, next)
-export const setGatewayState = (next: Updater<string>) => updateAtom($gatewayState, next)
+export const setGatewayState = (next: Updater<ConnectionState>) => updateAtom($gatewayState, next)
 export const setSessions = (next: Updater<SessionInfo[]>) => updateAtom($sessions, next)
 export const setSessionsTotal = (next: Updater<number>) => updateAtom($sessionsTotal, next)
 export const setCronSessions = (next: Updater<SessionInfo[]>) => updateAtom($cronSessions, next)

@@ -186,7 +186,9 @@ test('managed backend blocks only connection, assignment, and updater escape hat
     { path: '/api/future-feature?eva_session=raw-token' },
     { path: '/api/future-feature?gateway_url=https%3A%2F%2Fexample.invalid' },
     { path: '/api/hermes/update', method: 'POST' },
-    { path: '/api/hermes/update/check?force=true', method: 'GET' }
+    { path: '/api/hermes/update/', method: 'POST' },
+    { path: '/api/hermes/update/check?force=true', method: 'GET' },
+    { path: '/api/hermes/update/check/', method: 'GET' }
   ]
   for (const request of denied) {
     assert.throws(

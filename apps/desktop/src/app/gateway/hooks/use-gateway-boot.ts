@@ -50,6 +50,7 @@ import type { RpcEvent } from '@/types/hermes'
 const RECONNECT_ESCALATE_AFTER = 6
 
 interface GatewayBootOptions {
+  beforeConnectionSwitch: () => void
   handleGatewayEvent: (event: RpcEvent) => void
   onConnectionReady: (
     connection: Awaited<ReturnType<NonNullable<typeof window.hermesDesktop>['getConnection']>> | null
@@ -60,6 +61,7 @@ interface GatewayBootOptions {
 }
 
 export function useGatewayBoot({
+  beforeConnectionSwitch,
   handleGatewayEvent,
   onConnectionReady,
   onGatewayReady,
@@ -69,6 +71,7 @@ export function useGatewayBoot({
   const navigate = useNavigate()
 
   const callbacksRef = useRef({
+    beforeConnectionSwitch,
     handleGatewayEvent,
     onConnectionReady,
     onGatewayReady,
@@ -77,6 +80,7 @@ export function useGatewayBoot({
   })
 
   callbacksRef.current = {
+    beforeConnectionSwitch,
     handleGatewayEvent,
     onConnectionReady,
     onGatewayReady,
@@ -159,9 +163,10 @@ export function useGatewayBoot({
         // with a short TTL, so the ticket baked into the cached conn.wsUrl is
         // dead on every reconnect after the initial boot — reusing it surfaces
         // as an opaque "Could not connect to Hermes gateway". resolveGatewayWsUrl
-        // mints a fresh ticket (or throws a reauth error in OAuth mode rather
-        // than connecting with a stale one). For local/token gateways the URL
-        // carries a long-lived token and the re-mint is a cheap no-op.
+        // mints a fresh ticket rather than connecting with a stale one. An
+        // explicit auth rejection asks for sign-in; transport failures stay in
+        // this reconnect loop. For local/token gateways the URL carries a
+        // long-lived token and the re-mint is a cheap no-op.
         const wsUrl = await resolveGatewayWsUrl(desktop, conn)
         await gateway.connect(wsUrl)
 
@@ -268,6 +273,7 @@ export function useGatewayBoot({
       reconnectAttempt = 0
       escalated = false
       reauthNotified = false
+      callbacksRef.current.beforeConnectionSwitch()
       wipeSessionListsForGatewaySwitch()
 
       try {
@@ -458,9 +464,9 @@ export function useGatewayBoot({
         publish(conn)
         // Mint a fresh WS URL right before connecting. For OAuth gateways the
         // ticket is single-use with a short TTL, so the ticket baked into
-        // conn.wsUrl is stale; resolveGatewayWsUrl() re-mints it and, on
-        // failure, throws a reauth error rather than connecting with a dead
-        // ticket (which would surface as an opaque "connection closed").
+        // conn.wsUrl is stale; resolveGatewayWsUrl() re-mints it rather than
+        // connecting with a dead ticket. Auth rejection asks for sign-in;
+        // connectivity failures remain retryable.
         const wsUrl = await resolveGatewayWsUrl(desktop, conn)
         await gateway.connect(wsUrl)
 

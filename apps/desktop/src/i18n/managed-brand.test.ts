@@ -42,17 +42,11 @@ describe('managed evaOS Agent branding', () => {
   })
 
   it('keeps the English customer copy free of upstream product branding', () => {
-    const visibleCopy = collectRenderedCopy(en)
-    const allowedTechnicalCopy = [
-      'Base URL for the remote dashboard backend. Path prefixes are supported, for example /hermes.',
-      'Restorable via hermes curator restore.',
-      '@hermes:example.org',
-      'exit hermes',
-      'This adds the “Example” pattern to your permanent allowlist (~/.hermes/config.yaml). evaOS Agent won’t ask again for commands like this — in this session or any future one.',
-      'Timed out waiting for the gateway. Is `hermes gateway` running?'
-    ]
+    const visibleCopy = collectRenderedCopy(createManagedTranslations(en))
+    const upstreamProductBrand =
+      /\b(?:Hermes Desktop|Hermes Agent|Nous Portal|Nous Research|Eva by Electric Sheep|Eva)\b/i
 
-    expect(visibleCopy.filter(value => /\b(?:Hermes|Nous|Eva)\b/i.test(value))).toEqual(allowedTechnicalCopy)
+    expect(visibleCopy.filter(value => upstreamProductBrand.test(value))).toEqual([])
     expect(visibleCopy.filter(value => /evaOS Agent agent/i.test(value))).toEqual([])
   })
 })

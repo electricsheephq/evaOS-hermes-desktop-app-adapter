@@ -25,7 +25,7 @@ function sanitizeCatalogValue(value: unknown): unknown {
   }
 
   if (typeof value === 'function') {
-    return (...args: unknown[]) => sanitizeManagedBrandText(String(value(...args)))
+    return value
   }
 
   if (value && typeof value === 'object' && !Array.isArray(value)) {

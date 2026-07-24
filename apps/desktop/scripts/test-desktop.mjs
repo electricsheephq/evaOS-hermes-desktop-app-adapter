@@ -300,7 +300,7 @@ function validateBundle() {
     )
   }
 
-  const attributionPath = path.join(APP.resourcesPath, 'licenses', 'Hermes-Agent-MIT-LICENSE.txt')
+  const attributionPath = path.join(APP.resourcesPath, 'licenses', 'evaOS-Agent-MIT-LICENSE.txt')
   if (!exists(attributionPath)) {
     die(`Missing required Hermes Agent MIT attribution: ${attributionPath}`)
   }
