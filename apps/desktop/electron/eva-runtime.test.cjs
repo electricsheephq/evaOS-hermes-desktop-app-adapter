@@ -211,6 +211,83 @@ test('explicit refresh bypasses cooldown once, coalesces callers, and success re
   assert.equal(launches, 4)
 })
 
+test('a stale in-flight launch cannot restore backoff after auth invalidation', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-stale-backoff-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeEnrollment(statePath)
+
+  let launches = 0
+  let rejectLaunch
+  let outcome = 'wait'
+  const failure = new EvaBrokerError('Runtime enrollment is temporarily unavailable.', 500, 'vm_lookup_failed')
+  const enrollment = {
+    schemaVersion: 'evaos.hermes_desktop_enrollment.v1',
+    customerId: 'customer-one',
+    runtime: 'hermes',
+    agentId: 'main',
+    baseUrl: 'https://hermes-customer-one.ecs.electricsheephq.com',
+    token: 'fresh-runtime-token',
+    expiresAt: FUTURE
+  }
+  const runtime = makeManagedRuntime(statePath, {
+    now: () => 0,
+    launchRuntime: async () => {
+      launches += 1
+      if (outcome === 'wait') {
+        await new Promise((_resolve, reject) => {
+          rejectLaunch = reject
+        })
+      }
+      return enrollment
+    }
+  })
+
+  const staleLaunch = runtime.resolveBackend()
+  await new Promise(resolve => setImmediate(resolve))
+  await runtime.close()
+  outcome = 'success'
+  rejectLaunch(failure)
+
+  await assert.rejects(staleLaunch, error => error instanceof EvaBrokerError && error.code === 'stale-auth')
+  const backend = await runtime.resolveBackend()
+  assert.equal(launches, 2)
+  assert.equal(backend.baseUrl, 'eva-managed://customer-one')
+})
+
+test('a runtime 401 clears older transient backoff before requiring sign-in', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-sign-in-backoff-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeEnrollment(statePath)
+
+  let launches = 0
+  let outcome = 'fail'
+  const failure = new EvaBrokerError('Runtime enrollment is temporarily unavailable.', 500, 'vm_lookup_failed')
+  const runtime = makeManagedRuntime(statePath, {
+    now: () => 0,
+    launchRuntime: async () => {
+      launches += 1
+      if (outcome === 'unauthorized') {
+        throw new EvaBrokerError('Desktop session was revoked.', 401, 'unauthorized')
+      }
+      throw failure
+    }
+  })
+
+  await assert.rejects(runtime.resolveBackend(), error => error === failure)
+  outcome = 'unauthorized'
+  await assert.rejects(
+    runtime.refresh(),
+    error => error instanceof EvaBrokerError && error.code === 'sign-in-required'
+  )
+  await assert.rejects(
+    runtime.resolveBackend(),
+    error => error instanceof EvaBrokerError && error.code === 'sign-in-required'
+  )
+  assert.equal(launches, 2)
+})
+
 test('managed runtime forwards unknown APIs, bodies, uploads, and Hermes profiles to the assigned backend', async t => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-passthrough-'))
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }))

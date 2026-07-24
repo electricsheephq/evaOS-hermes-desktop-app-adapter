@@ -235,6 +235,7 @@ function createEvaManagedRuntime(options) {
   }
 
   function requireSignIn() {
+    resetRuntimeEnrollmentFailure()
     writeState(emptyState(true))
     updateBootProgress(
       {
@@ -287,6 +288,7 @@ function createEvaManagedRuntime(options) {
         return enrollment
       } catch (error) {
         if (error?.statusCode !== 401 && error?.code !== 'stale-auth') {
+          assertGeneration(auth, runtime)
           recordRuntimeEnrollmentFailure(error)
         }
         throw error
