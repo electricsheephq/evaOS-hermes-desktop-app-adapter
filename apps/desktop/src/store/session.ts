@@ -81,7 +81,16 @@ export async function ensureDefaultWorkspaceCwd(): Promise<void> {
     }
   }
 
-  const remembered = getRememberedWorkspaceCwd()
+  const alignRemoteWorkspace = () => {
+    const remoteRemembered = getRememberedWorkspaceCwd()
+    if (!$activeSessionId.get()) {
+      setCurrentCwdTransient(remoteRemembered)
+
+      if (!remoteRemembered) {
+        setCurrentBranch('')
+      }
+    }
+  }
 
   // Remote workspaces belong to the assigned backend. Do not consult or
   // sanitize local project-directory settings during managed boot: branded
@@ -90,13 +99,7 @@ export async function ensureDefaultWorkspaceCwd(): Promise<void> {
     // A connection switch can leave the previous local/backend cwd live even
     // when this remote has never remembered a workspace. Clear that stale
     // value so seedDefaultCwd() can adopt the remote backend default.
-    if (!$activeSessionId.get()) {
-      setCurrentCwdTransient(remembered)
-
-      if (!remembered) {
-        setCurrentBranch('')
-      }
-    }
+    alignRemoteWorkspace()
 
     return
   }
@@ -108,7 +111,14 @@ export async function ensureDefaultWorkspaceCwd(): Promise<void> {
   }
 
   await syncConfiguredDefaultProjectDir()
+  if ($connection.get()?.mode === 'remote') {
+    alignRemoteWorkspace()
+
+    return
+  }
+
   const configured = getConfiguredDefaultProjectDir()
+  const remembered = getRememberedWorkspaceCwd()
 
   if (configured) {
     const { cwd } = await sanitize(configured)

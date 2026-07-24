@@ -7594,16 +7594,28 @@ async function prepareProfileDeleteRequest(request) {
 async function startHermes() {
   if (EVA_MANAGED_BUILD) {
     await advanceBootProgress('backend.resolve', 'Resolving your managed evaOS agent', 8)
-    const remote = await evaManagedRuntime.resolveBackend()
-    await advanceBootProgress('backend.remote', 'Connecting to your managed evaOS agent', 30)
-    updateBootProgress({
-      phase: 'backend.ready',
-      message: 'evaOS Agent is connected',
-      progress: 94,
-      running: true,
-      error: null
-    })
-    return { ...remote, logs: hermesLog.slice(-80), ...getWindowState() }
+    try {
+      const remote = await evaManagedRuntime.resolveBackend()
+      await advanceBootProgress('backend.remote', 'Connecting to your managed evaOS agent', 30)
+      updateBootProgress({
+        phase: 'backend.ready',
+        message: 'evaOS Agent is connected',
+        progress: 94,
+        running: true,
+        error: null
+      })
+      return { ...remote, logs: hermesLog.slice(-80), ...getWindowState() }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      updateBootProgress({
+        phase: 'backend.error',
+        message,
+        progress: 100,
+        running: false,
+        error: message
+      })
+      throw error
+    }
   }
 
   // Latched-failure short-circuit: once bootstrap has failed in this
@@ -8827,10 +8839,12 @@ ipcMain.handle('hermes:connection-config:oauth-logout', async (_event, rawUrl) =
 // per-agent cascade. See the discovery/cascade helpers above.
 ipcMain.handle('hermes:cloud:status', async () => ({
   ...(EVA_MANAGED_BUILD ? { portalBaseUrl: null, signedIn: false, managed: true } : {}),
-  ...(!EVA_MANAGED_BUILD ? {
-  portalBaseUrl: resolvePortalBaseUrl(),
-  signedIn: await hasLivePortalSession()
-  } : {})
+  ...(!EVA_MANAGED_BUILD
+    ? {
+        portalBaseUrl: resolvePortalBaseUrl(),
+        signedIn: await hasLivePortalSession()
+      }
+    : {})
 }))
 ipcMain.handle('hermes:cloud:login', async () => {
   if (EVA_MANAGED_BUILD) throw new Error('Cloud selection is managed by Electric Sheep.')
@@ -8890,7 +8904,9 @@ ipcMain.handle('hermes:eva:sign-in', async () => evaManagedRuntime.signIn())
 ipcMain.handle('hermes:eva:sign-out', async () => evaManagedRuntime.signOut())
 ipcMain.handle('hermes:eva:refresh', async () => evaManagedRuntime.refresh())
 
-ipcMain.handle('hermes:profile:get', async () => ({ profile: EVA_MANAGED_BUILD ? 'default' : readActiveDesktopProfile() }))
+ipcMain.handle('hermes:profile:get', async () => ({
+  profile: EVA_MANAGED_BUILD ? 'default' : readActiveDesktopProfile()
+}))
 ipcMain.handle('hermes:profile:set', async (_event, name) => {
   if (EVA_MANAGED_BUILD) {
     if (!name || name === 'default') return { profile: 'default' }
@@ -10051,21 +10067,25 @@ ipcMain.handle('hermes:terminal:cwd', async (_event, id) => {
 ipcMain.handle('hermes:terminal:dispose', (_event, id) => disposeTerminalSession(String(id || '')))
 
 ipcMain.handle('hermes:updates:check', async () =>
-  EVA_MANAGED_BUILD ? managedUpdateResponse('check') : checkUpdates().catch(error => ({
-    supported: true,
-    branch: readDesktopUpdateConfig().branch,
-    error: 'check-failed',
-    message: error?.message || String(error),
-    fetchedAt: Date.now()
-  }))
+  EVA_MANAGED_BUILD
+    ? managedUpdateResponse('check')
+    : checkUpdates().catch(error => ({
+        supported: true,
+        branch: readDesktopUpdateConfig().branch,
+        error: 'check-failed',
+        message: error?.message || String(error),
+        fetchedAt: Date.now()
+      }))
 )
 
 ipcMain.handle('hermes:updates:apply', async (_event, payload) =>
-  EVA_MANAGED_BUILD ? managedUpdateResponse('apply') : applyUpdates(payload || {}).catch(error => ({
-    ok: false,
-    error: 'apply-failed',
-    message: error?.message || String(error)
-  }))
+  EVA_MANAGED_BUILD
+    ? managedUpdateResponse('apply')
+    : applyUpdates(payload || {}).catch(error => ({
+        ok: false,
+        error: 'apply-failed',
+        message: error?.message || String(error)
+      }))
 )
 
 ipcMain.handle('hermes:updates:branch:get', async () =>
@@ -10073,7 +10093,9 @@ ipcMain.handle('hermes:updates:branch:get', async () =>
 )
 
 ipcMain.handle('hermes:updates:branch:set', async (_event, name) => {
-  if (EVA_MANAGED_BUILD) return { branch: EVA_MANAGED_POLICY.updateChannel }
+  if (EVA_MANAGED_BUILD) {
+    throw new Error('Updates are managed by Electric Sheep.')
+  }
   const branch = typeof name === 'string' && name.trim() ? name.trim() : DEFAULT_UPDATE_BRANCH
   writeDesktopUpdateConfig({ branch })
 

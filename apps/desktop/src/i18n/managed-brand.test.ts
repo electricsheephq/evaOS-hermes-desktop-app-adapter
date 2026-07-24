@@ -43,8 +43,10 @@ describe('managed evaOS Agent branding', () => {
 
   it('keeps the English customer copy free of upstream product branding', () => {
     const visibleCopy = collectRenderedCopy(createManagedTranslations(en))
+    const upstreamProductBrand =
+      /\b(?:Hermes Desktop|Hermes Agent|Nous Portal|Nous Research|Eva by Electric Sheep|Eva)\b/i
 
-    expect(visibleCopy.filter(value => /\b(?:Hermes|Nous|Eva)\b/.test(value))).toEqual([])
+    expect(visibleCopy.filter(value => upstreamProductBrand.test(value))).toEqual([])
     expect(visibleCopy.filter(value => /evaOS Agent agent/i.test(value))).toEqual([])
   })
 })

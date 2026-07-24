@@ -84,7 +84,7 @@ export interface I18nProviderProps {
 
 export function I18nProvider({ children, configClient = defaultConfigClient, initialLocale }: I18nProviderProps) {
   const managed = isManagedEvaosAgent()
-  const [locale, setLocaleState] = useState<Locale>(() => normalizeLocale(initialLocale))
+  const [locale, setLocaleState] = useState<Locale>(() => (managed ? DEFAULT_LOCALE : normalizeLocale(initialLocale)))
   const [isLoadingConfig, setIsLoadingConfig] = useState(false)
   const [isSavingLocale, setIsSavingLocale] = useState(false)
   const [configLoadError, setConfigLoadError] = useState<Error | null>(null)
@@ -110,7 +110,7 @@ export function I18nProvider({ children, configClient = defaultConfigClient, ini
       .getConfig()
       .then(config => {
         if (!cancelled) {
-          setLocaleState(managed ? DEFAULT_LOCALE : normalizeLocale(getConfigDisplayLanguage(config)))
+          setLocaleState(normalizeLocale(getConfigDisplayLanguage(config)))
         }
       })
       .catch(error => {
@@ -172,7 +172,7 @@ export function I18nProvider({ children, configClient = defaultConfigClient, ini
       locale,
       saveError,
       setLocale,
-      t: managed ? MANAGED_TRANSLATIONS[DEFAULT_LOCALE] : TRANSLATIONS[locale]
+      t: managed ? MANAGED_TRANSLATIONS[locale] : TRANSLATIONS[locale]
     }),
     [configLoadError, isLoadingConfig, isSavingLocale, locale, managed, saveError, setLocale]
   )

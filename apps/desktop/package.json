@@ -198,7 +198,7 @@
       },
       {
         "from": "../../LICENSE",
-        "to": "licenses/Hermes-Agent-MIT-LICENSE.txt"
+        "to": "licenses/evaOS-Agent-MIT-LICENSE.txt"
       }
     ],
     "asar": true,

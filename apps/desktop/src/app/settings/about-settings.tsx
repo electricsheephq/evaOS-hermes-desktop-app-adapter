@@ -1,16 +1,22 @@
 import { useStore } from '@nanostores/react'
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 
 import { BrandMark } from '@/components/brand-mark'
+import type { EvaManagedStatus } from '@/global'
 import { $desktopVersion, refreshDesktopVersion } from '@/store/updates'
 
 import { ListRow, SettingsContent } from './primitives'
 
 export function AboutSettings() {
   const version = useStore($desktopVersion)
+  const [managedStatus, setManagedStatus] = useState<EvaManagedStatus | null>(null)
 
   useEffect(() => {
     void refreshDesktopVersion()
+    void window.hermesDesktop?.eva
+      ?.status()
+      .then(setManagedStatus)
+      .catch(() => undefined)
   }, [])
 
   return (
@@ -30,13 +36,16 @@ export function AboutSettings() {
           description="Your account, assigned agent, access policy, and software updates are managed by Electric Sheep."
           title="Managed business beta"
         />
-        <ListRow description="managed-beta · automatic updater disabled" title="Update channel" />
+        <ListRow
+          description={`${managedStatus?.updateChannel ?? 'managed'} · automatic updater disabled`}
+          title="Update channel"
+        />
         <ListRow
           description="Built on Hermes Agent by Nous Research, used under the MIT License."
           title="Open-source attribution"
         />
         <ListRow
-          description="Signed Apple Silicon pilot for the Dorman business account. This is not a public release."
+          description="Signed Apple Silicon managed business beta. This is not a public release."
           title="Distribution"
         />
       </div>

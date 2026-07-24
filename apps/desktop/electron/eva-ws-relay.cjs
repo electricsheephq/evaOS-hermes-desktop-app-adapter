@@ -6,6 +6,7 @@ const { buildEvaManagedWsUrl } = require('./eva-managed.cjs')
 
 const TICKET_TTL_MS = 30_000
 const MAX_UPSTREAM_HEADER_BYTES = 64 * 1024
+const UPSTREAM_SETUP_TIMEOUT_MS = 15_000
 
 function safeDestroy(socket) {
   try {
@@ -79,6 +80,7 @@ function createEvaWsRelay(options) {
   const now = options.now ?? (() => Date.now())
   const randomBytes = options.randomBytes ?? crypto.randomBytes
   const connectUpstream = options.connectUpstream ?? connectTls
+  const upstreamSetupTimeoutMs = options.upstreamSetupTimeoutMs ?? UPSTREAM_SETUP_TIMEOUT_MS
   const onEvent = options.onEvent ?? (() => undefined)
   const tickets = new Map()
   const liveSockets = new Set()
@@ -130,12 +132,28 @@ function createEvaWsRelay(options) {
     }
 
     let upstreamSocket
+    let setupFinished = false
+    const setupTimer = setTimeout(() => {
+      if (setupFinished) return
+      setupFinished = true
+      onEvent('upstream_setup_timeout')
+      writeFailure(clientSocket, 502, 'Bad Gateway')
+      safeDestroy(upstreamSocket)
+    }, upstreamSetupTimeoutMs)
+    setupTimer.unref?.()
     try {
       const upstream = await options.getUpstream()
       const upstreamUrl = new URL(buildEvaManagedWsUrl(upstream.baseUrl, upstream.token))
       upstreamSocket = track(await connectUpstream(upstreamUrl))
+      if (setupFinished) {
+        safeDestroy(upstreamSocket)
+        return
+      }
       upstreamSocket.write(buildUpgradeRequest(request, upstreamUrl))
     } catch (error) {
+      if (setupFinished) return
+      setupFinished = true
+      clearTimeout(setupTimer)
       onEvent(`upstream_connect_failed code=${String(error?.code || error?.name || 'unknown')}`)
       writeFailure(clientSocket, 502, 'Bad Gateway')
       safeDestroy(upstreamSocket)
@@ -144,6 +162,9 @@ function createEvaWsRelay(options) {
 
     let header = Buffer.alloc(0)
     const failUpstream = () => {
+      if (setupFinished) return
+      setupFinished = true
+      clearTimeout(setupTimer)
       if (!clientSocket.destroyed) writeFailure(clientSocket, 502, 'Bad Gateway')
       safeDestroy(upstreamSocket)
     }
@@ -156,6 +177,8 @@ function createEvaWsRelay(options) {
       const boundary = header.indexOf('\r\n\r\n')
       if (boundary < 0) return
 
+      setupFinished = true
+      clearTimeout(setupTimer)
       upstreamSocket.removeListener('data', onUpstreamData)
       upstreamSocket.removeListener('error', failUpstream)
       const responseHead = header.subarray(0, boundary + 4)

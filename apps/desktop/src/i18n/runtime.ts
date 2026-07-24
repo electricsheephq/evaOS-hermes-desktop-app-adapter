@@ -1,6 +1,5 @@
 import { TRANSLATIONS } from './catalog'
 import { DEFAULT_LOCALE } from './languages'
-import { isManagedEvaosAgent, sanitizeManagedBrandText } from './managed-brand'
 import type { Locale } from './types'
 
 let runtimeLocale: Locale = DEFAULT_LOCALE
@@ -38,14 +37,14 @@ export function translateFrom(
   const active = render(resolvePath(source(locale), key), args)
 
   if (active !== null) {
-    return isManagedEvaosAgent() ? sanitizeManagedBrandText(active) : active
+    return active
   }
 
   if (locale !== DEFAULT_LOCALE) {
     const fallback = render(resolvePath(source(DEFAULT_LOCALE), key), args)
 
     if (fallback !== null) {
-      return isManagedEvaosAgent() ? sanitizeManagedBrandText(fallback) : fallback
+      return fallback
     }
   }
 
