@@ -67,6 +67,7 @@ describe('onboarding Picker', () => {
     render(
       <DesktopOnboardingOverlay
         enabled={false}
+        profile="default"
         requestGateway={async () => undefined as never}
       />
     )

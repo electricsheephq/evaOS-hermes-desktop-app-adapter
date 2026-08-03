@@ -1,6 +1,7 @@
 import { useStore } from '@nanostores/react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 
+import { PageLoader } from '@/components/page-loader'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -27,13 +28,14 @@ import {
   RefreshCw,
   Terminal
 } from '@/lib/icons'
+import { coerceRemoteUrlScheme } from '@/lib/remote-url'
 import { selectableCardClass } from '@/lib/selectable-card'
 import { cn } from '@/lib/utils'
 import { notify, notifyError } from '@/store/notifications'
 import { $profiles, refreshActiveProfile } from '@/store/profile'
 
 import { CONTROL_TEXT } from './constants'
-import { EmptyState, ListRow, LoadingState, Pill, SettingsContent } from './primitives'
+import { EmptyState, ListRow, Pill, SettingsContent, SettingsSkeleton } from './primitives'
 import { enrichSelectedSshHost, selectSshHost } from './ssh-host-selection'
 
 type Mode = 'local' | 'remote' | 'cloud' | 'ssh'
@@ -56,6 +58,7 @@ interface GatewaySettingsState {
   sshPort: number | null
   sshKeyPath: string
   sshRemoteHermesPath: string
+  sshRemoteProfile: string
 }
 
 const SSH_HOST_CUSTOM = '__custom__'
@@ -73,7 +76,8 @@ const EMPTY_STATE: GatewaySettingsState = {
   sshUser: '',
   sshPort: null,
   sshKeyPath: '',
-  sshRemoteHermesPath: ''
+  sshRemoteHermesPath: '',
+  sshRemoteProfile: ''
 }
 
 export function savedCloudConnectionUrl(config: Pick<GatewaySettingsState, 'mode' | 'remoteUrl'>): string {
@@ -197,7 +201,12 @@ function EvaManagedGatewaySettings({ embedded = false }: { embedded?: boolean } 
   }
 
   if (!status && !error) {
-    return <LoadingState label="Loading managed evaOS Agent access…" />
+    return (
+      <PageLoader
+        className="-mt-[calc(var(--titlebar-height)+1rem)] h-[calc(100%+var(--titlebar-height)+1rem)]"
+        label="Loading managed evaOS Agent access…"
+      />
+    )
   }
 
   return (
@@ -371,7 +380,7 @@ function UnmanagedGatewaySettings({ embedded = false }: { embedded?: boolean } =
   // syntactically plausible URL. The probe result drives whether we render the
   // OAuth login button or the session-token entry box. The effective auth mode
   // prefers a fresh probe result over the saved value.
-  const trimmedUrl = state.remoteUrl.trim()
+  const trimmedUrl = coerceRemoteUrlScheme(state.remoteUrl)
 
   // The dashboardUrl of the currently-connected cloud instance (the saved
   // cloud connection's remoteUrl), normalized for comparison against each
@@ -523,6 +532,7 @@ function UnmanagedGatewaySettings({ embedded = false }: { embedded?: boolean } =
     return () => void (cancelled = true)
   }, [state.mode])
 
+  // eslint-disable-next-line no-restricted-syntax -- monotonic request-sequence counters, not an atom mirror
   useEffect(() => {
     contextSeq.current += 1
     sshTestSeq.current += 1
@@ -530,7 +540,16 @@ function UnmanagedGatewaySettings({ embedded = false }: { embedded?: boolean } =
     signingSeq.current += 1
     cloudConnectSeq.current += 1
     setLastTest(null)
-  }, [scope, state.mode, state.sshHost, state.sshUser, state.sshPort, state.sshKeyPath, state.sshRemoteHermesPath])
+  }, [
+    scope,
+    state.mode,
+    state.sshHost,
+    state.sshUser,
+    state.sshPort,
+    state.sshKeyPath,
+    state.sshRemoteHermesPath,
+    state.sshRemoteProfile
+  ])
 
   const oauthConnected = state.remoteOauthConnected
 
@@ -556,7 +575,10 @@ function UnmanagedGatewaySettings({ embedded = false }: { embedded?: boolean } =
     sshUser: state.sshUser.trim() || undefined,
     sshPort: state.sshPort,
     sshKeyPath: state.sshKeyPath.trim() || undefined,
-    sshRemoteHermesPath: state.sshRemoteHermesPath.trim()
+    sshRemoteHermesPath: state.sshRemoteHermesPath.trim(),
+    // Preserve an intentional blank so an existing remote-profile mapping can
+    // be cleared instead of being mistaken for an omitted field.
+    sshRemoteProfile: state.sshRemoteProfile.trim()
   })
 
   const save = async (apply: boolean) => {
@@ -1104,7 +1126,14 @@ function UnmanagedGatewaySettings({ embedded = false }: { embedded?: boolean } =
   }
 
   if (loading) {
-    return <LoadingState label={g.loading} />
+    return (
+      <SettingsSkeleton
+        sections={[
+          { heading: true, rows: 3 },
+          { heading: true, rows: 3 }
+        ]}
+      />
+    )
   }
 
   if (!window.hermesDesktop?.getConnectionConfig) {
@@ -1165,11 +1194,11 @@ function UnmanagedGatewaySettings({ embedded = false }: { embedded?: boolean } =
         <div className="grid auto-rows-fr grid-cols-1 gap-2 sm:grid-cols-2 min-[72rem]:grid-cols-4">
           <ModeCard
             active={state.mode === 'local'}
-            description={g.localDesc}
+            description={scope === null ? g.localDesc : g.inheritDesc}
             disabled={state.envOverride}
             icon={Monitor}
             onSelect={() => setState(current => ({ ...current, mode: 'local' }))}
-            title={g.localTitle}
+            title={scope === null ? g.localTitle : g.inheritTitle}
           />
           <ModeCard
             active={state.mode === 'cloud'}
@@ -1534,6 +1563,20 @@ function UnmanagedGatewaySettings({ embedded = false }: { embedded?: boolean } =
             description={g.sshHermesPathDesc}
             title={g.sshHermesPathTitle}
           />
+          {scope !== null ? (
+            <ListRow
+              action={
+                <Input
+                  className={cn('h-8 font-mono', CONTROL_TEXT)}
+                  onChange={event => setState(current => ({ ...current, sshRemoteProfile: event.target.value }))}
+                  placeholder={scope}
+                  value={state.sshRemoteProfile}
+                />
+              }
+              description={g.sshRemoteProfileDesc}
+              title={g.sshRemoteProfileTitle}
+            />
+          ) : null}
         </div>
       ) : null}
 

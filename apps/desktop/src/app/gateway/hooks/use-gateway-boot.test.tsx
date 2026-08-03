@@ -1,10 +1,11 @@
 import { act, cleanup, render } from '@testing-library/react'
-import { MemoryRouter, useLocation } from 'react-router-dom'
+import { MemoryRouter, useLocation } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { $desktopBoot } from '@/store/boot'
 import { $gatewayState, $sessionsLoading } from '@/store/session'
 
+import { takeGatewaySurvivor } from './gateway-hmr-survivor'
 import { useGatewayBoot } from './use-gateway-boot'
 
 // End-to-end-ish repro of the "remote VPS → stuck on CONNECTING, no Settings"
@@ -148,6 +149,17 @@ function renderHarness() {
 const originalWebSocket = globalThis.WebSocket
 
 beforeEach(() => {
+  // Drop any parked gateway left by a prior file/case (globalThis slot).
+  const leftover = takeGatewaySurvivor()
+
+  if (leftover) {
+    try {
+      leftover.gateway.close()
+    } catch {
+      // ignore
+    }
+  }
+
   vi.useFakeTimers()
   FakeWebSocket.mode = 'open'
   FakeWebSocket.instances = []
@@ -170,6 +182,19 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup()
+  // Vitest keeps import.meta.hot truthy, so the boot effect's cleanup parks an
+  // open gateway instead of tearing it down (the real HMR path). Drain + close
+  // that survivor so the next test boots a fresh socket instead of adoptBoot().
+  const survivor = takeGatewaySurvivor()
+
+  if (survivor) {
+    try {
+      survivor.gateway.close()
+    } catch {
+      // ignore
+    }
+  }
+
   vi.useRealTimers()
   ;(globalThis as { WebSocket: unknown }).WebSocket = originalWebSocket
   delete (window as { hermesDesktop?: unknown }).hermesDesktop
