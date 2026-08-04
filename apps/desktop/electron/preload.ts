@@ -4,7 +4,7 @@ contextBridge.exposeInMainWorld('hermesDesktop', {
   getConnection: profile => ipcRenderer.invoke('hermes:connection', profile),
   revalidateConnection: () => ipcRenderer.invoke('hermes:connection:revalidate'),
   touchBackend: profile => ipcRenderer.invoke('hermes:backend:touch', profile),
-  getGatewayWsUrl: profile => ipcRenderer.invoke('hermes:gateway:ws-url', profile),
+  getGatewayWsUrl: (profile, endpointPath) => ipcRenderer.invoke('hermes:gateway:ws-url', profile, endpointPath),
   openSessionWindow: (sessionId, opts) => ipcRenderer.invoke('hermes:window:openSession', sessionId, opts),
   openWindow: () => ipcRenderer.invoke('hermes:window:openInstance'),
   claimAmbientCue: key => ipcRenderer.invoke('hermes:ambient:claim', key),
@@ -99,6 +99,12 @@ contextBridge.exposeInMainWorld('hermesDesktop', {
     logout: () => ipcRenderer.invoke('hermes:cloud:logout'),
     discover: org => ipcRenderer.invoke('hermes:cloud:discover', org),
     agentSignIn: dashboardUrl => ipcRenderer.invoke('hermes:cloud:agent-sign-in', dashboardUrl)
+  },
+  eva: {
+    status: () => ipcRenderer.invoke('hermes:eva:status'),
+    signIn: () => ipcRenderer.invoke('hermes:eva:sign-in'),
+    signOut: () => ipcRenderer.invoke('hermes:eva:sign-out'),
+    refresh: () => ipcRenderer.invoke('hermes:eva:refresh')
   },
   profile: {
     get: () => ipcRenderer.invoke('hermes:profile:get'),

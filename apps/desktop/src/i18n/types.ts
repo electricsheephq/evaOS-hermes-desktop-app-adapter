@@ -91,6 +91,16 @@ export interface Translations {
     off: string
   }
 
+  quickEntry: {
+    inputLabel: string
+    askPlaceholder: string
+    disconnectedPlaceholder: string
+    sendTo: string
+    targetLabel: string
+    currentChat: string
+    newSession: string
+  }
+
   fileMenu: {
     revealFinder: string
     revealExplorer: string
@@ -727,6 +737,7 @@ export interface Translations {
       collapse: string
       connectAnother: string
       otherProviders: string
+      reauthenticate: string
       disconnect: string
       disconnectInTerminal: string
       removeConfirm: (provider: string) => string

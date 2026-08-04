@@ -1,5 +1,7 @@
-import { JsonRpcGatewayClient } from '@hermes/shared'
+import { JsonRpcGatewayClient, resolveGatewayWsUrl } from '@hermes/shared'
 
+import { isManagedEvaosAgent } from '@/i18n/managed-brand'
+import { assertManagedGatewayMethodAllowed } from '@/lib/managed-ui-policy'
 import { reconnectBackoffDelayMs } from '@/lib/reconnect-backoff'
 import type {
   ActionResponse,
@@ -227,12 +229,23 @@ export type {
 export class HermesGateway extends JsonRpcGatewayClient {
   constructor() {
     super({
-      closedErrorMessage: 'Hermes gateway connection closed',
-      connectErrorMessage: 'Could not connect to Hermes gateway',
+      closedErrorMessage: 'evaOS Agent gateway connection closed',
+      connectErrorMessage: 'Could not connect to evaOS Agent gateway',
       createRequestId: nextId => nextId,
-      notConnectedErrorMessage: 'Hermes gateway is not connected',
+      notConnectedErrorMessage: 'evaOS Agent gateway is not connected',
       requestTimeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS
     })
+  }
+
+  override request<T>(
+    method: string,
+    params: Record<string, unknown> = {},
+    timeoutMs?: number,
+    signal?: AbortSignal
+  ): Promise<T> {
+    assertManagedGatewayMethodAllowed(method, isManagedEvaosAgent())
+
+    return super.request<T>(method, params, timeoutMs, signal)
   }
 }
 
@@ -293,7 +306,7 @@ function pluginPathSuffix(caller: string, path: string): string {
  *  declared-capability seam; today the namespace IS the boundary. */
 export async function pluginRest<T>(pluginId: string, path: string, opts: PluginRestOptions = {}): Promise<T> {
   if (!window.hermesDesktop?.api) {
-    throw new Error('Hermes desktop bridge unavailable')
+    throw new Error('evaOS Agent desktop bridge unavailable')
   }
 
   const suffix = pluginPathSuffix('pluginRest', path)
@@ -310,31 +323,37 @@ export async function pluginRest<T>(pluginId: string, path: string, opts: Plugin
 
 /** The plugin WebSocket door — the live twin of `pluginRest`, scoped the same
  *  way: `path` is relative to `/api/plugins/<pluginId>` ('/events' → the
- *  plugin's own event stream). Token-mode backends auth via the same query
- *  credential the app's own sockets use; OAuth remotes resolve null (callers
- *  keep their polling fallback — every consumer must have one anyway, since a
- *  socket can drop). Auto-reconnects with backoff until disposed. */
+ *  plugin's own event stream). The bridge mints a fresh credential for this
+ *  exact endpoint and active profile; managed tickets never expose the runtime
+ *  secret to the renderer. Auto-reconnects with backoff until disposed. */
 export function pluginSocket(pluginId: string, path: string, onMessage: (data: unknown) => void): () => void {
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(pluginId)) {
+    throw new Error(`pluginSocket: invalid plugin id "${pluginId}"`)
+  }
+
   const suffix = pluginPathSuffix('pluginSocket', path)
+  const endpointPath = `/api/plugins/${pluginId}${suffix}`
 
   let socket: null | WebSocket = null
   let disposed = false
   let attempt = 0
 
   const connect = async () => {
-    const connection = await window.hermesDesktop.getConnection().catch(() => null)
+    const desktop = window.hermesDesktop
+    const profile = getApiRequestProfile()
+    const connection = await desktop?.getConnection(profile).catch(() => null)
 
-    // No bridge / OAuth cookie auth (WS tickets are single-use, core-managed):
-    // stay on the polling fallback rather than half-working.
-    if (disposed || !connection || connection.authMode === 'oauth') {
+    if (disposed || !desktop || !connection) {
       return
     }
 
-    const base = connection.baseUrl.replace(/^http/, 'ws')
-    const join = suffix.includes('?') ? '&' : '?'
-    socket = new WebSocket(
-      `${base}/api/plugins/${pluginId}${suffix}${join}token=${encodeURIComponent(connection.token)}`
-    )
+    const wsUrl = await resolveGatewayWsUrl(desktop, connection, endpointPath).catch(() => null)
+
+    if (disposed || !wsUrl) {
+      return
+    }
+
+    socket = new WebSocket(wsUrl)
 
     socket.onmessage = event => {
       attempt = 0

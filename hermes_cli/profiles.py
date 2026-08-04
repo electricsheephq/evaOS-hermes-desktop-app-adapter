@@ -369,7 +369,12 @@ def get_profile_dir(name: str) -> Path:
     canon = normalize_profile_name(name)
     if canon == "default":
         return _get_default_hermes_home()
-    return _get_profiles_root() / canon
+    safe_name = os.path.basename(canon)
+    if safe_name != canon:
+        raise ValueError(f"Invalid profile name {name!r}: path components are not allowed")
+    validate_profile_name(safe_name)
+    # safe_name is both basename-contained and restricted to _PROFILE_ID_RE.
+    return _get_profiles_root() / safe_name  # lgtm[py/path-injection]
 
 
 def profile_exists(name: str) -> bool:
@@ -377,7 +382,16 @@ def profile_exists(name: str) -> bool:
     canon = normalize_profile_name(name)
     if canon == "default":
         return True
-    return get_profile_dir(canon).is_dir()
+    validate_profile_name(canon)
+    try:
+        # Compare the validated profile name with existing directory entries
+        # instead of using request-derived text in a filesystem path.
+        return any(
+            entry.name == canon and entry.is_dir()
+            for entry in _get_profiles_root().iterdir()
+        )
+    except FileNotFoundError:
+        return False
 
 
 # ---------------------------------------------------------------------------

@@ -45,6 +45,16 @@ export const zhHant = defineLocale({
     off: '關閉'
   },
 
+  quickEntry: {
+    inputLabel: '快速輸入',
+    askPlaceholder: '詢問 evaOS Agent…',
+    disconnectedPlaceholder: '未連線 — 開啟 evaOS Agent 以重新連線',
+    sendTo: '傳送至',
+    targetLabel: '目標工作階段',
+    currentChat: '目前聊天',
+    newSession: '新工作階段'
+  },
+
   fileMenu: {
     revealFinder: '在 Finder 中顯示',
     revealExplorer: '在檔案總管中顯示',
@@ -862,6 +872,7 @@ export const zhHant = defineLocale({
       collapse: '收合',
       connectAnother: '連結其他提供方',
       otherProviders: '其他提供方',
+      reauthenticate: '重新驗證',
       removeConfirm: provider => `移除 ${provider}？`,
       removeKeyManaged: provider => `${provider} 由 API 金鑰設定。請從 API Keys 中移除。`,
       removedTitle: '帳號已移除',

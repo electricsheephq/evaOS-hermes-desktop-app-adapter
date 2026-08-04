@@ -45,6 +45,16 @@ export const ja = defineLocale({
     off: 'オフ'
   },
 
+  quickEntry: {
+    inputLabel: 'クイック入力',
+    askPlaceholder: 'evaOS Agent に質問…',
+    disconnectedPlaceholder: '未接続です — evaOS Agent を開いて再接続してください',
+    sendTo: '送信先',
+    targetLabel: '対象セッション',
+    currentChat: '現在のチャット',
+    newSession: '新しいセッション'
+  },
+
   fileMenu: {
     revealFinder: 'Finder で表示',
     revealExplorer: 'エクスプローラーで表示',
@@ -891,6 +901,7 @@ export const ja = defineLocale({
       collapse: '折りたたむ',
       connectAnother: '別のプロバイダーを接続',
       otherProviders: 'その他のプロバイダー',
+      reauthenticate: '再認証',
       removeConfirm: provider => `${provider} を削除しますか？`,
       removeKeyManaged: provider => `${provider} は API キーで設定されています。API Keys から削除してください。`,
       removedTitle: 'アカウントを削除しました',
