@@ -14,6 +14,7 @@ function waitForGatewayOpen(gateway: HermesGateway, timeoutMs = 15_000): Promise
 
   return new Promise((resolve, reject) => {
     let settled = false
+
     let offState = () => {}
 
     const finish = (error?: Error) => {

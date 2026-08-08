@@ -378,7 +378,9 @@ describe('workspaceCwdForNewSession', () => {
       dir: '/Users/test/local-project',
       resolvedCwd: '/Users/test/local-project'
     }))
+
     const sanitizeWorkspaceCwd = vi.fn(async (cwd: string) => ({ cwd, sanitized: false }))
+
     ;(window as unknown as { hermesDesktop: unknown }).hermesDesktop = {
       sanitizeWorkspaceCwd,
       settings: { getDefaultProjectDir }
@@ -402,13 +404,16 @@ describe('workspaceCwdForNewSession', () => {
 
   it('adopts the remote workspace when the gateway switches during an async local settings read', async () => {
     let resolveSettings: (value: { defaultLabel: string; dir: string; resolvedCwd: string }) => void = () => undefined
+
     const getDefaultProjectDir = vi.fn(
       () =>
         new Promise<{ defaultLabel: string; dir: string; resolvedCwd: string }>(resolve => {
           resolveSettings = resolve
         })
     )
+
     const sanitizeWorkspaceCwd = vi.fn(async (cwd: string) => ({ cwd, sanitized: false }))
+
     ;(window as unknown as { hermesDesktop: unknown }).hermesDesktop = {
       sanitizeWorkspaceCwd,
       settings: { getDefaultProjectDir }
@@ -436,17 +441,20 @@ describe('workspaceCwdForNewSession', () => {
 
   it('adopts the remote workspace when the gateway switches during async cwd sanitization', async () => {
     let resolveSanitize: (value: { cwd: string; sanitized: boolean }) => void = () => undefined
+
     const getDefaultProjectDir = vi.fn(async () => ({
       defaultLabel: '/Users/test',
       dir: '/Users/test/local-project',
       resolvedCwd: '/Users/test/local-project'
     }))
+
     const sanitizeWorkspaceCwd = vi.fn(
       () =>
         new Promise<{ cwd: string; sanitized: boolean }>(resolve => {
           resolveSanitize = resolve
         })
     )
+
     ;(window as unknown as { hermesDesktop: unknown }).hermesDesktop = {
       sanitizeWorkspaceCwd,
       settings: { getDefaultProjectDir }

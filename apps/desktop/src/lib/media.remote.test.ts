@@ -197,9 +197,11 @@ describe('resolveMediaPlaybackSrc', () => {
 
   it('preserves managed remote media bridge rejections without local fallback', async () => {
     const rejection = new Error('managed media grant expired')
+
     const getMediaStreamUrl = vi.fn(async () => {
       throw rejection
     })
+
     vi.stubGlobal('window', { hermesDesktop: { api: vi.fn(), getMediaStreamUrl } })
     $connection.set({
       mode: 'remote',

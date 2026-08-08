@@ -91,12 +91,14 @@ import {
 import { describeDevCdpDecision, resolveDevCdpPort } from './dev-cdp'
 import { installEmbedReferer } from './embed-referer'
 const { createEvaAppUpdater, safeApplyFailure, safeCheckFailure } = require('./eva-app-updater.cjs')
+
 const {
   assertEvaManagedLocalMutationAllowed,
   assertEvaManagedLocalTerminalAllowed,
   buildEvaAccountRendererResetScript,
   EVA_MANAGED_POLICY
 } = require('./eva-managed.cjs')
+
 const { createEvaMediaGrantCodec } = require('./eva-media-grant.cjs')
 const { createEvaManagedRuntime } = require('./eva-runtime.cjs')
 import { createEventDeduper } from './event-dedupe'
@@ -636,12 +638,14 @@ const PROFILE_NAME_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/
 // tracks main. User can also override at runtime via
 // hermesDesktop.updates.setBranch().
 const DEFAULT_UPDATE_BRANCH = EVA_MANAGED_BUILD ? EVA_MANAGED_POLICY.updateChannel : 'main'
+
 // desktop.log lives under HERMES_HOME/logs/ so it sits next to agent.log,
 // errors.log, gateway.log produced by hermes_logging.setup_logging — one log
 // directory per user, regardless of which UI surface produced the line.
 const DESKTOP_LOG_PATH = EVA_MANAGED_BUILD
   ? path.join(app.getPath('userData'), 'logs', 'evaos-agent-desktop.log')
   : path.join(HERMES_HOME, 'logs', 'desktop.log')
+
 const DESKTOP_LOG_FLUSH_MS = 120
 const DESKTOP_LOG_BUFFER_MAX_CHARS = 64 * 1024
 // Bound desktop.log on disk. It is an append-only forensic log, so a boot loop
@@ -1045,9 +1049,11 @@ function registerMediaProtocol() {
       }
 
       const grant = evaMediaGrants.verify(mediaUrl.pathname.replace(/^\/+/, ''))
+
       if (!grant) {
         return new Response('Managed media grant expired or invalid', { status: 403 })
       }
+
       if (!STREAMABLE_MEDIA_EXTS.has(path.extname(grant.path).toLowerCase())) {
         return new Response('Unsupported media type', { status: 415 })
       }
@@ -4309,6 +4315,7 @@ function multipartBody(upload) {
 function httpStatusError(statusCode, detail) {
   const error = new Error(`${statusCode}: ${detail}`) as Error & { statusCode: number }
   error.statusCode = statusCode
+
   return error
 }
 
@@ -6881,15 +6888,18 @@ async function resetEvaRendererSessions() {
       window.close()
     }
   }
+
   if (!mainWindow || mainWindow.isDestroyed()) {
     return
   }
+
   const rendererSession = mainWindow.webContents.session
   await mainWindow.webContents.executeJavaScript(buildEvaAccountRendererResetScript(), true).catch(() => undefined)
   await Promise.allSettled([
     rendererSession.clearStorageData({ storages: ['cachestorage', 'indexdb', 'serviceworkers'] }),
     rendererSession.clearCache()
   ])
+
   if (!mainWindow.isDestroyed()) {
     mainWindow.reload()
   }
@@ -6925,9 +6935,11 @@ const evaManagedRuntime = createEvaManagedRuntime({
     if (!mainWindow || mainWindow.isDestroyed()) {
       return
     }
+
     if (mainWindow.isMinimized()) {
       mainWindow.restore()
     }
+
     mainWindow.show()
     mainWindow.focus()
   }
@@ -8501,6 +8513,7 @@ async function prepareProfileDeleteRequest(request) {
 async function startHermes() {
   if (EVA_MANAGED_BUILD) {
     await advanceBootProgress('backend.resolve', 'Resolving your managed evaOS agent', 8)
+
     try {
       const remote = await evaManagedRuntime.resolveBackend()
       await advanceBootProgress('backend.remote', 'Connecting to your managed evaOS agent', 30)
@@ -8511,6 +8524,7 @@ async function startHermes() {
         running: true,
         error: null
       })
+
       return { ...remote, logs: hermesLog.slice(-80), ...getWindowState() }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
@@ -9878,6 +9892,7 @@ ipcMain.handle('hermes:bootstrap:reset', async () => {
   if (EVA_MANAGED_BUILD) {
     throw new Error('evaOS Agent uses a managed remote runtime; local repair is unavailable.')
   }
+
   // Renderer's "Reload and retry" path. Clear the latched failure and
   // reset connection state so the next startHermes() call restarts the
   // full backend flow (including a fresh runBootstrap pass).
@@ -9957,6 +9972,7 @@ ipcMain.handle('hermes:bootstrap:cancel', async () => {
   if (EVA_MANAGED_BUILD) {
     throw new Error('evaOS Agent uses a managed remote runtime; local installation is unavailable.')
   }
+
   // Renderer's Cancel button during first-launch install. Abort the running
   // install script (SIGTERM via the runner's abortSignal). runBootstrap
   // resolves with { cancelled: true }, which surfaces the recovery overlay.
@@ -10037,12 +10053,14 @@ ipcMain.handle('hermes:connection-config:test', async (_event, payload) => {
   if (EVA_MANAGED_BUILD) {
     throw new Error('evaOS Agent gateway settings are managed by Electric Sheep.')
   }
+
   return testDesktopConnectionConfig(payload)
 })
 ipcMain.handle('hermes:connection-config:probe', async (_event, rawUrl) => {
   if (EVA_MANAGED_BUILD) {
     throw new Error('evaOS Agent gateway settings are managed by Electric Sheep.')
   }
+
   return probeRemoteAuthMode(rawUrl)
 })
 ipcMain.handle('hermes:connection-config:oauth-login', async (_event, rawUrl) => {
@@ -10114,6 +10132,7 @@ ipcMain.handle('hermes:connection-config:oauth-logout', async (_event, rawUrl) =
   if (EVA_MANAGED_BUILD) {
     throw new Error('evaOS Agent gateway settings are managed by Electric Sheep.')
   }
+
   const baseUrl = rawUrl ? normalizeRemoteBaseUrl(rawUrl) : ''
   await clearOauthSession(baseUrl || undefined)
 
@@ -10147,6 +10166,7 @@ ipcMain.handle('hermes:cloud:login', async () => {
   if (EVA_MANAGED_BUILD) {
     throw new Error('Cloud selection is managed by Electric Sheep.')
   }
+
   await openPortalLoginWindow()
 
   return { ok: true, signedIn: await hasLivePortalSession() }
@@ -10155,6 +10175,7 @@ ipcMain.handle('hermes:cloud:logout', async () => {
   if (EVA_MANAGED_BUILD) {
     throw new Error('Cloud selection is managed by Electric Sheep.')
   }
+
   await clearOauthSession(resolvePortalBaseUrl())
 
   return { ok: true, signedIn: await hasLivePortalSession() }
@@ -10163,6 +10184,7 @@ ipcMain.handle('hermes:cloud:discover', async (_event, org) => {
   if (EVA_MANAGED_BUILD) {
     throw new Error('Cloud selection is managed by Electric Sheep.')
   }
+
   // Returns { agents } or { needsOrgSelection: true, orgs }. `org` (optional)
   // scopes discovery to a chosen org for multi-org users.
   return discoverCloudAgents(typeof org === 'string' && org ? org : undefined)
@@ -10171,6 +10193,7 @@ ipcMain.handle('hermes:cloud:agent-sign-in', async (_event, dashboardUrl) => {
   if (EVA_MANAGED_BUILD) {
     throw new Error('Cloud selection is managed by Electric Sheep.')
   }
+
   // Silent per-agent sign-in via the shared portal session. Returns the agent's
   // gateway baseUrl + whether its session cookie landed; the renderer then
   // saves a cloud-mode connection pointed at this dashboardUrl.
@@ -10180,6 +10203,7 @@ ipcMain.handle('hermes:connection-config:save', async (_event, payload) => {
   if (EVA_MANAGED_BUILD) {
     throw new Error('evaOS Agent gateway settings are managed by Electric Sheep.')
   }
+
   const config = coerceDesktopConnectionConfig(payload)
   writeDesktopConnectionConfig(config)
 
@@ -10189,6 +10213,7 @@ ipcMain.handle('hermes:connection-config:apply', async (_event, payload) => {
   if (EVA_MANAGED_BUILD) {
     throw new Error('evaOS Agent gateway settings are managed by Electric Sheep.')
   }
+
   const config = coerceDesktopConnectionConfig(payload)
   writeDesktopConnectionConfig(config)
 
@@ -10233,8 +10258,10 @@ ipcMain.handle('hermes:profile:set', async (_event, name) => {
     if (!name || name === 'default') {
       return { profile: 'default' }
     }
+
     throw new Error('evaOS Agent uses the agent assigned by Electric Sheep; Desktop profiles cannot change it.')
   }
+
   const next = writeActiveDesktopProfile(name)
 
   // Switching profiles is a backend re-home: relaunch the dashboard under the
@@ -10702,11 +10729,13 @@ ipcMain.handle('hermes:media:stream-url', async (_event, filePath, profile) => {
   }
 
   const candidate = String(filePath || '').trim()
+
   if (!candidate || !STREAMABLE_MEDIA_EXTS.has(path.extname(candidate).toLowerCase())) {
     throw new Error('Unsupported managed media path')
   }
 
   const grant = evaMediaGrants.mint({ path: candidate, profile })
+
   return `${MEDIA_PROTOCOL}://managed/${grant}`
 })
 
@@ -11749,6 +11778,7 @@ ipcMain.handle('hermes:updates:branch:set', async (_event, name) => {
   if (EVA_MANAGED_BUILD) {
     throw new Error('Updates are managed by Electric Sheep.')
   }
+
   const branch = typeof name === 'string' && name.trim() ? name.trim() : DEFAULT_UPDATE_BRANCH
   writeDesktopUpdateConfig({ branch })
 

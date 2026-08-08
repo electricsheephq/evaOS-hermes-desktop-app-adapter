@@ -266,6 +266,7 @@ export function setApiRequestProfile(profile: null | string): void {
   }
 
   _apiProfile = next
+
   for (const listener of apiProfileListeners) {
     listener(next)
   }
@@ -378,6 +379,7 @@ export function pluginSocket(pluginId: string, path: string, onMessage: (data: u
     if (!immediate) {
       attempt += 1
     }
+
     reconnectTimer = window.setTimeout(() => {
       reconnectTimer = null
       void connect()
@@ -393,8 +395,10 @@ export function pluginSocket(pluginId: string, path: string, onMessage: (data: u
     if (disposed || connectingGeneration !== generation) {
       return
     }
+
     if (!desktop || !connection) {
       scheduleReconnect()
+
       return
     }
 
@@ -413,8 +417,10 @@ export function pluginSocket(pluginId: string, path: string, onMessage: (data: u
     if (disposed || connectingGeneration !== generation) {
       return
     }
+
     if (!wsUrl) {
       scheduleReconnect()
+
       return
     }
 
@@ -439,6 +445,7 @@ export function pluginSocket(pluginId: string, path: string, onMessage: (data: u
       if (socket !== nextSocket) {
         return
       }
+
       socket = null
       scheduleReconnect()
     }

@@ -137,6 +137,7 @@ export async function ensureDefaultWorkspaceCwd(): Promise<void> {
 
   const alignRemoteWorkspace = () => {
     const remoteRemembered = getRememberedWorkspaceCwd()
+
     if (!$activeSessionId.get()) {
       setCurrentCwdTransient(remoteRemembered)
 
@@ -165,6 +166,7 @@ export async function ensureDefaultWorkspaceCwd(): Promise<void> {
   }
 
   await syncConfiguredDefaultProjectDir()
+
   if ($connection.get()?.mode === 'remote') {
     alignRemoteWorkspace()
 
@@ -176,11 +178,13 @@ export async function ensureDefaultWorkspaceCwd(): Promise<void> {
 
   if (configured) {
     const { cwd } = await sanitize(configured)
+
     if ($connection.get()?.mode === 'remote') {
       alignRemoteWorkspace()
 
       return
     }
+
     seedLiveCwd(cwd)
 
     return
@@ -188,11 +192,13 @@ export async function ensureDefaultWorkspaceCwd(): Promise<void> {
 
   if (remembered) {
     const { cwd } = await sanitize(remembered)
+
     if ($connection.get()?.mode === 'remote') {
       alignRemoteWorkspace()
 
       return
     }
+
     seedLiveCwd(cwd)
   }
 }
