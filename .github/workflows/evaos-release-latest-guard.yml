@@ -66,7 +66,7 @@ jobs:
           gh api \
             --method PATCH \
             "repos/${REPOSITORY}/releases/${desktop_release_id}" \
-            -F make_latest=true \
+            -f make_latest=true \
             --silent
 
           latest_tag="$(
