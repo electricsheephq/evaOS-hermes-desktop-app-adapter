@@ -213,6 +213,121 @@ def test_smart_mode_uses_native_guardian_without_a_second_prompt(verdict, allowe
     assert (result is None) is allowed
 
 
+def test_composio_write_always_uses_smart_guardian_even_when_yolo_is_active():
+    from tools import approval
+
+    state_key = mcp_tool._server_state_key("composio")
+    mcp_tool._tool_read_only_hints[state_key] = {"send_email": False}
+    mcp_tool._lazy_server_configs[state_key] = {
+        "auth": "evaos_lease",
+        "provider": "composio",
+    }
+    session_key = "composio-no-yolo"
+    token = approval.set_current_session_key(session_key)
+    approval.enable_session_yolo(session_key)
+    try:
+        with patch(
+            "tools.approval._smart_approve",
+            return_value="deny",
+        ) as smart, patch(
+            "tools.approval.request_elicitation_consent"
+        ) as consent:
+            blocked = mcp_tool._mcp_tool_approval_check(
+                "composio",
+                "send_email",
+                {"to": "owner@example.com"},
+                state_key,
+            )
+    finally:
+        approval.clear_session(session_key)
+        approval.reset_current_session_key(token)
+        mcp_tool._lazy_server_configs.pop(state_key, None)
+
+    smart.assert_called_once()
+    consent.assert_not_called()
+    assert "BLOCKED by smart approval" in json.loads(blocked)["error"]
+
+
+def test_composio_exact_read_only_hint_is_the_only_approval_bypass():
+    state_key = mcp_tool._server_state_key("composio")
+    mcp_tool._tool_read_only_hints[state_key] = {
+        "get_profile": True,
+        "truthy_hint": False,
+    }
+    mcp_tool._lazy_server_configs[state_key] = {
+        "auth": "evaos_lease",
+        "provider": "composio",
+    }
+    try:
+        with patch("tools.approval._smart_approve") as smart:
+            assert mcp_tool._mcp_tool_approval_check(
+                "composio",
+                "get_profile",
+                {},
+                state_key,
+            ) is None
+        smart.assert_not_called()
+
+        with patch(
+            "tools.approval._smart_approve",
+            return_value="deny",
+        ) as smart:
+            blocked = mcp_tool._mcp_tool_approval_check(
+                "composio",
+                "truthy_hint",
+                {},
+                state_key,
+            )
+        smart.assert_called_once()
+        assert "BLOCKED" in json.loads(blocked)["error"]
+    finally:
+        mcp_tool._lazy_server_configs.pop(state_key, None)
+
+
+def test_composio_approval_policy_is_isolated_by_profile_home(tmp_path):
+    jane_home = str((tmp_path / "jane").resolve())
+    louis_home = str((tmp_path / "louis").resolve())
+    jane_key = (jane_home, "composio")
+    louis_key = (louis_home, "composio")
+    mcp_tool._tool_read_only_hints[jane_key] = {"send_email": False}
+    mcp_tool._tool_read_only_hints[louis_key] = {"send_email": False}
+    mcp_tool._lazy_server_configs[jane_key] = {
+        "auth": "evaos_lease",
+        "provider": "composio",
+    }
+    mcp_tool._lazy_server_configs[louis_key] = {
+        "auth": "evaos_lease",
+        "app_slug": "gmail",
+    }
+    try:
+        with patch(
+            "tools.approval._get_approval_mode",
+            return_value="off",
+        ), patch(
+            "tools.approval._smart_approve",
+            return_value="deny",
+        ) as smart:
+            jane = mcp_tool._mcp_tool_approval_check(
+                "composio",
+                "send_email",
+                {},
+                jane_key,
+            )
+            louis = mcp_tool._mcp_tool_approval_check(
+                "composio",
+                "send_email",
+                {},
+                louis_key,
+            )
+    finally:
+        mcp_tool._lazy_server_configs.pop(jane_key, None)
+        mcp_tool._lazy_server_configs.pop(louis_key, None)
+
+    assert "BLOCKED" in json.loads(jane)["error"]
+    assert louis is None
+    smart.assert_called_once()
+
+
 def test_multiplex_write_approval_uses_owning_profile_mode(tmp_path, monkeypatch):
     pool_home = tmp_path / "pool"
     profile_home = tmp_path / "profile"

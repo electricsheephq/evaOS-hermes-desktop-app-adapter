@@ -119,6 +119,7 @@ _GLOBAL_ENV_EXACT = frozenset({
     # per-profile provider grant pointer intentionally remains scoped.
     "EVAOS_DESKTOP_RUNTIME_SESSION_URL",
     "PIPEDREAM_AGENT_BROKER_SECRET_FILE",
+    "COMPOSIO_AGENT_BROKER_SECRET_FILE",
     "CREDENTIALS_DIRECTORY",
 })
 _GLOBAL_ENV_PREFIXES = (

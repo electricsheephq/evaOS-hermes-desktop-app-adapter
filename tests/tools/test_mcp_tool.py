@@ -120,7 +120,7 @@ class TestLoadMCPConfig:
 
 
 class TestMCPParallelSafetyProvenance:
-    def test_same_display_server_state_and_handlers_are_profile_scoped(
+    def test_same_composio_name_keeps_connections_and_leases_profile_scoped(
         self, tmp_path, monkeypatch
     ):
         import tools.mcp_tool as mcp_tool
@@ -131,13 +131,17 @@ class TestMCPParallelSafetyProvenance:
         )
 
         monkeypatch.setattr(secret_scope, "_MULTIPLEX_ACTIVE", True)
-        server_name = "evaos-pipedream-google_sheets"
+        server_name = "composio"
         home_a = tmp_path / "profile-a"
         home_b = tmp_path / "profile-b"
 
         token = set_hermes_home_override(str(home_a))
         try:
             server_a = mcp_tool.MCPServerTask(server_name)
+            server_a._config = {
+                "auth": "evaos_lease",
+                "provider": "composio",
+            }
             server_a.session = object()
             handler_a = mcp_tool._make_tool_handler(
                 server_name,
@@ -150,6 +154,10 @@ class TestMCPParallelSafetyProvenance:
         token = set_hermes_home_override(str(home_b))
         try:
             server_b = mcp_tool.MCPServerTask(server_name)
+            server_b._config = {
+                "auth": "evaos_lease",
+                "provider": "composio",
+            }
             server_b.session = object()
             handler_b = mcp_tool._make_tool_handler(
                 server_name,

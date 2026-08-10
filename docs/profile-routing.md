@@ -115,3 +115,27 @@ activates the per-profile runtime scope (per-profile `HERMES_HOME`, secret scope
 profile-namespaced session keys); routing is the decision layer that picks *which*
 profile a given guild/channel/thread lands in. With multiplexing off, `profile_routes`
 is ignored entirely — behavior is byte-identical to a single-profile gateway.
+
+## Managed Composio MCP per profile
+
+A managed profile enables the evaOS Composio proxy without storing a static
+MCP URL or Composio project key:
+
+```yaml
+mcp_servers:
+  composio:
+    auth: evaos_lease
+    provider: composio
+```
+
+The runtime reads `COMPOSIO_AGENT_BROKER_SECRET_FILE`,
+`COMPOSIO_PROVIDER_GRANT_FILE`, and `COMPOSIO_BINDING_WITNESS_FILE` only as
+root-owned files or systemd `%d/` credentials. The broker path is
+deployment-wide; the grant and binding pointers are profile-scoped. The
+five-minute proxy URL and bearer remain in the owning server task's memory.
+
+The state key remains `(resolved HERMES_HOME, server_name)`. Two profiles may
+therefore both use the display name `composio` without sharing connections,
+refreshes, tool annotations, approvals, or cached leases. An exact MCP
+`readOnlyHint=true` may bypass approval; every other managed Composio tool is
+sent through smart approval even if a process or session enabled yolo mode.

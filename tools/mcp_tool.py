@@ -45,6 +45,9 @@ Example config::
       pipedream_google_sheets:
         auth: evaos_lease     # managed in-memory evaOS lease; no static URL
         app_slug: google_sheets
+      composio:
+        auth: evaos_lease
+        provider: composio    # exact grant + binding come from managed files
       searxng:
         url: "http://localhost:8000/sse"
         transport: sse       # use SSE transport instead of Streamable HTTP
@@ -1930,9 +1933,10 @@ class MCPServerTask:
         # parked→revived transition exactly once.
         self._was_parked: bool = False
         self._auth_type: str = ""
-        # Managed Pipedream credentials remain in this in-memory lease manager
-        # across transport reconnects.  Neither the broker secret nor provider
-        # grant is retained here; the source rereads them only for a mint.
+        # Managed provider credentials remain in this in-memory lease manager
+        # across transport reconnects. Neither the broker secret nor
+        # provider authority is retained here; the source rereads it only for
+        # a mint.
         self._evaos_lease_manager: Optional[Any] = None
         self._evaos_lease_auth: Optional[Any] = None
         self._refresh_lock = asyncio.Lock()
@@ -1995,17 +1999,30 @@ class MCPServerTask:
             from tools.evaos_mcp_lease import EvaosLeaseError
 
             raise EvaosLeaseError(
-                "managed MCP config may specify only app identity and "
+                "managed MCP config may specify only provider identity and "
                 "non-credential runtime options"
             )
-        app_slug = config.get("app_slug")
-        if (
-            not isinstance(app_slug, str)
-            or re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,127}", app_slug) is None
-        ):
+        provider = config.get("provider", "pipedream")
+        if provider not in {"pipedream", "composio"}:
             from tools.evaos_mcp_lease import EvaosLeaseError
 
-            raise EvaosLeaseError("managed MCP app slug is invalid")
+            raise EvaosLeaseError("managed MCP provider is invalid")
+        app_slug = config.get("app_slug")
+        if provider == "pipedream":
+            if (
+                not isinstance(app_slug, str)
+                or re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,127}", app_slug)
+                is None
+            ):
+                from tools.evaos_mcp_lease import EvaosLeaseError
+
+                raise EvaosLeaseError("managed MCP app slug is invalid")
+        elif app_slug is not None:
+            from tools.evaos_mcp_lease import EvaosLeaseError
+
+            raise EvaosLeaseError(
+                "managed Composio MCP does not accept an app slug"
+            )
 
     def _advertises_tools(self) -> bool:
         """Whether the server advertises the ``tools`` capability.
@@ -2859,7 +2876,8 @@ class MCPServerTask:
             if self._evaos_lease_manager is None:
                 source = EvaosLeaseSource(
                     profile_key=self.registration_home,
-                    app_slug=config["app_slug"],
+                    provider=config.get("provider", "pipedream"),
+                    app_slug=config.get("app_slug"),
                 )
                 self._evaos_lease_manager = EvaosLeaseManager(source=source)
                 self._evaos_lease_auth = EvaosLeaseHttpAuth(
@@ -3835,18 +3853,31 @@ def _mcp_tool_approval_check_scoped(
 ) -> Optional[str]:
     """Apply native Hermes approval semantics to one MCP tool call.
 
-    Read-only tools bypass the prompt.  Every other tool uses the existing
-    Hermes approval mode and session-yolo state; there is no MCP-specific
-    trust tier, allowlist, or second policy control.  The returned string is
-    an LLM-facing ``tool_error`` when the call must be blocked.
+    Read-only tools bypass the prompt. Every other tool normally uses the
+    existing Hermes approval mode and session-yolo state. Managed Composio is
+    the deliberate exception: it always uses smart approval and never inherits
+    yolo because hosted MCP modifiers cannot supply an independent guard. The
+    returned string is an LLM-facing ``tool_error`` when the call is blocked.
     """
+    approval_state_key = (
+        state_key if state_key is not None else _server_state_key(server_name)
+    )
     with _lock:
         read_only = (
             _tool_read_only_hints.get(
-                state_key if state_key is not None
-                else _server_state_key(server_name),
+                approval_state_key,
                 {},
             ).get(tool_name) is True
+        )
+        managed_config = _lazy_server_configs.get(approval_state_key)
+        managed_server = _servers.get(approval_state_key)
+        if managed_config is None and managed_server is not None:
+            managed_config = managed_server._config
+        composio_managed = bool(
+            isinstance(managed_config, dict)
+            and (managed_config.get("auth") or "").lower().strip()
+            == "evaos_lease"
+            and managed_config.get("provider") == "composio"
         )
     if read_only:
         return None
@@ -3856,7 +3887,11 @@ def _mcp_tool_approval_check_scoped(
 
     # ``is_approval_bypass_active`` is the canonical union of mode=off,
     # process --yolo, and the exact session's /yolo state.
-    if approval.is_approval_bypass_active():
+    # Private Composio connections never inherit mode=off, process --yolo,
+    # or session /yolo. Only an exact readOnlyHint=True annotation bypasses
+    # approval; every other Composio tool goes through the smart guardian and
+    # its normal human-escalation surface.
+    if not composio_managed and approval.is_approval_bypass_active():
         return None
 
     sensitive_keys = {
@@ -3924,7 +3959,7 @@ def _mcp_tool_approval_check_scoped(
         "external state because readOnlyHint=true was not supplied."
     )
 
-    if approval._get_approval_mode() == "smart":
+    if composio_managed or approval._get_approval_mode() == "smart":
         verdict = approval._smart_approve(display_target, description)
         if verdict == "approve":
             return None

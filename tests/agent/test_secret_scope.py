@@ -268,20 +268,28 @@ class TestEnvFileParsing:
         alpha_managed.mkdir(parents=True)
         beta_managed.mkdir()
         (alpha_home / ".env").write_text(
-            "PIPEDREAM_PROVIDER_GRANT_FILE=/user/alpha\n",
+            "PIPEDREAM_PROVIDER_GRANT_FILE=/user/alpha\n"
+            "COMPOSIO_PROVIDER_GRANT_FILE=/user/composio-alpha\n"
+            "COMPOSIO_BINDING_WITNESS_FILE=/user/binding-alpha\n",
             encoding="utf-8",
         )
         (beta_home / ".env").write_text(
-            "PIPEDREAM_PROVIDER_GRANT_FILE=/user/beta\n",
+            "PIPEDREAM_PROVIDER_GRANT_FILE=/user/beta\n"
+            "COMPOSIO_PROVIDER_GRANT_FILE=/user/composio-beta\n"
+            "COMPOSIO_BINDING_WITNESS_FILE=/user/binding-beta\n",
             encoding="utf-8",
         )
         (alpha_managed / ".env").write_text(
             "PIPEDREAM_PROVIDER_GRANT_FILE=%d/provider-alpha\n"
+            "COMPOSIO_PROVIDER_GRANT_FILE=%d/composio-alpha\n"
+            "COMPOSIO_BINDING_WITNESS_FILE=%d/binding-alpha\n"
             "CREDENTIALS_DIRECTORY=/wrong/managed-alpha\n",
             encoding="utf-8",
         )
         (beta_managed / ".env").write_text(
             "PIPEDREAM_PROVIDER_GRANT_FILE=%d/provider-beta\n"
+            "COMPOSIO_PROVIDER_GRANT_FILE=%d/composio-beta\n"
+            "COMPOSIO_BINDING_WITNESS_FILE=%d/binding-beta\n"
             "CREDENTIALS_DIRECTORY=/wrong/managed-beta\n",
             encoding="utf-8",
         )
@@ -292,6 +300,10 @@ class TestEnvFileParsing:
         monkeypatch.setenv(
             "CREDENTIALS_DIRECTORY",
             "/run/credentials/evaos-shared-gateway.service",
+        )
+        monkeypatch.setenv(
+            "COMPOSIO_AGENT_BROKER_SECRET_FILE",
+            "%d/composio-broker",
         )
         managed_scope.invalidate_managed_cache()
 
@@ -304,8 +316,22 @@ class TestEnvFileParsing:
         assert beta_scope["PIPEDREAM_PROVIDER_GRANT_FILE"] == (
             "%d/provider-beta"
         )
+        assert alpha_scope["COMPOSIO_PROVIDER_GRANT_FILE"] == (
+            "%d/composio-alpha"
+        )
+        assert beta_scope["COMPOSIO_PROVIDER_GRANT_FILE"] == (
+            "%d/composio-beta"
+        )
+        assert alpha_scope["COMPOSIO_BINDING_WITNESS_FILE"] == (
+            "%d/binding-alpha"
+        )
+        assert beta_scope["COMPOSIO_BINDING_WITNESS_FILE"] == (
+            "%d/binding-beta"
+        )
         assert "CREDENTIALS_DIRECTORY" not in alpha_scope
         assert "CREDENTIALS_DIRECTORY" not in beta_scope
+        assert "COMPOSIO_AGENT_BROKER_SECRET_FILE" not in alpha_scope
+        assert "COMPOSIO_AGENT_BROKER_SECRET_FILE" not in beta_scope
 
         ss.set_multiplex_active(True)
         alpha_token = ss.set_secret_scope(alpha_scope)
@@ -316,6 +342,15 @@ class TestEnvFileParsing:
             assert ss.get_secret("CREDENTIALS_DIRECTORY") == (
                 "/run/credentials/evaos-shared-gateway.service"
             )
+            assert ss.get_secret("COMPOSIO_PROVIDER_GRANT_FILE") == (
+                "%d/composio-alpha"
+            )
+            assert ss.get_secret("COMPOSIO_BINDING_WITNESS_FILE") == (
+                "%d/binding-alpha"
+            )
+            assert ss.get_secret("COMPOSIO_AGENT_BROKER_SECRET_FILE") == (
+                "%d/composio-broker"
+            )
         finally:
             ss.reset_secret_scope(alpha_token)
 
@@ -323,6 +358,12 @@ class TestEnvFileParsing:
         try:
             assert ss.get_secret("PIPEDREAM_PROVIDER_GRANT_FILE") == (
                 "%d/provider-beta"
+            )
+            assert ss.get_secret("COMPOSIO_PROVIDER_GRANT_FILE") == (
+                "%d/composio-beta"
+            )
+            assert ss.get_secret("COMPOSIO_BINDING_WITNESS_FILE") == (
+                "%d/binding-beta"
             )
         finally:
             ss.reset_secret_scope(beta_token)

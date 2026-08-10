@@ -78,6 +78,43 @@ def _lease_payload(expires_at: datetime, token="lease-token-1"):
         "expires_at": expires_at.isoformat(),
     }
 
+def _composio_source(tmp_path, *, profile_key="profile-a"):
+    broker = tmp_path / "composio-broker"
+    grant = tmp_path / "composio-grant"
+    binding = tmp_path / "composio-binding"
+    _write_secret(broker, "composio-broker-secret-under-test\n")
+    _write_secret(grant, "epg_composio_profile_1234567890\n")
+    _write_secret(
+        binding,
+        "70000000-0000-4000-8000-000000000001\n",
+    )
+    values = {
+        "EVAOS_DESKTOP_RUNTIME_SESSION_URL": (
+            "https://example.supabase.co/functions/v1/desktop-runtime-session"
+        ),
+        "COMPOSIO_AGENT_BROKER_SECRET_FILE": str(broker),
+        "COMPOSIO_PROVIDER_GRANT_FILE": str(grant),
+        "COMPOSIO_BINDING_WITNESS_FILE": str(binding),
+    }
+    source = EvaosLeaseSource(
+        profile_key=profile_key,
+        provider="composio",
+        secret_reader=values.get,
+        profile_resolver=lambda: profile_key,
+        root_uid=os.getuid(),
+    )
+    return source, broker, grant, binding
+
+
+def _composio_lease_payload(expires_at: datetime, token="evaos-lease-1"):
+    return {
+        "mcp_url": (
+            "https://example.supabase.co/functions/v1/composio-mcp-proxy"
+        ),
+        "headers": {"Authorization": f"Bearer {token}"},
+        "expires_at": expires_at.isoformat(),
+    }
+
 
 def test_source_defaults_service_uid_to_root_uid_without_geteuid(
     monkeypatch,
@@ -127,6 +164,46 @@ async def test_lease_request_body_contains_only_action_and_app_slug(tmp_path):
         "profile_id",
         "external_user_id",
         "agent_id",
+    } & calls[0][2].keys()
+
+
+@pytest.mark.asyncio
+async def test_composio_lease_uses_only_grant_and_exact_binding_witness(
+    tmp_path,
+):
+    now = datetime(2026, 8, 11, tzinfo=timezone.utc)
+    source, _, _, _ = _composio_source(tmp_path)
+    calls = []
+
+    async def transport(url, headers, payload):
+        calls.append((url, headers, payload))
+        return _Response(
+            200,
+            _composio_lease_payload(now + timedelta(minutes=10)),
+        )
+
+    manager = EvaosLeaseManager(
+        source=source,
+        transport=transport,
+        now=lambda: now,
+    )
+    lease = await manager.get_lease()
+
+    assert lease.mcp_url.endswith("/functions/v1/composio-mcp-proxy")
+    assert lease.headers == {"Authorization": "Bearer evaos-lease-1"}
+    assert calls[0][2] == {
+        "action": "composio_mcp_lease",
+        "binding_witness": "70000000-0000-4000-8000-000000000001",
+    }
+    assert calls[0][1]["X-Evaos-Provider-Grant"] == (
+        "epg_composio_profile_1234567890"
+    )
+    assert not {
+        "customer_id",
+        "customer_account_id",
+        "profile_id",
+        "agent_id",
+        "composio_subject",
     } & calls[0][2].keys()
 
 
@@ -240,6 +317,52 @@ async def test_http_auth_refreshes_and_retries_exactly_once_after_401(tmp_path):
     ]
 
 
+@pytest.mark.asyncio
+async def test_composio_http_auth_rereads_profile_grant_once_after_401(
+    tmp_path,
+):
+    now = datetime(2026, 8, 11, tzinfo=timezone.utc)
+    source, _, grant, _ = _composio_source(tmp_path)
+    grants_seen = []
+
+    async def transport(url, headers, payload):
+        grants_seen.append(headers["X-Evaos-Provider-Grant"])
+        return _Response(
+            200,
+            _composio_lease_payload(
+                now + timedelta(minutes=10),
+                token=f"evaos-lease-{len(grants_seen)}",
+            ),
+        )
+
+    manager = EvaosLeaseManager(
+        source=source,
+        transport=transport,
+        now=lambda: now,
+    )
+    auth = EvaosLeaseHttpAuth(manager)
+    request = httpx.Request(
+        "POST",
+        "https://example.supabase.co/functions/v1/composio-mcp-proxy",
+        headers={"x-pd-account-id": "must-be-removed"},
+        json={"jsonrpc": "2.0"},
+    )
+    flow = auth.async_auth_flow(request)
+
+    first = await anext(flow)
+    assert first.headers["Authorization"] == "Bearer evaos-lease-1"
+    assert "x-pd-account-id" not in first.headers
+    _write_secret(grant, "epg_composio_rotated_1234567890\n")
+    second = await flow.asend(httpx.Response(401, request=first))
+    assert second.headers["Authorization"] == "Bearer evaos-lease-2"
+    with pytest.raises(StopAsyncIteration):
+        await flow.asend(httpx.Response(401, request=second))
+    assert grants_seen == [
+        "epg_composio_profile_1234567890",
+        "epg_composio_rotated_1234567890",
+    ]
+
+
 def test_source_rejects_cross_profile_and_unsafe_files(tmp_path):
     source, _, grants = _source(tmp_path)
     source._profile_resolver = lambda: "profile-b"
@@ -248,6 +371,21 @@ def test_source_rejects_cross_profile_and_unsafe_files(tmp_path):
 
     source._profile_resolver = lambda: "profile-a"
     grants.chmod(0o644)
+    with pytest.raises(EvaosLeaseError, match="secure managed credential"):
+        source.read()
+
+
+def test_composio_source_rejects_malformed_or_unsafe_binding_witness(tmp_path):
+    source, _, _, binding = _composio_source(tmp_path)
+    _write_secret(binding, "jane\n")
+    with pytest.raises(EvaosLeaseError, match="binding witness"):
+        source.read()
+
+    _write_secret(
+        binding,
+        "70000000-0000-4000-8000-000000000001\n",
+    )
+    binding.chmod(0o644)
     with pytest.raises(EvaosLeaseError, match="secure managed credential"):
         source.read()
 
@@ -505,11 +643,64 @@ async def test_lease_response_is_strictly_validated(tmp_path, mutate):
         await manager.get_lease()
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda payload, now: payload.update(
+            mcp_url="https://attacker.supabase.co/functions/v1/composio-mcp-proxy"
+        ),
+        lambda payload, now: payload["headers"].update(
+            {"x-api-key": "must-never-reach-hermes"}
+        ),
+        lambda payload, now: payload.update(
+            mcp_url="https://example.supabase.co/functions/v1/other"
+        ),
+        lambda payload, now: payload.update(
+            expires_at=(now + timedelta(seconds=30)).isoformat()
+        ),
+    ],
+)
+async def test_composio_lease_response_is_strictly_validated(
+    tmp_path,
+    mutate,
+):
+    now = datetime(2026, 8, 11, tzinfo=timezone.utc)
+    source, _, _, _ = _composio_source(tmp_path)
+    payload = _composio_lease_payload(now + timedelta(minutes=10))
+    mutate(payload, now)
+
+    async def transport(url, headers, request_payload):
+        return _Response(200, payload)
+
+    manager = EvaosLeaseManager(
+        source=source,
+        transport=transport,
+        now=lambda: now,
+    )
+    with pytest.raises(EvaosLeaseError, match="lease response|expires too soon"):
+        await manager.get_lease()
+
+
 def test_managed_lease_config_is_http_without_a_static_url():
     task = MCPServerTask("pipedream-google-sheets")
     task._config = {
         "auth": "evaos_lease",
         "app_slug": "google_sheets",
+        "lazy": True,
+    }
+    task._auth_type = "evaos_lease"
+
+    task._validate_evaos_lease_config(task._config)
+
+    assert task._is_http() is True
+
+
+def test_composio_managed_lease_config_needs_no_static_url_or_app_slug():
+    task = MCPServerTask("composio")
+    task._config = {
+        "auth": "evaos_lease",
+        "provider": "composio",
         "lazy": True,
     }
     task._auth_type = "evaos_lease"
@@ -543,6 +734,28 @@ def test_managed_lease_config_rejects_connection_and_auth_overrides(override):
         task._validate_evaos_lease_config(config)
 
 
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"app_slug": "gmail"},
+        {"provider": "unknown"},
+        {"url": "https://app.composio.dev/tool_router/v3/trs_fake/mcp"},
+        {"headers": {"x-api-key": "must-not-be-accepted"}},
+    ],
+)
+def test_composio_config_rejects_identity_and_credential_overrides(override):
+    task = MCPServerTask("composio")
+    task._auth_type = "evaos_lease"
+    config = {
+        "auth": "evaos_lease",
+        "provider": "composio",
+        **override,
+    }
+
+    with pytest.raises(EvaosLeaseError, match="managed MCP|Composio"):
+        task._validate_evaos_lease_config(config)
+
+
 def test_schema_cache_fingerprint_includes_managed_app_identity():
     sheets = config_fingerprint(
         {"auth": "evaos_lease", "app_slug": "google_sheets"}
@@ -558,3 +771,14 @@ def test_schema_cache_fingerprint_includes_managed_app_identity():
     )
 
     assert len({sheets, drive, static}) == 3
+
+
+def test_schema_cache_fingerprint_separates_composio_provider_contract():
+    pipedream = config_fingerprint(
+        {"auth": "evaos_lease", "app_slug": "gmail"}
+    )
+    composio = config_fingerprint(
+        {"auth": "evaos_lease", "provider": "composio"}
+    )
+
+    assert composio != pipedream
