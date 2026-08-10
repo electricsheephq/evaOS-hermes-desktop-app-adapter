@@ -104,16 +104,14 @@ def _binding_scope_allows(
     """Enforce optional evaOS binding-derived DM/channel authorization.
 
     Legacy Mattermost configurations omit both keys and retain the existing
-    platform allowlist behavior. When either key is present, it is authoritative
-    for that chat type and an empty value denies that type.
+    platform allowlist behavior. Once either key is present, binding scope is
+    enabled and a missing or empty ACL denies that chat type.
     """
+    if not any(key in extra for key in ("dm_allowed_users", "channel_allowed_users")):
+        return True
     if channel_type == "D":
-        if "dm_allowed_users" not in extra:
-            return True
         return sender_id in _normalized_id_set(extra.get("dm_allowed_users"))
 
-    if "channel_allowed_users" not in extra:
-        return True
     configured = extra.get("channel_allowed_users")
     if isinstance(configured, dict):
         return sender_id in _normalized_id_set(configured.get(channel_id))

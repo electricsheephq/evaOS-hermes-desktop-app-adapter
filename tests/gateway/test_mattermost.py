@@ -447,6 +447,24 @@ class TestMattermostBindingScope:
         assert not self.adapter.handle_message.called
 
     @pytest.mark.asyncio
+    async def test_channel_only_config_denies_dm_when_counterpart_key_is_absent(self):
+        self.adapter.config.extra.update({
+            "channel_allowed_users": {"agent_private": ["user_allowed"]},
+        })
+        await self.adapter._handle_ws_event(self._event())
+        assert not self.adapter.handle_message.called
+
+    @pytest.mark.asyncio
+    async def test_dm_only_config_denies_channel_when_counterpart_key_is_absent(self):
+        self.adapter.config.extra.update({
+            "dm_allowed_users": ["user_allowed"],
+        })
+        await self.adapter._handle_ws_event(
+            self._event(channel_type="P", channel_id="agent_private")
+        )
+        assert not self.adapter.handle_message.called
+
+    @pytest.mark.asyncio
     async def test_legacy_config_without_binding_scope_preserves_existing_behavior(self):
         await self.adapter._handle_ws_event(self._event())
         assert self.adapter.handle_message.call_count == 1
@@ -650,4 +668,3 @@ async def test_mattermost_top_level_channel_post_is_thread_root():
     assert msg_event.source.thread_id == "top_post_123"
     assert msg_event.source.message_id == "top_post_123"
     assert msg_event.message_id == "top_post_123"
-
