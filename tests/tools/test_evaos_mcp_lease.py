@@ -11,13 +11,20 @@ import httpx
 import pytest
 
 from tools.evaos_mcp_lease import (
+    EvaosMcpCatalogConnection,
     EvaosLeaseError,
     EvaosLeaseHttpAuth,
     EvaosLeaseManager,
     EvaosLeaseSource,
+    catalog_connection_server_name,
+    fetch_evaos_mcp_catalog,
 )
 from tools.mcp_schema_cache import config_fingerprint
-from tools.mcp_tool import MCPServerTask
+from tools.mcp_tool import (
+    MCPServerTask,
+    _expand_evaos_catalog_servers,
+    _filter_suspicious_mcp_servers,
+)
 
 
 class _Response:
@@ -77,6 +84,153 @@ def _lease_payload(expires_at: datetime, token="lease-token-1"):
         },
         "expires_at": expires_at.isoformat(),
     }
+
+
+def _catalog_source(tmp_path, *, profile_key="profile-a"):
+    broker = tmp_path / "broker"
+    catalog = tmp_path / "catalog.json"
+    _write_secret(broker, "broker-secret-under-test\n")
+    _write_secret(
+        catalog,
+        json.dumps(
+            {
+                "schema_version": "evaos.pipedream_mcp_catalog.v1",
+                "bootstrap_grant_handle": "grant_catalog_bootstrap_123456",
+            }
+        ),
+    )
+    values = {
+        "EVAOS_DESKTOP_RUNTIME_SESSION_URL": (
+            "https://example.supabase.co/functions/v1/desktop-runtime-session"
+        ),
+        "PIPEDREAM_AGENT_BROKER_SECRET_FILE": str(broker),
+        "PIPEDREAM_PROVIDER_GRANT_FILE": str(catalog),
+    }
+    return values
+
+
+def test_catalog_lists_every_exact_connected_account_without_grant_handles(
+    tmp_path,
+):
+    values = _catalog_source(tmp_path)
+    calls = []
+
+    def transport(url, headers, payload):
+        calls.append((url, headers, payload))
+        return _Response(
+            200,
+            {
+                "schema_version": "evaos.pipedream_mcp_catalog.v1",
+                "connections": [
+                    {
+                        "connection_id":
+                            "30000000-0000-4000-8000-000000000001",
+                        "app_slug": "google_sheets",
+                        "account_id": "apn_sheets_primary",
+                        "display_name": "Primary Sheets",
+                    },
+                    {
+                        "connection_id":
+                            "30000000-0000-4000-8000-000000000002",
+                        "app_slug": "google_sheets",
+                        "account_id": "apn_sheets_secondary",
+                        "display_name": "Secondary Sheets",
+                    },
+                ],
+            },
+        )
+
+    connections = fetch_evaos_mcp_catalog(
+        profile_key="profile-a",
+        transport=transport,
+        secret_reader=values.get,
+        profile_resolver=lambda: "profile-a",
+        root_uid=os.getuid(),
+    )
+
+    assert [item.account_id for item in connections] == [
+        "apn_sheets_primary",
+        "apn_sheets_secondary",
+    ]
+    assert calls[0][2] == {"action": "pipedream_mcp_catalog"}
+    assert calls[0][1]["X-Evaos-Provider-Grant"] == (
+        "grant_catalog_bootstrap_123456"
+    )
+    assert "grant_catalog_bootstrap_123456" not in repr(connections)
+
+
+@pytest.mark.asyncio
+async def test_catalog_lease_selects_exact_connection_and_account(tmp_path):
+    now = datetime(2026, 8, 8, tzinfo=timezone.utc)
+    values = _catalog_source(tmp_path)
+    calls = []
+    connection_id = "30000000-0000-4000-8000-000000000002"
+    source = EvaosLeaseSource(
+        profile_key="profile-a",
+        app_slug="google_sheets",
+        connection_id=connection_id,
+        account_id="apn_sheets_secondary",
+        secret_reader=values.get,
+        profile_resolver=lambda: "profile-a",
+        root_uid=os.getuid(),
+    )
+
+    async def transport(url, headers, payload):
+        calls.append((url, headers, payload))
+        response = _lease_payload(now + timedelta(minutes=10))
+        response["headers"]["x-pd-account-id"] = "apn_sheets_secondary"
+        return _Response(200, response)
+
+    manager = EvaosLeaseManager(
+        source=source,
+        transport=transport,
+        now=lambda: now,
+    )
+    await manager.get_lease()
+
+    assert calls[0][2] == {
+        "action": "pipedream_mcp_lease",
+        "connection_id": connection_id,
+    }
+
+
+def test_catalog_expands_to_one_lazy_server_per_exact_account(monkeypatch):
+    connections = [
+        EvaosMcpCatalogConnection(
+            connection_id="30000000-0000-4000-8000-000000000001",
+            app_slug="google_sheets",
+            account_id="apn_sheets_primary",
+            display_name="Primary Sheets",
+        ),
+        EvaosMcpCatalogConnection(
+            connection_id="30000000-0000-4000-8000-000000000002",
+            app_slug="google_sheets",
+            account_id="apn_sheets_secondary",
+            display_name="Secondary Sheets",
+        ),
+    ]
+    monkeypatch.setattr(
+        "tools.evaos_mcp_lease.fetch_evaos_mcp_catalog",
+        lambda **_kwargs: connections,
+    )
+    monkeypatch.setattr(
+        "hermes_constants.get_hermes_home",
+        lambda: __import__("pathlib").Path("/srv/hermes/profile"),
+    )
+
+    expanded = _expand_evaos_catalog_servers(
+        {"pipedream": {"auth": "evaos_catalog", "lazy": True}}
+    )
+
+    assert set(expanded) == {
+        catalog_connection_server_name(connections[0]),
+        catalog_connection_server_name(connections[1]),
+    }
+    assert all(config["auth"] == "evaos_lease" for config in expanded.values())
+    assert {
+        config["account_id"] for config in expanded.values()
+    } == {"apn_sheets_primary", "apn_sheets_secondary"}
+    assert _filter_suspicious_mcp_servers(expanded) == expanded
 
 
 def test_source_defaults_service_uid_to_root_uid_without_geteuid(

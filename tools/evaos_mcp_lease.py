@@ -23,6 +23,12 @@ import httpx
 
 
 _APP_SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,127}$")
+_ACCOUNT_ID_RE = re.compile(r"^[A-Za-z0-9._~:-]{1,256}$")
+_CONNECTION_ID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-"
+    r"[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+    re.IGNORECASE,
+)
 _GRANT_HANDLE_RE = re.compile(r"^[A-Za-z0-9._~:-]{16,512}$")
 _CREDENTIAL_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
 _LEASE_ENDPOINT_PATH = "/functions/v1/desktop-runtime-session"
@@ -49,6 +55,8 @@ class _LeaseSourceMaterial:
     broker_secret: str
     provider_grant: str
     app_slug: str
+    connection_id: Optional[str] = None
+    account_id: Optional[str] = None
 
 
 @dataclass(frozen=True, repr=False)
@@ -100,6 +108,8 @@ class EvaosLeaseSource:
         *,
         profile_key: str,
         app_slug: str,
+        connection_id: Optional[str] = None,
+        account_id: Optional[str] = None,
         secret_reader: Optional[Callable[[str], Optional[str]]] = None,
         profile_resolver: Optional[Callable[[], str]] = None,
         root_uid: int = 0,
@@ -109,8 +119,20 @@ class EvaosLeaseSource:
             raise EvaosLeaseError("managed MCP profile authority is missing")
         if not isinstance(app_slug, str) or not _APP_SLUG_RE.fullmatch(app_slug):
             raise EvaosLeaseError("managed MCP app slug is invalid")
+        if connection_id is not None and (
+            not isinstance(connection_id, str)
+            or not _CONNECTION_ID_RE.fullmatch(connection_id)
+        ):
+            raise EvaosLeaseError("managed MCP connection identity is invalid")
+        if account_id is not None and (
+            not isinstance(account_id, str)
+            or not _ACCOUNT_ID_RE.fullmatch(account_id)
+        ):
+            raise EvaosLeaseError("managed MCP account identity is invalid")
         self._profile_key = profile_key
         self._app_slug = app_slug
+        self._connection_id = connection_id
+        self._account_id = account_id
         self._secret_reader = secret_reader or _default_secret_reader
         self._profile_resolver = profile_resolver or _default_profile_resolver
         self._root_uid = root_uid
@@ -128,7 +150,8 @@ class EvaosLeaseSource:
     def __repr__(self) -> str:
         return (
             "EvaosLeaseSource("
-            f"profile_key={self._profile_key!r}, app_slug={self._app_slug!r})"
+            f"profile_key={self._profile_key!r}, app_slug={self._app_slug!r}, "
+            "connection_id=<managed>)"
         )
 
     def _setting(self, name: str) -> str:
@@ -277,6 +300,22 @@ class EvaosLeaseSource:
             raise EvaosLeaseError("managed MCP provider grant map is malformed") from exc
         if not isinstance(grant_map, dict) or not grant_map:
             raise EvaosLeaseError("managed MCP provider grant map is malformed")
+        if set(grant_map) == {
+            "schema_version",
+            "bootstrap_grant_handle",
+        }:
+            if (
+                grant_map.get("schema_version")
+                != "evaos.pipedream_mcp_catalog.v1"
+                or not isinstance(grant_map.get("bootstrap_grant_handle"), str)
+                or not _GRANT_HANDLE_RE.fullmatch(
+                    grant_map["bootstrap_grant_handle"]
+                )
+            ):
+                raise EvaosLeaseError(
+                    "managed MCP provider catalog credential is malformed"
+                )
+            return grant_map["bootstrap_grant_handle"]
         for app_slug, handle in grant_map.items():
             if (
                 not isinstance(app_slug, str)
@@ -302,7 +341,141 @@ class EvaosLeaseSource:
             broker_secret=self._broker_secret(),
             provider_grant=self._provider_grant(),
             app_slug=self._app_slug,
+            connection_id=self._connection_id,
+            account_id=self._account_id,
         )
+
+
+@dataclass(frozen=True)
+class EvaosMcpCatalogConnection:
+    """One exact Pipedream connected account visible to this Hermes agent."""
+
+    connection_id: str
+    app_slug: str
+    account_id: str
+    display_name: str
+
+
+CatalogTransport = Callable[
+    [str, Mapping[str, str], Mapping[str, str]], Any
+]
+
+
+def _default_catalog_transport(
+    url: str,
+    headers: Mapping[str, str],
+    payload: Mapping[str, str],
+):
+    with httpx.Client(
+        follow_redirects=False,
+        timeout=httpx.Timeout(15.0),
+    ) as client:
+        return client.post(url, headers=headers, json=payload)
+
+
+def fetch_evaos_mcp_catalog(
+    *,
+    profile_key: str,
+    transport: Optional[CatalogTransport] = None,
+    secret_reader: Optional[Callable[[str], Optional[str]]] = None,
+    profile_resolver: Optional[Callable[[], str]] = None,
+    root_uid: int = 0,
+    service_uid: Optional[int] = None,
+) -> list[EvaosMcpCatalogConnection]:
+    """Fetch the startup-time connected-account catalog for one Hermes agent."""
+
+    source = EvaosLeaseSource(
+        profile_key=profile_key,
+        app_slug="catalog",
+        secret_reader=secret_reader,
+        profile_resolver=profile_resolver,
+        root_uid=root_uid,
+        service_uid=service_uid,
+    )
+    material = source.read()
+    headers = {
+        "Content-Type": "application/json",
+        "X-Evaos-Desktop-Broker-Secret": material.broker_secret,
+        "X-Evaos-Provider-Grant": material.provider_grant,
+    }
+    try:
+        response = (transport or _default_catalog_transport)(
+            material.endpoint,
+            headers,
+            {"action": "pipedream_mcp_catalog"},
+        )
+    except Exception as exc:
+        raise EvaosLeaseError(
+            "managed MCP catalog service is unavailable"
+        ) from exc
+    status_code = getattr(response, "status_code", None)
+    if status_code != 200:
+        if status_code in (401, 403):
+            message = "managed MCP catalog authority was rejected"
+        elif status_code in (429, 502, 503):
+            message = "managed MCP catalog service is temporarily unavailable"
+        else:
+            message = "managed MCP catalog service returned an unexpected status"
+        raise EvaosLeaseError(message)
+    try:
+        payload = response.json()
+    except Exception as exc:
+        raise EvaosLeaseError("managed MCP catalog response is malformed") from exc
+    if (
+        not isinstance(payload, dict)
+        or set(payload) != {"schema_version", "connections"}
+        or payload.get("schema_version") != "evaos.pipedream_mcp_catalog.v1"
+        or not isinstance(payload.get("connections"), list)
+    ):
+        raise EvaosLeaseError("managed MCP catalog response is malformed")
+    connections: list[EvaosMcpCatalogConnection] = []
+    seen: set[str] = set()
+    for item in payload["connections"]:
+        if not isinstance(item, dict) or set(item) != {
+            "connection_id",
+            "app_slug",
+            "account_id",
+            "display_name",
+        }:
+            raise EvaosLeaseError("managed MCP catalog response is malformed")
+        connection_id = item.get("connection_id")
+        app_slug = item.get("app_slug")
+        account_id = item.get("account_id")
+        display_name = item.get("display_name")
+        if (
+            not isinstance(connection_id, str)
+            or not _CONNECTION_ID_RE.fullmatch(connection_id)
+            or connection_id in seen
+            or not isinstance(app_slug, str)
+            or not _APP_SLUG_RE.fullmatch(app_slug)
+            or not isinstance(account_id, str)
+            or not _ACCOUNT_ID_RE.fullmatch(account_id)
+            or not isinstance(display_name, str)
+            or not display_name.strip()
+            or len(display_name) > 256
+            or "\r" in display_name
+            or "\n" in display_name
+        ):
+            raise EvaosLeaseError("managed MCP catalog response is malformed")
+        seen.add(connection_id)
+        connections.append(
+            EvaosMcpCatalogConnection(
+                connection_id=connection_id,
+                app_slug=app_slug,
+                account_id=account_id,
+                display_name=display_name.strip(),
+            )
+        )
+    return connections
+
+
+def catalog_connection_server_name(
+    connection: EvaosMcpCatalogConnection,
+) -> str:
+    """Return a stable collision-resistant MCP namespace for one account."""
+
+    compact_id = connection.connection_id.replace("-", "")
+    return f"pipedream_{connection.app_slug}_{compact_id}"
 
 
 LeaseTransport = Callable[
@@ -383,10 +556,11 @@ class EvaosLeaseManager:
             "X-Evaos-Desktop-Broker-Secret": material.broker_secret,
             "X-Evaos-Provider-Grant": material.provider_grant,
         }
-        request_body = {
-            "action": "pipedream_mcp_lease",
-            "app_slug": material.app_slug,
-        }
+        request_body = {"action": "pipedream_mcp_lease"}
+        if material.connection_id is not None:
+            request_body["connection_id"] = material.connection_id
+        else:
+            request_body["app_slug"] = material.app_slug
         try:
             response = await self._transport(
                 material.endpoint, request_headers, request_body
@@ -410,10 +584,18 @@ class EvaosLeaseManager:
             payload = response.json()
         except Exception as exc:
             raise EvaosLeaseError("managed MCP lease response is malformed") from exc
-        return self._parse_lease(payload, expected_app_slug=material.app_slug)
+        return self._parse_lease(
+            payload,
+            expected_app_slug=material.app_slug,
+            expected_account_id=material.account_id,
+        )
 
     def _parse_lease(
-        self, payload: Any, *, expected_app_slug: str
+        self,
+        payload: Any,
+        *,
+        expected_app_slug: str,
+        expected_account_id: Optional[str] = None,
     ) -> EvaosMcpLease:
         if not isinstance(payload, dict) or set(payload) != {
             "mcp_url",
@@ -453,6 +635,10 @@ class EvaosLeaseManager:
             or not headers.get("Authorization", "").startswith("Bearer ")
             or len(headers["Authorization"]) <= len("Bearer ")
             or headers.get("x-pd-app-slug") != expected_app_slug
+            or (
+                expected_account_id is not None
+                and headers.get("x-pd-account-id") != expected_account_id
+            )
         ):
             raise EvaosLeaseError("managed MCP lease response is malformed")
         raw_expiry = payload.get("expires_at")

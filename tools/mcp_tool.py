@@ -1999,6 +1999,8 @@ class MCPServerTask:
                 "non-credential runtime options"
             )
         app_slug = config.get("app_slug")
+        connection_id = config.get("connection_id")
+        account_id = config.get("account_id")
         if (
             not isinstance(app_slug, str)
             or re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,127}", app_slug) is None
@@ -2006,6 +2008,26 @@ class MCPServerTask:
             from tools.evaos_mcp_lease import EvaosLeaseError
 
             raise EvaosLeaseError("managed MCP app slug is invalid")
+        if connection_id is not None and (
+            not isinstance(connection_id, str)
+            or re.fullmatch(
+                r"[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-"
+                r"[89ab][0-9a-f]{3}-[0-9a-f]{12}",
+                connection_id,
+                re.IGNORECASE,
+            )
+            is None
+        ):
+            from tools.evaos_mcp_lease import EvaosLeaseError
+
+            raise EvaosLeaseError("managed MCP connection identity is invalid")
+        if account_id is not None and (
+            not isinstance(account_id, str)
+            or re.fullmatch(r"[A-Za-z0-9._~:-]{1,256}", account_id) is None
+        ):
+            from tools.evaos_mcp_lease import EvaosLeaseError
+
+            raise EvaosLeaseError("managed MCP account identity is invalid")
 
     def _advertises_tools(self) -> bool:
         """Whether the server advertises the ``tools`` capability.
@@ -2860,6 +2882,8 @@ class MCPServerTask:
                 source = EvaosLeaseSource(
                     profile_key=self.registration_home,
                     app_slug=config["app_slug"],
+                    connection_id=config.get("connection_id"),
+                    account_id=config.get("account_id"),
                 )
                 self._evaos_lease_manager = EvaosLeaseManager(source=source)
                 self._evaos_lease_auth = EvaosLeaseHttpAuth(
@@ -4991,6 +5015,58 @@ def _filter_suspicious_mcp_servers(servers: Dict[str, dict]) -> Dict[str, dict]:
     return safe_servers
 
 
+def _expand_evaos_catalog_servers(servers: Dict[str, dict]) -> Dict[str, dict]:
+    """Replace one managed catalog entry with one exact server per account."""
+
+    catalog_entries = [
+        (name, cfg)
+        for name, cfg in servers.items()
+        if isinstance(cfg, dict)
+        and (cfg.get("auth") or "").lower().strip() == "evaos_catalog"
+    ]
+    if not catalog_entries:
+        return servers
+    if len(catalog_entries) != 1:
+        raise ValueError("exactly one managed MCP catalog entry is supported")
+    catalog_name, catalog_config = catalog_entries[0]
+    allowed = {"auth", "enabled", "lazy"}
+    if set(catalog_config) - allowed:
+        raise ValueError(
+            f"managed MCP catalog '{catalog_name}' has unsupported options"
+        )
+    expanded = {
+        name: cfg
+        for name, cfg in servers.items()
+        if name != catalog_name
+    }
+    if not _parse_boolish(catalog_config.get("enabled", True), default=True):
+        return expanded
+
+    from hermes_constants import get_hermes_home
+    from tools.evaos_mcp_lease import (
+        catalog_connection_server_name,
+        fetch_evaos_mcp_catalog,
+    )
+
+    profile_home = str(get_hermes_home().expanduser().resolve())
+    connections = fetch_evaos_mcp_catalog(profile_key=profile_home)
+    lazy = _parse_boolish(catalog_config.get("lazy", True), default=True)
+    for connection in connections:
+        name = catalog_connection_server_name(connection)
+        if name in expanded:
+            raise ValueError(
+                f"managed MCP catalog server name collides with '{name}'"
+            )
+        expanded[name] = {
+            "auth": "evaos_lease",
+            "app_slug": connection.app_slug,
+            "connection_id": connection.connection_id,
+            "account_id": connection.account_id,
+            "lazy": lazy,
+        }
+    return expanded
+
+
 def _load_mcp_config() -> Dict[str, dict]:
     """Read ``mcp_servers`` from the Hermes config file.
 
@@ -5018,13 +5094,14 @@ def _load_mcp_config() -> Dict[str, dict]:
             load_hermes_dotenv()
         except Exception:
             pass
-        safe_servers: Dict[str, dict] = {}
-        for name, cfg in _filter_suspicious_mcp_servers(servers).items():
+        interpolated_servers: Dict[str, dict] = {}
+        for name, cfg in servers.items():
             interpolated = _interpolate_env_vars(cfg)
             if isinstance(interpolated, dict):
                 _warn_hidden_whitespace(name, interpolated)
-                safe_servers[name] = interpolated
-        return safe_servers
+                interpolated_servers[name] = interpolated
+        expanded_servers = _expand_evaos_catalog_servers(interpolated_servers)
+        return _filter_suspicious_mcp_servers(expanded_servers)
     except Exception as exc:
         logger.debug("Failed to load MCP config: %s", exc)
         return {}
