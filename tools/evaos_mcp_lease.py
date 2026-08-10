@@ -9,6 +9,7 @@ the manager, included in errors, or exposed to MCP tool/model surfaces.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import re
@@ -474,8 +475,10 @@ def catalog_connection_server_name(
 ) -> str:
     """Return a stable collision-resistant MCP namespace for one account."""
 
-    compact_id = connection.connection_id.replace("-", "")
-    return f"pipedream_{connection.app_slug}_{compact_id}"
+    suffix = hashlib.sha256(
+        connection.connection_id.encode("ascii")
+    ).hexdigest()[:10]
+    return f"pd_{connection.app_slug}_{suffix}"
 
 
 LeaseTransport = Callable[

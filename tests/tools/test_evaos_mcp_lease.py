@@ -226,6 +226,8 @@ def test_catalog_expands_to_one_lazy_server_per_exact_account(monkeypatch):
         catalog_connection_server_name(connections[0]),
         catalog_connection_server_name(connections[1]),
     }
+    assert len(set(expanded)) == 2
+    assert all(len(name) <= 40 for name in expanded)
     assert all(config["auth"] == "evaos_lease" for config in expanded.values())
     assert {
         config["account_id"] for config in expanded.values()
