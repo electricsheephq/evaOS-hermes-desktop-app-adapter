@@ -19,9 +19,10 @@ from tools.mcp_schema_cache import config_fingerprint
 from tools.mcp_tool import MCPServerTask
 
 class _Response:
-    def __init__(self, status_code: int, payload: dict):
+    def __init__(self, status_code: int, payload: dict, *, text: str = ""):
         self.status_code = status_code
         self._payload = payload
+        self.text = text
 
     def json(self):
         return self._payload
@@ -223,6 +224,23 @@ async def test_http_auth_refreshes_and_retries_exactly_once_after_401(tmp_path):
     with pytest.raises(StopAsyncIteration):
         await flow.asend(httpx.Response(401, request=second))
     assert calls == 2
+
+
+@pytest.mark.asyncio
+async def test_lease_mint_401_surfaces_sanitized_server_body(tmp_path):
+    now = datetime(2026, 8, 8, tzinfo=timezone.utc)
+    source, _ = _source(tmp_path)
+
+    async def transport(url, headers, payload):
+        return _Response(401, {}, text="Pipedream MCP grant is required")
+
+    manager = EvaosLeaseManager(source=source, transport=transport, now=lambda: now)
+    with pytest.raises(EvaosLeaseError) as caught:
+        await manager.get_lease()
+
+    assert str(caught.value) == (
+        "managed MCP lease rejected (401): Pipedream MCP grant is required"
+    )
 
 
 def test_source_rejects_cross_profile_and_unsafe_files(tmp_path):
