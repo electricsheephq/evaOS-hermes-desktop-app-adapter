@@ -74,12 +74,17 @@ Score lives on the program board (support-control#544 / gate #546) — never in 
   route — no reload endpoint exists in any release. Scope follows the process: on a per-profile
   gateway it reloads that profile only (deliver via that profile's own chat); on the shared
   multiplex serve it is PROCESS-GLOBAL (tears down every profile's MCP connections — schedule
-  accordingly). pcs#565's automation must therefore inject a message event (loopback
-  prompt.submit) or add a scoped reload to the runtime. Second on-box finding: per-profile
-  gateways did NOT consume managed-overlay `evaos-pipedream-*` entries on the pool layout
-  (eric-wilder, 2026-08-13 reload receipt: pipedream entries REMOVED on rediscovery) — the
-  overlay-consumption path per plane needs verification per box layout before seeding is
-  declared live.
+  accordingly). CORRECTION 2 (same day, on-box verified): the programmatic reload EXISTS —
+  `reload.mcp` JSON-RPC method (tui_gateway/methods_tools.py:84) on the serve RPC surface: no
+  model turn, no confirm gate, ~0.7s, returns {"status":"reloaded","loaded_rev":...}. THAT is
+  pcs#565's hook. The chat slash-command remains the human path (⚠ it hits a confirm gate whose
+  first use PERSISTS approvals.mcp_reload_confirm:false into config — reload via chat is not
+  read-only). Layer-1 lesson (eric-wilder, 2026-08-13): seeding + reload made servers MOUNT per-profile
+  (principal header resolves the overlay) yet tools stayed unreachable at turn time — L0-green
+  via curl does NOT imply the SERVING PROCESS can mint (check the unit's credential delivery:
+  jackie-david's per-profile units carry the broker secret via a LoadCredential drop-in; a serve
+  unit without it fails exactly this way). Verify the serving process's credential context, not
+  just the files on disk.
 - Token re-mints are connection-invisible (pre-refresh 60 s before expiry); a "transport is down"
   error is NEVER about token expiry — start at Layer 0.
 - Client 401s were historically mislabeled "broker secret was rejected" (adapter#100) — read the
