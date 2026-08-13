@@ -68,8 +68,18 @@ Score lives on the program board (support-control#544 / gate #546) — never in 
 ## Standing invariants (each earned the hard way)
 - The lease client sends identity from the profile's own managed entry (both-or-neither); the
   grant-header path is deployed back-compat ONLY — never re-add grant machinery client-side.
-- New app connected ⇒ the connect pipeline writes the entry AND calls the gateway `/reload-mcp`
-  (pcs#565) — never hand-seed, never wait for cache expiry.
+- New app connected ⇒ the connect pipeline writes the entry AND triggers a reload (pcs#565) —
+  never hand-seed, never wait for cache expiry. ⚠ MECHANISM (corrected 2026-08-13, verified
+  on-box): `/reload-mcp` is a CHAT SLASH-COMMAND (gateway/run.py slash dispatcher), NOT an HTTP
+  route — no reload endpoint exists in any release. Scope follows the process: on a per-profile
+  gateway it reloads that profile only (deliver via that profile's own chat); on the shared
+  multiplex serve it is PROCESS-GLOBAL (tears down every profile's MCP connections — schedule
+  accordingly). pcs#565's automation must therefore inject a message event (loopback
+  prompt.submit) or add a scoped reload to the runtime. Second on-box finding: per-profile
+  gateways did NOT consume managed-overlay `evaos-pipedream-*` entries on the pool layout
+  (eric-wilder, 2026-08-13 reload receipt: pipedream entries REMOVED on rediscovery) — the
+  overlay-consumption path per plane needs verification per box layout before seeding is
+  declared live.
 - Token re-mints are connection-invisible (pre-refresh 60 s before expiry); a "transport is down"
   error is NEVER about token expiry — start at Layer 0.
 - Client 401s were historically mislabeled "broker secret was rejected" (adapter#100) — read the
