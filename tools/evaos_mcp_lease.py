@@ -34,6 +34,12 @@ _APP_SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,127}$")
 _ACCOUNT_ID_RE = re.compile(r"^apn_[A-Za-z0-9_-]+$")
 _EXTERNAL_USER_ID_RE = re.compile(r"^[A-Za-z0-9._:-]{1,180}$")
 _CREDENTIAL_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
+_MAX_ERROR_BODY_LENGTH = 512
+_SENSITIVE_ERROR_VALUE_RE = re.compile(
+    r"(?i)\b(?:authorization|proxy-authorization|cookie|set-cookie|"
+    r"x-[\w-]*(?:secret|token|key))\s*[:=]\s*(?:Bearer\s+)?[^,;\s}]+"
+)
+_BEARER_TOKEN_RE = re.compile(r"(?i)\bBearer\s+\S+")
 _LEASE_ENDPOINT_PATH = "/functions/v1/desktop-runtime-session"
 _MCP_ORIGIN = ("https", "remote.mcp.pipedream.net")
 _REQUIRED_LEASE_HEADERS = frozenset(
@@ -50,6 +56,21 @@ _REQUIRED_LEASE_HEADERS = frozenset(
 
 class EvaosLeaseError(RuntimeError):
     """Sanitized failure while resolving or refreshing managed MCP auth."""
+
+
+def _sanitize_error_body(response: Any, *, broker_secret: str) -> str:
+    """Return bounded, printable server detail without credential material."""
+    try:
+        body = response.text
+    except Exception:
+        return ""
+    if not isinstance(body, str):
+        return ""
+    body = body.replace(broker_secret, "[redacted]")
+    body = _SENSITIVE_ERROR_VALUE_RE.sub("[redacted]", body)
+    body = _BEARER_TOKEN_RE.sub("Bearer [redacted]", body)
+    body = "".join(character for character in body if character.isprintable())
+    return body.strip()[:_MAX_ERROR_BODY_LENGTH]
 
 
 @dataclass(frozen=True, repr=False)
@@ -398,7 +419,7 @@ class EvaosLeaseManager:
         status_code = getattr(response, "status_code", None)
         if status_code != 200:
             if status_code == 401:
-                message = "managed MCP broker secret was rejected"
+                message = "managed MCP lease rejected"
             elif status_code == 403:
                 message = "managed MCP profile authority is no longer valid"
             elif status_code == 400:
@@ -407,7 +428,12 @@ class EvaosLeaseManager:
                 message = "managed MCP lease service is temporarily unavailable"
             else:
                 message = "managed MCP lease service returned an unexpected status"
-            raise EvaosLeaseError(message)
+            detail = _sanitize_error_body(
+                response,
+                broker_secret=material.broker_secret,
+            )
+            status = f"{message} ({status_code})"
+            raise EvaosLeaseError(f"{status}: {detail}" if detail else status)
         try:
             payload = response.json()
         except Exception as exc:
