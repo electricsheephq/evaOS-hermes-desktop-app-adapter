@@ -663,3 +663,231 @@ def test_schema_cache_fingerprint_includes_managed_app_identity():
     )
 
     assert len({sheets, drive, static}) == 3
+
+
+# ---------------------------------------------------------------------------
+# Direct profile-identity leases (lean path): the managed server entry carries
+# the profile's own Pipedream identity (external_user_id + account_id, per the
+# Pipedream developer docs), the mint body includes it, and the response echo
+# is strictly validated. No grant handle anywhere.
+# ---------------------------------------------------------------------------
+
+DIRECT_EXTERNAL_USER_ID = "acct_fixture_profile_fixture"
+DIRECT_ACCOUNT_ID = "apn_fixture_direct"
+
+
+def _direct_source(tmp_path, **overrides):
+    broker = tmp_path / "broker"
+    _write_secret(broker, "broker-secret-under-test\n")
+    values = {
+        "EVAOS_DESKTOP_RUNTIME_SESSION_URL": (
+            "https://example.supabase.co/functions/v1/desktop-runtime-session"
+        ),
+        "PIPEDREAM_AGENT_BROKER_SECRET_FILE": str(broker),
+    }
+    kwargs = dict(
+        profile_key="profile-a",
+        app_slug="google_sheets",
+        external_user_id=DIRECT_EXTERNAL_USER_ID,
+        account_id=DIRECT_ACCOUNT_ID,
+        secret_reader=values.get,
+        profile_resolver=lambda: "profile-a",
+        root_uid=os.getuid(),
+    )
+    kwargs.update(overrides)
+    return EvaosLeaseSource(**kwargs)
+
+
+def _direct_lease_payload(expires_at: datetime, **header_overrides):
+    headers = {
+        "Authorization": "Bearer lease-token-1",
+        "x-pd-project-id": "proj",
+        "x-pd-environment": "production",
+        "x-pd-external-user-id": DIRECT_EXTERNAL_USER_ID,
+        "x-pd-app-slug": "google_sheets",
+        "x-pd-account-id": DIRECT_ACCOUNT_ID,
+    }
+    headers.update(header_overrides)
+    return {
+        "mcp_url": "https://remote.mcp.pipedream.net/v3",
+        "headers": headers,
+        "expires_at": expires_at.isoformat(),
+    }
+
+
+@pytest.mark.asyncio
+async def test_direct_identity_is_sent_and_echo_validated(tmp_path):
+    now = datetime(2026, 8, 8, tzinfo=timezone.utc)
+    source = _direct_source(tmp_path)
+    calls = []
+
+    async def transport(url, headers, payload):
+        calls.append((url, headers, payload))
+        return _Response(200, _direct_lease_payload(now + timedelta(minutes=10)))
+
+    manager = EvaosLeaseManager(source=source, transport=transport, now=lambda: now)
+    lease = await manager.get_lease()
+
+    assert calls[0][2] == {
+        "action": "pipedream_mcp_lease",
+        "app_slug": "google_sheets",
+        "external_user_id": DIRECT_EXTERNAL_USER_ID,
+        "account_id": DIRECT_ACCOUNT_ID,
+    }
+    assert "X-Evaos-Provider-Grant" not in calls[0][1]
+    assert lease.headers["x-pd-external-user-id"] == DIRECT_EXTERNAL_USER_ID
+    assert lease.headers["x-pd-account-id"] == DIRECT_ACCOUNT_ID
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"x-pd-external-user-id": "someone-else"},
+        {"x-pd-account-id": "apn_other_account"},
+    ],
+)
+async def test_direct_identity_echo_mismatch_is_rejected(tmp_path, override):
+    now = datetime(2026, 8, 8, tzinfo=timezone.utc)
+    source = _direct_source(tmp_path)
+
+    async def transport(url, headers, payload):
+        return _Response(200, _direct_lease_payload(now + timedelta(minutes=10), **override))
+
+    manager = EvaosLeaseManager(source=source, transport=transport, now=lambda: now)
+    with pytest.raises(EvaosLeaseError):
+        await manager.get_lease()
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"account_id": None},
+        {"external_user_id": None},
+    ],
+)
+def test_identity_fields_must_come_together(tmp_path, overrides):
+    with pytest.raises(EvaosLeaseError):
+        _direct_source(tmp_path, **overrides)
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"external_user_id": "bad value with spaces"},
+        {"external_user_id": ""},
+        {"account_id": "not-an-apn-id"},
+        {"account_id": ""},
+    ],
+)
+def test_malformed_direct_identity_is_rejected(tmp_path, overrides):
+    with pytest.raises(EvaosLeaseError):
+        _direct_source(tmp_path, **overrides)
+
+
+@pytest.mark.asyncio
+async def test_managed_config_direct_identity_reaches_the_mint_body(
+    tmp_path, monkeypatch
+):
+    """MCPServerTask seam: a managed entry's identity flows into the exact
+    mint body through _run_http, and the echoed lease mounts."""
+    from tools import evaos_mcp_lease as lease_module
+    from tools import mcp_tool as mcp_tool_module
+
+    profile = tmp_path / "profile-test"
+    credentials = tmp_path / "credentials"
+    profile.mkdir()
+    credentials.mkdir(mode=0o700)
+    broker = credentials / "pipedream_broker"
+    _write_secret(broker, "broker-secret-under-test\n")
+    broker.chmod(0o400)
+    monkeypatch.setenv("HERMES_HOME", str(profile))
+    monkeypatch.setenv("CREDENTIALS_DIRECTORY", str(credentials))
+    monkeypatch.setenv(
+        "EVAOS_DESKTOP_RUNTIME_SESSION_URL",
+        "https://example.supabase.co/functions/v1/desktop-runtime-session",
+    )
+    monkeypatch.setenv("PIPEDREAM_AGENT_BROKER_SECRET_FILE", str(broker))
+
+    mint_calls = []
+
+    async def mint(url, headers, payload):
+        mint_calls.append((url, headers, payload))
+        return _Response(
+            200,
+            _direct_lease_payload(
+                datetime.now(timezone.utc) + timedelta(minutes=10)
+            ),
+        )
+
+    monkeypatch.setattr(lease_module, "_default_transport", mint)
+
+    mounted = {}
+
+    class Mounted(Exception):
+        pass
+
+    class CaptureTransport:
+        async def __aenter__(self):
+            raise Mounted
+
+        async def __aexit__(self, _exc_type, _exc, _tb):
+            return False
+
+    def capture_transport(url, **kwargs):
+        mounted.update(url=url, **kwargs)
+        return CaptureTransport()
+
+    monkeypatch.setattr(mcp_tool_module, "_MCP_HTTP_AVAILABLE", True)
+    monkeypatch.setattr(mcp_tool_module, "_MCP_NEW_HTTP", False)
+    monkeypatch.setattr(
+        mcp_tool_module, "streamablehttp_client", capture_transport
+    )
+
+    config = {
+        "auth": "evaos_lease",
+        "app_slug": "google_sheets",
+        "lazy": True,
+        "external_user_id": DIRECT_EXTERNAL_USER_ID,
+        "account_id": DIRECT_ACCOUNT_ID,
+    }
+    task = MCPServerTask("pipedream-google-sheets", str(profile))
+    task._auth_type = "evaos_lease"
+    task._validate_evaos_lease_config(config)
+
+    with pytest.raises(Mounted):
+        await task._run_http(config)
+
+    assert mint_calls[0][2] == {
+        "action": "pipedream_mcp_lease",
+        "app_slug": "google_sheets",
+        "external_user_id": DIRECT_EXTERNAL_USER_ID,
+        "account_id": DIRECT_ACCOUNT_ID,
+    }
+    assert "X-Evaos-Provider-Grant" not in mint_calls[0][1]
+    assert mounted["url"] == "https://remote.mcp.pipedream.net/v3"
+    assert mounted["headers"]["x-pd-external-user-id"] == DIRECT_EXTERNAL_USER_ID
+    assert mounted["headers"]["x-pd-account-id"] == DIRECT_ACCOUNT_ID
+
+
+@pytest.mark.parametrize(
+    "partial",
+    [
+        {"external_user_id": DIRECT_EXTERNAL_USER_ID},
+        {"account_id": DIRECT_ACCOUNT_ID},
+    ],
+    ids=["user-without-account", "account-without-user"],
+)
+def test_one_field_managed_identity_is_rejected(partial):
+    """MCPServerTask seam: config validation enforces both-or-neither."""
+    task = MCPServerTask("pipedream-google-sheets")
+    task._auth_type = "evaos_lease"
+    with pytest.raises(EvaosLeaseError):
+        task._validate_evaos_lease_config(
+            {
+                "auth": "evaos_lease",
+                "app_slug": "google_sheets",
+                "lazy": True,
+                **partial,
+            }
+        )
