@@ -1,5 +1,13 @@
 # Hermes Agent - Development Guide
 
+## Pipedream / MCP-connector work: the gate ladder is mandatory
+
+Any change touching the Pipedream/MCP path (`tools/evaos_mcp_lease.py`, `tools/mcp_tool.py`,
+gateway MCP discovery) follows `docs/PIPEDREAM-WORKING-GATE.md` IN THIS REPO: debug bottom-up
+from Layer 0 (the 2-curl contract probe against production — client error strings lie), and no
+release r-tag ships above a red layer. Customer-facing claims come only from the Layer-3
+real-workflow matrices + a Layer-4 real turn.
+
 ## Dispatched work: the Lane Contract is mandatory
 
 Every dispatched lane (Codex, Claude subagent, workflow agent) that writes code, configs, boxes,
