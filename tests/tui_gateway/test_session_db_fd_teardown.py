@@ -42,6 +42,8 @@ def _bare_agent(db: SessionDB, session_id: str) -> AIAgent:
     agent._end_session_on_close = True
     agent._active_children = []
     agent._active_children_lock = threading.Lock()
+    agent._context_engine_shutdown_lock = threading.Lock()
+    agent._context_engine_shutdown = False
     agent.client = None
     agent._session_messages = []
     agent.commit_memory_session = lambda *_args, **_kwargs: None

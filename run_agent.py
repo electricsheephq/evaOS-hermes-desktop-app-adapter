@@ -66,6 +66,9 @@ from types import SimpleNamespace
 from hermes_constants import get_hermes_home
 
 
+_CONTEXT_ENGINE_SHUTDOWN_FALLBACK_LOCK = threading.Lock()
+
+
 def _launch_cwd_for_session(source: str) -> Optional[str]:
     """Working directory to stamp on a new session row, or None.
 
@@ -4297,12 +4300,21 @@ class AIAgent:
         # exactly once at the real agent boundary so repeated close() calls
         # remain idempotent. The built-in compressor has no shutdown hook.
         try:
-            if not getattr(self, "_context_engine_shutdown", False):
-                self._context_engine_shutdown = True
-                context_engine = getattr(self, "context_compressor", None)
-                shutdown_context_engine = getattr(context_engine, "shutdown", None)
-                if callable(shutdown_context_engine):
-                    shutdown_context_engine()
+            shutdown_context_engine = None
+            shutdown_lock = getattr(
+                self,
+                "_context_engine_shutdown_lock",
+                _CONTEXT_ENGINE_SHUTDOWN_FALLBACK_LOCK,
+            )
+            with shutdown_lock:
+                if not getattr(self, "_context_engine_shutdown", False):
+                    self._context_engine_shutdown = True
+                    context_engine = getattr(self, "context_compressor", None)
+                    shutdown_context_engine = getattr(
+                        context_engine, "shutdown", None
+                    )
+            if callable(shutdown_context_engine):
+                shutdown_context_engine()
         except Exception:
             logger.debug("Context engine shutdown failed", exc_info=True)
 

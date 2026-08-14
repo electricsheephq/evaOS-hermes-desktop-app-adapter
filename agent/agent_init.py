@@ -817,6 +817,8 @@ def init_agent(
     agent._delegate_depth = 0        # 0 = top-level agent, incremented for children
     agent._active_children = []      # Running child AIAgents (for interrupt propagation)
     agent._active_children_lock = threading.Lock()
+    agent._context_engine_shutdown_lock = threading.Lock()
+    agent._context_engine_shutdown = False
     
     # Store OpenRouter provider preferences
     agent.providers_allowed = providers_allowed
