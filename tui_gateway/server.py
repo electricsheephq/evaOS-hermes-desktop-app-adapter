@@ -856,6 +856,16 @@ def _teardown_session(session: dict | None, *, end_reason: str = "tui_close") ->
             agent.close()
     except Exception:
         pass
+    # Synthetic/certification agents may implement close() as a no-op. The
+    # ownership flag is authoritative, so teardown remains the final backstop.
+    try:
+        if agent is not None and getattr(agent, "_owns_session_db", False):
+            owned_db = getattr(agent, "_session_db", None)
+            if owned_db is not None:
+                owned_db.close()
+                agent._owns_session_db = False
+    except Exception:
+        pass
     # NOTE: the slash-worker is closed inside _finalize_session (the single
     # _finalized-guarded chokepoint that main folded it into), exactly once.
     # We deliberately do NOT re-close it here — _teardown_session's job beyond
@@ -1338,6 +1348,22 @@ def _db_for_profile(profile: str | None = None):
             exc,
         )
         return None, False
+
+
+def _transfer_db_to_agent(agent, db) -> bool:
+    """Transfer one dedicated profile handle to the agent that will close it."""
+    if agent is None or db is None:
+        return False
+    try:
+        held_db = getattr(agent, "_session_db", None)
+        if held_db is not None and held_db is not db:
+            return False
+        if held_db is None:
+            agent._session_db = db
+        agent._owns_session_db = True
+        return True
+    except Exception:
+        return False
 
 
 @contextlib.contextmanager
@@ -2113,13 +2139,14 @@ def _start_agent_build(sid: str, session: dict) -> None:
         notify_registered = False
         home_token = None
         secret_token = None
+        session_db = None
+        owns_db = False
         profile_home = current.get("profile_home")
         try:
             tokens = _set_session_context(key)
             # Build against the session's profile (global-remote): bind its
             # HERMES_HOME so config/skills/model resolve to it, and hand the
             # agent that profile's db so turns persist to the right state.db.
-            session_db = None
             if profile_home:
                 home_token = set_hermes_home_override(profile_home)
                 try:
@@ -2132,6 +2159,7 @@ def _start_agent_build(sid: str, session: dict) -> None:
                     from hermes_state import SessionDB
 
                     session_db = SessionDB(db_path=Path(profile_home) / "state.db")
+                    owns_db = True
                 except Exception:
                     session_db = None
 
@@ -2267,6 +2295,11 @@ def _start_agent_build(sid: str, session: dict) -> None:
                     unregister_gateway_notify(key)
                 except Exception:
                     pass
+            if owns_db and session_db is not None:
+                built = None if replaced else current.get("agent")
+                if not _transfer_db_to_agent(built, session_db):
+                    with contextlib.suppress(Exception):
+                        session_db.close()
             ready.set()
 
     build_thread = threading.Thread(target=_build, daemon=True)

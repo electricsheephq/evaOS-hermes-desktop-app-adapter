@@ -326,6 +326,7 @@ def _(rid, params: dict) -> dict:
 
     # In a profile scope, the agent OWNS a long-lived db handle bound to that
     # profile (do NOT auto-close it here). Otherwise reuse the shared launch db.
+    owns_db = profile_home is not None
     if profile_home is not None:
         from hermes_state import SessionDB
 
@@ -335,13 +336,23 @@ def _(rid, params: dict) -> dict:
     if db is None:
         return _db_unavailable_error(rid, code=5000)
 
+    def _release_resume_db() -> None:
+        nonlocal owns_db
+        if owns_db:
+            owns_db = False
+            with contextlib.suppress(Exception):
+                db.close()
+
     lazy_child_profile = None
-    found = db.get_session(target)
+    try:
+        found = db.get_session(target)
+        if not found:
+            found = db.get_session_by_title(target)
+    except Exception:
+        _release_resume_db()
+        raise
     if not found:
-        found = db.get_session_by_title(target)
-        if found:
-            target = found["id"]
-        elif is_truthy_value(params.get("lazy", False)) and _child_run_active(target):
+        if is_truthy_value(params.get("lazy", False)) and _child_run_active(target):
             # Race: a watch window opened on a freshly-spawned subagent. The
             # child relays `subagent.start` (which carries child_session_id and
             # triggers the window) BEFORE its first run_conversation() flushes
@@ -356,7 +367,10 @@ def _(rid, params: dict) -> dict:
             found = {}
             lazy_child_profile = _child_run_profile(target)
         else:
+            _release_resume_db()
             return _err(rid, 4007, "session not found")
+    else:
+        target = found["id"]
 
     from hermes_cli.profile_scope import require_session_profile
 
@@ -365,6 +379,7 @@ def _(rid, params: dict) -> dict:
             found.get("profile_name") if found else lazy_child_profile
         )
     except PermissionError:
+        _release_resume_db()
         return _err(rid, 4003, "session profile is not authorized")
 
     # Follow the compression-continuation chain to the live tip so a resume on
@@ -385,10 +400,15 @@ def _(rid, params: dict) -> dict:
             tip = target
         if tip and tip != target:
             target = tip
-            found = db.get_session(target) or found
+            try:
+                found = db.get_session(target) or found
+            except Exception:
+                _release_resume_db()
+                raise
             try:
                 require_session_profile(found.get("profile_name"))
             except PermissionError:
+                _release_resume_db()
                 return _err(rid, 4003, "session profile is not authorized")
 
     profile_resume_cwd = str(found.get("cwd") or "").strip() or _profile_configured_cwd(
@@ -417,6 +437,7 @@ def _(rid, params: dict) -> dict:
     with _session_resume_lock:
         live = _find_live_session_by_key(target)
         if live is not None:
+            _release_resume_db()
             return _ok(rid, _reuse_live_payload(*live))
 
     # Lazy/watch resume: register the live session WITHOUT building an agent.
@@ -442,6 +463,7 @@ def _(rid, params: dict) -> dict:
         except Exception as e:
             if lease is not None:
                 lease.release()
+            _release_resume_db()
             return _err(rid, 5000, f"resume failed: {e}")
         cwd = profile_resume_cwd or _default_session_cwd()
         record = _deferred_session_record(
@@ -456,6 +478,7 @@ def _(rid, params: dict) -> dict:
             lazy=True,
         )
         if (live := _claim_or_reuse_live(sid, target, record, lease)) is not None:
+            _release_resume_db()
             return _ok(rid, _reuse_live_payload(*live))
         # A delegated child mid-run emits no session events of its own — report
         # its liveness from the relay registry so the window shows a busy turn.
@@ -474,6 +497,7 @@ def _(rid, params: dict) -> dict:
             logger.debug("child-watch display projection read failed", exc_info=True)
             display_history = history
         messages = [] if omit_messages else _history_to_messages(display_history)
+        _release_resume_db()
         return _ok(
             rid,
             {
@@ -528,11 +552,16 @@ def _(rid, params: dict) -> dict:
         except Exception as e:
             if lease is not None:
                 lease.release()
+            _release_resume_db()
             return _err(rid, 5000, f"resume failed: {e}")
         # Display keeps the full transcript; the model-fed history drops a
         # dangling/interrupted tool-call tail so a session killed mid-loop does
         # not replay the unanswered call forever (#29086).
-        prefix = [] if omit_messages else db.get_ancestor_display_prefix(target)
+        try:
+            prefix = [] if omit_messages else db.get_ancestor_display_prefix(target)
+        except Exception:
+            _release_resume_db()
+            raise
         history = sanitize_replay_history(raw_history)
         # Restore the model/provider/reasoning/tier this chat last used so the
         # deferred build (and the info below) match the eager path — without them
@@ -553,6 +582,7 @@ def _(rid, params: dict) -> dict:
             model_override=overrides.get("model_override"),
             resume_runtime_overrides=overrides or None,
         )
+        _release_resume_db()
         if (live := _claim_or_reuse_live(sid, target, record, lease)) is not None:
             return _ok(rid, _reuse_live_payload(*live))
 
@@ -644,6 +674,7 @@ def _(rid, params: dict) -> dict:
     except Exception as e:
         if lease is not None:
             lease.release()
+        _release_resume_db()
         return _err(rid, 5000, f"resume failed: {e}")
     finally:
         if home_token is not None:
@@ -662,6 +693,7 @@ def _(rid, params: dict) -> dict:
                     agent.close()
             except Exception:
                 pass
+            _release_resume_db()
             if lease is not None:
                 lease.release()
             other_sid, other_session = live
@@ -697,6 +729,12 @@ def _(rid, params: dict) -> dict:
                     session_db=db,
                     source=source,
                 )
+                if owns_db:
+                    if not _transfer_db_to_agent(agent, db):
+                        with _sessions_lock:
+                            _sessions.pop(sid, None)
+                        raise RuntimeError("agent refused profile session database ownership")
+                    owns_db = False
             finally:
                 if init_home_token is not None:
                     reset_hermes_home_override(init_home_token)
@@ -715,10 +753,20 @@ def _(rid, params: dict) -> dict:
                     _sessions[sid]["profile_home"] = str(profile_home)
                 _sessions[sid]["active_session_lease"] = lease
         except Exception as e:
+            if owns_db:
+                with _sessions_lock:
+                    _sessions.pop(sid, None)
+            try:
+                if hasattr(agent, "close"):
+                    agent.close()
+            except Exception:
+                pass
+            _release_resume_db()
             if lease is not None:
                 lease.release()
             return _err(rid, 5000, f"resume failed: {e}")
         session = _sessions.get(sid) or {}
+    _release_resume_db()
     auto_continue = (
         _maybe_schedule_auto_continue(sid, session, target) if session else None
     )
@@ -2690,6 +2738,9 @@ def _(rid, params: dict) -> dict:
             if lease is not None:
                 lease.release()
             return _err(rid, 5008, f"branch failed: {e}")
+    branch_db = None
+    branch_owns_db = False
+    agent = None
     try:
         # Bind the branched AGENT to the parent's profile, mirroring
         # session.create/resume: home override so config/skills/memory resolve
@@ -2699,11 +2750,11 @@ def _(rid, params: dict) -> dict:
         # parent's db while the agent stayed on the launch handle would
         # recreate the cross-profile split one turn later.
         parent_home = session.get("profile_home")
-        branch_db = None
         if parent_home:
             from hermes_state import SessionDB
 
             branch_db = SessionDB(db_path=Path(parent_home) / "state.db")
+            branch_owns_db = True
         home_token = (
             set_hermes_home_override(parent_home) if parent_home else None
         )
@@ -2740,6 +2791,12 @@ def _(rid, params: dict) -> dict:
                 source=source,
                 profile_home=parent_home,
             )
+            if branch_owns_db:
+                if not _transfer_db_to_agent(agent, branch_db):
+                    with _sessions_lock:
+                        _sessions.pop(new_sid, None)
+                    raise RuntimeError("agent refused profile session database ownership")
+                branch_owns_db = False
         finally:
             if secret_token is not None:
                 reset_secret_scope(secret_token)
@@ -2748,9 +2805,16 @@ def _(rid, params: dict) -> dict:
         if new_sid in _sessions:
             _sessions[new_sid]["active_session_lease"] = lease
     except Exception as e:
+        if agent is not None and hasattr(agent, "close"):
+            with contextlib.suppress(Exception):
+                agent.close()
         if lease is not None:
             lease.release()
         return _err(rid, 5000, f"agent init failed on branch: {e}")
+    finally:
+        if branch_owns_db and branch_db is not None:
+            with contextlib.suppress(Exception):
+                branch_db.close()
     branched_session = _sessions.get(new_sid)
     return _ok(
         rid,
