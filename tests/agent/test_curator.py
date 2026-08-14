@@ -776,3 +776,24 @@ def test_review_fork_toolset_surface_is_skills_plus_terminal():
     assert "read_file" not in surface
     assert "web_search" not in surface
     assert "lcm_grep" not in surface
+
+
+def test_finalize_review_agent_orders_session_end_before_close():
+    """A completed curator fork flushes context state before resource shutdown."""
+    from agent.curator import _finalize_review_agent
+
+    events = []
+    messages = [{"role": "assistant", "content": "curator result"}]
+
+    class _ReviewAgent:
+        _session_messages = messages
+
+        def shutdown_memory_provider(self, session_messages):
+            events.append(("session_end", session_messages))
+
+        def close(self):
+            events.append(("close", None))
+
+    _finalize_review_agent(_ReviewAgent())
+
+    assert events == [("session_end", messages), ("close", None)]
