@@ -611,6 +611,7 @@ class AIAgent:
             from hermes_state import SessionDB
 
             self._session_db = SessionDB()
+            self._owns_session_db = True
             return self._session_db
         except Exception:
             logger.debug("SessionDB unavailable for recall", exc_info=True)
@@ -4316,12 +4317,22 @@ class AIAgent:
         # must leave it open). end_session() is first-reason-wins and no-ops on
         # an already-ended row, so this never clobbers a 'compression' /
         # 'cron_complete' / 'cli_close' reason set by an earlier terminal path.
+        session_db = getattr(self, "_session_db", None)
         try:
             if getattr(self, "_end_session_on_close", True):
-                session_db = getattr(self, "_session_db", None)
                 session_id = getattr(self, "session_id", None)
                 if session_db and session_id:
                     session_db.end_session(session_id, "agent_close")
+        except Exception:
+            pass
+
+        # end_session() finalizes a row; it does not close SQLite. Only handles
+        # explicitly transferred to this agent are safe to close here. Shared
+        # launch handles retain the default False ownership flag.
+        try:
+            if getattr(self, "_owns_session_db", False) and session_db is not None:
+                session_db.close()
+                self._owns_session_db = False
         except Exception:
             pass
 
