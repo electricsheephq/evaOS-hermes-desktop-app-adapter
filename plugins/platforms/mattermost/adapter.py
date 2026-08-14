@@ -948,6 +948,9 @@ class MattermostAdapter(BasePlatformAdapter):
                     message_text = re.sub(
                         re.escape(pattern), "", message_text, flags=re.IGNORECASE
                     ).strip()
+                message_text = await self._strip_peer_bot_mentions(
+                    channel_id, message_text
+                )
 
         # Thread support: if the post is in a thread, use root_id. In
         # thread mode, top-level channel posts are valid roots for progress.
@@ -1043,6 +1046,52 @@ class MattermostAdapter(BasePlatformAdapter):
         )
 
         await self.handle_message(msg_event)
+
+    async def _strip_peer_bot_mentions(self, channel_id: str, text: str) -> str:
+        """Hide co-addressed bots from the model while preserving human mentions.
+
+        A human can mention several Mattermost bots in one channel post. Each
+        bot should receive the shared instruction, but peer bot handles are not
+        useful model input: models tend to echo them, producing a noisy thread
+        of repeated bot mentions. Resolve channel users only for such fan-out
+        messages and strip handles whose Mattermost account is a bot.
+
+        If the user lookup fails, preserve the original text rather than risk
+        removing a human mention.
+        """
+        mentioned = {
+            match.group(1).lower()
+            for match in re.finditer(
+                r"(?<![\w.-])@([A-Za-z0-9][A-Za-z0-9._-]{0,63})",
+                text,
+            )
+        }
+        if not mentioned:
+            return text
+
+        users = await self._api_get(
+            f"users?in_channel={channel_id}&per_page=200"
+        )
+        if not isinstance(users, list):
+            return text
+
+        peer_bot_usernames = {
+            str(user.get("username", "")).lower()
+            for user in users
+            if isinstance(user, dict)
+            and user.get("is_bot") is True
+            and str(user.get("username", "")).lower() in mentioned
+            and str(user.get("username", "")).lower()
+            != self._bot_username.lower()
+        }
+        for username in peer_bot_usernames:
+            text = re.sub(
+                rf"(?<![\w.-])@{re.escape(username)}(?![\w.-])",
+                "",
+                text,
+                flags=re.IGNORECASE,
+            )
+        return re.sub(r"[ \t]{2,}", " ", text).strip()
 
 
 

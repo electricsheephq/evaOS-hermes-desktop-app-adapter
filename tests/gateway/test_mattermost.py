@@ -393,6 +393,29 @@ class TestMattermostMentionBehavior:
             await self.adapter._handle_ws_event(self._make_event("hello", channel_id="chan_456"))
             assert self.adapter.handle_message.called
 
+    @pytest.mark.asyncio
+    async def test_multi_bot_fanout_strips_peer_bots_but_preserves_human_mentions(self):
+        """Each addressed bot sees the instruction without handles it may echo."""
+        self.adapter._api_get = AsyncMock(return_value=[
+            {"username": "hermes-bot", "is_bot": True},
+            {"username": "agent-agent3", "is_bot": True},
+            {"username": "agent-louis", "is_bot": True},
+            {"username": "davidcdorman", "is_bot": False},
+        ])
+
+        await self.adapter._handle_ws_event(
+            self._make_event(
+                "ping @hermes-bot @agent-agent3 @agent-louis for @davidcdorman"
+            )
+        )
+
+        assert self.adapter.handle_message.call_count == 1
+        message = self.adapter.handle_message.call_args[0][0]
+        assert message.text == "ping for @davidcdorman"
+        self.adapter._api_get.assert_awaited_once_with(
+            "users?in_channel=chan_456&per_page=200"
+        )
+
 
 class TestMattermostBindingScope:
     def setup_method(self):
