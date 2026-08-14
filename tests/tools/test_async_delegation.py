@@ -761,3 +761,23 @@ def test_gateway_cli_origin_event_left_unrouted():
     runner._enrich_async_delegation_routing(evt)
     assert "platform" not in evt
 
+
+def test_finalize_child_agent_orders_session_end_before_close():
+    """A completed delegated child flushes context state before resource shutdown."""
+    from tools.delegate_tool import _finalize_child_agent_resources
+
+    events = []
+    messages = [{"role": "assistant", "content": "delegated result"}]
+
+    class _Child:
+        _session_messages = messages
+
+        def shutdown_memory_provider(self, session_messages):
+            events.append(("session_end", session_messages))
+
+        def close(self):
+            events.append(("close", None))
+
+    _finalize_child_agent_resources(_Child())
+
+    assert events == [("session_end", messages), ("close", None)]

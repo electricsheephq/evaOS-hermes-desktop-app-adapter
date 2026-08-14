@@ -1824,6 +1824,26 @@ def _resolve_review_model(cfg: Dict[str, Any]) -> tuple[str, str]:
     return b.provider, b.model
 
 
+def _finalize_review_agent(review_agent) -> None:
+    """Finalize a curator session before releasing its owned resources."""
+    try:
+        if review_agent is not None and hasattr(
+            review_agent, "shutdown_memory_provider"
+        ):
+            session_messages = getattr(review_agent, "_session_messages", None)
+            if isinstance(session_messages, list):
+                review_agent.shutdown_memory_provider(session_messages)
+            else:
+                review_agent.shutdown_memory_provider()
+    except Exception:
+        logger.debug("Curator session finalization failed", exc_info=True)
+    try:
+        if review_agent is not None and hasattr(review_agent, "close"):
+            review_agent.close()
+    except Exception:
+        logger.debug("Curator agent close failed", exc_info=True)
+
+
 def _run_llm_review(prompt: str) -> Dict[str, Any]:
     """Spawn an AIAgent fork to run the curator review prompt.
 
@@ -1987,10 +2007,7 @@ def _run_llm_review(prompt: str) -> Dict[str, Any]:
         result_meta["summary"] = result_meta["error"]
     finally:
         if review_agent is not None:
-            try:
-                review_agent.close()
-            except Exception:
-                pass
+            _finalize_review_agent(review_agent)
     return result_meta
 
 
