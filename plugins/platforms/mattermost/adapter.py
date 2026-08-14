@@ -1069,11 +1069,25 @@ class MattermostAdapter(BasePlatformAdapter):
         if not mentioned:
             return text
 
-        users = await self._api_get(
-            f"users?in_channel={channel_id}&per_page=200"
-        )
-        if not isinstance(users, list):
-            return text
+        users: list[Dict[str, Any]] = []
+        resolved_usernames: set[str] = set()
+        page = 0
+        while resolved_usernames != mentioned:
+            page_users = await self._api_get(
+                f"users?in_channel={channel_id}&page={page}&per_page=200"
+            )
+            if not isinstance(page_users, list):
+                return text
+            users.extend(user for user in page_users if isinstance(user, dict))
+            resolved_usernames.update(
+                str(user.get("username", "")).lower()
+                for user in page_users
+                if isinstance(user, dict)
+                and str(user.get("username", "")).lower() in mentioned
+            )
+            if len(page_users) < 200:
+                break
+            page += 1
 
         peer_bot_usernames = {
             str(user.get("username", "")).lower()
@@ -1084,14 +1098,24 @@ class MattermostAdapter(BasePlatformAdapter):
             and str(user.get("username", "")).lower()
             != self._bot_username.lower()
         }
-        for username in peer_bot_usernames:
-            text = re.sub(
-                rf"(?<![\w.-])@{re.escape(username)}(?![\w.-])",
-                "",
-                text,
-                flags=re.IGNORECASE,
-            )
-        return re.sub(r"[ \t]{2,}", " ", text).strip()
+        if not peer_bot_usernames:
+            return text
+        peer_pattern = re.compile(
+            rf"(?<![\w.-])@(?:{'|'.join(re.escape(username) for username in sorted(peer_bot_usernames))})(?![\w.-])",
+            flags=re.IGNORECASE,
+        )
+        for match in reversed(list(peer_pattern.finditer(text))):
+            before = text[:match.start()]
+            after = text[match.end():]
+            if before and after and before[-1] in " \t" and after[0] in " \t":
+                before = before.rstrip(" \t")
+                after = " " + after.lstrip(" \t")
+            elif not before and after[:1] in {" ", "\t"}:
+                after = after.lstrip(" \t")
+            elif not after and before[-1:] in {" ", "\t"}:
+                before = before.rstrip(" \t")
+            text = before + after
+        return text
 
 
 

@@ -3,7 +3,7 @@ import json
 import os
 import time
 import pytest
-from unittest.mock import MagicMock, patch, AsyncMock
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 from gateway.config import Platform, PlatformConfig
 from gateway.platforms.base import MessageType
@@ -413,8 +413,45 @@ class TestMattermostMentionBehavior:
         message = self.adapter.handle_message.call_args[0][0]
         assert message.text == "ping for @davidcdorman"
         self.adapter._api_get.assert_awaited_once_with(
-            "users?in_channel=chan_456&per_page=200"
+            "users?in_channel=chan_456&page=0&per_page=200"
         )
+
+    @pytest.mark.asyncio
+    async def test_multi_bot_fanout_preserves_unrelated_whitespace(self):
+        self.adapter._api_get = AsyncMock(return_value=[
+            {"username": "hermes-bot", "is_bot": True},
+            {"username": "agent-agent3", "is_bot": True},
+        ])
+
+        await self.adapter._handle_ws_event(
+            self._make_event("value  =  expression @hermes-bot @agent-agent3")
+        )
+
+        message = self.adapter.handle_message.call_args[0][0]
+        assert message.text == "value  =  expression"
+
+    @pytest.mark.asyncio
+    async def test_multi_bot_fanout_finds_peer_bot_on_second_users_page(self):
+        first_page = [
+            {"username": f"human-{index}", "is_bot": False}
+            for index in range(200)
+        ]
+        second_page = [
+            {"username": "hermes-bot", "is_bot": True},
+            {"username": "agent-agent3", "is_bot": True},
+        ]
+        self.adapter._api_get = AsyncMock(side_effect=[first_page, second_page])
+
+        await self.adapter._handle_ws_event(
+            self._make_event("ping @hermes-bot @agent-agent3")
+        )
+
+        message = self.adapter.handle_message.call_args[0][0]
+        assert message.text == "ping"
+        assert self.adapter._api_get.await_args_list == [
+            call("users?in_channel=chan_456&page=0&per_page=200"),
+            call("users?in_channel=chan_456&page=1&per_page=200"),
+        ]
 
 
 class TestMattermostBindingScope:
