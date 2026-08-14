@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 import threading
 from pathlib import Path
 
@@ -134,3 +135,41 @@ def test_teardown_closes_owned_db_when_agent_close_is_a_noop(tmp_path):
     )
 
     assert _tracked_connections(db_path) == 0
+
+
+def test_profile_session_teardown_shuts_down_context_engine_sqlite(tmp_path):
+    """A session-owned context engine must release its SQLite resources."""
+    state_path = tmp_path / "state.db"
+    context_path = tmp_path / "lcm.db"
+    db = SessionDB(db_path=state_path)
+    agent = _bare_agent(db, "context-engine-session")
+    db.create_session(session_id=agent.session_id, source="desktop")
+    assert server._transfer_db_to_agent(agent, db) is True
+
+    class SQLiteContextEngine:
+        def __init__(self):
+            self.connection = sqlite3.connect(context_path)
+            self.shutdown_count = 0
+
+        def shutdown(self):
+            self.shutdown_count += 1
+            self.connection.close()
+
+    engine = SQLiteContextEngine()
+    agent.context_compressor = engine
+    assert _sqlite_fds(context_path) >= 1
+
+    server._teardown_session(
+        {
+            "agent": agent,
+            "history": [],
+            "history_lock": threading.Lock(),
+            "profile_home": str(tmp_path),
+            "session_key": agent.session_id,
+        }
+    )
+    agent.close()
+
+    assert engine.shutdown_count == 1
+    assert _sqlite_fds(context_path) == 0
+    assert _tracked_connections(state_path) == 0
