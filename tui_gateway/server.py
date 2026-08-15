@@ -9693,7 +9693,7 @@ def _run_prompt_submit(
                 agent.clear_interrupt()
             except Exception:
                 pass
-    def run():
+    def _run_turn():
         approval_token = None
         session_tokens = []
         home_token = None  # per-turn HERMES_HOME override for a resumed remote profile
@@ -10552,6 +10552,30 @@ def _run_prompt_submit(
                 f"{type(_drain_exc).__name__}: {_drain_exc}",
                 file=sys.stderr,
             )
+
+    def run():
+        try:
+            _run_turn()
+        finally:
+            # A prompt runs on a fresh thread while its agent can borrow the
+            # launch profile's process-long SessionDB.  WAL reads are
+            # thread-local, so the shared DB must release this dead worker's
+            # reader at the outermost thread boundary after every post-turn
+            # follow-up and notification path has finished.
+            try:
+                session_db = getattr(agent, "_session_db", None)
+                release_reader = getattr(
+                    session_db,
+                    "release_current_thread_read_connection",
+                    None,
+                )
+                if callable(release_reader):
+                    release_reader()
+            except Exception:
+                logger.debug(
+                    "Turn-thread SessionDB reader release failed",
+                    exc_info=True,
+                )
 
     run_thread = threading.Thread(target=run, daemon=True)
     # Serialize the final lifecycle re-check and thread publication against

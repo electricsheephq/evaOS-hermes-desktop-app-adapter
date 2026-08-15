@@ -16661,6 +16661,77 @@ def test_prompt_submit_passes_persist_user_message_to_agent(monkeypatch):
         server._sessions.pop("sid", None)
 
 
+@pytest.mark.parametrize("raise_from_turn", [False, True])
+def test_prompt_submit_releases_turn_thread_session_db_reader(
+    monkeypatch, tmp_path, raise_from_turn
+):
+    """A short-lived turn thread must not retain its shared state.db reader."""
+    releases = []
+    released = threading.Event()
+    session_db = SessionDB(db_path=tmp_path / "state.db")
+    release_reader = session_db.release_current_thread_read_connection
+
+    def _release_reader():
+        releases.append(threading.get_ident())
+        try:
+            return release_reader()
+        finally:
+            released.set()
+
+    monkeypatch.setattr(
+        session_db,
+        "release_current_thread_read_connection",
+        _release_reader,
+    )
+
+    class _Agent:
+        _session_db = session_db
+
+        def run_conversation(
+            self, prompt, conversation_history=None, stream_callback=None, **_kwargs
+        ):
+            self._session_db.get_session("missing-session")
+            assert self._session_db._read_conns
+            if raise_from_turn:
+                raise RuntimeError("turn failed")
+            return {
+                "final_response": "reply",
+                "messages": [{"role": "assistant", "content": "reply"}],
+            }
+
+    session = _session(agent=_Agent())
+    server._sessions["sid_reader_release"] = session
+    try:
+        monkeypatch.setattr(server, "_get_usage", lambda _a: {})
+        monkeypatch.setattr(server, "render_message", lambda _t, _c: "")
+        monkeypatch.setattr(server, "_emit", lambda *a: None)
+        monkeypatch.setattr(
+            "agent.title_generator.maybe_auto_title",
+            lambda *args, **kwargs: None,
+        )
+
+        server.handle_request(
+            {
+                "id": "1",
+                "method": "prompt.submit",
+                "params": {
+                    "session_id": "sid_reader_release",
+                    "text": "hi",
+                },
+            }
+        )
+
+        assert released.wait(timeout=5)
+        worker = session["_run_thread"]
+        worker.join(timeout=5)
+        assert not worker.is_alive()
+        assert releases == [worker.ident]
+        assert session_db._read_conns == set()
+    finally:
+        server._sessions.pop("sid_reader_release", None)
+        session_db.close()
+
+
 def test_prompt_submit_releases_old_history_before_heap_trim(monkeypatch):
     """The trim boundary must not retain the just-pruned history snapshots."""
     observed = {}
