@@ -10382,23 +10382,35 @@ def _run_prompt_submit(
             )
 
     run_thread = threading.Thread(target=run, daemon=True)
-    # Serialize the final lifecycle re-check, thread publication, and start
-    # against _pop_session_by_id's close ownership claim. The earlier
-    # history-lock check is only a fast path: close may win after it but before
-    # this point. Starting while holding the registry lock guarantees that a
-    # later close observes this exact thread; if close won first, _closing is
-    # already visible and no successor starts against torn-down resources.
+    # Serialize the final lifecycle re-check and thread publication against
+    # _pop_session_by_id's close ownership claim. The earlier history-lock
+    # check is only a fast path: close may win after it but before this point.
+    #
+    # The transport write must stay outside the registry lock so a blocked
+    # renderer cannot prevent close from claiming the session. Emit before
+    # starting the worker so message.start always precedes turn output, then
+    # re-check under the lock: if close won during the emit, do not run against
+    # resources that teardown may already have closed.
     with _sessions_lock:
         registered = _sessions.get(sid)
-        can_start = (
+        published = (
             not session.get("_closing")
             and (registered is None or registered is session)
         )
-        if can_start:
+        if published:
             session["_run_thread"] = run_thread
-            run_thread.start()
-    if can_start:
+    if published:
         _emit("message.start", sid)
+        with _sessions_lock:
+            registered = _sessions.get(sid)
+            can_start = (
+                not session.get("_closing")
+                and (registered is None or registered is session)
+            )
+            if can_start:
+                run_thread.start()
+    else:
+        can_start = False
     if not can_start:
         with session["history_lock"]:
             session["running"] = False

@@ -4954,12 +4954,12 @@ def test_run_prompt_submit_does_not_hold_registry_lock_during_start_emit(
         dispatch_thread.join(timeout=2)
         pop_thread.join(timeout=2)
         run_thread = session.get("_run_thread")
-        if run_thread is not None:
+        if run_thread is not None and run_thread.is_alive():
             run_thread.join(timeout=2)
         server._sessions.pop(sid, None)
 
-    assert dispatch_results == [True]
-    assert turns == ["turn"]
+    assert dispatch_results == [False]
+    assert turns == []
 
 
 @pytest.mark.parametrize("exit_code", [0, 7])

@@ -241,11 +241,12 @@ class TestNotificationPollerLoopKanbanWiring:
         monkeypatch.setattr(
             server, "_emit", lambda event, sid, payload=None: emits.append((event, payload))
         )
-        monkeypatch.setattr(
-            server,
-            "_run_prompt_submit",
-            lambda rid, sid, sess, text: submits.append(text),
-        )
+        def _submit(rid, sid, sess, text):
+            submits.append(text)
+            server._emit("message.start", sid)
+            return True
+
+        monkeypatch.setattr(server, "_run_prompt_submit", _submit)
         stop = threading.Event()
         thread = threading.Thread(
             target=server._notification_poller_loop,
