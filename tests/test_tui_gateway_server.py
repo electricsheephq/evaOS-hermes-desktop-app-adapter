@@ -4736,6 +4736,78 @@ def test_notification_poller_delivers_owned_events(
             process_registry.completion_queue.get_nowait()
 
 
+@pytest.mark.parametrize("drain_only", [False, True])
+def test_notification_poller_releases_claim_when_dispatch_is_rejected(
+    monkeypatch, drain_only
+):
+    """A rejected turn must remain pending instead of being acknowledged."""
+    import queue as _queue_mod
+
+    from tools import async_delegation
+    from tools.process_registry import process_registry
+
+    session = _session(session_key="closing-notification-owner")
+    event = {
+        "type": "async_delegation",
+        "delegation_id": "delegation-close-race",
+        "session_key": "closing-notification-owner",
+        "goal": "return the completed result",
+        "summary": "done",
+        "status": "completed",
+    }
+    isolated_queue: _queue_mod.Queue = _queue_mod.Queue()
+    isolated_queue.put(event)
+    completed = []
+    released = []
+    emitted = []
+
+    monkeypatch.setattr(process_registry, "completion_queue", isolated_queue)
+    monkeypatch.setattr(server, "_get_db", lambda: None)
+    monkeypatch.setattr(
+        server,
+        "_emit",
+        lambda *args, **_kwargs: emitted.append(args),
+    )
+    monkeypatch.setattr(server, "_run_prompt_submit", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(
+        async_delegation,
+        "claim_event_delivery",
+        lambda _event, _consumer: "close-race-claim",
+    )
+    monkeypatch.setattr(
+        async_delegation,
+        "complete_event_delivery",
+        lambda claimed_event, claim: completed.append((claimed_event, claim)),
+    )
+    monkeypatch.setattr(
+        async_delegation,
+        "release_event_delivery",
+        lambda claimed_event, claim: released.append((claimed_event, claim)),
+    )
+    server._sessions["sid-closing-notification"] = session
+    stop = threading.Event() if drain_only else _StopAfterOneNotificationPoll()
+    if drain_only:
+        stop.set()
+
+    try:
+        server._notification_poller_loop(
+            stop,
+            "sid-closing-notification",
+            session,
+        )
+
+        assert completed == []
+        assert released == [(event, "close-race-claim")]
+        assert session["running"] is False
+        assert [args for args in emitted if args[0] == "message.start"] == []
+        assert isolated_queue.qsize() == 1
+        assert isolated_queue.get_nowait() is event
+    finally:
+        server._sessions.pop("sid-closing-notification", None)
+        while not isolated_queue.empty():
+            isolated_queue.get_nowait()
+
+
 def _configure_immediate_prompt_run(
     monkeypatch, tmp_path, *, immediate_threads=True
 ):
