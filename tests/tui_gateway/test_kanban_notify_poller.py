@@ -36,6 +36,11 @@ def _accept_claims(session: dict) -> None:
     _complete_accepted_kanban_claims(session)
 
 
+def test_accepted_claim_completion_ignores_uninitialized_session():
+    """A poller racing session initialization must not crash the gateway."""
+    _complete_accepted_kanban_claims({})
+
+
 def _create_subscribed_task(*, chat_id: str = SESSION_KEY, platform: str = "tui"):
     conn = kb.connect()
     try:
