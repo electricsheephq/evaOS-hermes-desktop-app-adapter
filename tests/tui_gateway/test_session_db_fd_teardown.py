@@ -219,6 +219,7 @@ def test_session_close_waits_for_completed_turn_thread_before_context_shutdown(t
         "profile_home": str(tmp_path),
         "session_key": agent.session_id,
         "_run_thread": run_thread,
+        "_turn_terminal_emitted": True,
     }
 
     try:
@@ -231,3 +232,78 @@ def test_session_close_waits_for_completed_turn_thread_before_context_shutdown(t
         run_thread.join(timeout=1)
         engine.connection.close()
         db.close()
+
+
+def test_active_turn_close_does_not_wait_past_shutdown_grace(monkeypatch):
+    """Signal shutdown must not spend its grace joining an active turn."""
+
+    class ActiveTurn:
+        def __init__(self):
+            self.join_calls = []
+
+        def is_alive(self):
+            return True
+
+        def join(self, timeout=None):
+            self.join_calls.append(timeout)
+
+    run_thread = ActiveTurn()
+    torn_down = []
+    monkeypatch.setattr(
+        server,
+        "_teardown_session",
+        lambda session, *, end_reason="tui_close": torn_down.append(end_reason),
+    )
+
+    assert server._teardown_popped_session(
+        {
+            "_run_thread": run_thread,
+            "_turn_terminal_emitted": False,
+        },
+        end_reason="tui_shutdown",
+    )
+    assert run_thread.join_calls == []
+    assert torn_down == ["tui_shutdown"]
+
+
+def test_popped_session_blocks_queued_and_direct_followup_dispatch(monkeypatch):
+    """A close ownership claim forbids successor turns from the old tail."""
+    sid = "closing-followup-session"
+    dispatched = []
+    session = {
+        "history_lock": threading.Lock(),
+        "running": False,
+        "queued_prompt": {"text": "next", "transport": None},
+        "_queued_prompt_generation": 0,
+    }
+    monkeypatch.setattr(
+        server,
+        "_run_prompt_submit",
+        lambda *args, **kwargs: dispatched.append((args, kwargs)),
+    )
+
+    with server._sessions_lock:
+        server._sessions[sid] = session
+    try:
+        popped = server._pop_session_by_id(sid)
+        assert popped is session
+        assert session["_closing"] is True
+        assert server._drain_queued_prompt("rid", sid, session) is False
+        assert dispatched == []
+    finally:
+        with server._sessions_lock:
+            server._sessions.pop(sid, None)
+
+
+def test_run_prompt_submit_refuses_closing_session():
+    """The dispatch boundary closes the check-then-start race."""
+    session = {
+        "history_lock": threading.Lock(),
+        "running": True,
+        "_closing": True,
+    }
+
+    server._run_prompt_submit("rid", "sid", session, "next")
+
+    assert session["running"] is False
+    assert "_run_thread" not in session

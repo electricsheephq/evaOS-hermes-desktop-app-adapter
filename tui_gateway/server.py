@@ -895,7 +895,15 @@ def _pop_session_by_id(sid: str) -> dict | None:
     the global ``_session_resume_lock``.
     """
     with _sessions_lock:
-        session = _sessions.pop(sid, None)
+        session = _sessions.get(sid)
+        if session is not None:
+            # Publish the lifecycle transition before detaching the record.
+            # A turn that already emitted ``message.complete`` may still be
+            # running its post-finally tail; without this marker it can start
+            # a queued prompt or goal continuation after close has claimed the
+            # session.
+            session["_closing"] = True
+            _sessions.pop(sid, None)
     if session is None:
         return None
     # The session is already out of _sessions here, so downstream teardown
@@ -923,7 +931,12 @@ def _teardown_popped_session(
     # atomically popped the session, so no new turn can start. Give the already
     # terminal tail a bounded chance to finish before closing owned resources.
     run_thread = session.get("_run_thread")
-    if run_thread is not None and run_thread is not threading.current_thread():
+    terminal_emitted = bool(session.get("_turn_terminal_emitted"))
+    if (
+        terminal_emitted
+        and run_thread is not None
+        and run_thread is not threading.current_thread()
+    ):
         try:
             if run_thread.is_alive():
                 run_thread.join(timeout=_TURN_SETTLE_BEFORE_CLOSE_SECONDS)
@@ -7581,6 +7594,8 @@ def _drain_queued_prompt(rid, sid: str, session: dict) -> bool:
     claim-under-lock pattern used by the goal-continuation re-fire.
     """
     with session["history_lock"]:
+        if session.get("_closing"):
+            return False
         queued = session.get("queued_prompt")
         if not queued or session.get("running"):
             return False
@@ -7698,6 +7713,7 @@ def _emit_terminal_turn_error(sid: str, session: dict, error: Any) -> None:
     """
     with session["history_lock"]:
         _fail_inflight_turn(session, error)
+        session["_turn_terminal_emitted"] = True
         turn = session.get("inflight_turn") or {}
         message = str(turn.get("error") or "turn failed")
         partial = str(turn.get("assistant") or "")
@@ -9496,6 +9512,10 @@ def _run_prompt_submit(
     queued_prompt_generation: int | None = None,
 ) -> bool:
     with session["history_lock"]:
+        if session.get("_closing"):
+            session["running"] = False
+            return
+        session["_turn_terminal_emitted"] = False
         if (
             queued_prompt_generation is not None
             and int(session.get("_queued_prompt_generation", 0)) != queued_prompt_generation
@@ -10001,6 +10021,8 @@ def _run_prompt_submit(
                     (result.get("error") if isinstance(result, dict) else "") or raw
                 )
                 payload["recoverable"] = True
+            with session["history_lock"]:
+                session["_turn_terminal_emitted"] = True
             _retire_turn_marker(session, marker_key)
             _emit("message.complete", sid, payload)
 
@@ -10262,7 +10284,7 @@ def _run_prompt_submit(
         # we check that guard before re-firing.
         if goal_followup:
             with session["history_lock"]:
-                if session.get("running"):
+                if session.get("running") or session.get("_closing"):
                     # User already sent something — their turn wins,
                     # the judge will re-run on the next turn anyway.
                     return
@@ -10302,7 +10324,7 @@ def _run_prompt_submit(
             )
             for index, (_evt, synth) in enumerate(drained):
                 with session["history_lock"]:
-                    if session.get("running"):
+                    if session.get("running") or session.get("_closing"):
                         for pending_evt, _pending_synth in drained[index:]:
                             process_registry.completion_queue.put(pending_evt)
                         break
