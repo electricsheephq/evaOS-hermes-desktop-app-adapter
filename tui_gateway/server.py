@@ -9037,11 +9037,14 @@ def _format_kanban_event_text(sub: dict, task, ev, board_slug: str) -> Optional[
 
 def _complete_accepted_kanban_claims(session: dict) -> None:
     """Acknowledge durable claims only after their agent turn was accepted."""
+    history_lock = session.get("history_lock")
+    if history_lock is None:
+        return
     try:
         from hermes_cli import kanban_db as _kb
     except Exception:
         return
-    with session["history_lock"]:
+    with history_lock:
         claims = [
             dict(claim)
             for claim in (session.get("_kanban_delivery_claims") or [])
@@ -9068,7 +9071,7 @@ def _complete_accepted_kanban_claims(session: dict) -> None:
         finally:
             conn.close()
     if completed_keys:
-        with session["history_lock"]:
+        with history_lock:
             remaining = [
                 claim
                 for claim in (session.get("_kanban_delivery_claims") or [])
