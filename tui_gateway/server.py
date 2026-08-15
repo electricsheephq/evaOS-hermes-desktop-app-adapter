@@ -8987,6 +8987,7 @@ _KANBAN_NOTIFY_KINDS = (
 )
 _KANBAN_SILENT_KINDS = frozenset({"archived", "unblocked"})
 _KANBAN_POLL_SECONDS = 5.0
+_KANBAN_DELIVERY_OWNER = uuid.uuid4().hex
 
 
 def _format_kanban_event_text(sub: dict, task, ev, board_slug: str) -> Optional[str]:
@@ -9035,15 +9036,19 @@ def _format_kanban_event_text(sub: dict, task, ev, board_slug: str) -> Optional[
     return None
 
 
-def _complete_accepted_kanban_claims(session: dict) -> None:
+def _complete_accepted_kanban_claims(
+    session: dict,
+    *,
+    required_keys: set[tuple] | None = None,
+) -> bool:
     """Acknowledge durable claims only after their agent turn was accepted."""
     history_lock = session.get("history_lock")
     if history_lock is None:
-        return
+        return not required_keys
     try:
         from hermes_cli import kanban_db as _kb
     except Exception:
-        return
+        return not required_keys
     with history_lock:
         claims = [
             dict(claim)
@@ -9064,6 +9069,7 @@ def _complete_accepted_kanban_claims(session: dict) -> None:
                 chat_id=claim["chat_id"],
                 thread_id=claim["thread_id"],
                 event_ids=claim["event_ids"],
+                delivery_owner=_KANBAN_DELIVERY_OWNER,
             ):
                 completed_keys.add(tuple(claim["key"]))
         except Exception:
@@ -9081,6 +9087,7 @@ def _complete_accepted_kanban_claims(session: dict) -> None:
             session["_kanban_delivery_claim_keys"] = {
                 tuple(claim["key"]) for claim in remaining
             }
+    return not required_keys or required_keys.issubset(completed_keys)
 
 
 def _collect_kanban_notifications(session: dict) -> list:
@@ -9169,6 +9176,7 @@ def _collect_kanban_notifications(session: dict) -> list:
                     thread_id=sub.get("thread_id") or "",
                     kinds=_KANBAN_NOTIFY_KINDS,
                     persist_delivery=True,
+                    delivery_owner=_KANBAN_DELIVERY_OWNER,
                 )
                 if not events:
                     continue
@@ -9205,6 +9213,10 @@ def _collect_kanban_notifications(session: dict) -> list:
                     )
                     tracked_keys.add(claim_key)
                     session["_kanban_delivery_claim_keys"] = tracked_keys
+                    # Keep each agent turn tied to exactly one durable claim.
+                    # That lets the pre-turn acknowledgement fence stay
+                    # all-or-nothing even when several boards have events.
+                    return texts
                 else:
                     # Silent events are intentionally delivered by advancing
                     # the durable cursor without producing an agent turn.
@@ -9216,6 +9228,7 @@ def _collect_kanban_notifications(session: dict) -> list:
                             chat_id=sub["chat_id"],
                             thread_id=sub.get("thread_id") or "",
                             event_ids=event_ids,
+                            delivery_owner=_KANBAN_DELIVERY_OWNER,
                         )
                     except Exception:
                         pass
@@ -9278,23 +9291,57 @@ def _notification_poller_loop(
                 if _batch:
                     rid = f"__notif__{int(time.time() * 1000)}"
                     try:
+                        with session["history_lock"]:
+                            claim_keys = {
+                                tuple(claim["key"])
+                                for claim in (
+                                    session.get("_kanban_delivery_claims") or []
+                                )
+                                if not claim.get("accepted")
+                            }
+
+                        def accept_claims_after_turn_recorded() -> bool:
+                            with session["history_lock"]:
+                                for claim in (
+                                    session.get("_kanban_delivery_claims") or []
+                                ):
+                                    if tuple(claim["key"]) in claim_keys:
+                                        claim["accepted"] = True
+                            if _complete_accepted_kanban_claims(
+                                session,
+                                required_keys=claim_keys,
+                            ):
+                                return True
+                            # The durable row remains authoritative. Drop the
+                            # failed in-memory projection so the next poll can
+                            # reclaim/reload it instead of acknowledging it
+                            # without another recorded turn.
+                            with session["history_lock"]:
+                                remaining = [
+                                    claim
+                                    for claim in (
+                                        session.get("_kanban_delivery_claims") or []
+                                    )
+                                    if tuple(claim["key"]) not in claim_keys
+                                ]
+                                session["_kanban_delivery_claims"] = remaining
+                                session["_kanban_delivery_claim_keys"] = {
+                                    tuple(claim["key"]) for claim in remaining
+                                }
+                            return False
+
                         dispatch_started = _run_prompt_submit(
                             rid,
                             sid,
                             session,
                             "\n".join(_batch),
+                            on_turn_recorded=accept_claims_after_turn_recorded,
                         )
                         if dispatch_started is False:
                             with session["history_lock"]:
                                 session["_kanban_pending"] = []
                                 session["running"] = False
                             break
-                        with session["history_lock"]:
-                            for claim in (
-                                session.get("_kanban_delivery_claims") or []
-                            ):
-                                claim["accepted"] = True
-                        _complete_accepted_kanban_claims(session)
                     except Exception as exc:
                         print(
                             f"[tui_gateway] kanban notification dispatch failed: "
@@ -9617,6 +9664,7 @@ def _run_prompt_submit(
     display_metadata: dict | None = None,
     image_paths: list[str] | None = None,
     queued_prompt_generation: int | None = None,
+    on_turn_recorded: Callable[[], bool] | None = None,
 ) -> bool:
     with session["history_lock"]:
         if session.get("_closing"):
@@ -9668,8 +9716,44 @@ def _run_prompt_submit(
         marker_key = str(session.get("session_key") or "")
         marker_attempt = int(session.pop("_auto_continue_attempt", 0) or 0)
         marker_text = session.pop("_auto_continue_prompt", None) or text
+        durable_precondition_error: RuntimeError | None = None
         if isinstance(marker_text, str) and marker_text.strip():
-            record_turn_start(marker_home, marker_key, marker_text, attempts=marker_attempt)
+            marker_recorded = record_turn_start(
+                marker_home,
+                marker_key,
+                marker_text,
+                attempts=marker_attempt,
+            )
+            if on_turn_recorded is not None:
+                if not marker_recorded:
+                    durable_precondition_error = RuntimeError(
+                        "durable turn marker could not be recorded"
+                    )
+                else:
+                    try:
+                        accepted = on_turn_recorded()
+                    except Exception as exc:
+                        logger.warning(
+                            "post-record turn callback failed: %s: %s",
+                            type(exc).__name__,
+                            exc,
+                        )
+                        accepted = False
+                    if not accepted:
+                        durable_precondition_error = RuntimeError(
+                            "durable notification claim could not be acknowledged"
+                        )
+        elif on_turn_recorded is not None:
+            durable_precondition_error = RuntimeError(
+                "durable turn marker requires a non-empty session and prompt"
+            )
+        if durable_precondition_error is not None:
+            _emit_terminal_turn_error(sid, session, durable_precondition_error)
+            with session["history_lock"]:
+                session["running"] = False
+                session["last_active"] = time.time()
+            _emit_settled_session_info(sid, session, agent)
+            return False
         try:
             from tools.approval import (
                 reset_current_session_key,

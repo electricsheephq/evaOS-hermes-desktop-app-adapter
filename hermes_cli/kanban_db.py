@@ -9905,24 +9905,64 @@ def unseen_events_for_sub(
     return max_id, out
 
 
-def _decode_pending_event_ids(raw: Any) -> list[int]:
+NOTIFY_DELIVERY_LEASE_SECONDS = 30
+
+
+def _decode_pending_delivery(raw: Any) -> tuple[list[int], str, int]:
     if not raw:
-        return []
+        return [], "", 0
     try:
         values = json.loads(str(raw))
     except Exception:
-        return []
-    if not isinstance(values, list):
-        return []
+        return [], "", 0
+    owner = ""
+    claimed_at = 0
+    if isinstance(values, dict):
+        raw_ids = values.get("event_ids")
+        owner = str(values.get("owner") or "")
+        try:
+            claimed_at = int(values.get("claimed_at") or 0)
+        except (TypeError, ValueError):
+            claimed_at = 0
+    elif isinstance(values, list):
+        # Backward compatibility for claims written before durable ownership
+        # was added. The first current gateway may take these over.
+        raw_ids = values
+    else:
+        return [], "", 0
+    if not isinstance(raw_ids, list):
+        return [], owner, claimed_at
     event_ids: list[int] = []
-    for value in values:
+    for value in raw_ids:
         try:
             event_id = int(value)
         except (TypeError, ValueError):
             continue
         if event_id > 0:
             event_ids.append(event_id)
+    return event_ids, owner, claimed_at
+
+
+def _decode_pending_event_ids(raw: Any) -> list[int]:
+    event_ids, _owner, _claimed_at = _decode_pending_delivery(raw)
     return event_ids
+
+
+def _encode_pending_delivery(
+    event_ids: Iterable[int],
+    *,
+    owner: str,
+    claimed_at: int,
+) -> str:
+    return json.dumps(
+        {
+            "event_ids": [int(event_id) for event_id in event_ids],
+            "owner": owner,
+            "claimed_at": int(claimed_at),
+        },
+        separators=(",", ":"),
+        sort_keys=True,
+    )
 
 
 def _events_by_ids(
@@ -9976,6 +10016,8 @@ def claim_unseen_events_for_sub(
     thread_id: Optional[str] = None,
     kinds: Optional[Iterable[str]] = None,
     persist_delivery: bool = False,
+    delivery_owner: Optional[str] = None,
+    delivery_now: Optional[int] = None,
 ) -> tuple[int, int, list[Event]]:
     """Atomically claim unseen notification events for one subscription.
 
@@ -9991,11 +10033,15 @@ def claim_unseen_events_for_sub(
     ``new_cursor`` on success or call :func:`rewind_notify_cursor` if delivery
     failed before any terminal unsubscribe removed the row.
 
-    ``persist_delivery=True`` additionally stores the claimed event ids on the
-    subscription in the same transaction as the cursor advance. A replacement
-    gateway process receives those pending events again until
-    :func:`complete_notify_delivery` acknowledges them.
+    ``persist_delivery=True`` additionally stores the claimed event ids and a
+    durable owner lease on the subscription in the same transaction as the
+    cursor advance. The same process may replay/refresh its claim; a replacement
+    gateway may take it over only after the old lease expires.
     """
+    owner = str(delivery_owner or "").strip()
+    if persist_delivery and not owner:
+        raise ValueError("delivery_owner is required for durable notification claims")
+    now = int(time.time()) if delivery_now is None else int(delivery_now)
     with write_txn(conn):
         row = conn.execute(
             "SELECT last_event_id, pending_event_ids FROM kanban_notify_subs "
@@ -10006,8 +10052,37 @@ def claim_unseen_events_for_sub(
             return 0, 0, []
         old_cursor = int(row["last_event_id"])
         if persist_delivery:
-            pending_ids = _decode_pending_event_ids(row["pending_event_ids"])
+            pending_raw = row["pending_event_ids"]
+            pending_ids, pending_owner, pending_claimed_at = _decode_pending_delivery(
+                pending_raw
+            )
             if pending_ids:
+                if (
+                    pending_owner
+                    and pending_owner != owner
+                    and pending_claimed_at + NOTIFY_DELIVERY_LEASE_SECONDS > now
+                ):
+                    return old_cursor, old_cursor, []
+                refreshed_raw = _encode_pending_delivery(
+                    pending_ids,
+                    owner=owner,
+                    claimed_at=now,
+                )
+                cur = conn.execute(
+                    "UPDATE kanban_notify_subs SET pending_event_ids = ? "
+                    "WHERE task_id = ? AND platform = ? AND chat_id = ? "
+                    "AND thread_id = ? AND pending_event_ids = ?",
+                    (
+                        refreshed_raw,
+                        task_id,
+                        platform,
+                        chat_id,
+                        thread_id or "",
+                        pending_raw,
+                    ),
+                )
+                if cur.rowcount != 1:
+                    return old_cursor, old_cursor, []
                 return (
                     old_cursor,
                     old_cursor,
@@ -10028,7 +10103,11 @@ def claim_unseen_events_for_sub(
         if not events:
             return old_cursor, old_cursor, []
         pending_json = (
-            json.dumps([int(event.id) for event in events], separators=(",", ":"))
+            _encode_pending_delivery(
+                [int(event.id) for event in events],
+                owner=owner,
+                claimed_at=now,
+            )
             if persist_delivery
             else None
         )
@@ -10066,6 +10145,7 @@ def complete_notify_delivery(
     chat_id: str,
     thread_id: Optional[str] = None,
     event_ids: Iterable[int],
+    delivery_owner: Optional[str] = None,
 ) -> bool:
     """Acknowledge one durable notification delivery.
 
@@ -10085,7 +10165,12 @@ def complete_notify_delivery(
         if row is None:
             return False
         pending_raw = row["pending_event_ids"]
-        if _decode_pending_event_ids(pending_raw) != expected_ids:
+        pending_ids, pending_owner, _pending_claimed_at = _decode_pending_delivery(
+            pending_raw
+        )
+        if pending_ids != expected_ids:
+            return False
+        if pending_owner and pending_owner != str(delivery_owner or ""):
             return False
         task = conn.execute(
             "SELECT status FROM tasks WHERE id = ?",

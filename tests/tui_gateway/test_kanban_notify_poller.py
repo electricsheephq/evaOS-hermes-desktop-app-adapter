@@ -264,9 +264,11 @@ class TestNotificationPollerLoopKanbanWiring:
             server, "_emit", lambda event, sid, payload=None: emits.append((event, payload))
         )
         if submit is None:
-            def submit(rid, sid, sess, text):
+            def submit(rid, sid, sess, text, *, on_turn_recorded=None):
                 submits.append(text)
                 server._emit("message.start", sid)
+                if on_turn_recorded is not None:
+                    on_turn_recorded()
                 return True
 
         monkeypatch.setattr(server, "_run_prompt_submit", submit)
@@ -317,6 +319,65 @@ class TestNotificationPollerLoopKanbanWiring:
         assert any(tid in text for text in submits), submits
         assert session["running"] is True  # poller claimed the turn
         assert not session.get("_kanban_pending")
+
+    def test_claim_ack_waits_for_durable_turn_record(self, monkeypatch):
+        tid = _create_subscribed_task()
+        _complete(tid, summary="record before ack")
+        session = self._poller_session(running=False)
+        recorded_callbacks = []
+
+        def accept(_rid, _sid, _session, _text, *, on_turn_recorded=None):
+            recorded_callbacks.append(on_turn_recorded)
+            return True
+
+        stop, thread, _emits, _submits = self._start_poller(
+            session,
+            monkeypatch,
+            submit=accept,
+        )
+        try:
+            assert self._wait_for(lambda: recorded_callbacks)
+            rows = _sub_rows(tid)
+            assert len(rows) == 1
+            assert rows[0]["pending_event_ids"]
+
+            recorded_callbacks[0]()
+            assert self._wait_for(lambda: _sub_rows(tid) == [])
+        finally:
+            stop.set()
+            thread.join(timeout=5)
+
+    def test_failed_claim_ack_keeps_sqlite_claim_for_retry(
+        self, monkeypatch
+    ):
+        import tui_gateway.server as server
+
+        tid = _create_subscribed_task()
+        _complete(tid, summary="retry after failed ack")
+        session = self._poller_session(running=False)
+        monkeypatch.setattr(
+            server,
+            "_complete_accepted_kanban_claims",
+            lambda *_args, **_kwargs: False,
+        )
+
+        stop, thread, _emits, submits = self._start_poller(
+            session,
+            monkeypatch,
+        )
+        try:
+            assert self._wait_for(lambda: submits)
+            assert self._wait_for(
+                lambda: not session.get("_kanban_delivery_claims")
+            )
+        finally:
+            stop.set()
+            thread.join(timeout=5)
+
+        rows = _sub_rows(tid)
+        assert len(rows) == 1
+        assert rows[0]["pending_event_ids"]
+        assert not session.get("_kanban_delivery_claim_keys")
 
     def test_busy_session_buffers_then_flushes_when_idle(self, monkeypatch):
         tid = _create_subscribed_task()
@@ -371,8 +432,12 @@ class TestNotificationPollerLoopKanbanWiring:
         resumed = self._poller_session(running=False)
         delivered: list[str] = []
 
-        def accept(_rid, _sid, _session, text):
+        def accept(
+            _rid, _sid, _session, text, *, on_turn_recorded=None
+        ):
             delivered.append(text)
+            if on_turn_recorded is not None:
+                on_turn_recorded()
             return True
 
         stop, thread, _emits, _submits = self._start_poller(

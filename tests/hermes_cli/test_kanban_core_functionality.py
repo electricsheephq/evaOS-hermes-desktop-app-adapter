@@ -220,12 +220,14 @@ def test_notify_claim_can_remain_durable_until_delivery_completes(kanban_home):
             chat_id="session-1",
             kinds=["completed", "blocked"],
             persist_delivery=True,
+            delivery_owner="gateway-a",
+            delivery_now=100,
         )
         assert claimed_cursor > 0
         assert [ev.kind for ev in events] == ["completed"]
 
-        # A replacement gateway process/connection replays the durable pending
-        # delivery instead of treating the advanced cursor as complete.
+        # A second live gateway cannot replay another process's unexpired
+        # durable claim.
         _, replay_cursor, replay_events = kb.claim_unseen_events_for_sub(
             conn2,
             task_id=tid,
@@ -233,6 +235,23 @@ def test_notify_claim_can_remain_durable_until_delivery_completes(kanban_home):
             chat_id="session-1",
             kinds=["completed", "blocked"],
             persist_delivery=True,
+            delivery_owner="gateway-b",
+            delivery_now=101,
+        )
+        assert replay_cursor == claimed_cursor
+        assert replay_events == []
+
+        # Once the old owner's lease expires, a replacement process can take
+        # over and replay the same durable event ids.
+        _, replay_cursor, replay_events = kb.claim_unseen_events_for_sub(
+            conn2,
+            task_id=tid,
+            platform="tui",
+            chat_id="session-1",
+            kinds=["completed", "blocked"],
+            persist_delivery=True,
+            delivery_owner="gateway-b",
+            delivery_now=100 + kb.NOTIFY_DELIVERY_LEASE_SECONDS + 1,
         )
         assert replay_cursor == claimed_cursor
         assert [ev.id for ev in replay_events] == [ev.id for ev in events]
@@ -240,11 +259,20 @@ def test_notify_claim_can_remain_durable_until_delivery_completes(kanban_home):
         assert pending[0]["pending_event_ids"]
 
         assert kb.complete_notify_delivery(
+            conn1,
+            task_id=tid,
+            platform="tui",
+            chat_id="session-1",
+            event_ids=[ev.id for ev in events],
+            delivery_owner="gateway-a",
+        ) is False
+        assert kb.complete_notify_delivery(
             conn2,
             task_id=tid,
             platform="tui",
             chat_id="session-1",
             event_ids=[ev.id for ev in events],
+            delivery_owner="gateway-b",
         ) is True
         # Terminal-task subscriptions are removed only after delivery accepts.
         assert kb.list_notify_subs(conn2, tid) == []
@@ -267,6 +295,7 @@ def test_nonterminal_delivery_ack_retains_later_terminal_event(kanban_home):
             chat_id="session-1",
             kinds=["completed", "blocked"],
             persist_delivery=True,
+            delivery_owner="gateway-a",
         )
         assert [event.kind for event in blocked_events] == ["blocked"]
 
@@ -278,6 +307,7 @@ def test_nonterminal_delivery_ack_retains_later_terminal_event(kanban_home):
             platform="tui",
             chat_id="session-1",
             event_ids=[event.id for event in blocked_events],
+            delivery_owner="gateway-a",
         )
 
         rows = kb.list_notify_subs(conn, tid)
@@ -290,6 +320,7 @@ def test_nonterminal_delivery_ack_retains_later_terminal_event(kanban_home):
             chat_id="session-1",
             kinds=["completed", "blocked"],
             persist_delivery=True,
+            delivery_owner="gateway-a",
         )
         assert [event.kind for event in terminal_events] == ["completed"]
     finally:
@@ -310,6 +341,7 @@ def test_gc_retains_events_named_by_pending_delivery(kanban_home):
             chat_id="session-1",
             kinds=["completed", "blocked"],
             persist_delivery=True,
+            delivery_owner="gateway-a",
         )
         event_ids = [event.id for event in events]
         assert event_ids
@@ -328,6 +360,7 @@ def test_gc_retains_events_named_by_pending_delivery(kanban_home):
             chat_id="session-1",
             kinds=["completed", "blocked"],
             persist_delivery=True,
+            delivery_owner="gateway-a",
         )
         assert [event.id for event in replay_events] == event_ids
     finally:
