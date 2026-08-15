@@ -306,8 +306,9 @@ def test_run_prompt_submit_refuses_closing_session():
         "_closing": True,
     }
 
-    server._run_prompt_submit("rid", "sid", session, "next")
+    dispatch_started = server._run_prompt_submit("rid", "sid", session, "next")
 
+    assert dispatch_started is False
     assert session["running"] is False
     assert "_run_thread" not in session
 
@@ -316,6 +317,7 @@ def test_close_wins_race_before_turn_thread_publication(monkeypatch):
     """Turn startup revalidates close ownership under the registry lock."""
     sid = "close-before-thread-publication"
     started = []
+    emitted = []
     session = {
         "agent": object(),
         "history_lock": threading.Lock(),
@@ -333,13 +335,15 @@ def test_close_wins_race_before_turn_thread_publication(monkeypatch):
         assert server._pop_session_by_id(sid) is session
         return DeferredThread()
 
-    monkeypatch.setattr(server, "_emit", lambda *args, **kwargs: None)
+    monkeypatch.setattr(server, "_emit", lambda *args, **kwargs: emitted.append(args))
     monkeypatch.setattr(server.threading, "Thread", claim_close_before_thread_is_published)
     with server._sessions_lock:
         server._sessions[sid] = session
     try:
-        server._run_prompt_submit("rid", sid, session, "next")
+        dispatch_started = server._run_prompt_submit("rid", sid, session, "next")
+        assert dispatch_started is False
         assert started == []
+        assert not any(event and event[0] == "message.start" for event in emitted)
         assert session["_closing"] is True
         assert session["running"] is False
         assert "_run_thread" not in session
