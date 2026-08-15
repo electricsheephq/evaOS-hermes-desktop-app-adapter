@@ -9197,8 +9197,20 @@ def _notification_poller_loop(
                 if _batch:
                     rid = f"__notif__{int(time.time() * 1000)}"
                     try:
-                        _emit("message.start", sid)
-                        _run_prompt_submit(rid, sid, session, "\n".join(_batch))
+                        dispatch_started = _run_prompt_submit(
+                            rid,
+                            sid,
+                            session,
+                            "\n".join(_batch),
+                        )
+                        if dispatch_started is False:
+                            with session["history_lock"]:
+                                still_pending = list(
+                                    session.get("_kanban_pending") or []
+                                )
+                                session["_kanban_pending"] = _batch + still_pending
+                                session["running"] = False
+                            break
                     except Exception as exc:
                         print(
                             f"[tui_gateway] kanban notification dispatch failed: "
@@ -10384,8 +10396,9 @@ def _run_prompt_submit(
         )
         if can_start:
             session["_run_thread"] = run_thread
-            _emit("message.start", sid)
             run_thread.start()
+    if can_start:
+        _emit("message.start", sid)
     if not can_start:
         with session["history_lock"]:
             session["running"] = False
