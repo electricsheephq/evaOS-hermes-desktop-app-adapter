@@ -16686,7 +16686,8 @@ def test_prompt_submit_releases_turn_thread_session_db_reader(
         def run_conversation(
             self, prompt, conversation_history=None, stream_callback=None, **_kwargs
         ):
-            self._session_db.get_session_title("missing-session")
+            self._session_db.get_session("missing-session")
+            assert self._session_db._read_conns
             if raise_from_turn:
                 raise RuntimeError("turn failed")
             return {
