@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 import threading
+import time
 from pathlib import Path
 
 import psutil
@@ -175,3 +176,58 @@ def test_profile_session_teardown_shuts_down_context_engine_sqlite(tmp_path):
     assert engine.shutdown_count == 1
     assert _sqlite_fds(context_path) == 0
     assert _tracked_connections(state_path) == 0
+
+
+def test_session_close_waits_for_completed_turn_thread_before_context_shutdown(tmp_path):
+    """Do not race context shutdown with post-message.complete turn unwind."""
+    state_path = tmp_path / "state.db"
+    context_path = tmp_path / "lcm.db"
+    db = SessionDB(db_path=state_path)
+    agent = _bare_agent(db, "settling-context-engine-session")
+    db.create_session(session_id=agent.session_id, source="desktop")
+    assert server._transfer_db_to_agent(agent, db) is True
+
+    turn_started = threading.Event()
+    turn_settled = threading.Event()
+
+    def finish_turn():
+        turn_started.set()
+        time.sleep(0.2)
+        turn_settled.set()
+
+    run_thread = threading.Thread(target=finish_turn)
+    run_thread.start()
+    assert turn_started.wait(timeout=1)
+
+    class BusySQLiteContextEngine:
+        def __init__(self):
+            self.connection = sqlite3.connect(context_path)
+            self.shutdown_count = 0
+
+        def shutdown(self):
+            self.shutdown_count += 1
+            if not turn_settled.is_set():
+                raise RuntimeError("turn is still unwinding")
+            self.connection.close()
+
+    engine = BusySQLiteContextEngine()
+    agent.context_compressor = engine
+    session = {
+        "agent": agent,
+        "history": [],
+        "history_lock": threading.Lock(),
+        "profile_home": str(tmp_path),
+        "session_key": agent.session_id,
+        "_run_thread": run_thread,
+    }
+
+    try:
+        server._teardown_popped_session(session)
+        run_thread.join(timeout=1)
+        assert not run_thread.is_alive()
+        assert engine.shutdown_count == 1
+        assert _sqlite_fds(context_path) == 0
+    finally:
+        run_thread.join(timeout=1)
+        engine.connection.close()
+        db.close()

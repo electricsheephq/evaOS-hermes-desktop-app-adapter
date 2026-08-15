@@ -803,6 +803,7 @@ def _finalize_session(session: dict | None, end_reason: str = "tui_close") -> No
 # silently vanishing rather than being reclaimed. ``tui_close`` and friends are
 # deliberately absent: the client initiated those and already knows.
 _RECLAIM_END_REASONS = frozenset({"idle_timeout", "lru_evict", "ws_orphan_reap"})
+_TURN_SETTLE_BEFORE_CLOSE_SECONDS = 5.0
 
 
 def _announce_session_reclaimed(session: dict, end_reason: str) -> None:
@@ -910,6 +911,29 @@ def _teardown_popped_session(
     """Finish a close after the caller has atomically detached the session."""
     if session is None:
         return False
+    # ``message.complete`` is emitted before the turn thread's ``finally``
+    # clears ``running`` and releases the last profile/context-engine scopes.
+    # A client can therefore call session.close immediately after the terminal
+    # frame while that thread is still unwinding. Closing AIAgent concurrently
+    # makes plugin shutdown race its own post-turn work; a failed shutdown is
+    # deliberately marked attempted and will not be retried, so SQLite-backed
+    # engines can retain their descriptors for the life of the serve.
+    #
+    # Every production teardown path reaches this function only after it has
+    # atomically popped the session, so no new turn can start. Give the already
+    # terminal tail a bounded chance to finish before closing owned resources.
+    run_thread = session.get("_run_thread")
+    if run_thread is not None and run_thread is not threading.current_thread():
+        try:
+            if run_thread.is_alive():
+                run_thread.join(timeout=_TURN_SETTLE_BEFORE_CLOSE_SECONDS)
+            if run_thread.is_alive():
+                logger.warning(
+                    "session turn thread still alive after %.1fs teardown grace",
+                    _TURN_SETTLE_BEFORE_CLOSE_SECONDS,
+                )
+        except Exception:
+            logger.debug("failed waiting for session turn thread", exc_info=True)
     _teardown_session(session, end_reason=end_reason)
     return True
 
