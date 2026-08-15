@@ -252,6 +252,7 @@ async def test_lease_mint_401_surfaces_sanitized_server_body(tmp_path):
         ('{"account_id":"apn_profile_secret"}', "apn_profile_secret"),
         ('{"Authorization":"Bearer leaked-bearer"}', "leaked-bearer"),
         ('"{\\"token\\":\\"Bearer leaked-token\\"}"', "leaked-token"),
+        ("Bearer leaked-bearer", "leaked-bearer"),
         ("broker-secret", "broker-secret"),
     ],
 )

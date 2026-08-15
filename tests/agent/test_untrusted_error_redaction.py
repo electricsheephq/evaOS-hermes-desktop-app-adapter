@@ -20,6 +20,7 @@ from agent.redact import redact_untrusted_error_detail
         "token=synthetic-token-value",
         "password=synthetic-password-value",
         "account_id=synthetic-account-value",
+        "Bearer synthetic-unrecognized-token",
         "Authorization: Bearer synthetic-bearer-value",
         "Cookie: session=synthetic-cookie-value",
     ],
