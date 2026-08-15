@@ -9237,7 +9237,7 @@ def _notification_poller_loop(
         try:
             _emit("message.start", sid)
             if evt.get("type") == "async_delegation":
-                _run_prompt_submit(
+                dispatch_started = _run_prompt_submit(
                     rid,
                     sid,
                     session,
@@ -9246,8 +9246,13 @@ def _notification_poller_loop(
                     display_metadata=_async_delegation_display_metadata(evt),
                 )
             else:
-                _run_prompt_submit(rid, sid, session, text)
-            complete_event_delivery(evt, _claim)
+                dispatch_started = _run_prompt_submit(rid, sid, session, text)
+            if dispatch_started is False:
+                release_event_delivery(evt, _claim)
+                with session["history_lock"]:
+                    session["running"] = False
+            else:
+                complete_event_delivery(evt, _claim)
         except Exception as exc:
             release_event_delivery(evt, _claim)
             print(
@@ -9315,7 +9320,7 @@ def _notification_poller_loop(
         try:
             _emit("message.start", sid)
             if evt.get("type") == "async_delegation":
-                _run_prompt_submit(
+                dispatch_started = _run_prompt_submit(
                     rid,
                     sid,
                     session,
@@ -9324,8 +9329,13 @@ def _notification_poller_loop(
                     display_metadata=_async_delegation_display_metadata(evt),
                 )
             else:
-                _run_prompt_submit(rid, sid, session, text)
-            complete_event_delivery(evt, _claim)
+                dispatch_started = _run_prompt_submit(rid, sid, session, text)
+            if dispatch_started is False:
+                release_event_delivery(evt, _claim)
+                with session["history_lock"]:
+                    session["running"] = False
+            else:
+                complete_event_delivery(evt, _claim)
         except Exception as exc:
             release_event_delivery(evt, _claim)
             print(
@@ -9459,14 +9469,14 @@ def _run_prompt_submit(
     display_metadata: dict | None = None,
     image_paths: list[str] | None = None,
     queued_prompt_generation: int | None = None,
-) -> None:
+) -> bool:
     with session["history_lock"]:
         if (
             queued_prompt_generation is not None
             and int(session.get("_queued_prompt_generation", 0)) != queued_prompt_generation
         ):
             session["running"] = False
-            return
+            return False
         if image_paths is None:
             images = list(session.get("attached_images", []))
             session["attached_images"] = []
@@ -10280,8 +10290,13 @@ def _run_prompt_submit(
                     continue
                 try:
                     _emit("message.start", sid)
-                    _run_prompt_submit(rid, sid, session, synth)
-                    complete_event_delivery(_evt, _claim)
+                    dispatch_started = _run_prompt_submit(rid, sid, session, synth)
+                    if dispatch_started is False:
+                        release_event_delivery(_evt, _claim)
+                        with session["history_lock"]:
+                            session["running"] = False
+                    else:
+                        complete_event_delivery(_evt, _claim)
                 except Exception as _n_exc:
                     release_event_delivery(_evt, _claim)
                     print(
@@ -10301,6 +10316,7 @@ def _run_prompt_submit(
     run_thread = threading.Thread(target=run, daemon=True)
     session["_run_thread"] = run_thread
     run_thread.start()
+    return True
 
 
 # Byte-upload attach caps. 25 MB matches Anthropic's per-image limit; 50 MB / 25
