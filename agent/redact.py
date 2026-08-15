@@ -1047,6 +1047,8 @@ def redact_untrusted_error_detail(
             secret_text = "" if secret is None else str(secret)
             if secret_text and secret_text in text:
                 return "[redacted]"
+        if re.search(r"(?i)(?:^|\s)bearer\s+\S+", text):
+            return "[redacted]"
 
         try:
             parsed = json.loads(text)
