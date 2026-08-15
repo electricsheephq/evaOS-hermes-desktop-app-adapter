@@ -1359,6 +1359,7 @@ CREATE TABLE IF NOT EXISTS kanban_notify_subs (
     user_id       TEXT,
     notifier_profile TEXT,
     delivery_metadata TEXT,
+    pending_event_ids TEXT,
     created_at    INTEGER NOT NULL,
     last_event_id INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (task_id, platform, chat_id, thread_id)
@@ -2522,6 +2523,10 @@ def _migrate_add_optional_columns(conn: sqlite3.Connection) -> None:
             _add_column_if_missing(
                 conn, "kanban_notify_subs", "delivery_metadata", "delivery_metadata TEXT"
             )
+        if "pending_event_ids" not in notify_cols:
+            _add_column_if_missing(
+                conn, "kanban_notify_subs", "pending_event_ids", "pending_event_ids TEXT"
+            )
 
     # One-shot backfill: any task that is 'running' before runs existed
     # had its claim_lock / claim_expires / worker_pid on the task row.
@@ -2645,7 +2650,8 @@ _REBUILD_SPECS = {
         "CREATE TABLE kanban_notify_subs ("
         " task_id TEXT NOT NULL, platform TEXT NOT NULL, chat_id TEXT NOT NULL,"
         " chat_type TEXT, thread_id TEXT NOT NULL DEFAULT '', user_id TEXT,"
-        " notifier_profile TEXT, delivery_metadata TEXT, created_at INTEGER NOT NULL,"
+        " notifier_profile TEXT, delivery_metadata TEXT, pending_event_ids TEXT,"
+        " created_at INTEGER NOT NULL,"
         " last_event_id INTEGER NOT NULL DEFAULT 0,"
         " PRIMARY KEY (task_id, platform, chat_id, thread_id))",
         ("CREATE INDEX idx_notify_task ON kanban_notify_subs(task_id)",),
@@ -9899,6 +9905,108 @@ def unseen_events_for_sub(
     return max_id, out
 
 
+NOTIFY_DELIVERY_LEASE_SECONDS = 30
+
+
+def _decode_pending_delivery(raw: Any) -> tuple[list[int], str, int]:
+    if not raw:
+        return [], "", 0
+    try:
+        values = json.loads(str(raw))
+    except Exception:
+        return [], "", 0
+    owner = ""
+    claimed_at = 0
+    if isinstance(values, dict):
+        raw_ids = values.get("event_ids")
+        owner = str(values.get("owner") or "")
+        try:
+            claimed_at = int(values.get("claimed_at") or 0)
+        except (TypeError, ValueError):
+            claimed_at = 0
+    elif isinstance(values, list):
+        # Backward compatibility for claims written before durable ownership
+        # was added. The first current gateway may take these over.
+        raw_ids = values
+    else:
+        return [], "", 0
+    if not isinstance(raw_ids, list):
+        return [], owner, claimed_at
+    event_ids: list[int] = []
+    for value in raw_ids:
+        try:
+            event_id = int(value)
+        except (TypeError, ValueError):
+            continue
+        if event_id > 0:
+            event_ids.append(event_id)
+    return event_ids, owner, claimed_at
+
+
+def _decode_pending_event_ids(raw: Any) -> list[int]:
+    event_ids, _owner, _claimed_at = _decode_pending_delivery(raw)
+    return event_ids
+
+
+def _encode_pending_delivery(
+    event_ids: Iterable[int],
+    *,
+    owner: str,
+    claimed_at: int,
+) -> str:
+    return json.dumps(
+        {
+            "event_ids": [int(event_id) for event_id in event_ids],
+            "owner": owner,
+            "claimed_at": int(claimed_at),
+        },
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+
+
+def _events_by_ids(
+    conn: sqlite3.Connection,
+    *,
+    task_id: str,
+    event_ids: Iterable[int],
+) -> list[Event]:
+    ordered_ids = [int(event_id) for event_id in event_ids if int(event_id) > 0]
+    if not ordered_ids:
+        return []
+    rows = conn.execute(
+        "SELECT * FROM task_events WHERE task_id = ? AND id IN ("
+        + ",".join("?" for _ in ordered_ids)
+        + ")",
+        [task_id, *ordered_ids],
+    ).fetchall()
+    rows_by_id = {int(row["id"]): row for row in rows}
+    events: list[Event] = []
+    for event_id in ordered_ids:
+        row = rows_by_id.get(event_id)
+        if row is None:
+            continue
+        try:
+            payload = json.loads(row["payload"]) if row["payload"] else None
+        except Exception:
+            payload = None
+        events.append(
+            Event(
+                id=row["id"],
+                task_id=row["task_id"],
+                kind=row["kind"],
+                payload=payload,
+                created_at=row["created_at"],
+                run_id=(
+                    int(row["run_id"])
+                    if "run_id" in row.keys() and row["run_id"] is not None
+                    else None
+                ),
+            )
+        )
+    return events
+
+
 def claim_unseen_events_for_sub(
     conn: sqlite3.Connection,
     *,
@@ -9907,6 +10015,9 @@ def claim_unseen_events_for_sub(
     chat_id: str,
     thread_id: Optional[str] = None,
     kinds: Optional[Iterable[str]] = None,
+    persist_delivery: bool = False,
+    delivery_owner: Optional[str] = None,
+    delivery_now: Optional[int] = None,
 ) -> tuple[int, int, list[Event]]:
     """Atomically claim unseen notification events for one subscription.
 
@@ -9921,16 +10032,66 @@ def claim_unseen_events_for_sub(
     Callers should send the claimed events, then either leave the cursor at
     ``new_cursor`` on success or call :func:`rewind_notify_cursor` if delivery
     failed before any terminal unsubscribe removed the row.
+
+    ``persist_delivery=True`` additionally stores the claimed event ids and a
+    durable owner lease on the subscription in the same transaction as the
+    cursor advance. The same process may replay/refresh its claim; a replacement
+    gateway may take it over only after the old lease expires.
     """
+    owner = str(delivery_owner or "").strip()
+    if persist_delivery and not owner:
+        raise ValueError("delivery_owner is required for durable notification claims")
+    now = int(time.time()) if delivery_now is None else int(delivery_now)
     with write_txn(conn):
         row = conn.execute(
-            "SELECT last_event_id FROM kanban_notify_subs "
+            "SELECT last_event_id, pending_event_ids FROM kanban_notify_subs "
             "WHERE task_id = ? AND platform = ? AND chat_id = ? AND thread_id = ?",
             (task_id, platform, chat_id, thread_id or ""),
         ).fetchone()
         if row is None:
             return 0, 0, []
         old_cursor = int(row["last_event_id"])
+        if persist_delivery:
+            pending_raw = row["pending_event_ids"]
+            pending_ids, pending_owner, pending_claimed_at = _decode_pending_delivery(
+                pending_raw
+            )
+            if pending_ids:
+                if (
+                    pending_owner
+                    and pending_owner != owner
+                    and pending_claimed_at + NOTIFY_DELIVERY_LEASE_SECONDS > now
+                ):
+                    return old_cursor, old_cursor, []
+                refreshed_raw = _encode_pending_delivery(
+                    pending_ids,
+                    owner=owner,
+                    claimed_at=now,
+                )
+                cur = conn.execute(
+                    "UPDATE kanban_notify_subs SET pending_event_ids = ? "
+                    "WHERE task_id = ? AND platform = ? AND chat_id = ? "
+                    "AND thread_id = ? AND pending_event_ids = ?",
+                    (
+                        refreshed_raw,
+                        task_id,
+                        platform,
+                        chat_id,
+                        thread_id or "",
+                        pending_raw,
+                    ),
+                )
+                if cur.rowcount != 1:
+                    return old_cursor, old_cursor, []
+                return (
+                    old_cursor,
+                    old_cursor,
+                    _events_by_ids(
+                        conn,
+                        task_id=task_id,
+                        event_ids=pending_ids,
+                    ),
+                )
         new_cursor, events = unseen_events_for_sub(
             conn,
             task_id=task_id,
@@ -9941,13 +10102,107 @@ def claim_unseen_events_for_sub(
         )
         if not events:
             return old_cursor, old_cursor, []
-        conn.execute(
-            "UPDATE kanban_notify_subs SET last_event_id = ? "
-            "WHERE task_id = ? AND platform = ? AND chat_id = ? AND thread_id = ? "
-            "AND last_event_id = ?",
-            (int(new_cursor), task_id, platform, chat_id, thread_id or "", int(old_cursor)),
+        pending_json = (
+            _encode_pending_delivery(
+                [int(event.id) for event in events],
+                owner=owner,
+                claimed_at=now,
+            )
+            if persist_delivery
+            else None
         )
+        sql = (
+            "UPDATE kanban_notify_subs SET last_event_id = ?"
+            + (", pending_event_ids = ?" if persist_delivery else "")
+            + " WHERE task_id = ? AND platform = ? AND chat_id = ? AND thread_id = ? "
+            "AND last_event_id = ?"
+            + (
+                " AND (pending_event_ids IS NULL OR pending_event_ids = '')"
+                if persist_delivery
+                else ""
+            )
+        )
+        params: list[Any] = [int(new_cursor)]
+        if persist_delivery:
+            params.append(pending_json)
+        params.extend(
+            [task_id, platform, chat_id, thread_id or "", int(old_cursor)]
+        )
+        cur = conn.execute(
+            sql,
+            params,
+        )
+        if cur.rowcount != 1:
+            return old_cursor, old_cursor, []
         return old_cursor, new_cursor, events
+
+
+def complete_notify_delivery(
+    conn: sqlite3.Connection,
+    *,
+    task_id: str,
+    platform: str,
+    chat_id: str,
+    thread_id: Optional[str] = None,
+    event_ids: Iterable[int],
+    delivery_owner: Optional[str] = None,
+) -> bool:
+    """Acknowledge one durable notification delivery.
+
+    The exact pending id sequence is a CAS guard. Terminal subscriptions are
+    removed only after acceptance; nonterminal subscriptions clear the pending
+    ids and remain available for later events.
+    """
+    expected_ids = [int(event_id) for event_id in event_ids]
+    if not expected_ids:
+        return False
+    with write_txn(conn):
+        row = conn.execute(
+            "SELECT pending_event_ids FROM kanban_notify_subs "
+            "WHERE task_id = ? AND platform = ? AND chat_id = ? AND thread_id = ?",
+            (task_id, platform, chat_id, thread_id or ""),
+        ).fetchone()
+        if row is None:
+            return False
+        pending_raw = row["pending_event_ids"]
+        pending_ids, pending_owner, _pending_claimed_at = _decode_pending_delivery(
+            pending_raw
+        )
+        if pending_ids != expected_ids:
+            return False
+        if pending_owner and pending_owner != str(delivery_owner or ""):
+            return False
+        task = conn.execute(
+            "SELECT status FROM tasks WHERE id = ?",
+            (task_id,),
+        ).fetchone()
+        pending_events = _events_by_ids(
+            conn,
+            task_id=task_id,
+            event_ids=expected_ids,
+        )
+        pending_contains_terminal = any(
+            event.kind in {"completed", "archived"} for event in pending_events
+        )
+        if (
+            task is not None
+            and task["status"] in {"done", "archived"}
+            and pending_contains_terminal
+        ):
+            cur = conn.execute(
+                "DELETE FROM kanban_notify_subs WHERE task_id = ? "
+                "AND platform = ? AND chat_id = ? AND thread_id = ? "
+                "AND pending_event_ids = ?",
+                (task_id, platform, chat_id, thread_id or "", pending_raw),
+            )
+        else:
+            cur = conn.execute(
+                "UPDATE kanban_notify_subs SET pending_event_ids = NULL "
+                "WHERE task_id = ? AND platform = ? AND chat_id = ? "
+                "AND thread_id = ? AND pending_event_ids = ?",
+                (task_id, platform, chat_id, thread_id or "", pending_raw),
+            )
+    return cur.rowcount == 1
 
 
 def advance_notify_cursor(
@@ -10009,10 +10264,28 @@ def gc_events(
     history."""
     cutoff = int(time.time()) - int(older_than_seconds)
     with write_txn(conn):
-        cur = conn.execute(
+        protected_event_ids: set[int] = set()
+        for row in conn.execute(
+            "SELECT pending_event_ids FROM kanban_notify_subs "
+            "WHERE pending_event_ids IS NOT NULL AND pending_event_ids != ''"
+        ).fetchall():
+            protected_event_ids.update(
+                _decode_pending_event_ids(row["pending_event_ids"])
+            )
+        sql = (
             "DELETE FROM task_events WHERE created_at < ? AND task_id IN "
-            "(SELECT id FROM tasks WHERE status IN ('done', 'archived'))",
-            (cutoff,),
+            "(SELECT id FROM tasks WHERE status IN ('done', 'archived'))"
+        )
+        params: list[Any] = [cutoff]
+        if protected_event_ids:
+            ordered_protected_ids = sorted(protected_event_ids)
+            sql += " AND id NOT IN (" + ",".join(
+                "?" for _ in ordered_protected_ids
+            ) + ")"
+            params.extend(ordered_protected_ids)
+        cur = conn.execute(
+            sql,
+            params,
         )
     return int(cur.rowcount or 0)
 

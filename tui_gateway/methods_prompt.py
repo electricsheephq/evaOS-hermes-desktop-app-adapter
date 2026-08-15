@@ -329,7 +329,21 @@ def _(rid, params: dict) -> dict:
     # Keep a handle so session.interrupt can tell a live turn from a stuck
     # `running` flag (a turn that died without clearing it) and recover the latter.
     session["_run_thread"] = run_thread
-    run_thread.start()
+    try:
+        run_thread.start()
+    except Exception as exc:
+        try:
+            _emit_terminal_turn_error(sid, session, exc)
+        except Exception:
+            _emit("error", sid, {"message": str(exc)})
+        finally:
+            with session["history_lock"]:
+                if session.get("_run_thread") is run_thread:
+                    session.pop("_run_thread", None)
+                session["running"] = False
+                session["last_active"] = time.time()
+            _emit_settled_session_info(sid, session, session.get("agent"))
+        return _err(rid, 5072, f"turn worker could not start: {exc}")
     return _ok(rid, {"status": "streaming"})
 
 
