@@ -44,6 +44,46 @@ def test_read_conn_reused_within_thread(db):
 
 
 @pytest.mark.requires_wal
+def test_short_lived_threads_can_release_their_read_connections(db):
+    """Turn workers must not pin one shared-state reader per dead thread."""
+    released = []
+
+    def read_then_release():
+        assert db.get_session("s1")["id"] == "s1"
+        released.append(db.release_current_thread_read_connection())
+
+    threads = [threading.Thread(target=read_then_release) for _ in range(6)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert released == [True] * len(threads)
+    assert db._read_conns == set()
+
+
+def test_failed_thread_reader_close_remains_owned_for_retry(db):
+    """A failed close must remain tracked for SessionDB.close to retry."""
+
+    class FailingConnection:
+        def close(self):
+            raise RuntimeError("still in use")
+
+    conn = FailingConnection()
+    db._read_local.conn = conn
+    with db._read_conns_lock:
+        db._read_conns.add(conn)
+    try:
+        assert db.release_current_thread_read_connection() is False
+        assert db._read_local.conn is conn
+        assert conn in db._read_conns
+    finally:
+        db._read_local.conn = None
+        with db._read_conns_lock:
+            db._read_conns.discard(conn)
+
+
+@pytest.mark.requires_wal
 def test_reads_do_not_take_writer_lock(db):
     """Reads must complete while another thread holds self._lock."""
     acquired = db._lock.acquire()

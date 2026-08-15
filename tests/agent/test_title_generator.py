@@ -184,6 +184,26 @@ class TestAutoTitleSession:
             )
         assert seen == [("title generation", boom)]
 
+    @pytest.mark.requires_wal
+    def test_existing_title_worker_releases_shared_db_reader(self, tmp_path):
+        """A skipped title must not pin its short-lived thread's WAL reader."""
+        import threading
+
+        db = SessionDB(tmp_path / "state.db")
+        db.create_session(session_id="sess-1", source="desktop")
+        db.set_session_title("sess-1", "Existing Title")
+        worker = threading.Thread(
+            target=auto_title_session,
+            args=(db, "sess-1", "hi", "hello"),
+        )
+        try:
+            worker.start()
+            worker.join(timeout=5)
+            assert not worker.is_alive()
+            assert db._read_conns == set()
+        finally:
+            db.close()
+
 
 
 class TestMaybeAutoTitle:

@@ -286,6 +286,24 @@ def auto_title_session(
                 failure_callback("title generation", e)
             except Exception:
                 logger.debug("Auto-title failure_callback raised", exc_info=True)
+    finally:
+        # The gateway shares one launch-profile SessionDB for the life of the
+        # serve, while auto-title runs on a fresh daemon thread per new session.
+        # Release only this worker's read-only WAL connection; otherwise the
+        # shared DB retains one descriptor for every completed title worker.
+        try:
+            release_reader = getattr(
+                session_db,
+                "release_current_thread_read_connection",
+                None,
+            )
+            if callable(release_reader):
+                release_reader()
+        except Exception:
+            logger.debug(
+                "Auto-title SessionDB reader release failed",
+                exc_info=True,
+            )
 
 
 def _auto_title_session(

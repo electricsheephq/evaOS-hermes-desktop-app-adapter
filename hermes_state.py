@@ -2255,6 +2255,32 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
         self._read_local.conn = conn
         return conn
 
+    def release_current_thread_read_connection(self) -> bool:
+        """Close this thread's WAL reader without closing the shared store.
+
+        Gateway turn workers are short-lived threads while their ``SessionDB``
+        can be process-long.  Keeping each dead worker's thread-local reader in
+        ``_read_conns`` until process shutdown grows one SQLite descriptor per
+        qualifying turn.  Call this at the worker boundary; later reads on a
+        reused thread lazily open a fresh reader.
+        """
+        conn = getattr(self._read_local, "conn", None)
+        if conn is None:
+            return False
+        try:
+            conn.close()
+        except Exception:
+            logger.debug(
+                "thread-local read connection close failed for %s",
+                self.db_path,
+                exc_info=True,
+            )
+            return False
+        self._read_local.conn = None
+        with self._read_conns_lock:
+            self._read_conns.discard(conn)
+        return True
+
     @contextmanager
     def _read_ctx(self):
         """Yield a connection for read-only statements.
