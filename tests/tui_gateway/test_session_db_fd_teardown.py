@@ -6,6 +6,7 @@ import sqlite3
 import threading
 import time
 from pathlib import Path
+from typing import Any
 
 import psutil
 
@@ -106,6 +107,58 @@ def test_agent_close_does_not_close_borrowed_shared_db(tmp_path):
         agent.close()
         assert _tracked_connections(db_path) >= 1
         assert db.get_session(agent.session_id)["id"] == agent.session_id
+    finally:
+        db.close()
+
+
+def test_rpc_pool_session_list_releases_shared_db_reader(monkeypatch, tmp_path):
+    """A reusable RPC worker must not retain the launch-profile WAL reader."""
+    db_path = tmp_path / "state.db"
+    db = SessionDB(db_path=db_path)
+    db.create_session(session_id="rpc-list-session", source="desktop")
+    wrote = threading.Event()
+    released = threading.Event()
+    frames: list[dict[str, Any]] = []
+
+    class RecordingTransport:
+        def write(self, frame):
+            frames.append(frame)
+            wrote.set()
+            return True
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(server, "_db", db)
+    real_release = server._release_rpc_thread_read_connection
+
+    def release_and_signal():
+        try:
+            real_release()
+        finally:
+            released.set()
+
+    monkeypatch.setattr(
+        server,
+        "_release_rpc_thread_read_connection",
+        release_and_signal,
+    )
+
+    try:
+        response = server.dispatch(
+            {
+                "id": "rpc-list",
+                "method": "session.list",
+                "params": {"limit": 5},
+            },
+            RecordingTransport(),
+        )
+        assert response is None
+        assert wrote.wait(timeout=5)
+        assert released.wait(timeout=5)
+        assert frames[0]["result"]["sessions"][0]["id"] == "rpc-list-session"
+        with db._read_conns_lock:
+            assert db._read_conns == set()
     finally:
         db.close()
 
