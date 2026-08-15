@@ -4808,6 +4808,55 @@ def test_notification_poller_releases_claim_when_dispatch_is_rejected(
             isolated_queue.get_nowait()
 
 
+def test_notification_poller_requeues_kanban_batch_when_dispatch_is_rejected(
+    monkeypatch,
+):
+    """A rejected turn leaves its durable Kanban claim unacknowledged."""
+    import queue as _queue_mod
+
+    from tools.process_registry import process_registry
+
+    session = _session(session_key="closing-kanban-owner")
+    batch = ["first claimed Kanban event", "second claimed Kanban event"]
+    claim = {
+        "key": ("board", "task", "tui", "closing-kanban-owner", "", (1, 2)),
+        "accepted": False,
+    }
+    session["_kanban_delivery_claims"] = [claim]
+    session["_kanban_delivery_claim_keys"] = {tuple(claim["key"])}
+    emitted = []
+    isolated_queue: _queue_mod.Queue = _queue_mod.Queue()
+
+    monkeypatch.setattr(process_registry, "completion_queue", isolated_queue)
+    monkeypatch.setattr(
+        server,
+        "_collect_kanban_notifications",
+        lambda _session: list(batch),
+    )
+    monkeypatch.setattr(
+        server,
+        "_emit",
+        lambda *args, **_kwargs: emitted.append(args),
+    )
+    monkeypatch.setattr(server, "_run_prompt_submit", lambda *_args, **_kwargs: False)
+    server._sessions["sid-closing-kanban"] = session
+
+    try:
+        server._notification_poller_loop(
+            _StopAfterOneNotificationPoll(),
+            "sid-closing-kanban",
+            session,
+        )
+
+        assert session["_kanban_pending"] == []
+        assert session["running"] is False
+        assert session["_kanban_delivery_claims"] == [claim]
+        assert claim["accepted"] is False
+        assert [args for args in emitted if args[0] == "message.start"] == []
+    finally:
+        server._sessions.pop("sid-closing-kanban", None)
+
+
 def _configure_immediate_prompt_run(
     monkeypatch, tmp_path, *, immediate_threads=True
 ):
@@ -4856,6 +4905,171 @@ class _RecordingAgent:
     def run_conversation(self, prompt, conversation_history=None, stream_callback=None, **_kwargs):
         self._turns.append(prompt)
         return {"final_response": "", "messages": []}
+
+
+def test_run_prompt_submit_does_not_hold_registry_lock_during_start_emit(
+    monkeypatch, tmp_path
+):
+    """A blocked transport start cannot prevent close from claiming the session."""
+    import queue as _queue_mod
+
+    from tools.process_registry import process_registry
+
+    _configure_immediate_prompt_run(monkeypatch, tmp_path, immediate_threads=False)
+    isolated_queue: _queue_mod.Queue = _queue_mod.Queue()
+    monkeypatch.setattr(process_registry, "completion_queue", isolated_queue)
+
+    emit_entered = threading.Event()
+    release_emit = threading.Event()
+    dispatch_results = []
+    popped = []
+    turns = []
+    sid = "blocked-start-emit"
+    session = _session(
+        session_key="blocked-start-emit-key",
+        agent=_RecordingAgent(turns),
+        running=True,
+    )
+
+    def blocking_emit(event, *_args, **_kwargs):
+        if event == "message.start":
+            emit_entered.set()
+            assert release_emit.wait(timeout=2)
+
+    monkeypatch.setattr(server, "_emit", blocking_emit)
+    server._sessions[sid] = session
+    dispatch_thread = threading.Thread(
+        target=lambda: dispatch_results.append(
+            server._run_prompt_submit("rid", sid, session, "turn")
+        )
+    )
+    pop_thread = threading.Thread(
+        target=lambda: popped.append(server._pop_session_by_id(sid))
+    )
+
+    try:
+        dispatch_thread.start()
+        assert emit_entered.wait(timeout=1)
+
+        pop_thread.start()
+        pop_thread.join(timeout=0.5)
+
+        assert not pop_thread.is_alive()
+        assert popped == [session]
+        assert session["_closing"] is True
+    finally:
+        release_emit.set()
+        dispatch_thread.join(timeout=2)
+        pop_thread.join(timeout=2)
+        run_thread = session.get("_run_thread")
+        if run_thread is not None and run_thread.is_alive():
+            run_thread.join(timeout=2)
+        server._sessions.pop(sid, None)
+
+    assert dispatch_results == [False]
+    assert turns == []
+
+
+def test_run_prompt_submit_settles_when_worker_start_fails(monkeypatch, tmp_path):
+    """A failed Thread.start must not leave Desktop permanently busy."""
+    _configure_immediate_prompt_run(monkeypatch, tmp_path, immediate_threads=False)
+    events = []
+    turns = []
+    sid = "worker-start-failure"
+    session = _session(
+        session_key="worker-start-failure-key",
+        agent=_RecordingAgent(turns),
+        running=True,
+    )
+
+    class _FailingThread:
+        def __init__(self, target=None, daemon=None, **_kwargs):
+            self._target = target
+
+        def start(self):
+            raise RuntimeError("thread capacity exhausted")
+
+        def is_alive(self):
+            return False
+
+    monkeypatch.setattr(server.threading, "Thread", _FailingThread)
+    monkeypatch.setattr(
+        server,
+        "_emit",
+        lambda event, event_sid, payload=None: events.append(
+            (event, event_sid, payload)
+        ),
+    )
+    server._sessions[sid] = session
+    try:
+        accepted = server._run_prompt_submit("rid", sid, session, "turn")
+    finally:
+        server._sessions.pop(sid, None)
+
+    assert accepted is False
+    assert turns == []
+    assert session["running"] is False
+    assert [event for event, _sid, _payload in events[:2]] == [
+        "message.start",
+        "message.complete",
+    ]
+    assert events[1][2]["status"] == "error"
+    assert events[1][2]["recoverable"] is True
+    assert any(event == "session.info" for event, _sid, _payload in events)
+
+
+def test_prompt_submit_settles_when_outer_worker_start_fails(monkeypatch):
+    """The production wrapper must settle if its waiter thread cannot start."""
+    sid = "outer-worker-start-failure"
+    session = _session(agent=types.SimpleNamespace(), running=False)
+    terminal = []
+    settled = []
+
+    class _FailingThread:
+        def __init__(self, target=None, daemon=None, **_kwargs):
+            self._target = target
+
+        def start(self):
+            raise RuntimeError("thread capacity exhausted")
+
+        def is_alive(self):
+            return False
+
+    monkeypatch.setattr(server.threading, "Thread", _FailingThread)
+    monkeypatch.setattr(server, "_ensure_session_db_row", lambda *_args: None)
+    monkeypatch.setattr(server, "_persist_branch_seed", lambda *_args: None)
+    monkeypatch.setattr(server, "_start_agent_build", lambda *_args: None)
+    monkeypatch.setattr(
+        server,
+        "_emit_terminal_turn_error",
+        lambda event_sid, event_session, error: terminal.append(
+            (event_sid, event_session, str(error))
+        ),
+    )
+    monkeypatch.setattr(
+        server,
+        "_emit_settled_session_info",
+        lambda event_sid, event_session, agent: settled.append(
+            (event_sid, event_session, agent)
+        ),
+    )
+    server._sessions[sid] = session
+    try:
+        response = server.handle_request(
+            {
+                "id": "1",
+                "method": "prompt.submit",
+                "params": {"session_id": sid, "text": "turn"},
+            }
+        )
+    finally:
+        server._sessions.pop(sid, None)
+
+    assert response["error"]["code"] == 5072
+    assert terminal and terminal[0][0] == sid
+    assert settled and settled[0][0] == sid
+    assert session["running"] is False
+    assert "_run_thread" not in session
 
 
 @pytest.mark.parametrize("exit_code", [0, 7])

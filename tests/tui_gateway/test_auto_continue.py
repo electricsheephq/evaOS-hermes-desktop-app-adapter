@@ -152,6 +152,100 @@ def test_concluded_turn_clears_marker(emits, turn_env, marker_home):
     assert read_turn_marker(marker_home, "session-key") is None
 
 
+def test_turn_recorded_callback_runs_after_durable_marker(
+    emits, turn_env, marker_home
+):
+    observed: list[tuple[str, str]] = []
+
+    def _after_record():
+        marker = read_turn_marker(marker_home, "session-key")
+        observed.append(("callback", marker["prompt"] if marker else ""))
+        return True
+
+    def _run(message, **kwargs):
+        marker = read_turn_marker(marker_home, "session-key")
+        observed.append(("conversation", marker["prompt"] if marker else ""))
+        return {"final_response": "done"}
+
+    agent = types.SimpleNamespace(
+        session_id="session-key", run_conversation=_run, clear_interrupt=lambda: None
+    )
+    session = _session(agent=agent, running=True)
+
+    server._run_prompt_submit(
+        "rid",
+        "sid",
+        session,
+        "durable notification",
+        on_turn_recorded=_after_record,
+    )
+
+    assert observed == [
+        ("callback", "durable notification"),
+        ("conversation", "durable notification"),
+    ]
+
+
+def test_turn_recorded_callback_is_fenced_when_marker_write_fails(
+    monkeypatch, emits, turn_env
+):
+    observed: list[str] = []
+    monkeypatch.setattr(server, "record_turn_start", lambda *args, **kwargs: False)
+    agent = types.SimpleNamespace(
+        session_id="session-key",
+        run_conversation=lambda *args, **kwargs: observed.append("conversation"),
+        clear_interrupt=lambda: None,
+    )
+    session = _session(agent=agent, running=True)
+
+    server._run_prompt_submit(
+        "rid",
+        "sid",
+        session,
+        "durable notification",
+        on_turn_recorded=lambda: observed.append("callback") or True,
+    )
+
+    assert observed == []
+    assert session["running"] is False
+    assert any(
+        event == "message.complete"
+        and payload
+        and payload.get("status") == "error"
+        for event, _sid, payload in emits
+    )
+
+
+def test_turn_is_fenced_when_recorded_callback_rejects_claim(
+    emits, turn_env, marker_home
+):
+    observed: list[str] = []
+    agent = types.SimpleNamespace(
+        session_id="session-key",
+        run_conversation=lambda *args, **kwargs: observed.append("conversation"),
+        clear_interrupt=lambda: None,
+    )
+    session = _session(agent=agent, running=True)
+
+    server._run_prompt_submit(
+        "rid",
+        "sid",
+        session,
+        "durable notification",
+        on_turn_recorded=lambda: False,
+    )
+
+    assert observed == []
+    assert session["running"] is False
+    assert read_turn_marker(marker_home, "session-key") is None
+    assert any(
+        event == "message.complete"
+        and payload
+        and payload.get("status") == "error"
+        for event, _sid, payload in emits
+    )
+
+
 def test_handled_failure_still_clears_marker(emits, turn_env, marker_home):
     """An exception is a CONCLUDED turn (terminal frame + retained snapshot own
     recovery) — only a process death may leave the marker behind."""
@@ -372,5 +466,3 @@ def test_failed_agent_build_leaves_marker_for_retry(
 
 
 # ── End to end: continuation runs a real turn and clears the marker ────
-
-

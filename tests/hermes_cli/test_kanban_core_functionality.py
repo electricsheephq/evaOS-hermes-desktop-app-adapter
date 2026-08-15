@@ -205,6 +205,169 @@ def test_notify_claim_is_single_owner_and_rewindable(kanban_home):
         conn2.close()
 
 
+def test_notify_claim_can_remain_durable_until_delivery_completes(kanban_home):
+    conn1 = kb.connect()
+    conn2 = kb.connect()
+    try:
+        tid = kb.create_task(conn1, title="durable delivery", assignee="w")
+        kb.add_notify_sub(conn1, task_id=tid, platform="tui", chat_id="session-1")
+        kb.complete_task(conn1, tid, result="ok")
+
+        _, claimed_cursor, events = kb.claim_unseen_events_for_sub(
+            conn1,
+            task_id=tid,
+            platform="tui",
+            chat_id="session-1",
+            kinds=["completed", "blocked"],
+            persist_delivery=True,
+            delivery_owner="gateway-a",
+            delivery_now=100,
+        )
+        assert claimed_cursor > 0
+        assert [ev.kind for ev in events] == ["completed"]
+
+        # A second live gateway cannot replay another process's unexpired
+        # durable claim.
+        _, replay_cursor, replay_events = kb.claim_unseen_events_for_sub(
+            conn2,
+            task_id=tid,
+            platform="tui",
+            chat_id="session-1",
+            kinds=["completed", "blocked"],
+            persist_delivery=True,
+            delivery_owner="gateway-b",
+            delivery_now=101,
+        )
+        assert replay_cursor == claimed_cursor
+        assert replay_events == []
+
+        # Once the old owner's lease expires, a replacement process can take
+        # over and replay the same durable event ids.
+        _, replay_cursor, replay_events = kb.claim_unseen_events_for_sub(
+            conn2,
+            task_id=tid,
+            platform="tui",
+            chat_id="session-1",
+            kinds=["completed", "blocked"],
+            persist_delivery=True,
+            delivery_owner="gateway-b",
+            delivery_now=100 + kb.NOTIFY_DELIVERY_LEASE_SECONDS + 1,
+        )
+        assert replay_cursor == claimed_cursor
+        assert [ev.id for ev in replay_events] == [ev.id for ev in events]
+        pending = kb.list_notify_subs(conn2, tid)
+        assert pending[0]["pending_event_ids"]
+
+        assert kb.complete_notify_delivery(
+            conn1,
+            task_id=tid,
+            platform="tui",
+            chat_id="session-1",
+            event_ids=[ev.id for ev in events],
+            delivery_owner="gateway-a",
+        ) is False
+        assert kb.complete_notify_delivery(
+            conn2,
+            task_id=tid,
+            platform="tui",
+            chat_id="session-1",
+            event_ids=[ev.id for ev in events],
+            delivery_owner="gateway-b",
+        ) is True
+        # Terminal-task subscriptions are removed only after delivery accepts.
+        assert kb.list_notify_subs(conn2, tid) == []
+    finally:
+        conn1.close()
+        conn2.close()
+
+
+def test_nonterminal_delivery_ack_retains_later_terminal_event(kanban_home):
+    conn = kb.connect()
+    try:
+        tid = kb.create_task(conn, title="blocked then complete", assignee="w")
+        kb.add_notify_sub(conn, task_id=tid, platform="tui", chat_id="session-1")
+        assert kb.block_task(conn, tid, reason="waiting")
+
+        _, _, blocked_events = kb.claim_unseen_events_for_sub(
+            conn,
+            task_id=tid,
+            platform="tui",
+            chat_id="session-1",
+            kinds=["completed", "blocked"],
+            persist_delivery=True,
+            delivery_owner="gateway-a",
+        )
+        assert [event.kind for event in blocked_events] == ["blocked"]
+
+        assert kb.unblock_task(conn, tid)
+        assert kb.complete_task(conn, tid, result="done")
+        assert kb.complete_notify_delivery(
+            conn,
+            task_id=tid,
+            platform="tui",
+            chat_id="session-1",
+            event_ids=[event.id for event in blocked_events],
+            delivery_owner="gateway-a",
+        )
+
+        rows = kb.list_notify_subs(conn, tid)
+        assert len(rows) == 1
+        assert not rows[0]["pending_event_ids"]
+        _, _, terminal_events = kb.claim_unseen_events_for_sub(
+            conn,
+            task_id=tid,
+            platform="tui",
+            chat_id="session-1",
+            kinds=["completed", "blocked"],
+            persist_delivery=True,
+            delivery_owner="gateway-a",
+        )
+        assert [event.kind for event in terminal_events] == ["completed"]
+    finally:
+        conn.close()
+
+
+def test_gc_retains_events_named_by_pending_delivery(kanban_home):
+    conn1 = kb.connect()
+    conn2 = kb.connect()
+    try:
+        tid = kb.create_task(conn1, title="pending through gc", assignee="w")
+        kb.add_notify_sub(conn1, task_id=tid, platform="tui", chat_id="session-1")
+        assert kb.complete_task(conn1, tid, result="done")
+        _, _, events = kb.claim_unseen_events_for_sub(
+            conn1,
+            task_id=tid,
+            platform="tui",
+            chat_id="session-1",
+            kinds=["completed", "blocked"],
+            persist_delivery=True,
+            delivery_owner="gateway-a",
+        )
+        event_ids = [event.id for event in events]
+        assert event_ids
+        conn1.execute(
+            "UPDATE task_events SET created_at = 0 WHERE id IN ("
+            + ",".join("?" for _ in event_ids)
+            + ")",
+            event_ids,
+        )
+
+        kb.gc_events(conn1, older_than_seconds=0)
+        _, _, replay_events = kb.claim_unseen_events_for_sub(
+            conn2,
+            task_id=tid,
+            platform="tui",
+            chat_id="session-1",
+            kinds=["completed", "blocked"],
+            persist_delivery=True,
+            delivery_owner="gateway-a",
+        )
+        assert [event.id for event in replay_events] == event_ids
+    finally:
+        conn1.close()
+        conn2.close()
+
+
 # ---------------------------------------------------------------------------
 # GC + retention
 # ---------------------------------------------------------------------------
@@ -1406,5 +1569,3 @@ def test_notify_sub_starts_caught_up_on_active_task(kanban_home):
         assert events == [], "historical events must not replay to a new sub"
     finally:
         conn.close()
-
-

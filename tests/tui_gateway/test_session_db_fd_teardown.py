@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 import threading
+import time
 from pathlib import Path
 
 import psutil
@@ -175,3 +176,177 @@ def test_profile_session_teardown_shuts_down_context_engine_sqlite(tmp_path):
     assert engine.shutdown_count == 1
     assert _sqlite_fds(context_path) == 0
     assert _tracked_connections(state_path) == 0
+
+
+def test_session_close_waits_for_completed_turn_thread_before_context_shutdown(tmp_path):
+    """Do not race context shutdown with post-message.complete turn unwind."""
+    state_path = tmp_path / "state.db"
+    context_path = tmp_path / "lcm.db"
+    db = SessionDB(db_path=state_path)
+    agent = _bare_agent(db, "settling-context-engine-session")
+    db.create_session(session_id=agent.session_id, source="desktop")
+    assert server._transfer_db_to_agent(agent, db) is True
+
+    turn_started = threading.Event()
+    turn_settled = threading.Event()
+
+    def finish_turn():
+        turn_started.set()
+        time.sleep(0.2)
+        turn_settled.set()
+
+    run_thread = threading.Thread(target=finish_turn)
+    run_thread.start()
+    assert turn_started.wait(timeout=1)
+
+    class BusySQLiteContextEngine:
+        def __init__(self):
+            self.connection = sqlite3.connect(context_path)
+            self.shutdown_count = 0
+
+        def shutdown(self):
+            self.shutdown_count += 1
+            if not turn_settled.is_set():
+                raise RuntimeError("turn is still unwinding")
+            self.connection.close()
+
+    engine = BusySQLiteContextEngine()
+    agent.context_compressor = engine
+    session = {
+        "agent": agent,
+        "history": [],
+        "history_lock": threading.Lock(),
+        "profile_home": str(tmp_path),
+        "session_key": agent.session_id,
+        "_run_thread": run_thread,
+        "_turn_terminal_state": "emitted",
+    }
+
+    try:
+        server._teardown_popped_session(session)
+        run_thread.join(timeout=1)
+        assert not run_thread.is_alive()
+        assert engine.shutdown_count == 1
+        assert _sqlite_fds(context_path) == 0
+    finally:
+        run_thread.join(timeout=1)
+        engine.connection.close()
+        db.close()
+
+
+def test_signal_shutdown_never_waits_past_finalization_grace(monkeypatch):
+    """Signal shutdown must not join active, writing, or emitted turns."""
+
+    class ActiveTurn:
+        def __init__(self):
+            self.join_calls = []
+
+        def is_alive(self):
+            return True
+
+        def join(self, timeout=None):
+            self.join_calls.append(timeout)
+
+    torn_down = []
+    monkeypatch.setattr(
+        server,
+        "_teardown_session",
+        lambda session, *, end_reason="tui_close": torn_down.append(end_reason),
+    )
+
+    run_threads = []
+    for terminal_state in ("active", "emitting", "emitted"):
+        run_thread = ActiveTurn()
+        run_threads.append(run_thread)
+        assert server._teardown_popped_session(
+            {
+                "_run_thread": run_thread,
+                "_turn_terminal_state": terminal_state,
+            },
+            end_reason="tui_shutdown",
+        )
+    assert [thread.join_calls for thread in run_threads] == [[], [], []]
+    assert torn_down == ["tui_shutdown", "tui_shutdown", "tui_shutdown"]
+
+
+def test_popped_session_blocks_queued_and_direct_followup_dispatch(monkeypatch):
+    """A close ownership claim forbids successor turns from the old tail."""
+    sid = "closing-followup-session"
+    dispatched = []
+    session = {
+        "history_lock": threading.Lock(),
+        "running": False,
+        "queued_prompt": {"text": "next", "transport": None},
+        "_queued_prompt_generation": 0,
+    }
+    monkeypatch.setattr(
+        server,
+        "_run_prompt_submit",
+        lambda *args, **kwargs: dispatched.append((args, kwargs)),
+    )
+
+    with server._sessions_lock:
+        server._sessions[sid] = session
+    try:
+        popped = server._pop_session_by_id(sid)
+        assert popped is session
+        assert session["_closing"] is True
+        assert server._drain_queued_prompt("rid", sid, session) is False
+        assert dispatched == []
+    finally:
+        with server._sessions_lock:
+            server._sessions.pop(sid, None)
+
+
+def test_run_prompt_submit_refuses_closing_session():
+    """The dispatch boundary closes the check-then-start race."""
+    session = {
+        "history_lock": threading.Lock(),
+        "running": True,
+        "_closing": True,
+    }
+
+    dispatch_started = server._run_prompt_submit("rid", "sid", session, "next")
+
+    assert dispatch_started is False
+    assert session["running"] is False
+    assert "_run_thread" not in session
+
+
+def test_close_wins_race_before_turn_thread_publication(monkeypatch):
+    """Turn startup revalidates close ownership under the registry lock."""
+    sid = "close-before-thread-publication"
+    started = []
+    emitted = []
+    session = {
+        "agent": object(),
+        "history_lock": threading.Lock(),
+        "running": True,
+        "attached_images": [],
+    }
+
+    class DeferredThread:
+        def start(self):
+            started.append(True)
+
+    def claim_close_before_thread_is_published(*, target, daemon):
+        assert target is not None
+        assert daemon is True
+        assert server._pop_session_by_id(sid) is session
+        return DeferredThread()
+
+    monkeypatch.setattr(server, "_emit", lambda *args, **kwargs: emitted.append(args))
+    monkeypatch.setattr(server.threading, "Thread", claim_close_before_thread_is_published)
+    with server._sessions_lock:
+        server._sessions[sid] = session
+    try:
+        dispatch_started = server._run_prompt_submit("rid", sid, session, "next")
+        assert dispatch_started is False
+        assert started == []
+        assert not any(event and event[0] == "message.start" for event in emitted)
+        assert session["_closing"] is True
+        assert session["running"] is False
+        assert "_run_thread" not in session
+    finally:
+        with server._sessions_lock:
+            server._sessions.pop(sid, None)
