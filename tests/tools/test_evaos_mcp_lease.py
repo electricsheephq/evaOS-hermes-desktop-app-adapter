@@ -250,14 +250,17 @@ async def test_lease_mint_401_surfaces_sanitized_server_body(tmp_path):
         ("account_id=apn_profile_secret", "apn_profile_secret"),
         ('{"token":"leaked-token"}', "leaked-token"),
         ('{"account_id":"apn_profile_secret"}', "apn_profile_secret"),
+        ('{"Authorization":"Bearer leaked-bearer"}', "leaked-bearer"),
+        ('"{\\"token\\":\\"Bearer leaked-token\\"}"', "leaked-token"),
+        ("broker-secret", "broker-secret"),
     ],
 )
-def test_sanitized_detail_redacts_bare_sensitive_fields(body, leaked):
+def test_sanitized_detail_uses_fail_closed_boundary(body, leaked):
     detail = EvaosLeaseManager._sanitized_detail(
         _Response(403, {}, text=body), "broker-secret"
     )
     assert leaked not in detail
-    assert "[redacted]" in detail
+    assert detail == "[redacted]"
 
 
 def test_source_rejects_cross_profile_and_unsafe_files(tmp_path):

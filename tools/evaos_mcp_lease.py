@@ -7,6 +7,8 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable, Mapping, Optional
 from urllib.parse import urlparse
 import httpx
+from agent.redact import redact_untrusted_error_detail
+
 _APP_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,127}$")
 _ACCOUNT_RE = re.compile(r"^apn_[A-Za-z0-9_-]+$")
 _EXTERNAL_RE = re.compile(r"^[A-Za-z0-9._:-]{1,180}$")
@@ -15,9 +17,6 @@ _ENDPOINT_PATH = "/functions/v1/desktop-runtime-session"
 _MCP_ORIGIN = ("https", "remote.mcp.pipedream.net")
 _LEASE_HEADERS = frozenset({"Authorization", "x-pd-project-id",
     "x-pd-environment", "x-pd-external-user-id", "x-pd-app-slug", "x-pd-account-id"})
-_SENSITIVE = re.compile(r"(?i)\b(?:authorization|proxy-authorization|cookie|set-cookie|"
-    r"account(?:_id)?|external_user_id|profile(?:_id)?|project(?:_id)?|[\w-]*(?:secret|token|password|key))[\"']?\s*[:=]\s*(?:Bearer\s+)?[^,;\s}]+")
-_BEARER = re.compile(r"(?i)\bBearer\s+\S+")
 class EvaosLeaseError(RuntimeError):
     """Sanitized failure while resolving or refreshing a managed lease."""
 @dataclass(frozen=True, repr=False)
@@ -251,10 +250,9 @@ class EvaosLeaseManager:
             return ""
         if not isinstance(body, str):
             return ""
-        body = body.replace(broker_secret, "[redacted]")
-        body = _SENSITIVE.sub("[redacted]", body)
-        body = _BEARER.sub("Bearer [redacted]", body)
-        return "".join(c for c in body if c.isprintable()).strip()[:512]
+        detail = redact_untrusted_error_detail(body,
+            known_secrets=(broker_secret,), limit=512)
+        return "".join(c for c in detail if c.isprintable()).strip()
     def _parse(self, payload: Any, app_slug: str,
         external_user_id: Optional[str],
         account_id: Optional[str]) -> EvaosMcpLease:
