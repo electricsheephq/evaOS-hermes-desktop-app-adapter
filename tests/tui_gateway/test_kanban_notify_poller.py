@@ -347,6 +347,38 @@ class TestNotificationPollerLoopKanbanWiring:
             stop.set()
             thread.join(timeout=5)
 
+    def test_failed_claim_ack_keeps_sqlite_claim_for_retry(
+        self, monkeypatch
+    ):
+        import tui_gateway.server as server
+
+        tid = _create_subscribed_task()
+        _complete(tid, summary="retry after failed ack")
+        session = self._poller_session(running=False)
+        monkeypatch.setattr(
+            server,
+            "_complete_accepted_kanban_claims",
+            lambda *_args, **_kwargs: False,
+        )
+
+        stop, thread, _emits, submits = self._start_poller(
+            session,
+            monkeypatch,
+        )
+        try:
+            assert self._wait_for(lambda: submits)
+            assert self._wait_for(
+                lambda: not session.get("_kanban_delivery_claims")
+            )
+        finally:
+            stop.set()
+            thread.join(timeout=5)
+
+        rows = _sub_rows(tid)
+        assert len(rows) == 1
+        assert rows[0]["pending_event_ids"]
+        assert not session.get("_kanban_delivery_claim_keys")
+
     def test_busy_session_buffers_then_flushes_when_idle(self, monkeypatch):
         tid = _create_subscribed_task()
         _complete(tid, summary="buffered while busy")
