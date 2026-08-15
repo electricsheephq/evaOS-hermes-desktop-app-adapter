@@ -931,13 +931,12 @@ def _teardown_popped_session(
     # atomically popped the session, so no new turn can start. Give the already
     # terminal tail a bounded chance to finish before closing owned resources.
     run_thread = session.get("_run_thread")
-    terminal_state = str(session.get("_turn_terminal_state") or "")
     # Ordinary close/reap paths may wait for an active turn because their
     # caller has no process-level deadline. Signal shutdown is different:
-    # entry.py's one-second hard-exit timer must remain available for durable
-    # finalization, so it waits only when the terminal frame write has already
-    # returned. An in-progress write ("emitting") is deliberately not enough.
-    should_wait = end_reason != "tui_shutdown" or terminal_state == "emitted"
+    # entry.py's one-second hard-exit timer must remain wholly available for
+    # durable finalization. Never spend that process-level grace joining a
+    # turn, even one whose terminal frame write already returned.
+    should_wait = end_reason != "tui_shutdown"
     if (
         should_wait
         and run_thread is not None

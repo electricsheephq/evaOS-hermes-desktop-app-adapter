@@ -234,8 +234,8 @@ def test_session_close_waits_for_completed_turn_thread_before_context_shutdown(t
         db.close()
 
 
-def test_active_or_emitting_turn_close_does_not_wait_past_shutdown_grace(monkeypatch):
-    """Signal shutdown must not join an active or terminal-writing turn."""
+def test_signal_shutdown_never_waits_past_finalization_grace(monkeypatch):
+    """Signal shutdown must not join active, writing, or emitted turns."""
 
     class ActiveTurn:
         def __init__(self):
@@ -255,7 +255,7 @@ def test_active_or_emitting_turn_close_does_not_wait_past_shutdown_grace(monkeyp
     )
 
     run_threads = []
-    for terminal_state in ("active", "emitting"):
+    for terminal_state in ("active", "emitting", "emitted"):
         run_thread = ActiveTurn()
         run_threads.append(run_thread)
         assert server._teardown_popped_session(
@@ -265,8 +265,8 @@ def test_active_or_emitting_turn_close_does_not_wait_past_shutdown_grace(monkeyp
             },
             end_reason="tui_shutdown",
         )
-    assert [thread.join_calls for thread in run_threads] == [[], []]
-    assert torn_down == ["tui_shutdown", "tui_shutdown"]
+    assert [thread.join_calls for thread in run_threads] == [[], [], []]
+    assert torn_down == ["tui_shutdown", "tui_shutdown", "tui_shutdown"]
 
 
 def test_popped_session_blocks_queued_and_direct_followup_dispatch(monkeypatch):
