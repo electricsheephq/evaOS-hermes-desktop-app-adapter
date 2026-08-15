@@ -152,8 +152,6 @@ _stdout_lock = threading.Lock()
 _cfg_lock = threading.Lock()
 _sessions_lock = threading.RLock()  # reentrant: _close_session_by_id may run under callers that already hold it
 _prompt_lock = threading.Lock()
-_kanban_deferred_lock = threading.Lock()
-_kanban_deferred_by_session_key: dict[str, list[str]] = {}
 _cfg_cache: dict | None = None
 _cfg_mtime: float | None = None
 _cfg_path = None
@@ -8991,25 +8989,6 @@ _KANBAN_SILENT_KINDS = frozenset({"archived", "unblocked"})
 _KANBAN_POLL_SECONDS = 5.0
 
 
-def _defer_kanban_batch(session: dict, batch: list[str]) -> bool:
-    """Retain a claimed batch across teardown for the same durable session."""
-    session_key = str(session.get("session_key") or "")
-    if not session_key or not batch:
-        return False
-    with _kanban_deferred_lock:
-        _kanban_deferred_by_session_key.setdefault(session_key, []).extend(batch)
-    return True
-
-
-def _take_deferred_kanban_batch(session: dict) -> list[str]:
-    """Transfer a prior closing session's claimed batch to its replacement."""
-    session_key = str(session.get("session_key") or "")
-    if not session_key:
-        return []
-    with _kanban_deferred_lock:
-        return _kanban_deferred_by_session_key.pop(session_key, [])
-
-
 def _format_kanban_event_text(sub: dict, task, ev, board_slug: str) -> Optional[str]:
     """Single-line notification text for one kanban event.
 
@@ -9056,6 +9035,51 @@ def _format_kanban_event_text(sub: dict, task, ev, board_slug: str) -> Optional[
     return None
 
 
+def _complete_accepted_kanban_claims(session: dict) -> None:
+    """Acknowledge durable claims only after their agent turn was accepted."""
+    try:
+        from hermes_cli import kanban_db as _kb
+    except Exception:
+        return
+    with session["history_lock"]:
+        claims = [
+            dict(claim)
+            for claim in (session.get("_kanban_delivery_claims") or [])
+            if claim.get("accepted")
+        ]
+    completed_keys: set[tuple] = set()
+    for claim in claims:
+        try:
+            conn = _kb.connect(board=claim["board"])
+        except Exception:
+            continue
+        try:
+            if _kb.complete_notify_delivery(
+                conn,
+                task_id=claim["task_id"],
+                platform=claim["platform"],
+                chat_id=claim["chat_id"],
+                thread_id=claim["thread_id"],
+                event_ids=claim["event_ids"],
+            ):
+                completed_keys.add(tuple(claim["key"]))
+        except Exception:
+            pass
+        finally:
+            conn.close()
+    if completed_keys:
+        with session["history_lock"]:
+            remaining = [
+                claim
+                for claim in (session.get("_kanban_delivery_claims") or [])
+                if tuple(claim["key"]) not in completed_keys
+            ]
+            session["_kanban_delivery_claims"] = remaining
+            session["_kanban_delivery_claim_keys"] = {
+                tuple(claim["key"]) for claim in remaining
+            }
+
+
 def _collect_kanban_notifications(session: dict) -> list:
     """Claim unseen terminal kanban events for this TUI session's subscriptions.
 
@@ -9078,6 +9102,10 @@ def _collect_kanban_notifications(session: dict) -> list:
     except Exception:
         return []
     texts: list = []
+    tracked_keys = {
+        tuple(key)
+        for key in (session.get("_kanban_delivery_claim_keys") or set())
+    }
     try:
         boards = _kb.list_boards(include_archived=False)
     except Exception:
@@ -9137,26 +9165,54 @@ def _collect_kanban_notifications(session: dict) -> list:
                     chat_id=sub["chat_id"],
                     thread_id=sub.get("thread_id") or "",
                     kinds=_KANBAN_NOTIFY_KINDS,
+                    persist_delivery=True,
                 )
                 if not events:
                     continue
+                event_ids = tuple(int(event.id) for event in events)
+                claim_key = (
+                    resolved,
+                    sub["task_id"],
+                    sub["platform"],
+                    sub["chat_id"],
+                    sub.get("thread_id") or "",
+                    event_ids,
+                )
+                if claim_key in tracked_keys:
+                    continue
                 task = _kb.get_task(conn, sub["task_id"])
+                claim_texts: list[str] = []
                 for ev in events:
                     text = _format_kanban_event_text(sub, task, ev, slug)
                     if text:
-                        texts.append(text)
-                # Unsubscribe only at a truly final status (done/archived);
-                # blocked/crashed subs stay live so a respawned task's next
-                # terminal event still reaches the user (same rule as the
-                # gateway notifier).
-                if task and getattr(task, "status", "") in {"done", "archived"}:
+                        claim_texts.append(text)
+                if claim_texts:
+                    texts.extend(claim_texts)
+                    session.setdefault("_kanban_delivery_claims", []).append(
+                        {
+                            "key": claim_key,
+                            "board": slug,
+                            "task_id": sub["task_id"],
+                            "platform": sub["platform"],
+                            "chat_id": sub["chat_id"],
+                            "thread_id": sub.get("thread_id") or "",
+                            "event_ids": event_ids,
+                            "accepted": False,
+                        }
+                    )
+                    tracked_keys.add(claim_key)
+                    session["_kanban_delivery_claim_keys"] = tracked_keys
+                else:
+                    # Silent events are intentionally delivered by advancing
+                    # the durable cursor without producing an agent turn.
                     try:
-                        _kb.remove_notify_sub(
+                        _kb.complete_notify_delivery(
                             conn,
                             task_id=sub["task_id"],
                             platform=sub["platform"],
                             chat_id=sub["chat_id"],
                             thread_id=sub.get("thread_id") or "",
+                            event_ids=event_ids,
                         )
                     except Exception:
                         pass
@@ -9192,13 +9248,7 @@ def _notification_poller_loop(
         _now = time.monotonic()
         if _now - _last_kanban_poll >= _KANBAN_POLL_SECONDS:
             _last_kanban_poll = _now
-            _deferred_kanban = _take_deferred_kanban_batch(session)
-            if _deferred_kanban:
-                with session["history_lock"]:
-                    current_pending = list(session.get("_kanban_pending") or [])
-                    session["_kanban_pending"] = (
-                        _deferred_kanban + current_pending
-                    )
+            _complete_accepted_kanban_claims(session)
             try:
                 _kanban_texts = _collect_kanban_notifications(session)
             except Exception as _kb_exc:
@@ -9233,16 +9283,15 @@ def _notification_poller_loop(
                         )
                         if dispatch_started is False:
                             with session["history_lock"]:
-                                still_pending = list(
-                                    session.get("_kanban_pending") or []
-                                )
-                                rejected_batch = _batch + still_pending
                                 session["_kanban_pending"] = []
                                 session["running"] = False
-                            if not _defer_kanban_batch(session, rejected_batch):
-                                with session["history_lock"]:
-                                    session["_kanban_pending"] = rejected_batch
                             break
+                        with session["history_lock"]:
+                            for claim in (
+                                session.get("_kanban_delivery_claims") or []
+                            ):
+                                claim["accepted"] = True
+                        _complete_accepted_kanban_claims(session)
                     except Exception as exc:
                         print(
                             f"[tui_gateway] kanban notification dispatch failed: "
@@ -9250,6 +9299,10 @@ def _notification_poller_loop(
                             file=sys.stderr,
                         )
                         with session["history_lock"]:
+                            still_pending = list(
+                                session.get("_kanban_pending") or []
+                            )
+                            session["_kanban_pending"] = _batch + still_pending
                             session["running"] = False
         try:
             evt = process_registry.completion_queue.get(timeout=0.5)
@@ -10433,6 +10486,7 @@ def _run_prompt_submit(
             session["_run_thread"] = run_thread
     if published:
         _emit("message.start", sid)
+        start_error: Exception | None = None
         with _sessions_lock:
             registered = _sessions.get(sid)
             can_start = (
@@ -10440,7 +10494,24 @@ def _run_prompt_submit(
                 and (registered is None or registered is session)
             )
             if can_start:
-                run_thread.start()
+                try:
+                    run_thread.start()
+                except Exception as exc:
+                    start_error = exc
+                    can_start = False
+        if start_error is not None:
+            try:
+                _emit_terminal_turn_error(sid, session, start_error)
+            except Exception:
+                _emit("error", sid, {"message": str(start_error)})
+            finally:
+                with _sessions_lock:
+                    if session.get("_run_thread") is run_thread:
+                        session.pop("_run_thread", None)
+                with session["history_lock"]:
+                    session["running"] = False
+                    session["last_active"] = time.time()
+                _emit_settled_session_info(sid, session, agent)
     else:
         can_start = False
     if not can_start:

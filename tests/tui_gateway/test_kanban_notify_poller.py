@@ -7,16 +7,18 @@ adapter) and the TUI notification poller only watched process completions.
 ``last_event_id`` stayed 0 forever and no notification was ever delivered.
 
 These tests cover the delivery half that now lives in tui_gateway/server.py:
-``_collect_kanban_notifications`` (cursor claim + formatting + terminal
-unsubscribe) and ``_format_kanban_event_text``.
+``_collect_kanban_notifications`` (durable cursor claim + formatting),
+post-acceptance completion, and ``_format_kanban_event_text``.
 """
 
+import threading
 from types import SimpleNamespace
 from unittest.mock import patch
 
 from hermes_cli import kanban_db as kb
 from tui_gateway.server import (
     _collect_kanban_notifications,
+    _complete_accepted_kanban_claims,
     _format_kanban_event_text,
 )
 
@@ -24,7 +26,14 @@ SESSION_KEY = "tui-session-key-1"
 
 
 def _session(key: str = SESSION_KEY) -> dict:
-    return {"session_key": key}
+    return {"session_key": key, "history_lock": threading.Lock()}
+
+
+def _accept_claims(session: dict) -> None:
+    with session["history_lock"]:
+        for claim in session.get("_kanban_delivery_claims") or []:
+            claim["accepted"] = True
+    _complete_accepted_kanban_claims(session)
 
 
 def _create_subscribed_task(*, chat_id: str = SESSION_KEY, platform: str = "tui"):
@@ -65,17 +74,20 @@ class TestCollectKanbanNotifications:
         assert texts == []
         spy_connect.assert_not_called()
 
-    def test_delivers_completed_event_and_unsubscribes(self):
+    def test_delivers_completed_event_and_unsubscribes_after_acceptance(self):
         tid = _create_subscribed_task()
         _complete(tid, summary="shipped the fix")
+        session = _session()
 
-        texts = _collect_kanban_notifications(_session())
+        texts = _collect_kanban_notifications(session)
 
         assert len(texts) == 1
         assert tid in texts[0]
         assert "done" in texts[0]
         assert "shipped the fix" in texts[0]
-        # Task is at a final status -> subscription removed.
+        assert _sub_rows(tid)[0]["pending_event_ids"]
+        _accept_claims(session)
+        # Task is at a final status -> subscription removed after acceptance.
         assert _sub_rows(tid) == []
 
     def test_matching_tui_sub_delivers_and_advances_cursor(self):
@@ -87,20 +99,23 @@ class TestCollectKanbanNotifications:
         finally:
             conn.close()
 
+        session = _session()
         with patch.object(kb, "connect", wraps=kb.connect) as spy_connect:
-            first = _collect_kanban_notifications(_session())
-            second = _collect_kanban_notifications(_session())
+            first = _collect_kanban_notifications(session)
+            second = _collect_kanban_notifications(session)
 
         assert len(first) == 1
         assert "blocked" in first[0]
         assert "waiting on review" in first[0]
         assert second == []
         assert spy_connect.called
+        _accept_claims(session)
         # Blocked is not a final status -> subscription stays alive so a
         # respawned task's next terminal event still reaches the user.
         rows = _sub_rows(tid)
         assert len(rows) == 1
         assert rows[0]["last_event_id"] > pre_cursor
+        assert not rows[0]["pending_event_ids"]
 
     def test_non_tui_subscription_does_not_open_board_writable(self):
         tid = _create_subscribed_task(platform="telegram", chat_id="chat-1")
@@ -177,6 +192,7 @@ class TestCollectKanbanNotifications:
         session = {
             "session_key": SESSION_KEY,
             "profile_home": str(other_profile_home),
+            "history_lock": threading.Lock(),
         }
         # Simulate the strictest case: a context-local profile override is
         # active while the poller collects (as a profile-bound RPC would set).
@@ -189,6 +205,7 @@ class TestCollectKanbanNotifications:
         assert len(texts) == 1
         assert tid in texts[0]
         assert "cross-profile delivery" in texts[0]
+        _accept_claims(session)
         assert _sub_rows(tid) == []
 
 
@@ -231,7 +248,7 @@ class TestNotificationPollerLoopKanbanWiring:
     busy-session pending buffer that flushes once the session goes idle.
     """
 
-    def _start_poller(self, session: dict, monkeypatch):
+    def _start_poller(self, session: dict, monkeypatch, submit=None):
         import threading
         import tui_gateway.server as server
 
@@ -241,12 +258,13 @@ class TestNotificationPollerLoopKanbanWiring:
         monkeypatch.setattr(
             server, "_emit", lambda event, sid, payload=None: emits.append((event, payload))
         )
-        def _submit(rid, sid, sess, text):
-            submits.append(text)
-            server._emit("message.start", sid)
-            return True
+        if submit is None:
+            def submit(rid, sid, sess, text):
+                submits.append(text)
+                server._emit("message.start", sid)
+                return True
 
-        monkeypatch.setattr(server, "_run_prompt_submit", _submit)
+        monkeypatch.setattr(server, "_run_prompt_submit", submit)
         stop = threading.Event()
         thread = threading.Thread(
             target=server._notification_poller_loop,
@@ -321,3 +339,47 @@ class TestNotificationPollerLoopKanbanWiring:
         assert any(tid in text for text in submits), submits
         assert session["_kanban_pending"] == []
         assert session["running"] is True
+
+    def test_rejected_dispatch_replays_from_sqlite_after_fresh_session(
+        self, monkeypatch
+    ):
+        tid = _create_subscribed_task()
+        _complete(tid, summary="survive gateway restart")
+        rejected = self._poller_session(running=False)
+
+        stop, thread, _emits, _submits = self._start_poller(
+            rejected,
+            monkeypatch,
+            submit=lambda *_args, **_kwargs: False,
+        )
+        thread.join(timeout=5)
+        stop.set()
+
+        assert not thread.is_alive()
+        assert rejected["running"] is False
+        pending_rows = _sub_rows(tid)
+        assert len(pending_rows) == 1
+        assert pending_rows[0]["pending_event_ids"]
+
+        # A fresh session dictionary models a replacement gateway process:
+        # no in-memory claim or pending text survives, only the SQLite row.
+        resumed = self._poller_session(running=False)
+        delivered: list[str] = []
+
+        def accept(_rid, _sid, _session, text):
+            delivered.append(text)
+            return True
+
+        stop, thread, _emits, _submits = self._start_poller(
+            resumed,
+            monkeypatch,
+            submit=accept,
+        )
+        try:
+            assert self._wait_for(lambda: delivered), "durable claim was not replayed"
+        finally:
+            stop.set()
+            thread.join(timeout=5)
+
+        assert any(tid in text for text in delivered)
+        assert _sub_rows(tid) == []
