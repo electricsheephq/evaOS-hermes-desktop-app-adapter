@@ -8987,6 +8987,7 @@ _KANBAN_NOTIFY_KINDS = (
 )
 _KANBAN_SILENT_KINDS = frozenset({"archived", "unblocked"})
 _KANBAN_POLL_SECONDS = 5.0
+_KANBAN_DELIVERY_OWNER = uuid.uuid4().hex
 
 
 def _format_kanban_event_text(sub: dict, task, ev, board_slug: str) -> Optional[str]:
@@ -9064,6 +9065,7 @@ def _complete_accepted_kanban_claims(session: dict) -> None:
                 chat_id=claim["chat_id"],
                 thread_id=claim["thread_id"],
                 event_ids=claim["event_ids"],
+                delivery_owner=_KANBAN_DELIVERY_OWNER,
             ):
                 completed_keys.add(tuple(claim["key"]))
         except Exception:
@@ -9169,6 +9171,7 @@ def _collect_kanban_notifications(session: dict) -> list:
                     thread_id=sub.get("thread_id") or "",
                     kinds=_KANBAN_NOTIFY_KINDS,
                     persist_delivery=True,
+                    delivery_owner=_KANBAN_DELIVERY_OWNER,
                 )
                 if not events:
                     continue
@@ -9216,6 +9219,7 @@ def _collect_kanban_notifications(session: dict) -> list:
                             chat_id=sub["chat_id"],
                             thread_id=sub.get("thread_id") or "",
                             event_ids=event_ids,
+                            delivery_owner=_KANBAN_DELIVERY_OWNER,
                         )
                     except Exception:
                         pass
@@ -9278,23 +9282,36 @@ def _notification_poller_loop(
                 if _batch:
                     rid = f"__notif__{int(time.time() * 1000)}"
                     try:
+                        with session["history_lock"]:
+                            claim_keys = {
+                                tuple(claim["key"])
+                                for claim in (
+                                    session.get("_kanban_delivery_claims") or []
+                                )
+                                if not claim.get("accepted")
+                            }
+
+                        def accept_claims_after_turn_recorded() -> None:
+                            with session["history_lock"]:
+                                for claim in (
+                                    session.get("_kanban_delivery_claims") or []
+                                ):
+                                    if tuple(claim["key"]) in claim_keys:
+                                        claim["accepted"] = True
+                            _complete_accepted_kanban_claims(session)
+
                         dispatch_started = _run_prompt_submit(
                             rid,
                             sid,
                             session,
                             "\n".join(_batch),
+                            on_turn_recorded=accept_claims_after_turn_recorded,
                         )
                         if dispatch_started is False:
                             with session["history_lock"]:
                                 session["_kanban_pending"] = []
                                 session["running"] = False
                             break
-                        with session["history_lock"]:
-                            for claim in (
-                                session.get("_kanban_delivery_claims") or []
-                            ):
-                                claim["accepted"] = True
-                        _complete_accepted_kanban_claims(session)
                     except Exception as exc:
                         print(
                             f"[tui_gateway] kanban notification dispatch failed: "
@@ -9617,6 +9634,7 @@ def _run_prompt_submit(
     display_metadata: dict | None = None,
     image_paths: list[str] | None = None,
     queued_prompt_generation: int | None = None,
+    on_turn_recorded: Callable[[], None] | None = None,
 ) -> bool:
     with session["history_lock"]:
         if session.get("_closing"):
@@ -9670,6 +9688,15 @@ def _run_prompt_submit(
         marker_text = session.pop("_auto_continue_prompt", None) or text
         if isinstance(marker_text, str) and marker_text.strip():
             record_turn_start(marker_home, marker_key, marker_text, attempts=marker_attempt)
+            if on_turn_recorded is not None:
+                try:
+                    on_turn_recorded()
+                except Exception as exc:
+                    logger.warning(
+                        "post-record turn callback failed: %s: %s",
+                        type(exc).__name__,
+                        exc,
+                    )
         try:
             from tools.approval import (
                 reset_current_session_key,
