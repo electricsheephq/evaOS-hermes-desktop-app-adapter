@@ -16667,12 +16667,16 @@ def test_prompt_submit_releases_turn_thread_session_db_reader(
 ):
     """A short-lived turn thread must not retain its shared state.db reader."""
     releases = []
+    released = threading.Event()
     session_db = SessionDB(db_path=tmp_path / "state.db")
     release_reader = session_db.release_current_thread_read_connection
 
     def _release_reader():
         releases.append(threading.get_ident())
-        return release_reader()
+        try:
+            return release_reader()
+        finally:
+            released.set()
 
     monkeypatch.setattr(
         session_db,
@@ -16695,19 +16699,16 @@ def test_prompt_submit_releases_turn_thread_session_db_reader(
                 "messages": [{"role": "assistant", "content": "reply"}],
             }
 
-    class _ImmediateThread:
-        def __init__(self, target=None, daemon=None):
-            self._target = target
-
-        def start(self):
-            self._target()
-
-    server._sessions["sid_reader_release"] = _session(agent=_Agent())
+    session = _session(agent=_Agent())
+    server._sessions["sid_reader_release"] = session
     try:
-        monkeypatch.setattr(server.threading, "Thread", _ImmediateThread)
         monkeypatch.setattr(server, "_get_usage", lambda _a: {})
         monkeypatch.setattr(server, "render_message", lambda _t, _c: "")
         monkeypatch.setattr(server, "_emit", lambda *a: None)
+        monkeypatch.setattr(
+            "agent.title_generator.maybe_auto_title",
+            lambda *args, **kwargs: None,
+        )
 
         server.handle_request(
             {
@@ -16720,7 +16721,11 @@ def test_prompt_submit_releases_turn_thread_session_db_reader(
             }
         )
 
-        assert releases == [threading.get_ident()]
+        assert released.wait(timeout=5)
+        worker = session["_run_thread"]
+        worker.join(timeout=5)
+        assert not worker.is_alive()
+        assert releases == [worker.ident]
         assert session_db._read_conns == set()
     finally:
         server._sessions.pop("sid_reader_release", None)
