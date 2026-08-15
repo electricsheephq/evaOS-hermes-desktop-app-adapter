@@ -7,6 +7,7 @@ Short tokens (< 18 chars) are fully masked. Longer tokens preserve
 the first 6 and last 4 characters for debuggability.
 """
 
+import json
 import logging
 import os
 import re
@@ -64,6 +65,21 @@ _SENSITIVE_BODY_KEYS = frozenset({
     "authorization",
     "key",
 })
+
+# Untrusted error bodies can also expose stable identity material that must not
+# reach exception text or logs. Keep this exact and boundary-specific: ordinary
+# redaction intentionally preserves non-secret identifiers for debuggability.
+_SENSITIVE_ERROR_IDENTITY_KEYS = frozenset({
+    "account_id",
+    "external_id",
+    "profile_id",
+    "project_id",
+    "cookie",
+    "set_cookie",
+})
+_STRUCTURED_ERROR_FIELD_RE = re.compile(
+    r"""(?P<quote>["']?)(?P<key>[A-Za-z][A-Za-z0-9_.-]{0,127})(?P=quote)\s*[:=]"""
+)
 
 # Snapshot at import time so runtime env mutations (e.g. LLM-generated
 # `export HERMES_REDACT_SECRETS=false`) cannot disable redaction
@@ -1007,6 +1023,73 @@ def redact_sensitive_text(
         text = _SIGNAL_PHONE_RE.sub(_redact_phone, text)
 
     return text
+
+
+def redact_untrusted_error_detail(
+    value: object,
+    *,
+    known_secrets: tuple[object, ...] = (),
+    limit: int = 320,
+) -> str:
+    """Fail closed before untrusted error detail reaches exceptions or logs.
+
+    Ordinary log redaction preserves small token fragments for debugging.
+    External error bodies require a stricter boundary: if they contain a
+    sensitive structured field, known secret, or any text changed by the
+    authoritative redactor, replace the entire detail with a fixed sentinel.
+    """
+    try:
+        text = "" if value is None else str(value)
+        if not text:
+            return ""
+
+        for secret in known_secrets:
+            secret_text = "" if secret is None else str(secret)
+            if secret_text and secret_text in text:
+                return "[redacted]"
+
+        try:
+            parsed = json.loads(text)
+        except (TypeError, ValueError):
+            parsed = None
+
+        def _is_sensitive_key(key: object) -> bool:
+            key_text = str(key)
+            normalized = key_text.casefold().replace("-", "_")
+            return (
+                normalized in _SENSITIVE_BODY_KEYS
+                or normalized in _SENSITIVE_ERROR_IDENTITY_KEYS
+                or _key_has_secret_keyword(key_text)
+            )
+
+        def _has_sensitive_field(item: object) -> bool:
+            if isinstance(item, dict):
+                for key, child in item.items():
+                    if _is_sensitive_key(key):
+                        return True
+                    if _has_sensitive_field(child):
+                        return True
+            elif isinstance(item, list):
+                return any(_has_sensitive_field(child) for child in item)
+            return False
+
+        if parsed is not None and _has_sensitive_field(parsed):
+            return "[redacted]"
+
+        for match in _STRUCTURED_ERROR_FIELD_RE.finditer(text):
+            if _is_sensitive_key(match.group("key")):
+                return "[redacted]"
+
+        redacted = redact_sensitive_text(
+            text,
+            force=True,
+            redact_url_credentials=True,
+        )
+        if redacted != text:
+            return "[redacted]"
+        return text[:max(0, limit)]
+    except Exception:
+        return "[redacted]"
 
 
 # Commands whose stdout is an environment-variable dump (KEY=value lines),
