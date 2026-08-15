@@ -35,6 +35,10 @@ def config_fingerprint(config: dict) -> str:
         "args": config.get("args") or [],
         "url": config.get("url"),
         "transport": config.get("transport"),
+        "auth": config.get("auth"),
+        "app_slug": config.get("app_slug"),
+        "external_user_id": config.get("external_user_id"),
+        "account_id": config.get("account_id"),
         "tools_include": sorted(tools_filter.get("include") or []),
         "tools_exclude": sorted(tools_filter.get("exclude") or []),
     }

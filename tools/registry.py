@@ -855,7 +855,7 @@ class ToolRegistry:
                 self._toolset_checks[toolset] = check_fn
             self._generation += 1
 
-    def deregister(self, name: str) -> None:
+    def deregister(self, name: str, *, scope: Optional[str] = None) -> None:
         """Remove a tool from the registry.
 
         Also cleans up the toolset check if no other tools remain in the
@@ -874,10 +874,9 @@ class ToolRegistry:
         with self._lock:
             caller_mod = self._caller_module()
             caller_owner = self._plugin_namespace_of_module(caller_mod)
-            caller_scope = (
+            caller_scope = scope if scope is not None else (
                 self._plugin_scope_of(caller_owner)
-                if caller_owner is not None
-                else None
+                if caller_owner is not None else None
             )
             target = (
                 self._scoped_tools.get(caller_scope, {})
