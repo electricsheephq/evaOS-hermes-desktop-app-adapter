@@ -1973,6 +1973,18 @@ def handle_request(req: dict) -> dict | None:
     return fn(rid, params)
 
 
+def _release_rpc_thread_read_connection() -> None:
+    """Release this pool worker's reader on the process-long session store."""
+    db = _db
+    release = getattr(db, "release_current_thread_read_connection", None)
+    if not callable(release):
+        return
+    try:
+        release()
+    except Exception:
+        logger.debug("RPC thread SessionDB reader release failed", exc_info=True)
+
+
 def dispatch(req: dict, transport: Optional[Transport] = None) -> dict | None:
     """Route inbound RPCs — long handlers to the pool, everything else inline.
 
@@ -2001,11 +2013,17 @@ def dispatch(req: dict, transport: Optional[Transport] = None) -> dict | None:
 
         def run():
             try:
-                resp = handle_request(req)
-            except Exception as exc:
-                resp = _err(req.get("id"), -32000, f"handler error: {exc}")
-            if resp is not None:
-                t.write(resp)
+                try:
+                    resp = handle_request(req)
+                except Exception as exc:
+                    resp = _err(req.get("id"), -32000, f"handler error: {exc}")
+                if resp is not None:
+                    t.write(resp)
+            finally:
+                # Pool threads outlive individual RPCs. SessionDB WAL readers
+                # are thread-local, so leaving the launch-profile reader on a
+                # completed worker accumulates one state.db handle per worker.
+                _release_rpc_thread_read_connection()
 
         _pool.submit(lambda: ctx.run(run))
 
