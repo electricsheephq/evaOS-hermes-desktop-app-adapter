@@ -4736,7 +4736,10 @@ def test_notification_poller_delivers_owned_events(
             process_registry.completion_queue.get_nowait()
 
 
-def test_notification_poller_releases_claim_when_dispatch_is_rejected(monkeypatch):
+@pytest.mark.parametrize("drain_only", [False, True])
+def test_notification_poller_releases_claim_when_dispatch_is_rejected(
+    monkeypatch, drain_only
+):
     """A rejected turn must remain pending instead of being acknowledged."""
     import queue as _queue_mod
 
@@ -4756,10 +4759,15 @@ def test_notification_poller_releases_claim_when_dispatch_is_rejected(monkeypatc
     isolated_queue.put(event)
     completed = []
     released = []
+    emitted = []
 
     monkeypatch.setattr(process_registry, "completion_queue", isolated_queue)
     monkeypatch.setattr(server, "_get_db", lambda: None)
-    monkeypatch.setattr(server, "_emit", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        server,
+        "_emit",
+        lambda *args, **_kwargs: emitted.append(args),
+    )
     monkeypatch.setattr(server, "_run_prompt_submit", lambda *_args, **_kwargs: False)
     monkeypatch.setattr(
         async_delegation,
@@ -4777,10 +4785,13 @@ def test_notification_poller_releases_claim_when_dispatch_is_rejected(monkeypatc
         lambda claimed_event, claim: released.append((claimed_event, claim)),
     )
     server._sessions["sid-closing-notification"] = session
+    stop = threading.Event() if drain_only else _StopAfterOneNotificationPoll()
+    if drain_only:
+        stop.set()
 
     try:
         server._notification_poller_loop(
-            _StopAfterOneNotificationPoll(),
+            stop,
             "sid-closing-notification",
             session,
         )
@@ -4788,6 +4799,9 @@ def test_notification_poller_releases_claim_when_dispatch_is_rejected(monkeypatc
         assert completed == []
         assert released == [(event, "close-race-claim")]
         assert session["running"] is False
+        assert [args for args in emitted if args[0] == "message.start"] == []
+        assert isolated_queue.qsize() == 1
+        assert isolated_queue.get_nowait() is event
     finally:
         server._sessions.pop("sid-closing-notification", None)
         while not isolated_queue.empty():
