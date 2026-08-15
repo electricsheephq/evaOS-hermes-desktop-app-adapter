@@ -1063,6 +1063,13 @@ def redact_untrusted_error_detail(
             )
 
         def _has_sensitive_field(item: object) -> bool:
+            if isinstance(item, str):
+                try:
+                    nested = json.loads(item)
+                except (TypeError, ValueError):
+                    return False
+                if nested != item:
+                    return _has_sensitive_field(nested)
             if isinstance(item, dict):
                 for key, child in item.items():
                     if _is_sensitive_key(key):
