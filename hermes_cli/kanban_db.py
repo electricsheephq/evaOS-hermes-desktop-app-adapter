@@ -10091,7 +10091,19 @@ def complete_notify_delivery(
             "SELECT status FROM tasks WHERE id = ?",
             (task_id,),
         ).fetchone()
-        if task is not None and task["status"] in {"done", "archived"}:
+        pending_events = _events_by_ids(
+            conn,
+            task_id=task_id,
+            event_ids=expected_ids,
+        )
+        pending_contains_terminal = any(
+            event.kind in {"completed", "archived"} for event in pending_events
+        )
+        if (
+            task is not None
+            and task["status"] in {"done", "archived"}
+            and pending_contains_terminal
+        ):
             cur = conn.execute(
                 "DELETE FROM kanban_notify_subs WHERE task_id = ? "
                 "AND platform = ? AND chat_id = ? AND thread_id = ? "
@@ -10167,10 +10179,28 @@ def gc_events(
     history."""
     cutoff = int(time.time()) - int(older_than_seconds)
     with write_txn(conn):
-        cur = conn.execute(
+        protected_event_ids: set[int] = set()
+        for row in conn.execute(
+            "SELECT pending_event_ids FROM kanban_notify_subs "
+            "WHERE pending_event_ids IS NOT NULL AND pending_event_ids != ''"
+        ).fetchall():
+            protected_event_ids.update(
+                _decode_pending_event_ids(row["pending_event_ids"])
+            )
+        sql = (
             "DELETE FROM task_events WHERE created_at < ? AND task_id IN "
-            "(SELECT id FROM tasks WHERE status IN ('done', 'archived'))",
-            (cutoff,),
+            "(SELECT id FROM tasks WHERE status IN ('done', 'archived'))"
+        )
+        params: list[Any] = [cutoff]
+        if protected_event_ids:
+            ordered_protected_ids = sorted(protected_event_ids)
+            sql += " AND id NOT IN (" + ",".join(
+                "?" for _ in ordered_protected_ids
+            ) + ")"
+            params.extend(ordered_protected_ids)
+        cur = conn.execute(
+            sql,
+            params,
         )
     return int(cur.rowcount or 0)
 

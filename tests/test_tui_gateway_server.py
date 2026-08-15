@@ -5018,6 +5018,60 @@ def test_run_prompt_submit_settles_when_worker_start_fails(monkeypatch, tmp_path
     assert any(event == "session.info" for event, _sid, _payload in events)
 
 
+def test_prompt_submit_settles_when_outer_worker_start_fails(monkeypatch):
+    """The production wrapper must settle if its waiter thread cannot start."""
+    sid = "outer-worker-start-failure"
+    session = _session(agent=types.SimpleNamespace(), running=False)
+    terminal = []
+    settled = []
+
+    class _FailingThread:
+        def __init__(self, target=None, daemon=None, **_kwargs):
+            self._target = target
+
+        def start(self):
+            raise RuntimeError("thread capacity exhausted")
+
+        def is_alive(self):
+            return False
+
+    monkeypatch.setattr(server.threading, "Thread", _FailingThread)
+    monkeypatch.setattr(server, "_ensure_session_db_row", lambda *_args: None)
+    monkeypatch.setattr(server, "_persist_branch_seed", lambda *_args: None)
+    monkeypatch.setattr(server, "_start_agent_build", lambda *_args: None)
+    monkeypatch.setattr(
+        server,
+        "_emit_terminal_turn_error",
+        lambda event_sid, event_session, error: terminal.append(
+            (event_sid, event_session, str(error))
+        ),
+    )
+    monkeypatch.setattr(
+        server,
+        "_emit_settled_session_info",
+        lambda event_sid, event_session, agent: settled.append(
+            (event_sid, event_session, agent)
+        ),
+    )
+    server._sessions[sid] = session
+    try:
+        response = server.handle_request(
+            {
+                "id": "1",
+                "method": "prompt.submit",
+                "params": {"session_id": sid, "text": "turn"},
+            }
+        )
+    finally:
+        server._sessions.pop(sid, None)
+
+    assert response["error"]["code"] == 5072
+    assert terminal and terminal[0][0] == sid
+    assert settled and settled[0][0] == sid
+    assert session["running"] is False
+    assert "_run_thread" not in session
+
+
 @pytest.mark.parametrize("exit_code", [0, 7])
 def test_run_prompt_submit_requeues_foreign_completion(
     monkeypatch, tmp_path, exit_code
