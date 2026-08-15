@@ -4811,13 +4811,16 @@ def test_notification_poller_releases_claim_when_dispatch_is_rejected(
 def test_notification_poller_requeues_kanban_batch_when_dispatch_is_rejected(
     monkeypatch,
 ):
-    """A claimed Kanban batch remains pending when close rejects its turn."""
+    """A claimed Kanban batch survives close and reaches the resumed session."""
     import queue as _queue_mod
 
     from tools.process_registry import process_registry
 
-    session = _session(session_key="closing-kanban-owner")
+    session_key = "closing-kanban-owner"
+    session = _session(session_key=session_key)
     batch = ["first claimed Kanban event", "second claimed Kanban event"]
+    collected = [list(batch), []]
+    delivered = []
     emitted = []
     isolated_queue: _queue_mod.Queue = _queue_mod.Queue()
 
@@ -4825,7 +4828,7 @@ def test_notification_poller_requeues_kanban_batch_when_dispatch_is_rejected(
     monkeypatch.setattr(
         server,
         "_collect_kanban_notifications",
-        lambda _session: list(batch),
+        lambda _session: collected.pop(0),
     )
     monkeypatch.setattr(
         server,
@@ -4842,11 +4845,32 @@ def test_notification_poller_requeues_kanban_batch_when_dispatch_is_rejected(
             session,
         )
 
-        assert session["_kanban_pending"] == batch
+        assert session["_kanban_pending"] == []
         assert session["running"] is False
         assert [args for args in emitted if args[0] == "message.start"] == []
+
+        server._sessions.pop("sid-closing-kanban", None)
+        resumed = _session(session_key=session_key)
+        server._sessions["sid-resumed-kanban"] = resumed
+        monkeypatch.setattr(
+            server,
+            "_run_prompt_submit",
+            lambda _rid, _sid, _session, text: delivered.append(text) or True,
+        )
+        server._notification_poller_loop(
+            _StopAfterOneNotificationPoll(),
+            "sid-resumed-kanban",
+            resumed,
+        )
+
+        assert delivered == ["\n".join(batch)]
+        assert resumed["_kanban_pending"] == []
+        assert session_key not in server._kanban_deferred_by_session_key
     finally:
         server._sessions.pop("sid-closing-kanban", None)
+        server._sessions.pop("sid-resumed-kanban", None)
+        with server._kanban_deferred_lock:
+            server._kanban_deferred_by_session_key.pop(session_key, None)
 
 
 def _configure_immediate_prompt_run(

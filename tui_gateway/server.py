@@ -152,6 +152,8 @@ _stdout_lock = threading.Lock()
 _cfg_lock = threading.Lock()
 _sessions_lock = threading.RLock()  # reentrant: _close_session_by_id may run under callers that already hold it
 _prompt_lock = threading.Lock()
+_kanban_deferred_lock = threading.Lock()
+_kanban_deferred_by_session_key: dict[str, list[str]] = {}
 _cfg_cache: dict | None = None
 _cfg_mtime: float | None = None
 _cfg_path = None
@@ -8989,6 +8991,25 @@ _KANBAN_SILENT_KINDS = frozenset({"archived", "unblocked"})
 _KANBAN_POLL_SECONDS = 5.0
 
 
+def _defer_kanban_batch(session: dict, batch: list[str]) -> bool:
+    """Retain a claimed batch across teardown for the same durable session."""
+    session_key = str(session.get("session_key") or "")
+    if not session_key or not batch:
+        return False
+    with _kanban_deferred_lock:
+        _kanban_deferred_by_session_key.setdefault(session_key, []).extend(batch)
+    return True
+
+
+def _take_deferred_kanban_batch(session: dict) -> list[str]:
+    """Transfer a prior closing session's claimed batch to its replacement."""
+    session_key = str(session.get("session_key") or "")
+    if not session_key:
+        return []
+    with _kanban_deferred_lock:
+        return _kanban_deferred_by_session_key.pop(session_key, [])
+
+
 def _format_kanban_event_text(sub: dict, task, ev, board_slug: str) -> Optional[str]:
     """Single-line notification text for one kanban event.
 
@@ -9171,6 +9192,13 @@ def _notification_poller_loop(
         _now = time.monotonic()
         if _now - _last_kanban_poll >= _KANBAN_POLL_SECONDS:
             _last_kanban_poll = _now
+            _deferred_kanban = _take_deferred_kanban_batch(session)
+            if _deferred_kanban:
+                with session["history_lock"]:
+                    current_pending = list(session.get("_kanban_pending") or [])
+                    session["_kanban_pending"] = (
+                        _deferred_kanban + current_pending
+                    )
             try:
                 _kanban_texts = _collect_kanban_notifications(session)
             except Exception as _kb_exc:
@@ -9208,8 +9236,12 @@ def _notification_poller_loop(
                                 still_pending = list(
                                     session.get("_kanban_pending") or []
                                 )
-                                session["_kanban_pending"] = _batch + still_pending
+                                rejected_batch = _batch + still_pending
+                                session["_kanban_pending"] = []
                                 session["running"] = False
+                            if not _defer_kanban_batch(session, rejected_batch):
+                                with session["history_lock"]:
+                                    session["_kanban_pending"] = rejected_batch
                             break
                     except Exception as exc:
                         print(
