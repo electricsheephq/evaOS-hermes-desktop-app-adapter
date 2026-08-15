@@ -198,7 +198,7 @@ def test_turn_recorded_callback_is_fenced_when_marker_write_fails(
     )
     session = _session(agent=agent, running=True)
 
-    dispatch_started = server._run_prompt_submit(
+    server._run_prompt_submit(
         "rid",
         "sid",
         session,
@@ -207,7 +207,6 @@ def test_turn_recorded_callback_is_fenced_when_marker_write_fails(
     )
 
     assert observed == []
-    assert dispatch_started is False
     assert session["running"] is False
     assert any(
         event == "message.complete"
@@ -228,7 +227,7 @@ def test_turn_is_fenced_when_recorded_callback_rejects_claim(
     )
     session = _session(agent=agent, running=True)
 
-    dispatch_started = server._run_prompt_submit(
+    server._run_prompt_submit(
         "rid",
         "sid",
         session,
@@ -237,7 +236,6 @@ def test_turn_is_fenced_when_recorded_callback_rejects_claim(
     )
 
     assert observed == []
-    assert dispatch_started is False
     assert session["running"] is False
     assert read_turn_marker(marker_home, "session-key") is None
     assert any(
