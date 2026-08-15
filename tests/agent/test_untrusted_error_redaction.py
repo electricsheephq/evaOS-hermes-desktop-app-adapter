@@ -10,6 +10,7 @@ from agent.redact import redact_untrusted_error_detail
     "raw",
     [
         '{"token":"Bearer synthetic-token-value"}',
+        '"{\\"token\\":\\"Bearer synthetic-token-value\\"}"',
         '{"Authorization":"Bearer synthetic-bearer-value"}',
         '{"account_id":"synthetic-account-value"}',
         '{"outer":[{"profile_id":"synthetic-profile-value"}]}',
