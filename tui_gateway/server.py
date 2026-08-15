@@ -931,9 +931,15 @@ def _teardown_popped_session(
     # atomically popped the session, so no new turn can start. Give the already
     # terminal tail a bounded chance to finish before closing owned resources.
     run_thread = session.get("_run_thread")
-    terminal_emitted = bool(session.get("_turn_terminal_emitted"))
+    terminal_state = str(session.get("_turn_terminal_state") or "")
+    # Ordinary close/reap paths may wait for an active turn because their
+    # caller has no process-level deadline. Signal shutdown is different:
+    # entry.py's one-second hard-exit timer must remain available for durable
+    # finalization, so it waits only when the terminal frame write has already
+    # returned. An in-progress write ("emitting") is deliberately not enough.
+    should_wait = end_reason != "tui_shutdown" or terminal_state == "emitted"
     if (
-        terminal_emitted
+        should_wait
         and run_thread is not None
         and run_thread is not threading.current_thread()
     ):
@@ -7713,7 +7719,7 @@ def _emit_terminal_turn_error(sid: str, session: dict, error: Any) -> None:
     """
     with session["history_lock"]:
         _fail_inflight_turn(session, error)
-        session["_turn_terminal_emitted"] = True
+        session["_turn_terminal_state"] = "emitting"
         turn = session.get("inflight_turn") or {}
         message = str(turn.get("error") or "turn failed")
         partial = str(turn.get("assistant") or "")
@@ -7737,6 +7743,8 @@ def _emit_terminal_turn_error(sid: str, session: dict, error: Any) -> None:
         payload["rendered"] = rendered
     _retire_turn_marker(session)
     _emit("message.complete", sid, payload)
+    with session["history_lock"]:
+        session["_turn_terminal_state"] = "emitted"
 
 
 def _queued_prompt_snapshot(session: dict) -> dict | None:
@@ -9514,8 +9522,8 @@ def _run_prompt_submit(
     with session["history_lock"]:
         if session.get("_closing"):
             session["running"] = False
-            return
-        session["_turn_terminal_emitted"] = False
+            return False
+        session["_turn_terminal_state"] = "active"
         if (
             queued_prompt_generation is not None
             and int(session.get("_queued_prompt_generation", 0)) != queued_prompt_generation
@@ -9538,8 +9546,6 @@ def _run_prompt_submit(
                 agent.clear_interrupt()
             except Exception:
                 pass
-    _emit("message.start", sid)
-
     def run():
         approval_token = None
         session_tokens = []
@@ -10022,9 +10028,11 @@ def _run_prompt_submit(
                 )
                 payload["recoverable"] = True
             with session["history_lock"]:
-                session["_turn_terminal_emitted"] = True
+                session["_turn_terminal_state"] = "emitting"
             _retire_turn_marker(session, marker_key)
             _emit("message.complete", sid, payload)
+            with session["history_lock"]:
+                session["_turn_terminal_state"] = "emitted"
 
             # ── /goal continuation (Ralph-style loop) ─────────────────
             # After every TUI turn, if a /goal is active, ask the judge
@@ -10363,9 +10371,26 @@ def _run_prompt_submit(
             )
 
     run_thread = threading.Thread(target=run, daemon=True)
-    session["_run_thread"] = run_thread
-    run_thread.start()
-    return True
+    # Serialize the final lifecycle re-check, thread publication, and start
+    # against _pop_session_by_id's close ownership claim. The earlier
+    # history-lock check is only a fast path: close may win after it but before
+    # this point. Starting while holding the registry lock guarantees that a
+    # later close observes this exact thread; if close won first, _closing is
+    # already visible and no successor starts against torn-down resources.
+    with _sessions_lock:
+        registered = _sessions.get(sid)
+        can_start = (
+            not session.get("_closing")
+            and (registered is None or registered is session)
+        )
+        if can_start:
+            session["_run_thread"] = run_thread
+            _emit("message.start", sid)
+            run_thread.start()
+    if not can_start:
+        with session["history_lock"]:
+            session["running"] = False
+    return can_start
 
 
 # Byte-upload attach caps. 25 MB matches Anthropic's per-image limit; 50 MB / 25

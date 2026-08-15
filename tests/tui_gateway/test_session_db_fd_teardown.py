@@ -219,7 +219,7 @@ def test_session_close_waits_for_completed_turn_thread_before_context_shutdown(t
         "profile_home": str(tmp_path),
         "session_key": agent.session_id,
         "_run_thread": run_thread,
-        "_turn_terminal_emitted": True,
+        "_turn_terminal_state": "emitted",
     }
 
     try:
@@ -234,8 +234,8 @@ def test_session_close_waits_for_completed_turn_thread_before_context_shutdown(t
         db.close()
 
 
-def test_active_turn_close_does_not_wait_past_shutdown_grace(monkeypatch):
-    """Signal shutdown must not spend its grace joining an active turn."""
+def test_active_or_emitting_turn_close_does_not_wait_past_shutdown_grace(monkeypatch):
+    """Signal shutdown must not join an active or terminal-writing turn."""
 
     class ActiveTurn:
         def __init__(self):
@@ -247,7 +247,6 @@ def test_active_turn_close_does_not_wait_past_shutdown_grace(monkeypatch):
         def join(self, timeout=None):
             self.join_calls.append(timeout)
 
-    run_thread = ActiveTurn()
     torn_down = []
     monkeypatch.setattr(
         server,
@@ -255,15 +254,19 @@ def test_active_turn_close_does_not_wait_past_shutdown_grace(monkeypatch):
         lambda session, *, end_reason="tui_close": torn_down.append(end_reason),
     )
 
-    assert server._teardown_popped_session(
-        {
-            "_run_thread": run_thread,
-            "_turn_terminal_emitted": False,
-        },
-        end_reason="tui_shutdown",
-    )
-    assert run_thread.join_calls == []
-    assert torn_down == ["tui_shutdown"]
+    run_threads = []
+    for terminal_state in ("active", "emitting"):
+        run_thread = ActiveTurn()
+        run_threads.append(run_thread)
+        assert server._teardown_popped_session(
+            {
+                "_run_thread": run_thread,
+                "_turn_terminal_state": terminal_state,
+            },
+            end_reason="tui_shutdown",
+        )
+    assert [thread.join_calls for thread in run_threads] == [[], []]
+    assert torn_down == ["tui_shutdown", "tui_shutdown"]
 
 
 def test_popped_session_blocks_queued_and_direct_followup_dispatch(monkeypatch):
@@ -307,3 +310,39 @@ def test_run_prompt_submit_refuses_closing_session():
 
     assert session["running"] is False
     assert "_run_thread" not in session
+
+
+def test_close_wins_race_before_turn_thread_publication(monkeypatch):
+    """Turn startup revalidates close ownership under the registry lock."""
+    sid = "close-before-thread-publication"
+    started = []
+    session = {
+        "agent": object(),
+        "history_lock": threading.Lock(),
+        "running": True,
+        "attached_images": [],
+    }
+
+    class DeferredThread:
+        def start(self):
+            started.append(True)
+
+    def claim_close_before_thread_is_published(*, target, daemon):
+        assert target is not None
+        assert daemon is True
+        assert server._pop_session_by_id(sid) is session
+        return DeferredThread()
+
+    monkeypatch.setattr(server, "_emit", lambda *args, **kwargs: None)
+    monkeypatch.setattr(server.threading, "Thread", claim_close_before_thread_is_published)
+    with server._sessions_lock:
+        server._sessions[sid] = session
+    try:
+        server._run_prompt_submit("rid", sid, session, "next")
+        assert started == []
+        assert session["_closing"] is True
+        assert session["running"] is False
+        assert "_run_thread" not in session
+    finally:
+        with server._sessions_lock:
+            server._sessions.pop(sid, None)
