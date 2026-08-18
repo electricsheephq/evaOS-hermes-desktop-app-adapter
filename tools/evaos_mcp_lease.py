@@ -5,11 +5,11 @@ broker secret is read from a root-owned file only while minting that lease.
 It is never persisted in the manager, included in errors, or exposed to MCP
 tool/model surfaces.
 
-The mint request carries ``{action, app_slug}`` plus, when the profile's
-managed server entry configures them, the profile's own Pipedream identity —
-``external_user_id`` and ``account_id`` straight from Pipedream's developer
-docs (``x-pd-external-user-id`` / ``x-pd-account-id``).  Under multiplex every
-profile owns its MCP entries, so this identity is per-profile by construction.
+The mint request carries ``{action, app_slug}`` plus either the profile's
+own Pipedream identity (``external_user_id`` and ``account_id``) or an exact
+evaOS agent/account tuple (``customer_id``, ``agent_id``, and ``account_id``).
+The latter lets the broker recheck owner-or-active-share lineage without
+putting an evaOS grant handle in the runtime.
 No grant handle, catalog, alias, registry or evaOS-invented identity key is
 involved; without the configured identity the server rejects the mint (the
 legacy grant-header path is server-side back-compat only).
@@ -33,6 +33,8 @@ import httpx
 _APP_SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,127}$")
 _ACCOUNT_ID_RE = re.compile(r"^apn_[A-Za-z0-9_-]+$")
 _EXTERNAL_USER_ID_RE = re.compile(r"^[A-Za-z0-9._:-]{1,180}$")
+_CUSTOMER_ID_RE = re.compile(r"^[A-Za-z0-9._:-]{1,180}$")
+_AGENT_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 _CREDENTIAL_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
 _MAX_ERROR_BODY_LENGTH = 512
 _SENSITIVE_ERROR_VALUE_RE = re.compile(
@@ -80,6 +82,8 @@ class _LeaseSourceMaterial:
     app_slug: str
     external_user_id: Optional[str] = None
     account_id: Optional[str] = None
+    customer_id: Optional[str] = None
+    agent_id: Optional[str] = None
 
 
 @dataclass(frozen=True, repr=False)
@@ -124,6 +128,8 @@ class EvaosLeaseSource:
         app_slug: str,
         external_user_id: Optional[str] = None,
         account_id: Optional[str] = None,
+        customer_id: Optional[str] = None,
+        agent_id: Optional[str] = None,
         secret_reader: Optional[Callable[[str], Optional[str]]] = None,
         profile_resolver: Optional[Callable[[], str]] = None,
         root_uid: int = 0,
@@ -133,7 +139,13 @@ class EvaosLeaseSource:
             raise EvaosLeaseError("managed MCP profile authority is missing")
         if not isinstance(app_slug, str) or not _APP_SLUG_RE.fullmatch(app_slug):
             raise EvaosLeaseError("managed MCP app slug is invalid")
-        if (external_user_id is None) != (account_id is None):
+        has_profile_identity = external_user_id is not None
+        has_agent_identity = customer_id is not None or agent_id is not None
+        if has_profile_identity and has_agent_identity:
+            raise EvaosLeaseError(
+                "managed MCP profile and agent identity modes are mutually exclusive"
+            )
+        if not has_agent_identity and (external_user_id is None) != (account_id is None):
             raise EvaosLeaseError(
                 "managed MCP external_user_id and account_id must be configured together"
             )
@@ -144,10 +156,29 @@ class EvaosLeaseSource:
                 raise EvaosLeaseError("managed MCP external user id is invalid")
             if not isinstance(account_id, str) or not _ACCOUNT_ID_RE.fullmatch(account_id):
                 raise EvaosLeaseError("managed MCP account id is invalid")
+        if has_agent_identity:
+            if (
+                not isinstance(customer_id, str)
+                or not _CUSTOMER_ID_RE.fullmatch(customer_id)
+                or not isinstance(agent_id, str)
+                or not _AGENT_ID_RE.fullmatch(agent_id)
+                or (
+                    account_id is not None
+                    and (
+                        not isinstance(account_id, str)
+                        or not _ACCOUNT_ID_RE.fullmatch(account_id)
+                    )
+                )
+            ):
+                raise EvaosLeaseError(
+                    "managed MCP customer_id and agent_id must be valid together"
+                )
         self._profile_key = profile_key
         self._app_slug = app_slug
         self._external_user_id = external_user_id
         self._account_id = account_id
+        self._customer_id = customer_id
+        self._agent_id = agent_id
         self._secret_reader = secret_reader or _default_secret_reader
         self._profile_resolver = profile_resolver or _default_profile_resolver
         self._root_uid = root_uid
@@ -316,6 +347,8 @@ class EvaosLeaseSource:
             app_slug=self._app_slug,
             external_user_id=self._external_user_id,
             account_id=self._account_id,
+            customer_id=self._customer_id,
+            agent_id=self._agent_id,
         )
 
 
@@ -407,7 +440,15 @@ class EvaosLeaseManager:
             "action": "pipedream_mcp_lease",
             "app_slug": material.app_slug,
         }
-        if material.external_user_id is not None:
+        if material.customer_id is not None:
+            request_body.update({
+                "customer_id": material.customer_id,
+                "agent_runtime": "hermes",
+                "agent_id": material.agent_id,
+            })
+            if material.account_id is not None:
+                request_body["account_id"] = material.account_id
+        elif material.external_user_id is not None:
             request_body["external_user_id"] = material.external_user_id
             request_body["account_id"] = material.account_id
         try:
