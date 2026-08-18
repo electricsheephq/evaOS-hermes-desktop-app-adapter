@@ -317,12 +317,15 @@ def _sdk_httpx_auth_base() -> type:
 _SDK_HTTPX_AUTH_BASE = _sdk_httpx_auth_base()
 
 
-class EvaosLeaseHttpAuth(_SDK_HTTPX_AUTH_BASE):
-    """Apply a lease and retry exactly once after a 401."""
+class _EvaosLeaseAuthMixin:
+    """Shared lease flow for the SDK and legacy HTTPX Auth bases."""
     requires_request_body = True
+
     def __init__(self, manager: EvaosLeaseManager):
         self._manager = manager
+
     def __repr__(self) -> str: return "EvaosLeaseHttpAuth(manager=<redacted>)"
+
     @staticmethod
     def _apply(request: Any, lease: EvaosMcpLease) -> None:
         # Preserve the Request/URL family supplied by the transport.  This
@@ -345,3 +348,15 @@ class EvaosLeaseHttpAuth(_SDK_HTTPX_AUTH_BASE):
         )
         self._apply(request, refreshed)
         yield request
+
+
+if _SDK_HTTPX_AUTH_BASE is httpx.Auth:
+    class EvaosLeaseHttpAuth(_EvaosLeaseAuthMixin, httpx.Auth):
+        """Apply a lease and retry exactly once after a 401."""
+else:
+    class EvaosLeaseHttpAuth(
+        _EvaosLeaseAuthMixin,
+        _SDK_HTTPX_AUTH_BASE,
+        httpx.Auth,
+    ):
+        """Apply a lease and retry exactly once after a 401."""

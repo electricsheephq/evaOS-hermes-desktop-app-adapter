@@ -293,6 +293,60 @@ async def test_real_sdk_http_client_mounts_lease_and_refreshes_once_after_401(
 
 
 @pytest.mark.asyncio
+async def test_real_legacy_http_client_mounts_lease_and_refreshes_once_after_401(
+    tmp_path,
+):
+    """The legacy std-httpx client accepts the same SDK-selected adapter."""
+    now = datetime(2026, 8, 8, tzinfo=timezone.utc)
+    source, _ = _source(tmp_path)
+    mint_calls = 0
+
+    async def transport(url, headers, payload):
+        nonlocal mint_calls
+        mint_calls += 1
+        return _Response(
+            200,
+            _lease_payload(
+                now + timedelta(minutes=10),
+                token=f"lease-token-{mint_calls}",
+            ),
+        )
+
+    manager = EvaosLeaseManager(
+        source=source,
+        transport=transport,
+        now=lambda: now,
+    )
+    requests = []
+
+    def handler(request):
+        requests.append((str(request.url), dict(request.headers)))
+        status = 401 if len(requests) == 1 else 200
+        return httpx.Response(status, request=request)
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler),
+        auth=EvaosLeaseHttpAuth(manager),
+    ) as client:
+        response = await client.post(
+            "https://initial.example/mcp",
+            content=b"{}",
+        )
+
+    assert response.status_code == 200
+    assert mint_calls == 2
+    assert len(requests) == 2
+    assert [url for url, _headers in requests] == [
+        "https://remote.mcp.pipedream.net/v3",
+        "https://remote.mcp.pipedream.net/v3",
+    ]
+    assert [headers["authorization"] for _url, headers in requests] == [
+        "Bearer lease-token-1",
+        "Bearer lease-token-2",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_lease_mint_401_surfaces_sanitized_server_body(tmp_path):
     now = datetime(2026, 8, 8, tzinfo=timezone.utc)
     source, _ = _source(tmp_path)

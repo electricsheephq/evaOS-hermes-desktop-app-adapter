@@ -930,8 +930,11 @@ class ToolRegistry:
             # Drop the toolset check and aliases if this was the last tool in
             # that toolset.
             toolset_still_exists = any(
+                e.toolset == entry.toolset for e in self._tools.values()
+            ) or any(
                 e.toolset == entry.toolset
-                for e in self._merged_tools(caller_scope).values()
+                for entries in self._scoped_tools.values()
+                for e in entries.values()
             )
             if not toolset_still_exists:
                 self._toolset_checks.pop(entry.toolset, None)
