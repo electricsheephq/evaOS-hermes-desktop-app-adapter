@@ -101,6 +101,8 @@ _GLOBAL_ENV_EXACT = frozenset({
     "HERMES_MAX_ITERATIONS", "HERMES_MAX_TOKENS", "HERMES_API_TIMEOUT",
     "HERMES_REDACT_SECRETS", "HERMES_NOUS_TIMEOUT_SECONDS",
     "_HERMES_GATEWAY",
+    "EVAOS_DESKTOP_RUNTIME_SESSION_URL",
+    "PIPEDREAM_AGENT_BROKER_SECRET_FILE", "CREDENTIALS_DIRECTORY",
     # OS / interpreter
     "PATH", "HOME", "USER", "LANG", "LC_ALL", "TZ", "PWD", "SHELL", "TMPDIR",
     "VIRTUAL_ENV", "PYTHONPATH", "SSL_CERT_FILE",
@@ -289,5 +291,22 @@ def build_profile_secret_scope(hermes_home: Path) -> Dict[str, str]:
         if _is_global_env(key):
             continue
         secrets[key] = value
+
+    try:
+        from hermes_cli.managed_scope import load_managed_env
+        from hermes_constants import (
+            reset_hermes_home_override,
+            set_hermes_home_override,
+        )
+        home_token = set_hermes_home_override(home)
+        try:
+            managed_secrets = load_managed_env()
+        finally:
+            reset_hermes_home_override(home_token)
+    except Exception:
+        managed_secrets = {}
+    for key, value in managed_secrets.items():
+        if not _is_global_env(key):
+            secrets[key] = value
 
     return secrets

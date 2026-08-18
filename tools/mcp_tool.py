@@ -97,6 +97,7 @@ Thread safety:
 import asyncio
 import contextvars
 import concurrent.futures
+from collections.abc import MutableMapping
 import errno
 import fnmatch
 import inspect
@@ -2327,16 +2328,18 @@ class MCPServerTask:
         "_tools", "_error", "_config",
         "_sampling", "_elicitation",
         "_registered_tool_names", "_auth_type", "_refresh_lock",
+        "_evaos_lease_manager", "_evaos_lease_warning_emitted",
         "_rpc_lock", "_pending_refresh_tasks",
         "_pending_call_context",
         "_lifecycle_started_at", "_last_tool_call_at",
         "_idle_timeout_seconds", "_max_lifetime_seconds", "_recycled_reason",
         "initialize_result", "_ping_unsupported", "_list_cache_meta",
-        "_reconnect_retries", "_session_proven", "_was_parked",
+        "_reconnect_retries", "_session_proven", "_was_parked", "_profile_scope",
     )
 
     def __init__(self, name: str):
         self.name = name
+        self._profile_scope = _mcp_profile_scope()
         self.session: Optional[Any] = None
         self.tool_timeout: float = _DEFAULT_TOOL_TIMEOUT
         self._task: Optional[asyncio.Task] = None
@@ -2368,6 +2371,8 @@ class MCPServerTask:
         # parked→revived transition exactly once.
         self._was_parked: bool = False
         self._auth_type: str = ""
+        self._evaos_lease_manager: Optional[Any] = None
+        self._evaos_lease_warning_emitted: bool = False
         self._refresh_lock = asyncio.Lock()
         # MCP stdio sessions are a single JSON-RPC stream. Some servers emit
         # list_changed notifications during startup; if the notification
@@ -2410,7 +2415,34 @@ class MCPServerTask:
 
     def _is_http(self) -> bool:
         """Check if this server uses HTTP transport."""
-        return "url" in self._config
+        return "url" in self._config or self._auth_type == "evaos_lease"
+
+    def _validate_evaos_lease_config(self, config: dict) -> None:
+        from tools.evaos_mcp_lease import EvaosLeaseError, EvaosLeaseSource
+
+        blocked = {"url", "headers", "command", "args", "env", "transport", "ssl_verify"}
+        if blocked.intersection(config):
+            raise EvaosLeaseError(
+                "managed MCP lease config cannot override connection or auth settings"
+            )
+        EvaosLeaseSource(
+            profile_key="validation",
+            app_slug=config.get("app_slug"),
+            external_user_id=config.get("external_user_id"),
+            account_id=config.get("account_id"),
+        )
+
+    def _warn_evaos_lease_failure(self, _exc: Exception) -> None:
+        if self._evaos_lease_warning_emitted:
+            return
+        self._evaos_lease_warning_emitted = True
+        from hermes_constants import get_hermes_home
+
+        logger.warning(
+            "MCP server '%s' lease mint failed for profile '%s'",
+            self.name,
+            get_hermes_home().name,
+        )
 
     def _advertises_tools(self) -> bool:
         """Whether the server advertises the ``tools`` capability.
@@ -2706,7 +2738,7 @@ class MCPServerTask:
                 # is currently owned by another server.
                 if registry.get_toolset_for_tool(tool_name) != toolset_name:
                     continue
-                registry.deregister(tool_name)
+                _deregister_registry_tool(registry, tool_name, _mcp_profile_scope())
                 _forget_mcp_tool_server(tool_name)
 
             # 3. Re-register with the fresh list. The helper may skip names that
@@ -2724,7 +2756,7 @@ class MCPServerTask:
             for tool_name in old_tool_names - registered_name_set:
                 if registry.get_toolset_for_tool(tool_name) != toolset_name:
                     continue
-                registry.deregister(tool_name)
+                _deregister_registry_tool(registry, tool_name, _mcp_profile_scope())
                 _forget_mcp_tool_server(tool_name)
             self._registered_tool_names = registered_names
 
@@ -3351,8 +3383,33 @@ class MCPServerTask:
                 "Upgrade the mcp package to get HTTP support."
             )
 
-        url = config["url"]
-        headers = dict(config.get("headers") or {})
+        lease_auth = None
+        if self._auth_type == "evaos_lease":
+            from hermes_constants import get_hermes_home
+            from tools.evaos_mcp_lease import (
+                EvaosLeaseHttpAuth,
+                EvaosLeaseManager,
+                EvaosLeaseSource,
+            )
+
+            if self._evaos_lease_manager is None:
+                profile_key = str(get_hermes_home().expanduser().resolve())
+                self._evaos_lease_manager = EvaosLeaseManager(
+                    source=EvaosLeaseSource(
+                        profile_key=profile_key,
+                        app_slug=config["app_slug"],
+                        external_user_id=config.get("external_user_id"),
+                        account_id=config.get("account_id"),
+                    ),
+                    on_mint_failure=self._warn_evaos_lease_failure,
+                )
+            lease = await self._evaos_lease_manager.get_lease()
+            lease_auth = EvaosLeaseHttpAuth(self._evaos_lease_manager)
+            url = lease.mcp_url
+            headers = dict(lease.headers)
+        else:
+            url = config["url"]
+            headers = dict(config.get("headers") or {})
         # Portable Agent Plugins v1 packages set strict_redirect_headers:
         # configured headers are visible package data and MUST NOT be
         # forwarded to a different origin through a redirect (spec §7.2.1).
@@ -3533,8 +3590,8 @@ class MCPServerTask:
             }
             if headers:
                 client_kwargs["headers"] = headers
-            if _oauth_auth is not None:
-                client_kwargs["auth"] = _oauth_auth
+            if lease_auth is not None or _oauth_auth is not None:
+                client_kwargs["auth"] = lease_auth or _oauth_auth
             if client_cert is not None:
                 client_kwargs["cert"] = client_cert
 
@@ -3589,8 +3646,8 @@ class MCPServerTask:
                 "timeout": float(connect_timeout),
                 "verify": ssl_verify,
             }
-            if _oauth_auth is not None:
-                _http_kwargs["auth"] = _oauth_auth
+            if lease_auth is not None or _oauth_auth is not None:
+                _http_kwargs["auth"] = lease_auth or _oauth_auth
             try:
                 async with streamablehttp_client(url, **_http_kwargs) as (
                     read_stream, write_stream, _get_session_id,
@@ -3692,6 +3749,8 @@ class MCPServerTask:
         self._config = config
         self.tool_timeout = config.get("timeout", _DEFAULT_TOOL_TIMEOUT)
         self._auth_type = (config.get("auth") or "").lower().strip()
+        if self._auth_type == "evaos_lease":
+            self._validate_evaos_lease_config(config)
         self._idle_timeout_seconds = _get_lifecycle_seconds(config, "idle_timeout_seconds")
         self._max_lifetime_seconds = _get_lifecycle_seconds(config, "max_lifetime_seconds")
 
@@ -3731,7 +3790,7 @@ class MCPServerTask:
         # means a typo in config.yaml fails fast with a clear error — and
         # critically, no reconnect-backoff burn.  (Ported from
         # anomalyco/opencode#25019.)
-        if self._is_http():
+        if self._is_http() and self._auth_type != "evaos_lease":
             try:
                 _validate_remote_mcp_url(self.name, config.get("url"))
             except InvalidMcpUrlError as exc:
@@ -4150,8 +4209,8 @@ class MCPServerTask:
         from tools.registry import registry
 
         for tool_name in list(getattr(self, "_registered_tool_names", [])):
-            registry.deregister(tool_name)
-            _forget_mcp_tool_server(tool_name)
+            _deregister_registry_tool(registry, tool_name, self._profile_scope)
+            _mcp_tool_server_names.for_scope(self._profile_scope).pop(tool_name, None)
         self._registered_tool_names = []
 
     async def _wait_for_lazy_reconnect(self) -> None:
@@ -4177,15 +4236,57 @@ class MCPServerTask:
 # Module-level state
 # ---------------------------------------------------------------------------
 
-_servers: Dict[str, MCPServerTask] = {}
-_server_connecting: set[str] = set()
-_server_connect_errors: Dict[str, str] = {}
+def _mcp_profile_scope() -> Optional[str]:
+    from agent.secret_scope import is_multiplex_active
+    if not is_multiplex_active():
+        return None
+    from hermes_constants import hermes_home_key
+    return hermes_home_key()
+
+
+def _deregister_registry_tool(registry, tool_name, scope):
+    registry.deregister(tool_name, **({} if scope is None else {"scope": scope}))
+
+
+class _ScopedState(MutableMapping):
+    """Dict/set-compatible state partitioned by the active Hermes profile."""
+    def __init__(self, factory):
+        self._factory = factory
+        self._global = factory()
+        self._profiles = {}
+    def _target(self):
+        return self.for_scope(_mcp_profile_scope())
+    def for_scope(self, scope):
+        return self._global if scope is None else self._profiles.setdefault(scope, self._factory())
+    def __getitem__(self, key): return self._target()[key]
+    def __setitem__(self, key, value): self._target()[key] = value
+    def __delitem__(self, key): del self._target()[key]
+    def __iter__(self): return iter(self._target())
+    def __len__(self): return len(self._target())
+    def __contains__(self, key): return key in self._target()
+    def clear(self): self._target().clear()
+    def add(self, value): self._target().add(value)
+    def discard(self, value): self._target().discard(value)
+    def update(self, *args, **kwargs): self._target().update(*args, **kwargs)
+    def difference_update(self, *args): self._target().difference_update(*args)
+    def all_values(self):
+        return list(self._global.values()) + [
+            value for state in self._profiles.values() for value in state.values()
+        ]
+    def clear_all(self):
+        self._global.clear()
+        self._profiles.clear()
+
+
+_servers = _ScopedState(dict)
+_server_connecting = _ScopedState(set)
+_server_connect_errors = _ScopedState(dict)
 # Lazy MCP startup (#56832): servers whose tools were registered from the
 # on-disk schema cache without spawning/connecting. Keyed by server name;
 # entries are popped once a real connection is established on first use.
-_lazy_server_configs: Dict[str, dict] = {}
-_lazy_server_fingerprints: Dict[str, str] = {}
-_lazy_server_tool_names: Dict[str, List[str]] = {}
+_lazy_server_configs = _ScopedState(dict)
+_lazy_server_fingerprints = _ScopedState(dict)
+_lazy_server_tool_names = _ScopedState(dict)
 # Discovery installs a task-local claim before calling ``_connect_server`` so
 # it can retain a recoverable parked task without making standalone probe calls
 # publish failed servers into module-global ownership.
@@ -4213,8 +4314,8 @@ _connect_server_claim: contextvars.ContextVar[
 # server is retried on a backoff schedule instead of on every worker
 # session -- isolating it from the rest of the bridge. A successful
 # connection clears the state.
-_server_connect_retry_after: Dict[str, float] = {}   # name -> monotonic deadline
-_server_connect_failures: Dict[str, int] = {}        # name -> consecutive failures
+_server_connect_retry_after = _ScopedState(dict)
+_server_connect_failures = _ScopedState(dict)
 _CONNECT_RETRY_BASE_BACKOFF_SEC = 30.0
 _CONNECT_RETRY_MAX_BACKOFF_SEC = 600.0
 
@@ -4265,8 +4366,8 @@ def _connect_cooldown_active(server_name: str) -> bool:
 # the breaker most recently transitioned into the open state. Use the
 # ``_bump_server_error`` / ``_reset_server_error`` helpers to mutate
 # this state — they keep the count and timestamp in sync.
-_server_error_counts: Dict[str, int] = {}
-_server_breaker_opened_at: Dict[str, float] = {}
+_server_error_counts = _ScopedState(dict)
+_server_breaker_opened_at = _ScopedState(dict)
 _CIRCUIT_BREAKER_THRESHOLD = 3
 _CIRCUIT_BREAKER_COOLDOWN_SEC = 60.0
 
@@ -4297,8 +4398,8 @@ _CIRCUIT_BREAKER_COOLDOWN_SEC = 60.0
 # Classification happens at CALL TIME from data captured at DISCOVERY —
 # no toolset or schema mutation, so the conversation's toolset stays
 # byte-stable and prompt caching is preserved.
-_server_trust_levels: Dict[str, str] = {}
-_tool_read_only_hints: Dict[str, Dict[str, bool]] = {}
+_server_trust_levels = _ScopedState(dict)
+_tool_read_only_hints = _ScopedState(dict)
 
 _TRUST_FULL = "full"
 _TRUST_UNTRUSTED = "untrusted"
@@ -4349,7 +4450,9 @@ def _record_tool_trust_metadata(
     """Capture per-server trust and per-tool readOnlyHint at discovery."""
     with _lock:
         _server_trust_levels[server_name] = _normalize_server_trust(
-            (config or {}).get("trust")
+            (config or {}).get(
+                "trust", "untrusted" if config.get("auth") == "evaos_lease" else None
+            )
         )
         hints = _tool_read_only_hints.setdefault(server_name, {})
         for tool in tools:
@@ -4936,13 +5039,13 @@ def _handle_session_expired_and_retry(
 # Exact raw server names whose ``supports_parallel_tool_calls`` config is True.
 # Raw identity matters: distinct names such as ``foo-bar`` and ``foo_bar`` both
 # sanitize to ``foo_bar`` but must not share policy.
-_parallel_safe_servers: set = set()
+_parallel_safe_servers = _ScopedState(set)
 
 # Exact MCP tool-name provenance. The generated registry name is lossy because
 # provider-safe normalization maps punctuation to ``_``. Keep the raw server
 # name captured at registration time so policy and capability checks never rely
 # on parsing or re-sanitizing the generated name.
-_mcp_tool_server_names: Dict[str, str] = {}
+_mcp_tool_server_names = _ScopedState(dict)
 
 # Dedicated event loop running in a background daemon thread.
 _mcp_loop: Optional[asyncio.AbstractEventLoop] = None
@@ -5467,19 +5570,23 @@ def _load_mcp_config() -> Dict[str, dict]:
     ``os.environ`` (which includes ``~/.hermes/.env`` loaded at startup).
     """
     try:
-        from hermes_cli.config import load_config
+        from hermes_cli import managed_scope
+        from hermes_cli.config import _deep_merge, load_config, read_raw_config
         from utils import env_var_enabled as _env_enabled
 
         if _env_enabled("HERMES_SAFE_MODE"):
             return {}
-        config = load_config()
+        config = (_deep_merge(read_raw_config() or {},
+            managed_scope.load_managed_config()) if os.environ.get(
+                "EVAOS_HERMES_MANAGED_PROFILE_ROOT") or _mcp_profile_scope() else load_config())
         servers = config.get("mcp_servers")
         if not isinstance(servers, dict):
             servers = {}
         # Ensure .env vars are available for interpolation
         try:
             from hermes_cli.env_loader import load_hermes_dotenv
-            load_hermes_dotenv()
+            if not (os.environ.get("EVAOS_HERMES_MANAGED_PROFILE_ROOT") or _mcp_profile_scope()):
+                load_hermes_dotenv()
         except Exception:
             pass
         safe_servers: Dict[str, dict] = {}
@@ -5668,7 +5775,7 @@ def _ensure_lazy_server_connected(server_name: str) -> bool:
         from tools.registry import registry
 
         for tool_name in phantom_names:
-            registry.deregister(tool_name)
+            _deregister_registry_tool(registry, tool_name, _mcp_profile_scope())
             _forget_mcp_tool_server(tool_name)
         logger.info(
             "MCP server '%s': deregistered %d phantom cached tool(s) not "
@@ -6898,6 +7005,7 @@ def _register_server_tools(name: str, server: MCPServerTask, config: dict) -> Li
             check_fn=candidate["check_fn"],
             is_async=False,
             description=candidate["schema"]["description"],
+            scope=_mcp_profile_scope(),
         )
 
         # The pre-check above is advisory only. Multiple servers connect in
@@ -7051,6 +7159,7 @@ def _register_from_cache_sync(name: str, config: dict, entry: dict) -> List[str]
             check_fn=check_fn,
             is_async=False,
             description=schema["description"],
+            scope=_mcp_profile_scope(),
         )
         if registry.get_toolset_for_tool(registry_name) != toolset_name:
             continue
@@ -7084,6 +7193,7 @@ def _register_from_cache_sync(name: str, config: dict, entry: dict) -> List[str]
             check_fn=check_fn,
             is_async=False,
             description=schema.get("description") or "",
+            scope=_mcp_profile_scope(),
         )
         if registry.get_toolset_for_tool(util_name) != toolset_name:
             continue
@@ -7868,7 +7978,7 @@ def shutdown_mcp_servers():
     All servers are shut down in parallel via ``asyncio.gather``.
     """
     with _lock:
-        servers_snapshot = list(_servers.values())
+        servers_snapshot = _servers.all_values()
 
     # Fast path: nothing to shut down. The connect-cooldown maps can still
     # be populated here — a server that failed to connect is never recorded
@@ -7878,8 +7988,8 @@ def shutdown_mcp_servers():
     # configured server immediately.
     if not servers_snapshot:
         with _lock:
-            _server_connect_retry_after.clear()
-            _server_connect_failures.clear()
+            _server_connect_retry_after.clear_all()
+            _server_connect_failures.clear_all()
         _stop_mcp_loop()
         return
 
@@ -7894,12 +8004,12 @@ def shutdown_mcp_servers():
                     "Error closing MCP server '%s': %s", server.name, result,
                 )
         with _lock:
-            _servers.clear()
+            _servers.clear_all()
             # Drop connect-retry cooldowns too: a full shutdown/restart
             # should re-attempt every server immediately, not honour a
             # stale per-server backoff from before the restart (#50394).
-            _server_connect_retry_after.clear()
-            _server_connect_failures.clear()
+            _server_connect_retry_after.clear_all()
+            _server_connect_failures.clear_all()
 
     with _lock:
         loop = _mcp_loop
@@ -7921,8 +8031,8 @@ def shutdown_mcp_servers():
     # shutdown must leave no stale connect-cooldown state behind — the
     # next start should re-attempt every server immediately (#50394).
     with _lock:
-        _server_connect_retry_after.clear()
-        _server_connect_failures.clear()
+        _server_connect_retry_after.clear_all()
+        _server_connect_failures.clear_all()
 
     _stop_mcp_loop()
 
