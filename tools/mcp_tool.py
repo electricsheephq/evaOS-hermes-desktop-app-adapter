@@ -2008,7 +2008,15 @@ class MCPServerTask:
             raise EvaosLeaseError("managed MCP app slug is invalid")
         external_user_id = config.get("external_user_id")
         account_id = config.get("account_id")
-        if (external_user_id is None) != (account_id is None):
+        customer_id = config.get("customer_id")
+        agent_id = config.get("agent_id")
+        has_profile_identity = external_user_id is not None
+        has_agent_identity = customer_id is not None or agent_id is not None
+        if has_profile_identity and has_agent_identity:
+            raise EvaosLeaseError(
+                "managed MCP profile and agent identity modes are mutually exclusive"
+            )
+        if not has_agent_identity and (external_user_id is None) != (account_id is None):
             raise EvaosLeaseError(
                 "managed MCP external_user_id and account_id must be configured together"
             )
@@ -2023,6 +2031,22 @@ class MCPServerTask:
                 or re.fullmatch(r"apn_[A-Za-z0-9_-]+", account_id) is None
             ):
                 raise EvaosLeaseError("managed MCP account id is invalid")
+        if has_agent_identity and (
+            not isinstance(customer_id, str)
+            or re.fullmatch(r"[A-Za-z0-9._:-]{1,180}", customer_id) is None
+            or not isinstance(agent_id, str)
+            or re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,63}", agent_id) is None
+            or (
+                account_id is not None
+                and (
+                    not isinstance(account_id, str)
+                    or re.fullmatch(r"apn_[A-Za-z0-9_-]+", account_id) is None
+                )
+            )
+        ):
+            raise EvaosLeaseError(
+                "managed MCP customer_id and agent_id must be valid together"
+            )
 
     def _warn_evaos_lease_failure(self, exc: Exception) -> None:
         if self._evaos_lease_warning_emitted:
@@ -2888,6 +2912,8 @@ class MCPServerTask:
                     app_slug=config["app_slug"],
                     external_user_id=config.get("external_user_id"),
                     account_id=config.get("account_id"),
+                    customer_id=config.get("customer_id"),
+                    agent_id=config.get("agent_id"),
                 )
                 self._evaos_lease_manager = EvaosLeaseManager(
                     source=source, on_mint_failure=self._warn_evaos_lease_failure

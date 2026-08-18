@@ -566,6 +566,7 @@ async def test_managed_config_mounts_through_r5_lease(
     assert mint_calls[0][2] == {
         "action": "pipedream_mcp_lease",
         "app_slug": "google_sheets",
+        **identity,
     }
     assert "X-Evaos-Provider-Grant" not in mint_calls[0][1]
     assert mounted["url"] == "https://remote.mcp.pipedream.net/v3"
@@ -692,6 +693,8 @@ def test_schema_cache_fingerprint_includes_managed_app_identity():
 
 DIRECT_EXTERNAL_USER_ID = "acct_fixture_profile_fixture"
 DIRECT_ACCOUNT_ID = "apn_fixture_direct"
+DIRECT_CUSTOMER_ID = "customer-fixture"
+DIRECT_AGENT_ID = "grace"
 
 
 def _direct_source(tmp_path, **overrides):
@@ -733,6 +736,16 @@ def _direct_lease_payload(expires_at: datetime, **header_overrides):
     }
 
 
+def _agent_direct_source(tmp_path, **overrides):
+    values = {
+        "external_user_id": None,
+        "customer_id": DIRECT_CUSTOMER_ID,
+        "agent_id": DIRECT_AGENT_ID,
+    }
+    values.update(overrides)
+    return _direct_source(tmp_path, **values)
+
+
 @pytest.mark.asyncio
 async def test_direct_identity_is_sent_and_echo_validated(tmp_path):
     now = datetime(2026, 8, 8, tzinfo=timezone.utc)
@@ -755,6 +768,45 @@ async def test_direct_identity_is_sent_and_echo_validated(tmp_path):
     assert "X-Evaos-Provider-Grant" not in calls[0][1]
     assert lease.headers["x-pd-external-user-id"] == DIRECT_EXTERNAL_USER_ID
     assert lease.headers["x-pd-account-id"] == DIRECT_ACCOUNT_ID
+
+
+@pytest.mark.asyncio
+async def test_exact_agent_account_identity_is_sent_without_grant_handle(tmp_path):
+    now = datetime(2026, 8, 8, tzinfo=timezone.utc)
+    source = _agent_direct_source(tmp_path)
+    calls = []
+
+    async def transport(url, headers, payload):
+        calls.append((url, headers, payload))
+        return _Response(200, _direct_lease_payload(now + timedelta(minutes=10)))
+
+    manager = EvaosLeaseManager(source=source, transport=transport, now=lambda: now)
+    lease = await manager.get_lease()
+
+    assert calls[0][2] == {
+        "action": "pipedream_mcp_lease",
+        "app_slug": "google_sheets",
+        "customer_id": DIRECT_CUSTOMER_ID,
+        "agent_runtime": "hermes",
+        "agent_id": DIRECT_AGENT_ID,
+        "account_id": DIRECT_ACCOUNT_ID,
+    }
+    assert "X-Evaos-Provider-Grant" not in calls[0][1]
+    assert lease.headers["x-pd-account-id"] == DIRECT_ACCOUNT_ID
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"customer_id": None},
+        {"agent_id": None},
+        {"customer_id": "bad customer"},
+        {"agent_id": "Bad Agent"},
+    ],
+)
+def test_exact_agent_account_identity_requires_valid_complete_tuple(tmp_path, overrides):
+    with pytest.raises(EvaosLeaseError):
+        _agent_direct_source(tmp_path, **overrides)
 
 
 @pytest.mark.asyncio
@@ -886,6 +938,37 @@ async def test_managed_config_direct_identity_reaches_the_mint_body(
     assert mounted["url"] == "https://remote.mcp.pipedream.net/v3"
     assert mounted["headers"]["x-pd-external-user-id"] == DIRECT_EXTERNAL_USER_ID
     assert mounted["headers"]["x-pd-account-id"] == DIRECT_ACCOUNT_ID
+
+
+def test_managed_config_accepts_exact_agent_account_mode():
+    task = MCPServerTask("pipedream-google-sheets")
+    task._auth_type = "evaos_lease"
+    task._validate_evaos_lease_config(
+        {
+            "auth": "evaos_lease",
+            "app_slug": "google_sheets",
+            "lazy": True,
+            "customer_id": DIRECT_CUSTOMER_ID,
+            "agent_id": DIRECT_AGENT_ID,
+            "account_id": DIRECT_ACCOUNT_ID,
+        }
+    )
+
+
+def test_managed_config_rejects_mixed_profile_and_agent_identity():
+    task = MCPServerTask("pipedream-google-sheets")
+    task._auth_type = "evaos_lease"
+    with pytest.raises(EvaosLeaseError):
+        task._validate_evaos_lease_config(
+            {
+                "auth": "evaos_lease",
+                "app_slug": "google_sheets",
+                "external_user_id": DIRECT_EXTERNAL_USER_ID,
+                "customer_id": DIRECT_CUSTOMER_ID,
+                "agent_id": DIRECT_AGENT_ID,
+                "account_id": DIRECT_ACCOUNT_ID,
+            }
+        )
 
 
 @pytest.mark.parametrize(
