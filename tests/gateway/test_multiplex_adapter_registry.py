@@ -95,6 +95,47 @@ class TestProfileMessageHandler:
         assert result == "ok"
         assert seen["profile"] == "coder"
 
+    @pytest.mark.asyncio
+    async def test_primary_handler_authorizes_in_routed_profile_scope(
+        self, tmp_path, monkeypatch
+    ):
+        from agent import secret_scope
+        from gateway.authz_mixin import _platform_gate_env
+
+        root = tmp_path / "root"
+        profile = tmp_path / "profiles" / "eve"
+        root.mkdir()
+        profile.mkdir(parents=True)
+        (profile / ".env").write_text(
+            "DISCORD_ALLOWED_USERS=profile-user\n", encoding="utf-8"
+        )
+        monkeypatch.setenv("HERMES_HOME", str(root))
+        monkeypatch.setenv("DISCORD_ALLOWED_USERS", "root-user")
+        monkeypatch.setattr(secret_scope, "_MULTIPLEX_ACTIVE", True)
+
+        runner = GatewayRunner.__new__(GatewayRunner)
+        runner._resolve_profile_home_for_source = lambda _source: profile
+        seen = {}
+
+        async def _fake_handle(event):
+            seen["profile"] = event.source.profile
+            seen["allowed"] = _platform_gate_env("DISCORD_ALLOWED_USERS")
+            return "ok"
+
+        runner._handle_message = _fake_handle
+        handler = runner._make_default_profile_message_handler()
+
+        class _Src:
+            profile = "eve"
+
+        class _Evt:
+            source = _Src()
+
+        result = await handler(_Evt())
+
+        assert result == "ok"
+        assert seen == {"profile": "eve", "allowed": "profile-user"}
+
 
 class TestProfileRuntimeStatus:
     def test_base_adapter_uses_namespaced_platform_key(self, monkeypatch):
@@ -637,5 +678,4 @@ class TestFeishuPortBindingConditional:
 
         connected = await runner._start_one_profile_adapters("reviewer", "/tmp/x", {})
         assert connected == 0  # no error, just nothing connected
-
 
