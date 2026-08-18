@@ -2,21 +2,37 @@
 
 from __future__ import annotations
 
-import threading
+import contextvars, threading
 from contextlib import nullcontext
 from typing import Optional
 
 _mcp_discovery_lock = threading.Lock()
 _mcp_discovery_started = False
 _mcp_discovery_thread: Optional[threading.Thread] = None
+_mcp_discovery_started_scopes: set[str] = set()
+_mcp_discovery_threads: dict[str, threading.Thread] = {}
+
+
+def _discovery_scope() -> Optional[str]:
+    from agent.secret_scope import is_multiplex_active
+    if not is_multiplex_active():
+        return None
+    from hermes_constants import hermes_home_key
+    return hermes_home_key()
+
+
+def _current_discovery_thread() -> Optional[threading.Thread]:
+    scope = _discovery_scope()
+    return _mcp_discovery_threads.get(scope) if scope else _mcp_discovery_thread
 
 
 def _has_configured_mcp_servers() -> bool:
     """Cheap config probe so non-MCP users avoid importing the MCP stack."""
     try:
         from hermes_cli.config import read_raw_config
+        from hermes_cli.managed_scope import apply_managed_overlay
 
-        raw_config = read_raw_config() or {}
+        raw_config = apply_managed_overlay(read_raw_config() or {})
         mcp_servers = raw_config.get("mcp_servers")
         if isinstance(mcp_servers, dict) and len(mcp_servers) > 0:
             return True
@@ -40,8 +56,16 @@ def start_background_mcp_discovery(*, logger, thread_name: str) -> None:
     global _mcp_discovery_started, _mcp_discovery_thread
 
     with _mcp_discovery_lock:
-        if _mcp_discovery_started:
-            thread = _mcp_discovery_thread
+        scope = _discovery_scope()
+        started = (
+            scope in _mcp_discovery_started_scopes
+            if scope else _mcp_discovery_started
+        )
+        if started:
+            thread = (
+                _mcp_discovery_threads.get(scope)
+                if scope else _mcp_discovery_thread
+            )
             if thread is not None and thread.is_alive():
                 return
             try:
@@ -56,12 +80,19 @@ def start_background_mcp_discovery(*, logger, thread_name: str) -> None:
                 "Background MCP discovery previously exited with no connected "
                 "servers; retrying discovery thread"
             )
-            _mcp_discovery_started = False
-            _mcp_discovery_thread = None
+            if scope:
+                _mcp_discovery_started_scopes.discard(scope)
+                _mcp_discovery_threads.pop(scope, None)
+            else:
+                _mcp_discovery_started = False
+                _mcp_discovery_thread = None
 
-        _mcp_discovery_started = True
         if not _has_configured_mcp_servers():
             return
+        if scope:
+            _mcp_discovery_started_scopes.add(scope)
+        else:
+            _mcp_discovery_started = True
 
         # Capture the caller's context-local HERMES_HOME override (profile
         # scoping in multi-profile processes like the dashboard/desktop
@@ -108,14 +139,21 @@ def start_background_mcp_discovery(*, logger, thread_name: str) -> None:
                         pass
                 with _mcp_discovery_lock:
                     global _mcp_discovery_thread, _mcp_discovery_started
-                    _mcp_discovery_thread = None
+                    if scope:
+                        _mcp_discovery_threads.pop(scope, None)
+                    else:
+                        _mcp_discovery_thread = None
 
+        caller_context = contextvars.copy_context()
         thread = threading.Thread(
-            target=_discover,
+            target=lambda: caller_context.run(_discover),
             name=thread_name,
             daemon=True,
         )
-        _mcp_discovery_thread = thread
+        if scope:
+            _mcp_discovery_threads[scope] = thread
+        else:
+            _mcp_discovery_thread = thread
         thread.start()
 
 
@@ -188,7 +226,7 @@ def wait_for_mcp_discovery(
     ``mcp_single_query_discovery_timeout`` instead (default 15s vs 1.5s
     interactive) because one-shot sessions have no second turn to recover.
     """
-    thread = _mcp_discovery_thread
+    thread = _current_discovery_thread()
     if thread is None or not thread.is_alive():
         return
     thread.join(timeout=_resolve_discovery_timeout(timeout, single_query=single_query))
@@ -205,7 +243,7 @@ def mcp_discovery_in_flight() -> bool:
     scheduler must consult both to decide whether a slow server's tools are
     still pending (see #51587).
     """
-    thread = _mcp_discovery_thread
+    thread = _current_discovery_thread()
     return thread is not None and thread.is_alive()
 
 
@@ -217,7 +255,7 @@ def join_mcp_discovery(timeout: "float | None" = None) -> bool:
     ``wait_for_mcp_discovery`` this accepts an unbounded/long wait and reports
     the outcome, for the off-critical-path late-refresh waiter.
     """
-    thread = _mcp_discovery_thread
+    thread = _current_discovery_thread()
     if thread is None:
         return True
     thread.join(timeout=timeout)

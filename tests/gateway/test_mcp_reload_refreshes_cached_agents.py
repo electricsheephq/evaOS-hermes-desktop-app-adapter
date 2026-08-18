@@ -174,3 +174,65 @@ async def test_reload_mcp_preserves_per_agent_toolset_overrides():
     assert captured_calls, "get_tool_definitions was never called to refresh the cache"
     assert captured_calls[0]["enabled_toolsets"] == ["safe"]
     assert captured_calls[0]["disabled_toolsets"] == ["terminal"]
+
+
+@pytest.mark.asyncio
+async def test_multiplex_reload_refreshes_only_routed_profile_cache(
+    tmp_path, monkeypatch
+):
+    from agent import secret_scope
+    from hermes_constants import get_hermes_home
+    from tests.hermes_cli.test_managed_mcp_profile_scope import _profile_scope
+
+    runner = _make_runner_with_cached_agents(num_agents=2)
+    runner.config.multiplex_profiles = True
+    eve_entry, grace_entry = list(runner._agent_cache.values())
+    runner._agent_cache = OrderedDict(
+        [
+            ("agent:eve:discord:channel:eve", eve_entry),
+            ("agent:grace:discord:channel:grace", grace_entry),
+        ]
+    )
+    event = _make_event()
+    event.source.profile = "eve"
+    refreshed = []
+    seen_shutdown_homes = []
+    eve_home = tmp_path / "profiles" / "eve"
+    eve_home.mkdir(parents=True)
+    monkeypatch.setattr(secret_scope, "_MULTIPLEX_ACTIVE", True)
+
+    def _scoped_shutdown():
+        seen_shutdown_homes.append(get_hermes_home().resolve())
+
+    try:
+        with _profile_scope(eve_home):
+            with (
+                patch("tools.mcp_tool.shutdown_mcp_servers") as global_shutdown,
+                patch(
+                    "tools.mcp_tool.shutdown_mcp_servers_for_current_scope",
+                    side_effect=_scoped_shutdown,
+                ) as scoped_shutdown,
+                patch(
+                    "tools.mcp_tool.discover_mcp_tools",
+                    return_value=["gmail_read"],
+                ),
+                patch.dict(
+                    "tools.mcp_tool._servers", {"gmail": object()}, clear=True
+                ),
+                patch(
+                    "tools.mcp_tool.refresh_agent_mcp_tools",
+                    side_effect=lambda agent, **_kwargs: refreshed.append(agent),
+                ),
+            ):
+                result = await runner._execute_mcp_reload(event)
+    finally:
+        executor = getattr(runner, "_executor", None)
+        if executor is not None:
+            executor.shutdown(wait=True)
+
+    assert isinstance(result, str)
+    scoped_shutdown.assert_called_once_with()
+    global_shutdown.assert_not_called()
+    assert seen_shutdown_homes == [eve_home.resolve()]
+    assert refreshed == [eve_entry[0]]
+    assert grace_entry[0] not in refreshed

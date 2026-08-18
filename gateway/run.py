@@ -2100,6 +2100,31 @@ def _profile_runtime_scope(profile_home: "Path"):
         reset_hermes_home_override(home_token)
 
 
+def _prepare_mcp_registry_for_gateway_agent() -> None:
+    """Discover the routed profile's MCP tools before agent construction.
+
+    ``AIAgent`` snapshots its tool definitions during ``__init__``. A
+    multiplexed gateway starts in the shared root scope, so startup discovery
+    cannot populate a secondary profile's registry. Routed turns already run
+    inside ``_profile_runtime_scope``; complete idempotent discovery there
+    immediately before the fresh agent takes its snapshot.
+
+    Single-profile gateways retain their existing startup discovery path.
+    """
+    from agent.secret_scope import is_multiplex_active
+
+    if not is_multiplex_active():
+        return
+    try:
+        from tools.mcp_tool import discover_mcp_tools
+
+        discover_mcp_tools()
+    except Exception as exc:
+        logger.warning(
+            "Profile-scoped MCP discovery failed before agent build: %s", exc
+        )
+
+
 def load_gateway_config_for_runner() -> "GatewayConfig":
     """Load gateway config for the process-level GatewayRunner.
 
@@ -5578,6 +5603,7 @@ class TurnRunner:
 
         if agent is None:
             # Config changed or first message — create fresh agent
+            _prepare_mcp_registry_for_gateway_agent()
             agent = ctx.AIAgent(
                 model=turn_route["model"],
                 **turn_route["runtime"],
@@ -15389,10 +15415,34 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         return _handler
 
     def _make_default_profile_message_handler(self):
-        """Scope a multiplexed default-profile message from ingress onward."""
-        profile_home = Path(get_hermes_home())
+        """Scope a primary-adapter message to its routed multiplex profile.
+
+        A primary adapter can serve channel routes owned by secondary
+        profiles. Resolving the home once at handler construction pins auth to
+        the shared/default root and makes the gateway's second authorization
+        layer reject a sender that the routed profile explicitly allows.
+        Resolve per event before ``_handle_message`` performs authorization.
+        """
 
         async def _handler(event):
+            from gateway.profile_routing import ProfileRouteRejected
+
+            try:
+                source = event.source
+                profile_name = (getattr(source, "profile", None) or "").strip()
+                if not profile_name:
+                    profile_name = self._profile_name_for_source(source)
+                if profile_name:
+                    profile_home = self._resolve_profile_home_for_source(source)
+                else:
+                    # Preserve the primary adapter's legacy/default scope when
+                    # no explicit profile or route selected another profile.
+                    # This is also the shared-root scope used by synthetic
+                    # events that legitimately bypass profile routing.
+                    profile_home = Path(get_hermes_home())
+            except ProfileRouteRejected:
+                event.source.profile_route_rejected = True
+                return await self._handle_message(event)
             with _profile_runtime_scope(profile_home):
                 return await self._handle_message(event)
 
@@ -22167,6 +22217,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                         logger.warning("Background task vision enrichment failed: %s", e)
 
             def run_sync():
+                _prepare_mcp_registry_for_gateway_agent()
                 agent = AIAgent(
                     model=turn_route["model"],
                     **turn_route["runtime"],
@@ -22997,9 +23048,31 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         wrapper can invoke the same path whether the user confirmed via
         button, text reply, or has the confirm gate disabled.
         """
-        loop = asyncio.get_running_loop()
         try:
-            from tools.mcp_tool import shutdown_mcp_servers, discover_mcp_tools, _servers, _lock
+            from tools.mcp_tool import (
+                discover_mcp_tools,
+                shutdown_mcp_servers,
+                shutdown_mcp_servers_for_current_scope,
+                _servers,
+                _lock,
+            )
+
+            multiplex = bool(
+                getattr(getattr(self, "config", None), "multiplex_profiles", False)
+            )
+            target_profile = str(
+                getattr(event.source, "profile", "") or ""
+            ).strip()
+            if multiplex and not target_profile:
+                try:
+                    from hermes_cli.profiles import get_active_profile_name
+
+                    target_profile = get_active_profile_name() or "default"
+                except Exception:
+                    target_profile = "default"
+            target_namespace = (
+                "main" if target_profile in {"", "default"} else target_profile
+            )
 
             # Capture old server names before shutdown
             with _lock:
@@ -23007,10 +23080,17 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
 
             # Read new config before shutting down, so we know what will be added/removed
             # Shutdown existing connections
-            await loop.run_in_executor(None, shutdown_mcp_servers)
+            shutdown = (
+                shutdown_mcp_servers_for_current_scope
+                if multiplex
+                else shutdown_mcp_servers
+            )
+            await self._run_in_executor_with_context(shutdown)
 
             # Reconnect by discovering tools (reads config.yaml fresh)
-            new_tools = await loop.run_in_executor(None, discover_mcp_tools)
+            new_tools = await self._run_in_executor_with_context(
+                discover_mcp_tools
+            )
 
             # Compute what changed
             with _lock:
@@ -23045,6 +23125,10 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 if _cache_lock is not None and _cache:
                     with _cache_lock:
                         for _sess_key, _entry in list(_cache.items()):
+                            if multiplex and not str(_sess_key).startswith(
+                                f"agent:{target_namespace}:"
+                            ):
+                                continue
                             try:
                                 _agent = _entry[0] if isinstance(_entry, tuple) else _entry
                             except Exception:
@@ -24076,6 +24160,33 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         _adapters = getattr(self, "adapters", None) or {}
         _adapter = _adapters.get(context.source.platform)
         _async_delivery = getattr(_adapter, "supports_async_delivery", True)
+        _session_cwd: str | None = ""
+        if getattr(getattr(self, "config", None), "multiplex_profiles", False):
+            # The caller has already entered _profile_runtime_scope for the
+            # routed profile. Read terminal.cwd from that scoped config and pin
+            # it in the task-local session context. Without this, secondary
+            # profiles inherit the launch profile's process-wide TERMINAL_CWD,
+            # so context discovery can load another profile's AGENTS.md.
+            _session_cwd = None
+            try:
+                from hermes_cli.config import (
+                    apply_terminal_config_to_env,
+                    load_config_readonly,
+                )
+
+                _cwd_env: Dict[str, str] = {}
+                apply_terminal_config_to_env(
+                    env=_cwd_env,
+                    config=load_config_readonly(),
+                    override=True,
+                )
+                _session_cwd = _cwd_env.get("TERMINAL_CWD")
+            except Exception:
+                logger.warning(
+                    "Could not resolve routed profile terminal.cwd; "
+                    "session context will mask the process default cwd",
+                    exc_info=True,
+                )
         return set_session_vars(
             platform=context.source.platform.value,
             chat_id=context.source.chat_id,
@@ -24091,6 +24202,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             session_key=context.session_key,
             message_id=str(context.source.message_id) if context.source.message_id else "",
             profile=getattr(context.source, "profile", "") or "",
+            cwd=_session_cwd,
             async_delivery=_async_delivery,
             cron_session="",
         )
