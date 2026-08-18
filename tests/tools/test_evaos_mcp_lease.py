@@ -550,6 +550,7 @@ async def test_managed_config_mounts_through_r5_lease(
     monkeypatch.setattr(lease_module, "_default_transport", mint)
 
     mounted = {}
+    client_kwargs = {}
 
     class Mounted(Exception):
         pass
@@ -565,10 +566,23 @@ async def test_managed_config_mounts_through_r5_lease(
         mounted.update(url=url, **kwargs)
         return CaptureTransport()
 
+    class CaptureClient:
+        def __init__(self, **kwargs):
+            client_kwargs.update(kwargs)
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, _exc_type, _exc, _tb):
+            return False
+
     monkeypatch.setattr(mcp_tool_module, "_MCP_HTTP_AVAILABLE", True)
-    monkeypatch.setattr(mcp_tool_module, "_MCP_NEW_HTTP", False)
+    monkeypatch.setattr(mcp_tool_module, "_MCP_NEW_HTTP", True)
     monkeypatch.setattr(
-        mcp_tool_module, "streamablehttp_client", capture_transport
+        mcp_tool_module.sdk_httpx(), "AsyncClient", CaptureClient
+    )
+    monkeypatch.setattr(
+        mcp_tool_module, "streamable_http_client", capture_transport
     )
 
     config = {
@@ -591,7 +605,7 @@ async def test_managed_config_mounts_through_r5_lease(
     assert "X-Evaos-Provider-Grant" not in mint_calls[0][1]
     assert mounted["url"] == "https://remote.mcp.pipedream.net/v3"
     assert {
-        name: mounted["headers"][name]
+        name: client_kwargs["headers"][name]
         for name in (
             "Authorization",
             "x-pd-project-id",
@@ -603,7 +617,7 @@ async def test_managed_config_mounts_through_r5_lease(
     } == _lease_payload(
         datetime.now(timezone.utc) + timedelta(minutes=10)
     )["headers"]
-    assert isinstance(mounted["auth"], EvaosLeaseHttpAuth)
+    assert isinstance(client_kwargs["auth"], EvaosLeaseHttpAuth)
 
 
 def test_identity_keyed_managed_config_remains_tolerated():
@@ -863,6 +877,7 @@ async def test_managed_config_direct_identity_reaches_the_mint_body(
     monkeypatch.setattr(lease_module, "_default_transport", mint)
 
     mounted = {}
+    client_kwargs = {}
 
     class Mounted(Exception):
         pass
@@ -878,10 +893,23 @@ async def test_managed_config_direct_identity_reaches_the_mint_body(
         mounted.update(url=url, **kwargs)
         return CaptureTransport()
 
+    class CaptureClient:
+        def __init__(self, **kwargs):
+            client_kwargs.update(kwargs)
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, _exc_type, _exc, _tb):
+            return False
+
     monkeypatch.setattr(mcp_tool_module, "_MCP_HTTP_AVAILABLE", True)
-    monkeypatch.setattr(mcp_tool_module, "_MCP_NEW_HTTP", False)
+    monkeypatch.setattr(mcp_tool_module, "_MCP_NEW_HTTP", True)
     monkeypatch.setattr(
-        mcp_tool_module, "streamablehttp_client", capture_transport
+        mcp_tool_module.sdk_httpx(), "AsyncClient", CaptureClient
+    )
+    monkeypatch.setattr(
+        mcp_tool_module, "streamable_http_client", capture_transport
     )
 
     config = {
@@ -906,8 +934,8 @@ async def test_managed_config_direct_identity_reaches_the_mint_body(
     }
     assert "X-Evaos-Provider-Grant" not in mint_calls[0][1]
     assert mounted["url"] == "https://remote.mcp.pipedream.net/v3"
-    assert mounted["headers"]["x-pd-external-user-id"] == DIRECT_EXTERNAL_USER_ID
-    assert mounted["headers"]["x-pd-account-id"] == DIRECT_ACCOUNT_ID
+    assert client_kwargs["headers"]["x-pd-external-user-id"] == DIRECT_EXTERNAL_USER_ID
+    assert client_kwargs["headers"]["x-pd-account-id"] == DIRECT_ACCOUNT_ID
 
 
 @pytest.mark.parametrize(
