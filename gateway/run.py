@@ -15428,7 +15428,18 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             from gateway.profile_routing import ProfileRouteRejected
 
             try:
-                profile_home = self._resolve_profile_home_for_source(event.source)
+                source = event.source
+                profile_name = (getattr(source, "profile", None) or "").strip()
+                if not profile_name:
+                    profile_name = self._profile_name_for_source(source)
+                if profile_name:
+                    profile_home = self._resolve_profile_home_for_source(source)
+                else:
+                    # Preserve the primary adapter's legacy/default scope when
+                    # no explicit profile or route selected another profile.
+                    # This is also the shared-root scope used by synthetic
+                    # events that legitimately bypass profile routing.
+                    profile_home = Path(get_hermes_home())
             except ProfileRouteRejected:
                 event.source.profile_route_rejected = True
                 return await self._handle_message(event)
