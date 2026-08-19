@@ -166,8 +166,8 @@ test('broker requests identify the actual Desktop package version', async () => 
   assert.equal(clientInfo, `evaos-agent/${desktopPackageVersion}`)
 })
 
-test('broker rejections preserve a safe diagnostic code without leaking provider details', async () => {
-  const rawDetail = 'customer_id=jackie-david token=secret https://internal.example.invalid/api'
+test('broker rejections preserve a safe diagnostic code without leaking backend detail', async () => {
+  const rawDetail = 'jackie-david'
 
   await assert.rejects(
     brokerPost(

@@ -118,21 +118,6 @@ function normalizeEvaManagedBrokerCode(value) {
   return code.length <= 64 && EVA_MANAGED_BROKER_CODE_RE.test(code) ? code : null
 }
 
-function normalizeEvaManagedBrokerReason(value) {
-  if (typeof value !== 'string') return null
-  const reason = value.trim()
-  if (
-    !reason ||
-    reason.length > 240 ||
-    /[\\/=@.\\r\\n\\t]/.test(reason) ||
-    /(?:https?|wss?):/i.test(reason) ||
-    /\b(?:bearer|session|token|customer|account|agent|gateway|route|path|host|url)\b/i.test(reason)
-  ) {
-    return null
-  }
-  return reason
-}
-
 function normalizeEvaManagedApiPath(value) {
   const rawPath = String(value || '')
   if (!rawPath.startsWith('/') || rawPath.startsWith('//') || rawPath.includes('\\')) {
@@ -597,9 +582,12 @@ async function brokerPost(body, options = {}) {
 
   if (!response.ok) {
     const brokerCode = normalizeEvaManagedBrokerCode(payload?.code ?? payload?.error)
-    const reason = normalizeEvaManagedBrokerReason(payload?.message ?? payload?.error)
-    const safeReason = reason && reason !== brokerCode ? reason : `Electric Sheep request failed (${response.status}).`
-    const safeMessage = brokerCode ? `${safeReason} [code: ${brokerCode}]` : safeReason
+    // Backend prose may contain account, customer, route, or provider detail.
+    // Surface only the bounded machine code and status that this client has
+    // independently validated.
+    const safeMessage = brokerCode
+      ? `Electric Sheep request failed (${response.status}). [code: ${brokerCode}]`
+      : `Electric Sheep request failed (${response.status}).`
     const error = new EvaBrokerError(safeMessage, response.status, brokerCode ?? 'broker-rejected')
     // Keep the polling/retry classification separate from the broker's
     // diagnostic code. A server-selected code must never accidentally look like
