@@ -2,7 +2,7 @@ import { act, cleanup, render } from '@testing-library/react'
 import { MemoryRouter, useLocation, useNavigate } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { $desktopBoot } from '@/store/boot'
+import { $desktopBoot, applyDesktopBootProgress } from '@/store/boot'
 import { $gatewayState, $sessionsLoading } from '@/store/session'
 
 import { takeGatewaySurvivor } from './gateway-hmr-survivor'
@@ -250,6 +250,20 @@ describe('useGatewayBoot remote reconnect loop (real hook, fake socket)', () => 
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(90_000)
+    })
+
+    expect($desktopBoot.get().error).toBe('Lost connection to the gateway')
+    expect($desktopBoot.get().running).toBe(false)
+    expect($desktopBoot.get().visible).toBe(true)
+
+    applyDesktopBootProgress({
+      error: null,
+      fakeMode: false,
+      message: 'Late managed startup result',
+      phase: 'eva.ready',
+      progress: 100,
+      running: true,
+      timestamp: Date.now()
     })
 
     expect($desktopBoot.get().error).toBe('Lost connection to the gateway')

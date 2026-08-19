@@ -537,6 +537,7 @@ export interface Translations {
         refresh: string
         signOut: string
         failed: string
+        failedWithCode: (code: string) => string
       }
       loading: string
       unavailableTitle: string

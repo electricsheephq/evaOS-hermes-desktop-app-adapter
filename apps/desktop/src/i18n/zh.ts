@@ -845,7 +845,8 @@ export const zh: Translations = {
         signIn: '登录 evaOS Agent',
         refresh: '刷新已分配访问权限',
         signOut: '退出登录',
-        failed: '无法加载托管访问权限。请重试或联系 Electric Sheep 支持。'
+        failed: '无法加载托管访问权限。请重试或联系 Electric Sheep 支持。',
+        failedWithCode: code => `Electric Sheep 请求失败 [代码: ${code}]`
       },
       loading: '正在加载网关设置...',
       unavailableTitle: '网关设置不可用',

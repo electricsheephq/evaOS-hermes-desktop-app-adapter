@@ -84,11 +84,15 @@ const SAFE_MANAGED_BROKER_CODES = new Set([
   'revoke_upstream_failed'
 ])
 
-export function safeManagedErrorMessage(error: unknown, fallback: string): string {
+export function safeManagedErrorMessage(
+  error: unknown,
+  fallback: string,
+  failedWithCode: (code: string) => string = code => `Electric Sheep request failed [code: ${code}]`
+): string {
   const message = error instanceof Error ? error.message.trim() : ''
   const brokerCode = message.match(/\[code: ([a-z][a-z0-9]*(?:[_-][a-z0-9]+)*)\]/)?.[1]
   if (brokerCode && brokerCode.length <= 64 && SAFE_MANAGED_BROKER_CODES.has(brokerCode)) {
-    return `Electric Sheep request failed [code: ${brokerCode}]`
+    return failedWithCode(brokerCode)
   }
   return fallback
 }
@@ -226,7 +230,7 @@ function EvaManagedGatewaySettings({ embedded = false }: { embedded?: boolean } 
         setStatus(next)
       }
     } catch (err) {
-      setError(safeManagedErrorMessage(err, g.failed))
+      setError(safeManagedErrorMessage(err, g.failed, g.failedWithCode))
     } finally {
       setBusy(null)
     }
