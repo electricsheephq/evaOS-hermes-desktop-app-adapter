@@ -199,6 +199,32 @@ test('broker rejections preserve a safe diagnostic code without leaking backend 
   )
 })
 
+test('broker rejections suppress unrecognized diagnostic codes', async () => {
+  await assert.rejects(
+    brokerPost(
+      { action: 'runtime_launch' },
+      {
+        policy: {
+          brokerUrl: 'https://broker.example.invalid/runtime',
+          brokerRequestTimeoutMs: 1_000
+        },
+        fetchImpl: async () =>
+          new Response(JSON.stringify({ error: 'customer_opaquevalue' }), {
+            status: 403,
+            headers: { 'Content-Type': 'application/json' }
+          })
+      }
+    ),
+    error => {
+      assert.ok(error instanceof EvaBrokerError)
+      assert.equal(error.statusCode, 403)
+      assert.equal(error.code, 'broker-rejected')
+      assert.doesNotMatch(error.message, /customer_opaquevalue/)
+      return true
+    }
+  )
+})
+
 test('broker request deadline covers a stalled response body and exposes no raw transport detail', async () => {
   let aborted = false
   const rawDetail = 'socket stalled at internal-broker-host'

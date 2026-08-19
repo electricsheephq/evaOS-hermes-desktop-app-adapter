@@ -117,7 +117,7 @@ test('cold launch replaces an expired runtime enrollment before connecting', asy
   assert.equal(persisted.runtime.expires_at, FUTURE)
 })
 
-test('failed runtime enrollment is coalesced and automatic retries wait for the shared cooldown', async t => {
+test('throttled runtime enrollment is coalesced and automatic retries wait for the shared cooldown', async t => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-backoff-'))
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
   const statePath = path.join(directory, 'eva-enrollment.json')
@@ -125,7 +125,7 @@ test('failed runtime enrollment is coalesced and automatic retries wait for the 
 
   let clock = 0
   let launches = 0
-  const failure = new EvaBrokerError('Runtime enrollment is temporarily unavailable.', 500, 'vm_lookup_failed')
+  const failure = new EvaBrokerError('Runtime enrollment is temporarily unavailable.', 429, 'rate_limited')
   const runtime = makeManagedRuntime(statePath, {
     now: () => clock,
     launchRuntime: async () => {
