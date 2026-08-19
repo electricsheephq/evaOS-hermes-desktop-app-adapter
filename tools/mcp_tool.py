@@ -6348,21 +6348,31 @@ def get_mcp_server_inventory_for_current_profile() -> tuple[set[str], set[str]]:
     servers lets status and reload paths report lazy routes without eagerly
     connecting them or looking at a sibling profile's registry.
     """
+    current_key = _server_state_key("")
+
+    def _is_current_inventory_key(state_key: _ServerStateKey) -> bool:
+        if isinstance(current_key, str):
+            return isinstance(state_key, str)
+        return (
+            isinstance(state_key, tuple)
+            and state_key[0] == current_key[0]
+        )
+
     with _lock:
         available = {
             state_key[1] if isinstance(state_key, tuple) else state_key
             for state_key in _servers
-            if _state_key_is_current(state_key)
+            if _is_current_inventory_key(state_key)
         }
         available.update(
             state_key[1] if isinstance(state_key, tuple) else state_key
             for state_key in _lazy_server_tool_names
-            if _state_key_is_current(state_key)
+            if _is_current_inventory_key(state_key)
         )
         connected = {
             state_key[1] if isinstance(state_key, tuple) else state_key
             for state_key, server in _servers.items()
-            if _state_key_is_current(state_key)
+            if _is_current_inventory_key(state_key)
             and getattr(server, "session", None) is not None
         }
     return available, connected

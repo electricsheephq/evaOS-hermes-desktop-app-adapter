@@ -308,10 +308,18 @@ async def test_multiplex_reload_reports_lazy_survivor_without_touching_sibling(
 
     try:
         with (
-            patch.dict(mcp_tool._servers, {}, clear=True),
+            patch.dict(
+                mcp_tool._servers,
+                {
+                    "base-pre-multiplex": SimpleNamespace(session=object()),
+                    grace_owned: SimpleNamespace(session=object()),
+                },
+                clear=True,
+            ),
             patch.dict(
                 mcp_tool._lazy_server_tool_names,
                 {
+                    "base-lazy-pre-multiplex": ["base_lazy_read"],
                     eve_owned: ["gmail_owned_read"],
                     eve_shared: ["gmail_shared_read"],
                     grace_owned: ["drive_owned_read"],
@@ -337,6 +345,8 @@ async def test_multiplex_reload_reports_lazy_survivor_without_touching_sibling(
             assert "Reconnected: gmail-owned" not in result
             assert "1 tool(s) available from 1 server(s)" in result
             assert "No MCP servers connected" not in result
+            assert "base-pre-multiplex" not in result
+            assert "base-lazy-pre-multiplex" not in result
             assert grace_owned in mcp_tool._lazy_server_tool_names
     finally:
         executor = getattr(runner, "_executor", None)
