@@ -2109,6 +2109,11 @@ class SessionStore:
         that tuple does not contain a workspace id and could therefore revive
         another team's session. The caller performs one explicit exact lookup
         of the old unscoped key instead.
+
+        Multiplexed gateways disable it for the same reason: the tuple carries
+        no profile either, so a profile whose own key does not resolve would
+        adopt whichever sibling profile last spoke in that chat wherever the
+        two namespaces still share one state.db.
         """
         if not self._db:
             return None
@@ -2153,7 +2158,10 @@ class SessionStore:
         recovered = self._find_gateway_session_row(
             session_key=session_key,
             source=source,
-            allow_peer_fallback=legacy_key is None,
+            allow_peer_fallback=(
+                legacy_key is None
+                and not getattr(self.config, "multiplex_profiles", False)
+            ),
             raise_on_lookup_error=raise_on_lookup_error,
         )
         migrated_legacy = False
@@ -2232,7 +2240,10 @@ class SessionStore:
         recovered = self._find_gateway_session_row(
             session_key=session_key,
             source=source,
-            allow_peer_fallback=legacy_key is None,
+            allow_peer_fallback=(
+                legacy_key is None
+                and not getattr(self.config, "multiplex_profiles", False)
+            ),
         )
         migrated_legacy = False
         if (
