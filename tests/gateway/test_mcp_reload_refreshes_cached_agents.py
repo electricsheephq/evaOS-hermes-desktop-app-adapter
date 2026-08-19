@@ -182,8 +182,6 @@ async def test_multiplex_reload_refreshes_only_routed_profile_cache(
 ):
     from agent import secret_scope
     from hermes_constants import get_hermes_home
-    from tests.hermes_cli.test_managed_mcp_profile_scope import _profile_scope
-
     runner = _make_runner_with_cached_agents(num_agents=2)
     runner.config.multiplex_profiles = True
     eve_entry, grace_entry = list(runner._agent_cache.values())
@@ -204,29 +202,30 @@ async def test_multiplex_reload_refreshes_only_routed_profile_cache(
     def _scoped_shutdown():
         seen_shutdown_homes.append(get_hermes_home().resolve())
 
+    runner._resolve_profile_home_for_source = lambda _source: eve_home
+
     try:
-        with _profile_scope(eve_home):
-            with (
-                patch("tools.mcp_tool.shutdown_mcp_servers") as global_shutdown,
-                patch(
-                    "tools.mcp_tool.shutdown_mcp_servers_for_current_scope",
-                    side_effect=_scoped_shutdown,
-                ) as scoped_shutdown,
-                patch(
-                    "tools.mcp_tool.discover_mcp_tools",
-                    return_value=["gmail_read"],
-                ),
-                patch.dict(
-                    "tools.mcp_tool._servers",
-                    {(str(eve_home.resolve()), "gmail"): object()},
-                    clear=True,
-                ),
-                patch(
-                    "tools.mcp_tool.refresh_agent_mcp_tools",
-                    side_effect=lambda agent, **_kwargs: refreshed.append(agent),
-                ),
-            ):
-                result = await runner._execute_mcp_reload(event)
+        with (
+            patch("tools.mcp_tool.shutdown_mcp_servers") as global_shutdown,
+            patch(
+                "tools.mcp_tool.shutdown_mcp_servers_for_current_scope",
+                side_effect=_scoped_shutdown,
+            ) as scoped_shutdown,
+            patch(
+                "tools.mcp_tool.discover_mcp_tools",
+                return_value=["gmail_read"],
+            ),
+            patch.dict(
+                "tools.mcp_tool._servers",
+                {(str(eve_home.resolve()), "gmail"): object()},
+                clear=True,
+            ),
+            patch(
+                "tools.mcp_tool.refresh_agent_mcp_tools",
+                side_effect=lambda agent, **_kwargs: refreshed.append(agent),
+            ),
+        ):
+            result = await runner._execute_mcp_reload(event)
     finally:
         executor = getattr(runner, "_executor", None)
         if executor is not None:

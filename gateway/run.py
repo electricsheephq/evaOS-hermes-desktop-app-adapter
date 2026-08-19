@@ -20331,6 +20331,38 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         wrapper can invoke the same path whether the user confirmed via
         button, text reply, or has the confirm gate disabled.
         """
+        multiplex = bool(
+            getattr(getattr(self, "config", None), "multiplex_profiles", False)
+        )
+        target_profile = str(
+            getattr(event.source, "profile", "") or ""
+        ).strip()
+        target_namespace = (
+            "main" if target_profile in {"", "default"} else target_profile
+        )
+
+        if multiplex:
+            profile_home = self._resolve_profile_home_for_source(event.source)
+            with _profile_runtime_scope(profile_home):
+                return await self._execute_mcp_reload_in_current_scope(
+                    event,
+                    multiplex=multiplex,
+                    target_namespace=target_namespace,
+                )
+
+        return await self._execute_mcp_reload_in_current_scope(
+            event,
+            multiplex=multiplex,
+            target_namespace=target_namespace,
+        )
+
+    async def _execute_mcp_reload_in_current_scope(
+        self,
+        event: MessageEvent,
+        *,
+        multiplex: bool,
+        target_namespace: str,
+    ) -> str:
         try:
             from tools.mcp_tool import (
                 discover_mcp_tools,
@@ -20338,16 +20370,6 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 shutdown_mcp_servers_for_current_scope,
                 _servers,
                 _lock,
-            )
-
-            multiplex = bool(
-                getattr(getattr(self, "config", None), "multiplex_profiles", False)
-            )
-            target_profile = str(
-                getattr(event.source, "profile", "") or ""
-            ).strip()
-            target_namespace = (
-                "main" if target_profile in {"", "default"} else target_profile
             )
 
             def _current_server_names() -> set[str]:
