@@ -68,18 +68,20 @@ Score lives on the program board (support-control#544 / gate #546) — never in 
 ## Standing invariants (each earned the hard way)
 - The lease client sends identity from the profile's own managed entry (both-or-neither); the
   grant-header path is deployed back-compat ONLY — never re-add grant machinery client-side.
-- New app connected ⇒ the connect pipeline writes the entry AND triggers a reload (pcs#565) —
-  never hand-seed, never wait for cache expiry. ⚠ MECHANISM (corrected 2026-08-13, verified
-  on-box): `/reload-mcp` is a CHAT SLASH-COMMAND (gateway/run.py slash dispatcher), NOT an HTTP
-  route — no reload endpoint exists in any release. Scope follows the process: on a per-profile
-  gateway it reloads that profile only (deliver via that profile's own chat); on the shared
-  multiplex serve it is PROCESS-GLOBAL (tears down every profile's MCP connections — schedule
-  accordingly). CORRECTION 2 (same day, on-box verified): the programmatic reload EXISTS —
-  `reload.mcp` JSON-RPC method (tui_gateway/methods_tools.py:84) on the serve RPC surface: no
-  model turn, no confirm gate, ~0.7s, returns {"status":"reloaded","loaded_rev":...}. THAT is
-  pcs#565's hook. The chat slash-command remains the human path (⚠ it hits a confirm gate whose
-  first use PERSISTS approvals.mcp_reload_confirm:false into config — reload via chat is not
-  read-only). Layer-1 lesson (eric-wilder, 2026-08-13): seeding + reload made servers MOUNT per-profile
+- New app connected ⇒ the connect pipeline writes the entry and converges the affected runtime
+  consumer through the reviewed PCS reconciler (pcs#565). The normal product path verifies the
+  resulting route set; it does not tell the customer to run `/reload-mcp`, start `/new`, hand-seed
+  config, or wait for cache expiry. `/reload-mcp` remains the human recovery/debug path. On a
+  per-profile gateway it reloads that profile. On an r28 shared multiplex gateway it resolves the
+  routed event's profile home, shuts down and rediscovers only that profile's MCP registry, refreshes
+  only cached sessions in that profile namespace, and reports both eager and lazy available routes
+  without opening cached lazy routes. A lazy route with no valid schema cache may connect once during
+  bootstrap to populate that cache; this is discovery, not permission to expose it across profiles.
+  Sibling profiles remain untouched. The programmatic
+  `reload.mcp` JSON-RPC method on the serve RPC surface is revision-aware and refreshes the exact
+  session after a confirmed reload; it is not an HTTP endpoint. Both interactive forms may invalidate
+  the prompt cache and therefore retain the approval/confirmation gate. Layer-1 lesson
+  (eric-wilder, 2026-08-13): seeding + reload made servers MOUNT per-profile
   (principal header resolves the overlay) yet tools stayed unreachable at turn time — L0-green
   via curl does NOT imply the SERVING PROCESS can mint (check the unit's credential delivery:
   jackie-david's per-profile units carry the broker secret via a LoadCredential drop-in; a serve
