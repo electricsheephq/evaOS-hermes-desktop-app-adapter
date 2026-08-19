@@ -75,6 +75,7 @@ describe('GatewaySettings', () => {
         'Connection failed'
       )
     ).toBe('Connection failed')
+    expect(safeManagedErrorMessage(new Error('line one\nline two'), 'Connection failed')).toBe('Connection failed')
   })
 
   it('labels local mode as default inheritance for a named profile', async () => {

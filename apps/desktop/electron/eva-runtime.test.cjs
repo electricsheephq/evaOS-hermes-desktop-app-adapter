@@ -117,41 +117,43 @@ test('cold launch replaces an expired runtime enrollment before connecting', asy
   assert.equal(persisted.runtime.expires_at, FUTURE)
 })
 
-test('throttled runtime enrollment is coalesced and automatic retries wait for the shared cooldown', async t => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-backoff-'))
-  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
-  const statePath = path.join(directory, 'eva-enrollment.json')
-  writeEnrollment(statePath)
+for (const [statusCode, errorCode] of [[408, 'broker_timeout'], [429, 'rate_limited']]) {
+  test(`HTTP ${statusCode} runtime enrollment waits for the shared retry cooldown`, async t => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), `eva-runtime-backoff-${statusCode}-`))
+    t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+    const statePath = path.join(directory, 'eva-enrollment.json')
+    writeEnrollment(statePath)
 
-  let clock = 0
-  let launches = 0
-  const failure = new EvaBrokerError('Runtime enrollment is temporarily unavailable.', 429, 'rate_limited')
-  const runtime = makeManagedRuntime(statePath, {
-    now: () => clock,
-    launchRuntime: async () => {
-      launches += 1
-      throw failure
-    }
+    let clock = 0
+    let launches = 0
+    const failure = new EvaBrokerError('Runtime enrollment is temporarily unavailable.', statusCode, errorCode)
+    const runtime = makeManagedRuntime(statePath, {
+      now: () => clock,
+      launchRuntime: async () => {
+        launches += 1
+        throw failure
+      }
+    })
+
+    const first = await Promise.allSettled([
+      runtime.resolveBackend(),
+      runtime.requestApi({ path: '/api/sessions', method: 'GET' }),
+      runtime.freshWsUrl()
+    ])
+    assert.equal(launches, 1)
+    assert.deepEqual(
+      first.map(result => result.status),
+      ['rejected', 'rejected', 'rejected']
+    )
+
+    await assert.rejects(runtime.resolveBackend(), error => error === failure)
+    assert.equal(launches, 1)
+
+    clock = 2_000
+    await assert.rejects(runtime.resolveBackend(), error => error === failure)
+    assert.equal(launches, 2)
   })
-
-  const first = await Promise.allSettled([
-    runtime.resolveBackend(),
-    runtime.requestApi({ path: '/api/sessions', method: 'GET' }),
-    runtime.freshWsUrl()
-  ])
-  assert.equal(launches, 1)
-  assert.deepEqual(
-    first.map(result => result.status),
-    ['rejected', 'rejected', 'rejected']
-  )
-
-  await assert.rejects(runtime.resolveBackend(), error => error === failure)
-  assert.equal(launches, 1)
-
-  clock = 2_000
-  await assert.rejects(runtime.resolveBackend(), error => error === failure)
-  assert.equal(launches, 2)
-})
+}
 
 test('deterministic enrollment rejection terminates boot progress and a later refresh can recover', async t => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-rejected-enrollment-'))

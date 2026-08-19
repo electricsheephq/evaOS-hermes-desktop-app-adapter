@@ -72,7 +72,7 @@ export function safeManagedErrorMessage(error: unknown, fallback: string): strin
   if (
     !message ||
     message.length > 240 ||
-    /[\\/=@.\\r\\n\\t]/.test(message) ||
+    /[\\/=@.\r\n\t]/.test(message) ||
     /(?:https?|wss?):/i.test(message) ||
     /\b(?:bearer|session|token|customer|account|agent|gateway|route|path|host|url)\b/i.test(message)
   ) {

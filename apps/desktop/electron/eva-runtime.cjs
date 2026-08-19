@@ -329,7 +329,7 @@ function createEvaManagedRuntime(options) {
 
   function isRetryableEnrollmentFailure(error) {
     const statusCode = statusCodeOf(error)
-    return statusCode === null || statusCode === 429 || statusCode >= 500 || (statusCode === 408 && error?.code === 'timeout')
+    return statusCode === null || statusCode === 408 || statusCode === 429 || statusCode >= 500
   }
 
   function enrollmentFailureMessage(error) {
