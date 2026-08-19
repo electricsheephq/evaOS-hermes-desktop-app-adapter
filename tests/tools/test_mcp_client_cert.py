@@ -76,7 +76,8 @@ class TestResolveClientCert:
 
 
 class TestHTTPClientCert:
-    def test_cert_forwarded_to_async_client(self, tmp_path):
+    @pytest.mark.parametrize("transport_arity", [2, 3])
+    def test_cert_forwarded_to_async_client(self, tmp_path, transport_arity):
         """When client_cert is set, the new-SDK HTTP path passes ``cert=``
         into ``httpx.AsyncClient``."""
         from tools.mcp_tool import MCPServerTask
@@ -99,7 +100,10 @@ class TestHTTPClientCert:
 
         class DummyTransportCtx:
             async def __aenter__(self):
-                return MagicMock(), MagicMock(), (lambda: None)
+                streams = (MagicMock(), MagicMock())
+                if transport_arity == 2:
+                    return streams
+                return (*streams, lambda: None)
 
             async def __aexit__(self, *a):
                 return False
