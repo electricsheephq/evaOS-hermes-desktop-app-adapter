@@ -14,19 +14,67 @@ Failures isolate by layer — start every debug at Layer 0, never at the top.
 
 ## Layer 0 — contract probe (~10 s, from any customer box; would have caught r1–r12)
 ```bash
+set -euo pipefail
+umask 077
 EP="https://<SUPABASE_PROJECT_REF>.supabase.co/functions/v1/desktop-runtime-session"
-SEC=$(cat /etc/evaos/hermes/pipedream-broker-secret)
+APP="<app>"
+EU="<eu>"
+ACCOUNT="<apn_...>"
+PROBE_DIR=$(mktemp -d)
+trap 'rm -rf "$PROBE_DIR"' EXIT
+
+# Keep the broker secret and request/response bodies out of argv and logs.
+printf 'Content-Type: application/json\nX-Evaos-Desktop-Broker-Secret: %s\n' \
+  "$(cat /etc/evaos/hermes/pipedream-broker-secret)" > "$PROBE_DIR/headers"
 # per-profile identity from the profile's managed entry:
 #   /etc/evaos/hermes/managed/<profile>/config.yaml → mcp_servers.evaos-pipedream-<app>
 #   fields: external_user_id + account_id
-curl -s -w " HTTP %{http_code}\n" -X POST "$EP" -H "Content-Type: application/json" \
-  -H "X-Evaos-Desktop-Broker-Secret: $SEC" \
-  -d '{"action":"pipedream_mcp_lease","app_slug":"<app>","external_user_id":"<eu>","account_id":"<apn_...>"}'
+printf '{"action":"pipedream_mcp_lease","app_slug":"%s","external_user_id":"%s","account_id":"%s"}\n' \
+  "$APP" "$EU" "$ACCOUNT" > "$PROBE_DIR/lease-request.json"
+lease_status=$(curl -sS --connect-timeout 5 --max-time 10 -o "$PROBE_DIR/lease-response.json" \
+  -w '%{http_code}' -X POST "$EP" -H "@$PROBE_DIR/headers" \
+  --data-binary "@$PROBE_DIR/lease-request.json")
+test "$lease_status" = 200
+python3 - "$PROBE_DIR/lease-request.json" "$PROBE_DIR/lease-response.json" <<'PY'
+import datetime
+import json
+import sys
+
+request = json.load(open(sys.argv[1], encoding="utf-8"))
+response = json.load(open(sys.argv[2], encoding="utf-8"))
+headers = response.get("headers", {})
+assert headers.get("x-pd-external-user-id") == request["external_user_id"]
+assert headers.get("x-pd-app-slug") == request["app_slug"]
+assert headers.get("x-pd-account-id") == request["account_id"]
+expires_at = datetime.datetime.fromisoformat(response["expires_at"].replace("Z", "+00:00"))
+remaining = (expires_at - datetime.datetime.now(datetime.timezone.utc)).total_seconds()
+assert 3000 <= remaining <= 3900, remaining
+PY
+
+# Fence 1: no identity and no grant must fail closed.
+printf '{"action":"pipedream_mcp_lease","app_slug":"%s"}\n' "$APP" \
+  > "$PROBE_DIR/no-identity-request.json"
+no_identity_status=$(curl -sS --connect-timeout 5 --max-time 10 \
+  -o "$PROBE_DIR/no-identity-response.json" -w '%{http_code}' -X POST "$EP" \
+  -H "@$PROBE_DIR/headers" --data-binary "@$PROBE_DIR/no-identity-request.json")
+test "$no_identity_status" = 401
+jq -e '.error == "Pipedream MCP grant is required"' \
+  "$PROBE_DIR/no-identity-response.json" >/dev/null
+
+# Fence 2: profile identity and a grant header must not be mixed.
+mixed_status=$(curl -sS --connect-timeout 5 --max-time 10 \
+  -o "$PROBE_DIR/mixed-response.json" -w '%{http_code}' -X POST "$EP" \
+  -H "@$PROBE_DIR/headers" \
+  -H 'X-Evaos-Provider-Grant: epg_00000000000000000000000000000000' \
+  --data-binary "@$PROBE_DIR/lease-request.json")
+test "$mixed_status" = 400
+jq -e '.error | contains("cannot mix")' "$PROBE_DIR/mixed-response.json" >/dev/null
 ```
-GREEN = HTTP 200, response headers echo the identity, `expires_at` ~1 h out.
-Also assert the fences: no identity + no grant header → 401 "Pipedream MCP grant is required";
-identity + grant header together → 400 "cannot mix". Any other shape = the deployed fn drifted —
-fix the FN (or the client contract) before touching anything above.
+GREEN = the lease returns HTTP 200, its response JSON `headers` map echoes the exact identity,
+`expires_at` is ~1 h out, and both executable fences return their exact expected status/body.
+Any other shape = the deployed fn drifted — fix the FN (or the client contract) before touching
+anything above. Never print the protected response bodies: the successful body contains a usable
+lease.
 
 ## Layer 1 — transport probe (~1 min, same box): raw MCP round-trip on the minted lease
 POST JSON-RPC to the returned `mcp_url` with the returned headers: `initialize` →

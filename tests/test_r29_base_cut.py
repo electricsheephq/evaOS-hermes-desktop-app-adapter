@@ -44,3 +44,15 @@ def test_r29_tests_use_the_worktree_mcp2_environment() -> None:
     importlib.metadata.version("httpx2")
     distribution_root = Path(importlib.metadata.distribution("hermes-agent").locate_file("")).resolve()
     assert distribution_root == REPO_ROOT
+
+
+def test_r29_pipedream_layer0_probe_is_bounded_private_and_executable() -> None:
+    gate = (REPO_ROOT / "docs" / "PIPEDREAM-WORKING-GATE.md").read_text(encoding="utf-8")
+    assert 'X-Evaos-Desktop-Broker-Secret: $SEC' not in gate
+    assert gate.count("--max-time 10") == 3
+    assert gate.count('-H "@$PROBE_DIR/headers"') == 3
+    assert 'lease_status=$(curl ' in gate
+    assert 'no_identity_status=$(curl ' in gate
+    assert 'mixed_status=$(curl ' in gate
+    assert 'response JSON `headers` map echoes the exact identity' in gate
+    assert 'Never print the protected response bodies' in gate

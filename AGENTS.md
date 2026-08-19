@@ -6,7 +6,9 @@ Every dispatched lane (Codex, Claude subagent, workflow agent) that writes code,
 or trackers MUST carry a Lane Contract in its spec: Observable outcome · Done when (evidence,
 not task-list) · Resume identity (repo/branch/base SHA) · Proof-claim boundary · Stop conditions
 (200-LOC integration budget; scope drift → stop and report) · Evidence path · Secret boundary.
-Template: `~/.claude/skills/lane-contract/LANE-SPEC-TEMPLATE.md` (office Mac).
+Template on the office Mac: `~/.claude/skills/lane-contract/LANE-SPEC-TEMPLATE.md`. When that
+template is unavailable, include the seven fields above literally; its absence never waives the
+contract.
 
 Claim discipline: closeouts state a claim class (`advisory` / `pr_ready` / `merge_ready` /
 `release_ready` / `runtime_safe` / `customer_ready`) and what the result does NOT prove.
@@ -19,7 +21,8 @@ fire. Integration UX problems get skills/runbooks/aliases before product code.
 
 Any change touching the Pipedream/MCP path (`tools/evaos_mcp_lease.py`, `tools/mcp_tool.py`,
 gateway MCP discovery) follows `docs/PIPEDREAM-WORKING-GATE.md` IN THIS REPO: debug bottom-up
-from Layer 0 (the 2-curl contract probe against production — client error strings lie), and no
+from Layer 0 (one lease request plus two fence requests against production — client error strings
+lie), and no
 release r-tag ships above a red layer. Customer-facing claims come only from the Layer-3
 real-workflow matrices + a Layer-4 real turn.
 
