@@ -274,3 +274,71 @@ def test_scoped_mcp_shutdown_preserves_sibling_profile_state(tmp_path, monkeypat
         assert grace_key in mcp_tool._server_connect_errors
         assert grace_key in mcp_tool._server_connecting
         assert grace_key in mcp_tool._parallel_safe_servers
+
+
+@pytest.mark.asyncio
+async def test_multiplex_reload_reports_lazy_survivor_without_touching_sibling(
+    tmp_path, monkeypatch
+):
+    from agent import secret_scope
+    from tests.hermes_cli.test_managed_mcp_profile_scope import _profile_scope
+    from tools import mcp_tool
+
+    runner = _make_runner_with_cached_agents(num_agents=0)
+    runner.config.multiplex_profiles = True
+    event = _make_event()
+    event.source.profile = "eve"
+    eve_home = (tmp_path / "profiles" / "eve").resolve()
+    grace_home = (tmp_path / "profiles" / "grace").resolve()
+    eve_home.mkdir(parents=True)
+    grace_home.mkdir(parents=True)
+    eve_owned = (str(eve_home), "gmail-owned")
+    eve_shared = (str(eve_home), "gmail-shared")
+    grace_owned = (str(grace_home), "drive-owned")
+    monkeypatch.setattr(secret_scope, "_MULTIPLEX_ACTIVE", True)
+    runner._resolve_profile_home_for_source = lambda _source: eve_home
+
+    def _scoped_shutdown():
+        mcp_tool._lazy_server_tool_names.pop(eve_owned, None)
+        mcp_tool._lazy_server_tool_names.pop(eve_shared, None)
+
+    def _discover():
+        mcp_tool._lazy_server_tool_names[eve_owned] = ["gmail_owned_read"]
+        return ["gmail_owned_read"]
+
+    try:
+        with (
+            patch.dict(mcp_tool._servers, {}, clear=True),
+            patch.dict(
+                mcp_tool._lazy_server_tool_names,
+                {
+                    eve_owned: ["gmail_owned_read"],
+                    eve_shared: ["gmail_shared_read"],
+                    grace_owned: ["drive_owned_read"],
+                },
+                clear=True,
+            ),
+            patch(
+                "tools.mcp_tool.shutdown_mcp_servers_for_current_scope",
+                side_effect=_scoped_shutdown,
+            ),
+            patch("tools.mcp_tool.discover_mcp_tools", side_effect=_discover),
+            patch("model_tools.get_tool_definitions", return_value=[]),
+        ):
+            result = await runner._execute_mcp_reload(event)
+            with _profile_scope(eve_home):
+                available, connected = (
+                    mcp_tool.get_mcp_server_inventory_for_current_profile()
+                )
+
+            assert available == {"gmail-owned"}
+            assert connected == set()
+            assert "Removed: gmail-shared" in result
+            assert "Reconnected: gmail-owned" not in result
+            assert "1 tool(s) available from 1 server(s)" in result
+            assert "No MCP servers connected" not in result
+            assert grace_owned in mcp_tool._lazy_server_tool_names
+    finally:
+        executor = getattr(runner, "_executor", None)
+        if executor is not None:
+            executor.shutdown(wait=True)

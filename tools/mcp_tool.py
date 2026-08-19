@@ -6340,6 +6340,34 @@ def _select_utility_schemas(server_name: str, server: MCPServerTask, config: dic
     return selected
 
 
+def get_mcp_server_inventory_for_current_profile() -> tuple[set[str], set[str]]:
+    """Return available and connected MCP server names for this profile.
+
+    Lazy servers are available from their schema cache before their first tool
+    call opens a transport.  Keeping that state distinct from connected
+    servers lets status and reload paths report lazy routes without eagerly
+    connecting them or looking at a sibling profile's registry.
+    """
+    with _lock:
+        available = {
+            state_key[1] if isinstance(state_key, tuple) else state_key
+            for state_key in _servers
+            if _state_key_is_current(state_key)
+        }
+        available.update(
+            state_key[1] if isinstance(state_key, tuple) else state_key
+            for state_key in _lazy_server_tool_names
+            if _state_key_is_current(state_key)
+        )
+        connected = {
+            state_key[1] if isinstance(state_key, tuple) else state_key
+            for state_key, server in _servers.items()
+            if _state_key_is_current(state_key)
+            and getattr(server, "session", None) is not None
+        }
+    return available, connected
+
+
 def _existing_tool_names() -> List[str]:
     """Return tool names for all currently connected servers."""
     names: List[str] = []

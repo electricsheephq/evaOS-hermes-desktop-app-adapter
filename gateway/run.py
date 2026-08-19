@@ -20366,25 +20366,15 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         try:
             from tools.mcp_tool import (
                 discover_mcp_tools,
+                get_mcp_server_inventory_for_current_profile,
                 shutdown_mcp_servers,
                 shutdown_mcp_servers_for_current_scope,
-                _servers,
-                _lock,
             )
 
-            def _current_server_names() -> set[str]:
-                from hermes_constants import get_hermes_home
-
-                current_home = str(Path(get_hermes_home()).expanduser().resolve())
-                return {
-                    key[1] if isinstance(key, tuple) else key
-                    for key in _servers
-                    if not isinstance(key, tuple) or key[0] == current_home
-                }
-
             # Capture old server names before shutdown
-            with _lock:
-                old_servers = _current_server_names()
+            old_servers, _ = (
+                get_mcp_server_inventory_for_current_profile()
+            )
 
             # Read new config before shutting down, so we know what will be added/removed
             # Shutdown existing connections
@@ -20401,12 +20391,14 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             )
 
             # Compute what changed
-            with _lock:
-                connected_servers = _current_server_names()
+            available_servers, connected_servers = (
+                get_mcp_server_inventory_for_current_profile()
+            )
 
-            added = connected_servers - old_servers
-            removed = old_servers - connected_servers
-            reconnected = connected_servers & old_servers
+            added = available_servers - old_servers
+            removed = old_servers - available_servers
+            retained = available_servers & old_servers
+            reconnected = retained & connected_servers
 
             lines = [t("gateway.reload_mcp.header")]
             if reconnected:
@@ -20415,10 +20407,10 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 lines.append(t("gateway.reload_mcp.added", names=", ".join(sorted(added))))
             if removed:
                 lines.append(t("gateway.reload_mcp.removed", names=", ".join(sorted(removed))))
-            if not connected_servers:
+            if not available_servers:
                 lines.append(t("gateway.reload_mcp.none_connected"))
             else:
-                lines.append(t("gateway.reload_mcp.tools_available", tools=len(new_tools), servers=len(connected_servers)))
+                lines.append(t("gateway.reload_mcp.tools_available", tools=len(new_tools), servers=len(available_servers)))
 
             # Refresh cached agents so existing sessions see new MCP tools on
             # their next turn — without this, the user has to `/new` (which
