@@ -7720,6 +7720,97 @@ def shutdown_mcp_servers():
     _stop_mcp_loop()
 
 
+def shutdown_mcp_servers_for_current_scope():
+    """Close only the active multiplex profile's MCP state and servers."""
+    current_key = _server_state_key("")
+    if isinstance(current_key, str):
+        return shutdown_mcp_servers()
+    current_home = current_key[0]
+
+    def _belongs_to_current_profile(key: Any) -> bool:
+        return isinstance(key, tuple) and key[0] == current_home
+
+    scoped_states = (
+        _servers,
+        _server_connecting,
+        _server_connect_errors,
+        _lazy_server_configs,
+        _lazy_server_fingerprints,
+        _lazy_server_tool_names,
+        _server_connect_retry_after,
+        _server_connect_failures,
+        _server_error_counts,
+        _server_breaker_opened_at,
+        _tool_read_only_hints,
+        _parallel_safe_servers,
+        _mcp_tool_server_names,
+    )
+
+    with _lock:
+        servers_snapshot = [
+            server
+            for key, server in _servers.items()
+            if _belongs_to_current_profile(key)
+        ]
+        lazy_tool_names = [
+            tool_name
+            for key, names in _lazy_server_tool_names.items()
+            if _belongs_to_current_profile(key)
+            for tool_name in names
+        ]
+
+    if lazy_tool_names:
+        from tools.registry import registry
+
+        for tool_name in lazy_tool_names:
+            registry.deregister(
+                tool_name,
+                registration_home_override=current_home,
+            )
+            _forget_mcp_tool_server(tool_name, current_home)
+
+    async def _shutdown_scope():
+        results = await asyncio.gather(
+            *(server.shutdown() for server in servers_snapshot),
+            return_exceptions=True,
+        )
+        for server, result in zip(servers_snapshot, results):
+            if isinstance(result, Exception):
+                logger.debug(
+                    "Error closing scoped MCP server '%s': %s",
+                    server.name,
+                    result,
+                )
+
+    if servers_snapshot:
+        with _lock:
+            loop = _mcp_loop
+        if loop is not None and loop.is_running():
+            from agent.async_utils import safe_schedule_threadsafe
+
+            future = safe_schedule_threadsafe(
+                _shutdown_scope(),
+                loop,
+                logger=logger,
+                log_message="Scoped MCP shutdown: failed to schedule",
+            )
+            if future is not None:
+                try:
+                    future.result(timeout=15)
+                except BaseException as exc:
+                    logger.debug("Error during scoped MCP shutdown: %s", exc)
+
+    with _lock:
+        for state in scoped_states:
+            for key in list(state):
+                if not _belongs_to_current_profile(key):
+                    continue
+                if isinstance(state, set):
+                    state.discard(key)
+                else:
+                    state.pop(key, None)
+
+
 def _kill_orphaned_mcp_children(
     include_active: bool = False,
     server_name: Optional[str] = None,

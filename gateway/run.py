@@ -20331,24 +20331,56 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         wrapper can invoke the same path whether the user confirmed via
         button, text reply, or has the confirm gate disabled.
         """
-        loop = asyncio.get_running_loop()
         try:
-            from tools.mcp_tool import shutdown_mcp_servers, discover_mcp_tools, _servers, _lock
+            from tools.mcp_tool import (
+                discover_mcp_tools,
+                shutdown_mcp_servers,
+                shutdown_mcp_servers_for_current_scope,
+                _servers,
+                _lock,
+            )
+
+            multiplex = bool(
+                getattr(getattr(self, "config", None), "multiplex_profiles", False)
+            )
+            target_profile = str(
+                getattr(event.source, "profile", "") or ""
+            ).strip()
+            target_namespace = (
+                "main" if target_profile in {"", "default"} else target_profile
+            )
+
+            def _current_server_names() -> set[str]:
+                from hermes_constants import get_hermes_home
+
+                current_home = str(Path(get_hermes_home()).expanduser().resolve())
+                return {
+                    key[1] if isinstance(key, tuple) else key
+                    for key in _servers
+                    if not isinstance(key, tuple) or key[0] == current_home
+                }
 
             # Capture old server names before shutdown
             with _lock:
-                old_servers = set(_servers.keys())
+                old_servers = _current_server_names()
 
             # Read new config before shutting down, so we know what will be added/removed
             # Shutdown existing connections
-            await loop.run_in_executor(None, shutdown_mcp_servers)
+            shutdown = (
+                shutdown_mcp_servers_for_current_scope
+                if multiplex
+                else shutdown_mcp_servers
+            )
+            await self._run_in_executor_with_context(shutdown)
 
             # Reconnect by discovering tools (reads config.yaml fresh)
-            new_tools = await loop.run_in_executor(None, discover_mcp_tools)
+            new_tools = await self._run_in_executor_with_context(
+                discover_mcp_tools
+            )
 
             # Compute what changed
             with _lock:
-                connected_servers = set(_servers.keys())
+                connected_servers = _current_server_names()
 
             added = connected_servers - old_servers
             removed = old_servers - connected_servers
@@ -20379,6 +20411,10 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 if _cache_lock is not None and _cache:
                     with _cache_lock:
                         for _sess_key, _entry in list(_cache.items()):
+                            if multiplex and not str(_sess_key).startswith(
+                                f"agent:{target_namespace}:"
+                            ):
+                                continue
                             try:
                                 _agent = _entry[0] if isinstance(_entry, tuple) else _entry
                             except Exception:
