@@ -3095,9 +3095,12 @@ class MCPServerTask:
             # http_client is provided, so we wrap in async-with.
             try:
                 async with httpx.AsyncClient(**client_kwargs) as http_client:
-                    async with streamable_http_client(url, http_client=http_client) as (
-                        read_stream, write_stream, _get_session_id,
-                    ):
+                    async with streamable_http_client(
+                        url, http_client=http_client
+                    ) as transport:
+                        # SDK builds in the supported range return either
+                        # (read, write) or (read, write, get_session_id).
+                        read_stream, write_stream = transport[:2]
                         async with ClientSession(read_stream, write_stream, **sampling_kwargs) as session:
                             # Bound the handshake (#59349) — see stdio path.
                             self.initialize_result = await asyncio.wait_for(

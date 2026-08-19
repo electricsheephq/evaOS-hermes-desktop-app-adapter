@@ -99,7 +99,9 @@ class TestHTTPClientCert:
 
         class DummyTransportCtx:
             async def __aenter__(self):
-                return MagicMock(), MagicMock(), (lambda: None)
+                # mcp SDK builds before the session-id accessor return two
+                # values from the new streamable_http_client API.
+                return MagicMock(), MagicMock()
 
             async def __aexit__(self, *a):
                 return False
