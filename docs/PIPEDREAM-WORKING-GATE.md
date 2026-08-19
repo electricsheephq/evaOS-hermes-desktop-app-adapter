@@ -75,7 +75,9 @@ Score lives on the program board (support-control#544 / gate #546) — never in 
   per-profile gateway it reloads that profile. On an r28 shared multiplex gateway it resolves the
   routed event's profile home, shuts down and rediscovers only that profile's MCP registry, refreshes
   only cached sessions in that profile namespace, and reports both eager and lazy available routes
-  without eagerly connecting lazy routes. Sibling profiles remain untouched. The programmatic
+  without opening cached lazy routes. A lazy route with no valid schema cache may connect once during
+  bootstrap to populate that cache; this is discovery, not permission to expose it across profiles.
+  Sibling profiles remain untouched. The programmatic
   `reload.mcp` JSON-RPC method on the serve RPC surface is revision-aware and refreshes the exact
   session after a confirmed reload; it is not an HTTP endpoint. Both interactive forms may invalidate
   the prompt cache and therefore retain the approval/confirmation gate. Layer-1 lesson
