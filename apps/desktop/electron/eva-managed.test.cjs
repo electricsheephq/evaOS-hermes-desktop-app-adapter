@@ -166,6 +166,39 @@ test('broker requests identify the actual Desktop package version', async () => 
   assert.equal(clientInfo, `evaos-agent/${desktopPackageVersion}`)
 })
 
+test('broker rejections preserve a safe diagnostic code without leaking provider details', async () => {
+  const rawDetail = 'customer_id=jackie-david token=secret https://internal.example.invalid/api'
+
+  await assert.rejects(
+    brokerPost(
+      { action: 'runtime_launch' },
+      {
+        policy: {
+          brokerUrl: 'https://broker.example.invalid/runtime',
+          brokerRequestTimeoutMs: 1_000
+        },
+        fetchImpl: async () =>
+          new Response(
+            JSON.stringify({
+              error: 'feature_not_enabled',
+              message: rawDetail
+            }),
+            { status: 403, headers: { 'Content-Type': 'application/json' } }
+          )
+      }
+    ),
+    error => {
+      assert.ok(error instanceof EvaBrokerError)
+      assert.equal(error.statusCode, 403)
+      assert.equal(error.code, 'feature_not_enabled')
+      assert.equal(error.brokerRejected, true)
+      assert.match(error.message, /code: feature_not_enabled/)
+      assert.doesNotMatch(error.message, /jackie-david|secret|internal\.example/i)
+      return true
+    }
+  )
+})
+
 test('broker request deadline covers a stalled response body and exposes no raw transport detail', async () => {
   let aborted = false
   const rawDetail = 'socket stalled at internal-broker-host'

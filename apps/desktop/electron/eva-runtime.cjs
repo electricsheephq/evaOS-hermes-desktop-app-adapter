@@ -323,6 +323,25 @@ function createEvaManagedRuntime(options) {
     return match ? Number(match[1]) : null
   }
 
+  function isStaleAuthError(error) {
+    return error?.brokerRejected !== true && error?.code === 'stale-auth'
+  }
+
+  function isRetryableEnrollmentFailure(error) {
+    const statusCode = statusCodeOf(error)
+    return statusCode === null || statusCode >= 500 || (statusCode === 408 && error?.code === 'timeout')
+  }
+
+  function enrollmentFailureMessage(error) {
+    if (error instanceof EvaBrokerError && typeof error.message === 'string' && error.message.length <= 240) {
+      return error.message
+    }
+    const statusCode = statusCodeOf(error)
+    const code = String(error?.code || '').match(/^[a-z][a-z0-9]*(?:[_-][a-z0-9]+)*$/)?.[0]
+    const diagnostic = code ? ` [code: ${code}]` : ''
+    return `evaOS Agent enrollment was rejected (${statusCode ?? 'unknown'}).${diagnostic}`
+  }
+
   async function ensureRuntimeEnrollment(input = {}) {
     const force = input.force === true
     if (runtimeEnrollmentPromise) {
@@ -362,9 +381,30 @@ function createEvaManagedRuntime(options) {
         resetRuntimeEnrollmentFailure()
         return enrollment
       } catch (error) {
-        if (statusCodeOf(error) !== 401 && error?.code !== 'stale-auth') {
+        const statusCode = statusCodeOf(error)
+        if (statusCode !== 401 && !isStaleAuthError(error)) {
           assertGeneration(auth, runtime)
-          recordRuntimeEnrollmentFailure(error)
+          if (isRetryableEnrollmentFailure(error)) {
+            recordRuntimeEnrollmentFailure(error)
+          } else {
+            // A deterministic broker/readiness rejection is terminal for this
+            // boot attempt. Publish the safe reason before rethrowing so the
+            // renderer can dismiss CONNECTING and show its recovery actions.
+            resetRuntimeEnrollmentFailure()
+            const message = enrollmentFailureMessage(error)
+            try {
+              updateBootProgress({
+                error: message,
+                message,
+                phase: 'eva.enroll.error',
+                progress: 100,
+                running: false
+              })
+            } catch {
+              // Progress publication must not replace the original enrollment
+              // error or change the auth/routing result.
+            }
+          }
         }
         throw error
       }

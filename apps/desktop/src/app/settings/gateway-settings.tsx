@@ -63,6 +63,24 @@ interface GatewaySettingsState {
 
 const SSH_HOST_CUSTOM = '__custom__'
 
+export function safeManagedErrorMessage(error: unknown, fallback: string): string {
+  const message = error instanceof Error ? error.message.trim() : ''
+  const brokerCode = message.match(/\[code: ([a-z][a-z0-9]*(?:[_-][a-z0-9]+)*)\]/)?.[1]
+  if (brokerCode) {
+    return `Electric Sheep request failed [code: ${brokerCode}]`
+  }
+  if (
+    !message ||
+    message.length > 240 ||
+    /[\\/=@.\\r\\n\\t]/.test(message) ||
+    /(?:https?|wss?):/i.test(message) ||
+    /\b(?:bearer|session|token|customer|account|agent|gateway|route|path|host|url)\b/i.test(message)
+  ) {
+    return fallback
+  }
+  return message
+}
+
 const EMPTY_STATE: GatewaySettingsState = {
   envOverride: false,
   mode: 'local',
@@ -195,8 +213,8 @@ function EvaManagedGatewaySettings({ embedded = false }: { embedded?: boolean } 
 
         setStatus(next)
       }
-    } catch {
-      setError(g.failed)
+    } catch (err) {
+      setError(safeManagedErrorMessage(err, g.failed))
     } finally {
       setBusy(null)
     }

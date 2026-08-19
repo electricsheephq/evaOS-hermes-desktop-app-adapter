@@ -153,6 +153,50 @@ test('failed runtime enrollment is coalesced and automatic retries wait for the 
   assert.equal(launches, 2)
 })
 
+test('deterministic enrollment rejection terminates boot progress and a later refresh can recover', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-rejected-enrollment-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeEnrollment(statePath)
+
+  const updates = []
+  let outcome = 'reject'
+  const rejection = new EvaBrokerError(
+    'Electric Sheep request failed (403). [code: feature_not_enabled]',
+    403,
+    'feature_not_enabled'
+  )
+  const enrollment = {
+    schemaVersion: 'evaos.hermes_desktop_enrollment.v1',
+    customerId: 'customer-one',
+    runtime: 'hermes',
+    agentId: 'main',
+    baseUrl: 'https://hermes-customer-one.ecs.electricsheephq.com',
+    token: 'fresh-runtime-token',
+    expiresAt: FUTURE
+  }
+  const runtime = makeManagedRuntime(statePath, {
+    updateBootProgress: update => updates.push(update),
+    launchRuntime: async () => {
+      if (outcome === 'reject') throw rejection
+      return enrollment
+    }
+  })
+
+  await assert.rejects(runtime.resolveBackend(), error => error === rejection)
+  assert.deepEqual(updates.at(-1), {
+    error: rejection.message,
+    message: rejection.message,
+    phase: 'eva.enroll.error',
+    progress: 100,
+    running: false
+  })
+
+  outcome = 'success'
+  await runtime.refresh()
+  assert.equal(runtime.status().runtimeSessionActive, true)
+})
+
 test('explicit refresh bypasses cooldown once, coalesces callers, and success resets backoff', async t => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-refresh-backoff-'))
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }))

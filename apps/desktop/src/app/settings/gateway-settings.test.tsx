@@ -60,6 +60,23 @@ afterEach(() => {
 })
 
 describe('GatewaySettings', () => {
+  it('shows a safe broker code without rendering rejected backend detail', async () => {
+    const { safeManagedErrorMessage } = await import('./gateway-settings')
+
+    expect(
+      safeManagedErrorMessage(
+        new Error('Electric Sheep request failed (403). [code: feature_not_enabled]'),
+        'Connection failed'
+      )
+    ).toBe('Electric Sheep request failed [code: feature_not_enabled]')
+    expect(
+      safeManagedErrorMessage(
+        new Error('token=secret customer=private https://internal.example.invalid'),
+        'Connection failed'
+      )
+    ).toBe('Connection failed')
+  })
+
   it('labels local mode as default inheritance for a named profile', async () => {
     const { GatewaySettings } = await import('./gateway-settings')
 

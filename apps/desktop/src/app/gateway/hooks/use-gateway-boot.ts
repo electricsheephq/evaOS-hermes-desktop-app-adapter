@@ -55,6 +55,27 @@ import { stashGatewaySurvivor, survivorIsStale, takeGatewaySurvivor } from './ga
 // 1→15s ladder took ~45s to reach six failures — this threshold keeps that
 // original ~45s calibration.
 const RECONNECT_ESCALATE_AFTER_MS = 45_000
+// The main process already bounds the managed broker (15s), backend health
+// (45s), and WebSocket setup (15s) independently. Keep a renderer-level outer
+// deadline as a final escape hatch for a future internal promise that forgets
+// to honor one of those bounds, with enough margin not to duplicate or shorten
+// any existing stage deadline.
+const INITIAL_CONNECTION_DEADLINE_MS = 90_000
+
+async function getConnectionWithDeadline<T>(operation: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(message)), timeoutMs)
+  })
+
+  try {
+    return await Promise.race([operation, timeout])
+  } finally {
+    if (timer !== undefined) {
+      clearTimeout(timer)
+    }
+  }
+}
 
 interface GatewayBootOptions {
   beforeConnectionSwitch: () => void
@@ -494,7 +515,11 @@ export function useGatewayBoot({
 
     async function boot() {
       try {
-        const conn = await desktop.getConnection()
+        const conn = await getConnectionWithDeadline(
+          desktop.getConnection(),
+          INITIAL_CONNECTION_DEADLINE_MS,
+          translateNow('boot.errors.gatewayConnectionLost')
+        )
 
         if (cancelled) {
           return
