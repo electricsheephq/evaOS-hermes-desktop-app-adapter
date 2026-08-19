@@ -237,10 +237,10 @@ describe('useGatewayBoot remote reconnect loop (real hook, fake socket)', () => 
     expect(currentLocation).toBe('/settings?tab=gateway')
   })
 
-  it('fails the initial connection when an internal promise exceeds the outer deadline', async () => {
+  it('fails managed initial connection when an internal promise exceeds the outer deadline', async () => {
     const desktop = fakeDesktop()
     desktop.getConnection = vi.fn(() => new Promise(() => undefined))
-    ;(window as { hermesDesktop?: unknown }).hermesDesktop = desktop
+    ;(window as { hermesDesktop?: unknown }).hermesDesktop = { ...desktop, eva: {} }
 
     renderHarness()
     await flushAsync()
@@ -255,6 +255,22 @@ describe('useGatewayBoot remote reconnect loop (real hook, fake socket)', () => 
     expect($desktopBoot.get().error).toBe('Lost connection to the gateway')
     expect($desktopBoot.get().running).toBe(false)
     expect($desktopBoot.get().visible).toBe(true)
+  })
+
+  it('does not apply the managed deadline to a supported slow local startup', async () => {
+    const desktop = fakeDesktop()
+    desktop.getConnection = vi.fn(() => new Promise(() => undefined))
+    ;(window as { hermesDesktop?: unknown }).hermesDesktop = desktop
+
+    renderHarness()
+    await flushAsync()
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(90_000)
+    })
+
+    expect($desktopBoot.get().error).toBeNull()
+    expect($desktopBoot.get().running).toBe(true)
   })
 
   it('keeps the live gateway mounted when declarative router navigation changes navigate identity', async () => {

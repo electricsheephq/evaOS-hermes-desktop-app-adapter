@@ -515,11 +515,14 @@ export function useGatewayBoot({
 
     async function boot() {
       try {
-        const conn = await getConnectionWithDeadline(
-          desktop.getConnection(),
-          INITIAL_CONNECTION_DEADLINE_MS,
-          translateNow('boot.errors.gatewayConnectionLost')
-        )
+        const connection = desktop.getConnection()
+        const conn = desktop.eva
+          ? await getConnectionWithDeadline(
+              connection,
+              INITIAL_CONNECTION_DEADLINE_MS,
+              translateNow('boot.errors.gatewayConnectionLost')
+            )
+          : await connection
 
         if (cancelled) {
           return
