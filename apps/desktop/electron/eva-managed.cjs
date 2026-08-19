@@ -63,6 +63,28 @@ const EVA_MANAGED_BLOCKED_GATEWAY_PREFIXES = ['billing.', 'subscription.']
 const EVA_MANAGED_HIDDEN_NOUS_COMMANDS = new Set(['subscription', 'topup', 'upgrade'])
 const EVA_MANAGED_PROFILE_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
 const EVA_MANAGED_PROFILE_SELECTORS = new Set(['all'])
+const EVA_MANAGED_BROKER_CODE_RE = /^[a-z][a-z0-9]*(?:[_-][a-z0-9]+)*$/
+const EVA_MANAGED_SAFE_BROKER_CODES = new Set([
+  'ambiguous_hermes_agent_binding',
+  'client_agent_override_not_allowed',
+  'client_customer_override_not_allowed',
+  'client_download_override_not_allowed',
+  'company_brain_denied',
+  'eva_desktop_session_required',
+  'evaos_agent_download_forbidden',
+  'evaos_agent_download_unavailable',
+  'feature_not_enabled',
+  'invalid_client_surface',
+  'invalid_eva_runtime',
+  'invalid_hermes_agent_binding',
+  'invalid_launch_mode',
+  'invalid_release_track',
+  'invalid_request',
+  'missing_hermes_agent_binding',
+  'missing_runtime_permission',
+  'provider_ambiguous',
+  'revoke_upstream_failed'
+])
 const EVA_ACCOUNT_SCOPED_RENDERER_STORAGE_KEYS = Object.freeze([
   'hermes.desktop.composerQueue.v1',
   'hermes.desktop.dismissedAutoProjects',
@@ -110,6 +132,13 @@ class EvaBrokerError extends Error {
     this.statusCode = statusCode
     this.code = code
   }
+}
+
+function normalizeEvaManagedBrokerCode(value) {
+  const code = String(value || '').trim().toLowerCase()
+  return code.length <= 64 && EVA_MANAGED_BROKER_CODE_RE.test(code) && EVA_MANAGED_SAFE_BROKER_CODES.has(code)
+    ? code
+    : null
 }
 
 function normalizeEvaManagedApiPath(value) {
@@ -575,11 +604,19 @@ async function brokerPost(body, options = {}) {
   }
 
   if (!response.ok) {
-    const safeMessage =
-      payload && typeof payload.error === 'string' && payload.error.length <= 240
-        ? payload.error
-        : `Electric Sheep request failed (${response.status}).`
-    throw new EvaBrokerError(safeMessage, response.status, 'broker-rejected')
+    const brokerCode = normalizeEvaManagedBrokerCode(payload?.code ?? payload?.error)
+    // Backend prose may contain account, customer, route, or provider detail.
+    // Surface only the bounded machine code and status that this client has
+    // independently validated.
+    const safeMessage = brokerCode
+      ? `Electric Sheep request failed (${response.status}). [code: ${brokerCode}]`
+      : `Electric Sheep request failed (${response.status}).`
+    const error = new EvaBrokerError(safeMessage, response.status, brokerCode ?? 'broker-rejected')
+    // Keep the polling/retry classification separate from the broker's
+    // diagnostic code. A server-selected code must never accidentally look like
+    // an internal state marker such as stale-auth.
+    error.brokerRejected = true
+    throw error
   }
   return payload
 }
@@ -619,7 +656,7 @@ async function pollEvaDeviceCode(deviceCode, deviceCodeVerifier, options = {}) {
     try {
       return await claimEvaDeviceCode(deviceCode, deviceCodeVerifier, { ...options, now: now() })
     } catch (error) {
-      if (!(error instanceof EvaBrokerError) || error.statusCode !== 401 || error.code !== 'broker-rejected') {
+      if (!(error instanceof EvaBrokerError) || error.statusCode !== 401 || error.brokerRejected !== true) {
         throw error
       }
     }

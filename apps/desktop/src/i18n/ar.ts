@@ -692,7 +692,8 @@ export const ar = defineLocale({
         signIn: 'تسجيل الدخول إلى evaOS Agent',
         refresh: 'تحديث الوصول المعيّن',
         signOut: 'تسجيل الخروج',
-        failed: 'تعذر تحميل الوصول المُدار. أعد المحاولة أو تواصل مع دعم Electric Sheep.'
+        failed: 'تعذر تحميل الوصول المُدار. أعد المحاولة أو تواصل مع دعم Electric Sheep.',
+        failedWithCode: code => `فشل طلب Electric Sheep [الرمز: ${code}]`
       },
       loading: 'جار تحميل إعدادات البوابة...',
       unavailableTitle: 'إعدادات البوابة غير متاحة',

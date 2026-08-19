@@ -716,7 +716,8 @@ export const zhHant = defineLocale({
         signIn: '登入 evaOS Agent',
         refresh: '重新整理已指派存取權',
         signOut: '登出',
-        failed: '無法載入受管理存取權。請重試或聯絡 Electric Sheep 支援。'
+        failed: '無法載入受管理存取權。請重試或聯絡 Electric Sheep 支援。',
+        failedWithCode: code => `Electric Sheep 要求失敗 [代碼: ${code}]`
       },
       loading: '正在載入閘道設定...',
       unavailableTitle: '閘道設定不可用',

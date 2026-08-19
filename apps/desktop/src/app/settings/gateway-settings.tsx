@@ -62,6 +62,40 @@ interface GatewaySettingsState {
 }
 
 const SSH_HOST_CUSTOM = '__custom__'
+const SAFE_MANAGED_BROKER_CODES = new Set([
+  'ambiguous_hermes_agent_binding',
+  'client_agent_override_not_allowed',
+  'client_customer_override_not_allowed',
+  'client_download_override_not_allowed',
+  'company_brain_denied',
+  'eva_desktop_session_required',
+  'evaos_agent_download_forbidden',
+  'evaos_agent_download_unavailable',
+  'feature_not_enabled',
+  'invalid_client_surface',
+  'invalid_eva_runtime',
+  'invalid_hermes_agent_binding',
+  'invalid_launch_mode',
+  'invalid_release_track',
+  'invalid_request',
+  'missing_hermes_agent_binding',
+  'missing_runtime_permission',
+  'provider_ambiguous',
+  'revoke_upstream_failed'
+])
+
+export function safeManagedErrorMessage(
+  error: unknown,
+  fallback: string,
+  failedWithCode: (code: string) => string = code => `Electric Sheep request failed [code: ${code}]`
+): string {
+  const message = error instanceof Error ? error.message.trim() : ''
+  const brokerCode = message.match(/\[code: ([a-z][a-z0-9]*(?:[_-][a-z0-9]+)*)\]/)?.[1]
+  if (brokerCode && brokerCode.length <= 64 && SAFE_MANAGED_BROKER_CODES.has(brokerCode)) {
+    return failedWithCode(brokerCode)
+  }
+  return fallback
+}
 
 const EMPTY_STATE: GatewaySettingsState = {
   envOverride: false,
@@ -195,8 +229,8 @@ function EvaManagedGatewaySettings({ embedded = false }: { embedded?: boolean } 
 
         setStatus(next)
       }
-    } catch {
-      setError(g.failed)
+    } catch (err) {
+      setError(safeManagedErrorMessage(err, g.failed, g.failedWithCode))
     } finally {
       setBusy(null)
     }

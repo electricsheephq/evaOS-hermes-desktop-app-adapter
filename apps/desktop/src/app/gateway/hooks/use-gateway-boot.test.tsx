@@ -2,7 +2,7 @@ import { act, cleanup, render } from '@testing-library/react'
 import { MemoryRouter, useLocation, useNavigate } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { $desktopBoot } from '@/store/boot'
+import { $desktopBoot, applyDesktopBootProgress } from '@/store/boot'
 import { $gatewayState, $sessionsLoading } from '@/store/session'
 
 import { takeGatewaySurvivor } from './gateway-hmr-survivor'
@@ -235,6 +235,56 @@ describe('useGatewayBoot remote reconnect loop (real hook, fake socket)', () => 
     expect($desktopBoot.get().error).toBeNull()
     expect($sessionsLoading.get()).toBe(false)
     expect(currentLocation).toBe('/settings?tab=gateway')
+  })
+
+  it('fails managed initial connection when an internal promise exceeds the outer deadline', async () => {
+    const desktop = fakeDesktop()
+    desktop.getConnection = vi.fn(() => new Promise(() => undefined))
+    ;(window as { hermesDesktop?: unknown }).hermesDesktop = { ...desktop, eva: {} }
+
+    renderHarness()
+    await flushAsync()
+
+    expect($desktopBoot.get().error).toBeNull()
+    expect($desktopBoot.get().running).toBe(true)
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(90_000)
+    })
+
+    expect($desktopBoot.get().error).toBe('Lost connection to the gateway')
+    expect($desktopBoot.get().running).toBe(false)
+    expect($desktopBoot.get().visible).toBe(true)
+
+    applyDesktopBootProgress({
+      error: null,
+      fakeMode: false,
+      message: 'Late managed startup result',
+      phase: 'eva.ready',
+      progress: 100,
+      running: true,
+      timestamp: Date.now()
+    })
+
+    expect($desktopBoot.get().error).toBe('Lost connection to the gateway')
+    expect($desktopBoot.get().running).toBe(false)
+    expect($desktopBoot.get().visible).toBe(true)
+  })
+
+  it('does not apply the managed deadline to a supported slow local startup', async () => {
+    const desktop = fakeDesktop()
+    desktop.getConnection = vi.fn(() => new Promise(() => undefined))
+    ;(window as { hermesDesktop?: unknown }).hermesDesktop = desktop
+
+    renderHarness()
+    await flushAsync()
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(90_000)
+    })
+
+    expect($desktopBoot.get().error).toBeNull()
+    expect($desktopBoot.get().running).toBe(true)
   })
 
   it('keeps the live gateway mounted when declarative router navigation changes navigate identity', async () => {

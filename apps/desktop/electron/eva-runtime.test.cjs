@@ -117,40 +117,93 @@ test('cold launch replaces an expired runtime enrollment before connecting', asy
   assert.equal(persisted.runtime.expires_at, FUTURE)
 })
 
-test('failed runtime enrollment is coalesced and automatic retries wait for the shared cooldown', async t => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-backoff-'))
+for (const [statusCode, errorCode] of [[408, 'broker_timeout'], [429, 'rate_limited']]) {
+  test(`HTTP ${statusCode} runtime enrollment waits for the shared retry cooldown`, async t => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), `eva-runtime-backoff-${statusCode}-`))
+    t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+    const statePath = path.join(directory, 'eva-enrollment.json')
+    writeEnrollment(statePath)
+
+    let clock = 0
+    let launches = 0
+    const failure = new EvaBrokerError('Runtime enrollment is temporarily unavailable.', statusCode, errorCode)
+    const runtime = makeManagedRuntime(statePath, {
+      now: () => clock,
+      launchRuntime: async () => {
+        launches += 1
+        throw failure
+      }
+    })
+
+    const first = await Promise.allSettled([
+      runtime.resolveBackend(),
+      runtime.requestApi({ path: '/api/sessions', method: 'GET' }),
+      runtime.freshWsUrl()
+    ])
+    assert.equal(launches, 1)
+    assert.deepEqual(
+      first.map(result => result.status),
+      ['rejected', 'rejected', 'rejected']
+    )
+
+    await assert.rejects(runtime.resolveBackend(), error => error === failure)
+    assert.equal(launches, 1)
+
+    clock = 2_000
+    await assert.rejects(runtime.resolveBackend(), error => error === failure)
+    assert.equal(launches, 2)
+  })
+}
+
+test('deterministic enrollment rejection terminates boot progress and a later refresh can recover', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-rejected-enrollment-'))
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
   const statePath = path.join(directory, 'eva-enrollment.json')
   writeEnrollment(statePath)
 
-  let clock = 0
+  const updates = []
+  let outcome = 'reject'
   let launches = 0
-  const failure = new EvaBrokerError('Runtime enrollment is temporarily unavailable.', 500, 'vm_lookup_failed')
+  const rejection = new EvaBrokerError(
+    'Electric Sheep request failed (403). [code: feature_not_enabled]',
+    403,
+    'feature_not_enabled'
+  )
+  const enrollment = {
+    schemaVersion: 'evaos.hermes_desktop_enrollment.v1',
+    customerId: 'customer-one',
+    runtime: 'hermes',
+    agentId: 'main',
+    baseUrl: 'https://hermes-customer-one.ecs.electricsheephq.com',
+    token: 'fresh-runtime-token',
+    expiresAt: FUTURE
+  }
   const runtime = makeManagedRuntime(statePath, {
-    now: () => clock,
+    updateBootProgress: update => updates.push(update),
     launchRuntime: async () => {
       launches += 1
-      throw failure
+      if (outcome === 'reject') throw rejection
+      return enrollment
     }
   })
 
-  const first = await Promise.allSettled([
-    runtime.resolveBackend(),
-    runtime.requestApi({ path: '/api/sessions', method: 'GET' }),
-    runtime.freshWsUrl()
-  ])
-  assert.equal(launches, 1)
-  assert.deepEqual(
-    first.map(result => result.status),
-    ['rejected', 'rejected', 'rejected']
-  )
-
-  await assert.rejects(runtime.resolveBackend(), error => error === failure)
+  await assert.rejects(runtime.resolveBackend(), error => error === rejection)
+  assert.deepEqual(updates.at(-1), {
+    error: rejection.message,
+    message: rejection.message,
+    phase: 'eva.enroll.error',
+    progress: 100,
+    running: false
+  })
   assert.equal(launches, 1)
 
-  clock = 2_000
-  await assert.rejects(runtime.resolveBackend(), error => error === failure)
+  await assert.rejects(runtime.resolveBackend(), error => error === rejection)
+  assert.equal(launches, 1)
+
+  outcome = 'success'
+  await runtime.refresh()
   assert.equal(launches, 2)
+  assert.equal(runtime.status().runtimeSessionActive, true)
 })
 
 test('explicit refresh bypasses cooldown once, coalesces callers, and success resets backoff', async t => {

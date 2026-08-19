@@ -733,7 +733,8 @@ export const ja = defineLocale({
         signIn: 'evaOS Agent にサインイン',
         refresh: '割り当て済みアクセスを更新',
         signOut: 'サインアウト',
-        failed: 'マネージドアクセスを読み込めませんでした。再試行するか Electric Sheep サポートに連絡してください。'
+        failed: 'マネージドアクセスを読み込めませんでした。再試行するか Electric Sheep サポートに連絡してください。',
+        failedWithCode: code => `Electric Sheep リクエストに失敗しました [コード: ${code}]`
       },
       loading: 'ゲートウェイ設定を読み込み中...',
       unavailableTitle: 'ゲートウェイ設定は利用できません',
