@@ -163,6 +163,7 @@ test('deterministic enrollment rejection terminates boot progress and a later re
 
   const updates = []
   let outcome = 'reject'
+  let launches = 0
   const rejection = new EvaBrokerError(
     'Electric Sheep request failed (403). [code: feature_not_enabled]',
     403,
@@ -180,6 +181,7 @@ test('deterministic enrollment rejection terminates boot progress and a later re
   const runtime = makeManagedRuntime(statePath, {
     updateBootProgress: update => updates.push(update),
     launchRuntime: async () => {
+      launches += 1
       if (outcome === 'reject') throw rejection
       return enrollment
     }
@@ -193,9 +195,14 @@ test('deterministic enrollment rejection terminates boot progress and a later re
     progress: 100,
     running: false
   })
+  assert.equal(launches, 1)
+
+  await assert.rejects(runtime.resolveBackend(), error => error === rejection)
+  assert.equal(launches, 1)
 
   outcome = 'success'
   await runtime.refresh()
+  assert.equal(launches, 2)
   assert.equal(runtime.status().runtimeSessionActive, true)
 })
 

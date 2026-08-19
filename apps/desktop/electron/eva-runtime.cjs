@@ -191,6 +191,14 @@ function createEvaManagedRuntime(options) {
     }
   }
 
+  function recordTerminalRuntimeEnrollmentFailure(error) {
+    runtimeEnrollmentFailure = {
+      attempts: (runtimeEnrollmentFailure?.attempts ?? 0) + 1,
+      error,
+      nextRetryAt: Number.POSITIVE_INFINITY
+    }
+  }
+
   function invalidateAuthWork() {
     authGeneration += 1
     runtimeGeneration += 1
@@ -390,7 +398,7 @@ function createEvaManagedRuntime(options) {
             // A deterministic broker/readiness rejection is terminal for this
             // boot attempt. Publish the safe reason before rethrowing so the
             // renderer can dismiss CONNECTING and show its recovery actions.
-            resetRuntimeEnrollmentFailure()
+            recordTerminalRuntimeEnrollmentFailure(error)
             const message = enrollmentFailureMessage(error)
             try {
               updateBootProgress({

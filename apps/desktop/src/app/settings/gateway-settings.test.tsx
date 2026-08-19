@@ -75,6 +75,13 @@ describe('GatewaySettings', () => {
         'Connection failed'
       )
     ).toBe('Connection failed')
+    expect(safeManagedErrorMessage(new Error('jackie-david'), 'Connection failed')).toBe('Connection failed')
+    expect(
+      safeManagedErrorMessage(
+        new Error('Electric Sheep request failed (403). [code: customer_opaquevalue]'),
+        'Connection failed'
+      )
+    ).toBe('Connection failed')
     expect(safeManagedErrorMessage(new Error('line one\nline two'), 'Connection failed')).toBe('Connection failed')
   })
 

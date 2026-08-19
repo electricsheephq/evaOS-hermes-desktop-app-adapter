@@ -62,23 +62,35 @@ interface GatewaySettingsState {
 }
 
 const SSH_HOST_CUSTOM = '__custom__'
+const SAFE_MANAGED_BROKER_CODES = new Set([
+  'ambiguous_hermes_agent_binding',
+  'client_agent_override_not_allowed',
+  'client_customer_override_not_allowed',
+  'client_download_override_not_allowed',
+  'company_brain_denied',
+  'eva_desktop_session_required',
+  'evaos_agent_download_forbidden',
+  'evaos_agent_download_unavailable',
+  'feature_not_enabled',
+  'invalid_client_surface',
+  'invalid_eva_runtime',
+  'invalid_hermes_agent_binding',
+  'invalid_launch_mode',
+  'invalid_release_track',
+  'invalid_request',
+  'missing_hermes_agent_binding',
+  'missing_runtime_permission',
+  'provider_ambiguous',
+  'revoke_upstream_failed'
+])
 
 export function safeManagedErrorMessage(error: unknown, fallback: string): string {
   const message = error instanceof Error ? error.message.trim() : ''
   const brokerCode = message.match(/\[code: ([a-z][a-z0-9]*(?:[_-][a-z0-9]+)*)\]/)?.[1]
-  if (brokerCode) {
+  if (brokerCode && brokerCode.length <= 64 && SAFE_MANAGED_BROKER_CODES.has(brokerCode)) {
     return `Electric Sheep request failed [code: ${brokerCode}]`
   }
-  if (
-    !message ||
-    message.length > 240 ||
-    /[\\/=@.\r\n\t]/.test(message) ||
-    /(?:https?|wss?):/i.test(message) ||
-    /\b(?:bearer|session|token|customer|account|agent|gateway|route|path|host|url)\b/i.test(message)
-  ) {
-    return fallback
-  }
-  return message
+  return fallback
 }
 
 const EMPTY_STATE: GatewaySettingsState = {
