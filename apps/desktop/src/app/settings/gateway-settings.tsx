@@ -62,6 +62,7 @@ interface GatewaySettingsState {
 }
 
 const SSH_HOST_CUSTOM = '__custom__'
+
 const SAFE_MANAGED_BROKER_CODES = new Set([
   'ambiguous_hermes_agent_binding',
   'client_agent_override_not_allowed',
@@ -91,9 +92,11 @@ export function safeManagedErrorMessage(
 ): string {
   const message = error instanceof Error ? error.message.trim() : ''
   const brokerCode = message.match(/\[code: ([a-z][a-z0-9]*(?:[_-][a-z0-9]+)*)\]/)?.[1]
+
   if (brokerCode && brokerCode.length <= 64 && SAFE_MANAGED_BROKER_CODES.has(brokerCode)) {
     return failedWithCode(brokerCode)
   }
+
   return fallback
 }
 

@@ -64,6 +64,7 @@ const INITIAL_CONNECTION_DEADLINE_MS = 90_000
 
 async function getConnectionWithDeadline<T>(operation: Promise<T>, timeoutMs: number, message: string): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined
+
   const timeout = new Promise<never>((_, reject) => {
     timer = setTimeout(() => reject(new Error(message)), timeoutMs)
   })
@@ -516,6 +517,7 @@ export function useGatewayBoot({
     async function boot() {
       try {
         const connection = desktop.getConnection()
+
         const conn = desktop.eva
           ? await getConnectionWithDeadline(
               connection,

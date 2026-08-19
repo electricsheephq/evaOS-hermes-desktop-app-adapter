@@ -28,6 +28,7 @@ function LocationProbe() {
   const location = useLocation()
   navigateRoute = useNavigate()
   currentLocation = `${location.pathname}${location.search}`
+
   return null
 }
 

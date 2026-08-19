@@ -229,8 +229,10 @@ describe('I18nProvider', () => {
 
   it('keeps managed locale state aligned with managed translations', async () => {
     const originalDesktop = window.hermesDesktop
+
     ;(window as unknown as { hermesDesktop: unknown }).hermesDesktop = { eva: {} }
     const saveConfig = vi.fn().mockResolvedValue({ ok: true })
+
     const configClient: I18nConfigClient = {
       getConfig: vi
         .fn()

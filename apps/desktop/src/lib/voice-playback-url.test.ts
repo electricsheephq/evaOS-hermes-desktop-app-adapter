@@ -15,10 +15,12 @@ it('accepts only the exact managed speech-stream endpoint', async () => {
     profile,
     wsUrl: 'ws://127.0.0.1:4123/api/ws?ticket=stale'
   }))
+
   const getGatewayWsUrl = vi
     .fn()
     .mockResolvedValueOnce('ws://127.0.0.1:4123/unexpected/api/audio/speak-stream?ticket=wrong')
     .mockResolvedValueOnce('ws://127.0.0.1:4123/api/audio/speak-stream?ticket=exact')
+
   ;(window as { hermesDesktop?: unknown }).hermesDesktop = { getConnection, getGatewayWsUrl }
   setApiRequestProfile('research')
 
