@@ -14431,7 +14431,7 @@ async def delete_hook(body: HookDelete):
                     del hooks_cfg[event]
                 if not hooks_cfg:
                     cfg.pop("hooks", None)
-                save_config(cfg)
+                save_config(cfg, removed_root_keys={"hooks"} if not hooks_cfg else None)
 
         # Revoke consent regardless so a re-add re-prompts.
         try:
@@ -14790,7 +14790,7 @@ def _write_profile_mcp_servers(profile_dir: Path, servers: List["MCPServerCreate
             # We created an empty mcp_servers dict but wrote nothing — don't
             # leave a stray empty key in the new profile's config.
             cfg.pop("mcp_servers", None)
-            save_config(cfg)
+            save_config(cfg, removed_root_keys={"mcp_servers"})
     finally:
         reset_hermes_home_override(token)
     return written
@@ -15329,7 +15329,7 @@ async def update_config_raw(body: RawConfigUpdate, profile: Optional[str] = None
             # Full-document replacement: the editor owns the whole file; do not
             # merge omitted sections back from disk (#62723).
             approvals_mode_changed = _approval_mode_of(parsed) != _approval_mode_of(read_raw_config())
-            save_config(parsed, merge_existing=False)
+            save_config(parsed, full_replace=True)
         # Same indicator refresh as the schema-driven save above.
         if approvals_mode_changed and not _is_other_profile(body.profile or profile):
             _broadcast_gateway_session_info()
