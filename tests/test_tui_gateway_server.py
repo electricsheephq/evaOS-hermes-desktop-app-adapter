@@ -14679,6 +14679,57 @@ def test_session_activate_clears_stale_busy_state_after_prompt_worker_exits(monk
     assert session.get("inflight_turn") is None
 
 
+def test_live_payload_rebinds_expired_owner_and_clears_finished_worker(monkeypatch):
+    """The F3 ownership guard and F4 stale-run repair compose in one payload."""
+
+    class _DeadThread:
+        @staticmethod
+        def is_alive():
+            return False
+
+    class _Transport:
+        def __init__(self, last_inbound_at):
+            self.closed = False
+            self.last_inbound_at = last_inbound_at
+
+        def write(self, _obj):
+            return True
+
+    owner = _Transport(time.monotonic() - 46)
+    contender = _Transport(time.monotonic())
+    session = _session(
+        agent=types.SimpleNamespace(model="model-composed"),
+        running=True,
+        inflight_turn={
+            "assistant": "stale partial",
+            "status": "streaming",
+            "user": "already completed",
+        },
+        transport=owner,
+    )
+    session["_run_thread"] = _DeadThread()
+    monkeypatch.setattr(server, "_session_info", lambda _agent: {"model": "model-composed"})
+    server._live_transports.clear()
+    server.register_live_transport(owner)
+    try:
+        payload = server._live_session_payload(
+            "sid-composed",
+            session,
+            transport=contender,
+            omit_messages=True,
+        )
+    finally:
+        server.unregister_live_transport(owner)
+        server._live_transports.clear()
+
+    assert session["transport"] is contender
+    assert session["running"] is False
+    assert session.get("inflight_turn") is None
+    assert payload["running"] is False
+    assert payload["status"] == "idle"
+    assert "inflight" not in payload
+
+
 def test_session_activate_returns_prompt_queued_during_busy_turn(monkeypatch):
     """A full client restart must recover an accepted next-turn prompt.
 
