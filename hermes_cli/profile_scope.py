@@ -147,7 +147,7 @@ def managed_profile_context(
             _principal.reset(token)
             raise PermissionError("profile is not authorized")
         effective_token = _effective_profile.set(selected)
-        profile_home = profiles_mod._get_profiles_root() / selected
+        profile_home = profiles_mod.get_profile_dir(selected)
         home_token = set_hermes_home_override(str(profile_home))
     try:
         yield principal

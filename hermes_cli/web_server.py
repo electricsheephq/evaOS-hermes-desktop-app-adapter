@@ -5403,14 +5403,21 @@ async def speak_stream_ws(ws: "WebSocket") -> None:
     if not _ws_request_is_allowed(ws):
         await ws.close(code=4403)
         return
+
+    try:
+        profile = _managed_websocket_profile(
+            ws,
+            ws.query_params.get("profile") or None,
+        )
+    except (PermissionError, ValueError):
+        await ws.close(code=4403)
+        return
     await ws.accept()
 
     # Profile via query param, like /api/pty and /api/console: the provider
     # chain + API keys must resolve from the requesting profile's config, not
     # the dashboard's own. The streamer captures its config at resolve time,
     # so scoping resolution scopes the whole session.
-    profile = (ws.query_params.get("profile") or "").strip() or None
-
     loop = asyncio.get_running_loop()
 
     def _resolve():
