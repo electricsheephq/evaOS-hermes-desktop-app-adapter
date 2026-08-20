@@ -175,6 +175,35 @@ def test_oauth_provider_status_omits_token_preview_and_filesystem_label(monkeypa
     }
 
 
+def test_oauth_provider_status_omits_unc_filesystem_label(monkeypatch):
+    from hermes_cli import web_server as ws
+
+    fake_catalog = [{
+        "id": "fake-unc-oauth",
+        "name": "Fake UNC OAuth",
+        "flow": "pkce",
+        "cli_command": "hermes auth add fake-unc-oauth",
+        "docs_url": "https://example.com",
+        "status_fn": lambda: {
+            "logged_in": True,
+            "source": "hermes_pkce",
+            "source_label": r"Hermes PKCE (\\server\share\hermes\.anthropic_oauth.json)",
+            "token_preview": "…secret",
+            "expires_at": None,
+            "has_refresh_token": True,
+        },
+    }]
+    monkeypatch.setattr(ws, "_build_oauth_catalog", lambda: fake_catalog)
+
+    resp = client.get("/api/providers/oauth", headers=HEADERS)
+
+    assert resp.status_code == 200, resp.text
+    status = resp.json()["providers"][0]["status"]
+    assert "token_preview" not in status
+    assert "source_label" not in status
+    assert status["source"] == "hermes_pkce"
+
+
 def test_oauth_poll_requires_token_and_rejects_profile_substitution():
     from hermes_cli import web_server as ws
 
@@ -1051,5 +1080,4 @@ def test_status_falls_through_to_generic_dispatcher_for_catalog_only_provider():
     assert out["token_preview"] and "sk-future-secret-token-xyz" not in out["token_preview"]
     assert out["expires_at"] == "2026-12-01T00:00:00Z"
     assert out["has_refresh_token"] is True
-
 
