@@ -371,6 +371,48 @@ def test_single_profile_discovery_slot_is_claimed_once(profiles):
         threads.update(prior_threads)
 
 
+def test_single_profile_registration_and_shutdown_reuse_one_scope(profiles):
+    """Registration and process shutdown keep the historical one-registry path."""
+    home_a, _ = profiles
+    entry = {
+        "fingerprint": "fp-single",
+        "tools": [
+            {
+                "name": "ping",
+                "description": "Ping",
+                "inputSchema": {"type": "object", "properties": {}},
+            }
+        ],
+        "utility_tools": [],
+    }
+    config = {"command": "single-mcp", "lazy": True}
+
+    with _scoped_to(home_a):
+        first_bucket = mcp._servers._current()
+        with patch(
+            "tools.mcp_schema_cache.config_fingerprint",
+            return_value="fp-single",
+        ):
+            registered = mcp._register_from_cache_sync("single", config, entry)
+        assert registered
+        assert registry.get_entry(registered[0]) is not None
+
+    with _scoped_to(home_a):
+        assert mcp._servers._current() is first_bucket
+        server = mcp.MCPServerTask("single")
+        server._registered_tool_names = list(registered)
+        server._registered_scope = hermes_home_key(home_a)
+        mcp._servers["single"] = server
+        mcp._ensure_mcp_loop()
+        try:
+            mcp.shutdown_mcp_servers()
+        finally:
+            mcp._stop_mcp_loop()
+
+        assert mcp._servers.total_len() == 0
+        assert registry.get_entry(registered[0]) is None
+
+
 def test_single_profile_trust_gate_is_unchanged(profiles):
     """The trust tier keeps its documented single-profile semantics."""
     home_a, _ = profiles
