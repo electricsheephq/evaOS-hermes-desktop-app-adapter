@@ -121,6 +121,7 @@ class TestAddCommand:
     def test_add_appends_new_entry(self, isolated_home, capsys):
         _write_config(isolated_home, {
             "model": {"provider": "anthropic", "default": "claude-sonnet-4-6"},
+            "fallback_model": {"provider": "legacy", "model": "legacy-model"},
         })
 
         def fake_picker(args=None):
@@ -146,6 +147,7 @@ class TestAddCommand:
         assert cfg["model"]["default"] == "claude-sonnet-4-6"
         # Fallback was appended
         assert cfg["fallback_providers"] == [
+            {"provider": "legacy", "model": "legacy-model"},
             {
                 "provider": "openrouter",
                 "model": "anthropic/claude-sonnet-4.6",
@@ -153,6 +155,7 @@ class TestAddCommand:
                 "api_mode": "chat_completions",
             }
         ]
+        assert "fallback_model" not in cfg
         out = capsys.readouterr().out
         assert "Added fallback" in out
 
@@ -230,6 +233,7 @@ class TestRemoveCommand:
                 {"provider": "nous", "model": "Hermes-4"},
                 {"provider": "anthropic", "model": "claude-sonnet-4-6"},
             ],
+            "fallback_model": {"provider": "legacy", "model": "legacy-model"},
         })
 
         # Picker returns index 1 (the middle entry, "nous / Hermes-4")
@@ -241,7 +245,9 @@ class TestRemoveCommand:
         assert cfg["fallback_providers"] == [
             {"provider": "openrouter", "model": "gpt-5.4"},
             {"provider": "anthropic", "model": "claude-sonnet-4-6"},
+            {"provider": "legacy", "model": "legacy-model"},
         ]
+        assert "fallback_model" not in cfg
         out = capsys.readouterr().out
         assert "Removed fallback" in out
         assert "Hermes-4" in out
@@ -259,6 +265,7 @@ class TestClearCommand:
                 {"provider": "openrouter", "model": "gpt-5.4"},
                 {"provider": "nous", "model": "Hermes-4"},
             ],
+            "fallback_model": {"provider": "legacy", "model": "legacy-model"},
         })
         monkeypatch.setattr("builtins.input", lambda *a, **kw: "y")
         from hermes_cli.fallback_cmd import cmd_fallback_clear
@@ -266,6 +273,7 @@ class TestClearCommand:
 
         cfg = _read_config(isolated_home)
         assert cfg.get("fallback_providers") == []
+        assert "fallback_model" not in cfg
         out = capsys.readouterr().out
         assert "Fallback chain cleared" in out
 
