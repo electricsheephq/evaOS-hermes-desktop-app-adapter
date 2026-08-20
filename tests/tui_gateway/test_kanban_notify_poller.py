@@ -168,6 +168,38 @@ class TestCollectKanbanNotifications:
         assert len(rows) == 1
         assert rows[0]["last_event_id"] == pre_cursor
 
+    def test_two_profiles_claim_only_their_own_subscriptions(self, tmp_path):
+        """A profile poller never advances or returns its sibling's route."""
+        profile_a = "profile-a-session"
+        profile_b = "profile-b-session"
+        task_a = _create_subscribed_task(chat_id=profile_a)
+        task_b = _create_subscribed_task(chat_id=profile_b)
+        pre_b_cursor = _sub_rows(task_b)[0]["last_event_id"]
+        _complete(task_a, summary="profile a only")
+        _complete(task_b, summary="profile b only")
+
+        texts_a = _collect_kanban_notifications(
+            {
+                "session_key": profile_a,
+                "profile_home": str(tmp_path / "profiles" / "a"),
+            }
+        )
+
+        assert len(texts_a) == 1
+        assert task_a in texts_a[0]
+        assert task_b not in texts_a[0]
+        assert _sub_rows(task_b)[0]["last_event_id"] == pre_b_cursor
+
+        texts_b = _collect_kanban_notifications(
+            {
+                "session_key": profile_b,
+                "profile_home": str(tmp_path / "profiles" / "b"),
+            }
+        )
+        assert len(texts_b) == 1
+        assert task_b in texts_b[0]
+        assert task_a not in texts_b[0]
+
     def test_probe_error_falls_back_to_writable_delivery(self, monkeypatch):
         tid = _create_subscribed_task()
         _complete(tid, summary="fallback delivery")
@@ -416,4 +448,87 @@ class TestNotificationPollerLoopKanbanWiring:
         assert tid in submits[0]
         assert submits[1] == submits[0]
         assert submits.count(submits[0]) == 2, submits
+        assert session["_kanban_pending"] == []
+
+    def test_retry_attempts_are_bounded_by_rejections_then_acceptance(
+        self, monkeypatch
+    ):
+        """N rejected dispatches produce exactly N+1 attempts, then stop."""
+        import threading
+        import tui_gateway.server as server
+
+        rejected_attempts = 3
+        tid = _create_subscribed_task()
+        _complete(tid, summary="bounded retry")
+        session = self._poller_session(running=False)
+        submits: list[str] = []
+
+        def _submit(_rid, _sid, _sess, text):
+            submits.append(text)
+            return len(submits) > rejected_attempts
+
+        monkeypatch.setattr(server, "_KANBAN_POLL_SECONDS", 0.01)
+        monkeypatch.setattr(server, "_emit", lambda *a, **kw: None)
+        monkeypatch.setattr(server, "_run_prompt_submit", _submit)
+
+        stop = threading.Event()
+        thread = threading.Thread(
+            target=server._notification_poller_loop,
+            args=(stop, "sid-kanban-bound", session),
+            daemon=True,
+        )
+        thread.start()
+        try:
+            assert self._wait_for(lambda: len(submits) == rejected_attempts + 1)
+            # Let several additional poll intervals pass. Acceptance leaves no
+            # pending batch, so the same notification cannot storm again.
+            assert self._wait_for(lambda: session.get("_kanban_pending") == [])
+            assert len(submits) == rejected_attempts + 1
+        finally:
+            stop.set()
+            thread.join(timeout=5)
+
+        assert all(text == submits[0] for text in submits)
+        assert tid in submits[0]
+        assert session["_kanban_pending"] == []
+
+    def test_accepted_batch_is_not_dispatched_again_when_session_idles(
+        self, monkeypatch
+    ):
+        """A successfully accepted batch is delivered once, not replayed."""
+        import threading
+        import time
+        import tui_gateway.server as server
+
+        tid = _create_subscribed_task()
+        _complete(tid, summary="accepted exactly once")
+        session = self._poller_session(running=False)
+        submits: list[str] = []
+
+        monkeypatch.setattr(server, "_KANBAN_POLL_SECONDS", 0.01)
+        monkeypatch.setattr(server, "_emit", lambda *a, **kw: None)
+        monkeypatch.setattr(
+            server,
+            "_run_prompt_submit",
+            lambda _rid, _sid, _sess, text: submits.append(text),
+        )
+
+        stop = threading.Event()
+        thread = threading.Thread(
+            target=server._notification_poller_loop,
+            args=(stop, "sid-kanban-once", session),
+            daemon=True,
+        )
+        thread.start()
+        try:
+            assert self._wait_for(lambda: len(submits) == 1)
+            with session["history_lock"]:
+                session["running"] = False
+            time.sleep(0.1)
+            assert submits == [submits[0]]
+        finally:
+            stop.set()
+            thread.join(timeout=5)
+
+        assert tid in submits[0]
         assert session["_kanban_pending"] == []
