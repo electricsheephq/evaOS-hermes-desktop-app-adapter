@@ -139,12 +139,13 @@ class TestProfileExists:
     def test_missing_named_profile_is_false(self, profile_env):
         assert profiles.profile_exists("ghost") is False
 
-    @pytest.mark.parametrize("name", ["..", "../x", "a/b"])
-    def test_traversal_name_does_not_confirm(self, profile_env, name):
+    @pytest.mark.parametrize(
+        "name", [None, "", "..", "../x", "a/b", "has space", object()]
+    )
+    def test_invalid_name_does_not_confirm(self, profile_env, name):
         # Must never report an out-of-tree directory as an existing profile;
-        # a traversal name is rejected rather than confirmed.
-        with pytest.raises(ValueError):
-            profiles.profile_exists(name)
+        # profile-routing probes fail closed instead of raising into startup.
+        assert profiles.profile_exists(name) is False
 
 
 # ===================================================================
@@ -1163,5 +1164,4 @@ class TestResolveProfileEnvSpelling:
         # No HERMES_HOME: the platform default root applies (existing contract).
         monkeypatch.delenv("HERMES_HOME", raising=False)
         assert Path(resolve_profile_env("default")) == _get_default_hermes_home()
-
 

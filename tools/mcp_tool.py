@@ -6925,6 +6925,23 @@ def _existing_tool_names() -> List[str]:
     return names
 
 
+def get_mcp_server_inventory_for_current_profile() -> tuple[set[str], set[str]]:
+    """Return available and connected server names in the active profile.
+
+    The scoped containers keep sibling profiles out of these ordinary mapping
+    views. Lazy servers are available before their transport is connected.
+    """
+    with _lock:
+        available = set(_servers)
+        available.update(_lazy_server_tool_names)
+        connected = {
+            name
+            for name, server in _servers.items()
+            if getattr(server, "session", None) is not None
+        }
+    return available, connected
+
+
 def _register_server_tools(name: str, server: MCPServerTask, config: dict) -> List[str]:
     """Register tools from an already-connected server into the registry.
 
@@ -8167,6 +8184,81 @@ def shutdown_mcp_servers():
         _server_connect_failures.clear_all()
 
     _stop_mcp_loop()
+
+
+def shutdown_mcp_servers_for_current_scope():
+    """Close only the active multiplex profile's MCP state and servers."""
+    from agent.secret_scope import is_multiplex_active
+
+    if not is_multiplex_active():
+        return shutdown_mcp_servers()
+
+    scoped_states = (
+        _servers,
+        _server_connecting,
+        _server_connect_errors,
+        _lazy_server_configs,
+        _lazy_server_fingerprints,
+        _lazy_server_tool_names,
+        _server_connect_retry_after,
+        _server_connect_failures,
+        _server_error_counts,
+        _server_breaker_opened_at,
+        _server_trust_levels,
+        _tool_read_only_hints,
+        _parallel_safe_servers,
+        _mcp_tool_server_names,
+    )
+    with _lock:
+        servers_snapshot = list(_servers.values())
+        lazy_tool_names = [
+            tool_name
+            for names in _lazy_server_tool_names.values()
+            for tool_name in names
+        ]
+        registry_scope = _mcp_registry_scope()
+
+    if lazy_tool_names:
+        from tools.registry import registry
+
+        for tool_name in lazy_tool_names:
+            registry.deregister(tool_name, scope=registry_scope)
+            _forget_mcp_tool_server(tool_name)
+
+    async def _shutdown_scope():
+        results = await asyncio.gather(
+            *(server.shutdown() for server in servers_snapshot),
+            return_exceptions=True,
+        )
+        for server, result in zip(servers_snapshot, results):
+            if isinstance(result, Exception):
+                logger.debug(
+                    "Error closing scoped MCP server '%s': %s",
+                    server.name,
+                    result,
+                )
+
+    if servers_snapshot:
+        with _lock:
+            loop = _mcp_loop
+        if loop is not None and loop.is_running():
+            from agent.async_utils import safe_schedule_threadsafe
+
+            future = safe_schedule_threadsafe(
+                _shutdown_scope(),
+                loop,
+                logger=logger,
+                log_message="Scoped MCP shutdown: failed to schedule",
+            )
+            if future is not None:
+                try:
+                    future.result(timeout=15)
+                except BaseException as exc:
+                    logger.debug("Error during scoped MCP shutdown: %s", exc)
+
+    with _lock:
+        for state in scoped_states:
+            state.clear()
 
 
 def _kill_orphaned_mcp_children(

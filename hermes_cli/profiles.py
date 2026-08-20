@@ -404,20 +404,18 @@ def profile_exists(name: str) -> bool:
             name = require_profile(name)
         except PermissionError:
             return False
-    canon = normalize_profile_name(name)
-    if canon == "default":
-        return True
-    # Validate before touching the filesystem so a malformed/relative name can
-    # never confirm an out-of-tree directory, and compare the validated name
-    # against existing entries instead of joining request-derived text into a
-    # path (avoids the path-injection shape entirely).
-    validate_profile_name(canon)
     try:
+        canon = normalize_profile_name(name)
+        if canon == "default":
+            return True
+        # Validate before touching the filesystem so a malformed/relative name
+        # can never confirm an out-of-tree directory.
+        validate_profile_name(canon)
         return any(
             entry.name == canon and entry.is_dir()
             for entry in _get_profiles_root().iterdir()
         )
-    except FileNotFoundError:
+    except (OSError, TypeError, ValueError):
         return False
 
 

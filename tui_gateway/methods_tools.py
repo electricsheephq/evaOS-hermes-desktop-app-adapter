@@ -82,6 +82,7 @@ def _(rid, params: dict) -> dict:
 
 
 @method("reload.mcp")
+@_profile_scoped
 def _(rid, params: dict) -> dict:
     session = _sessions.get(params.get("session_id", ""))
     try:
@@ -133,7 +134,10 @@ def _(rid, params: dict) -> dict:
                 return _err(rid, 5019, f"compute-host reload_mcp failed: {exc}")
             return _ok(rid, {"status": "reloaded", "turn_isolation": True, "host_ack": ack})
 
-        from tools.mcp_tool import shutdown_mcp_servers, discover_mcp_tools
+        from tools.mcp_tool import (
+            discover_mcp_tools,
+            shutdown_mcp_servers_for_current_scope,
+        )
 
         def _refresh_session_agent() -> None:
             """Rebuild THIS session's cached tool snapshot from the live
@@ -183,7 +187,7 @@ def _(rid, params: dict) -> dict:
 
             loaded = _compute_mcp_rev()
             for _ in range(_MCP_RELOAD_MAX_PASSES):
-                shutdown_mcp_servers()
+                shutdown_mcp_servers_for_current_scope()
                 discover_mcp_tools()
                 after = _compute_mcp_rev()
                 if after == loaded:
@@ -2026,7 +2030,17 @@ def _(rid, params: dict) -> dict:
             _save_mcp_server,
         )
 
-        if name in _get_mcp_servers():
+        existing = _get_mcp_servers().get(name)
+        if (
+            isinstance(existing, dict)
+            and str(existing.get("auth") or "").lower().strip() == "evaos_lease"
+        ):
+            return _err(
+                rid,
+                4092,
+                f"server '{name}' is managed by the dashboard; disconnect the app there",
+            )
+        if existing is not None:
             return _err(rid, 4090, f"server '{name}' already exists")
 
         preset = str(params.get("preset") or "").strip()
@@ -2112,6 +2126,12 @@ def _(rid, params: dict) -> dict:
         entry = servers[name]
         if not isinstance(entry, dict):
             return _err(rid, 4001, "malformed server config")
+        if str(entry.get("auth") or "").lower().strip() == "evaos_lease":
+            return _err(
+                rid,
+                4092,
+                f"server '{name}' is managed by the dashboard; disconnect the app there",
+            )
 
         if entry.get("url"):
             # http/sse server: store a bearer token + Authorization template.
@@ -2244,7 +2264,18 @@ def _(rid, params: dict) -> dict:
     if err:
         return err
     try:
-        from hermes_cli.mcp_config import _remove_mcp_server
+        from hermes_cli.mcp_config import _get_mcp_servers, _remove_mcp_server
+
+        entry = _get_mcp_servers().get(name)
+        if (
+            isinstance(entry, dict)
+            and str(entry.get("auth") or "").lower().strip() == "evaos_lease"
+        ):
+            return _err(
+                rid,
+                4092,
+                f"server '{name}' is managed by the dashboard; disconnect the app there",
+            )
 
         removed = _remove_mcp_server(name)
         if not removed:
@@ -2351,6 +2382,7 @@ def _(rid, params: dict) -> dict:
 
 
 @method("skills.reload")
+@_profile_scoped
 def _(rid, params: dict) -> dict:
     try:
         from agent.skill_commands import reload_skills
