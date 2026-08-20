@@ -948,6 +948,12 @@ class ToolRegistry:
             )
             if not toolset_still_exists:
                 self._toolset_checks.pop(entry.toolset, None)
+            toolset_still_exists = toolset_still_exists or any(
+                scoped_entry.toolset == entry.toolset
+                for scoped_entries in self._scoped_tools.values()
+                for scoped_entry in scoped_entries.values()
+            )
+            if not toolset_still_exists:
                 self._toolset_aliases = {
                     alias: target
                     for alias, target in self._toolset_aliases.items()

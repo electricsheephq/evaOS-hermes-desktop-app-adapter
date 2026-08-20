@@ -27,7 +27,7 @@ from hermes_constants import (
     reset_hermes_home_override,
     set_hermes_home_override,
 )
-from tools.registry import registry
+from tools.registry import ToolRegistry, registry
 
 
 @pytest.fixture
@@ -186,6 +186,36 @@ def test_registered_mcp_tools_are_scoped_to_their_profile(profiles):
     finally:
         with _scoped_to(home_a):
             registry.deregister(tool_name, scope=hermes_home_key(home_a))
+
+
+def test_scoped_deregister_preserves_shared_toolset_alias(profiles):
+    """Removing A's tools must not remove B's same-server alias."""
+    home_a, home_b = profiles
+    scoped_registry = ToolRegistry()
+    tool_name = "mcp__gmail__search"
+    toolset_name = "mcp-gmail"
+    schema = {
+        "name": tool_name,
+        "description": "Search mail",
+        "parameters": {"type": "object", "properties": {}},
+    }
+
+    for home in (home_a, home_b):
+        scoped_registry.register(
+            name=tool_name,
+            toolset=toolset_name,
+            schema=schema,
+            handler=lambda **_: None,
+            scope=hermes_home_key(home),
+        )
+    scoped_registry.register_toolset_alias("gmail", toolset_name)
+
+    scoped_registry.deregister(tool_name, scope=hermes_home_key(home_a))
+
+    assert scoped_registry.get_entry(
+        tool_name, scope=hermes_home_key(home_b)
+    ) is not None
+    assert scoped_registry.get_toolset_alias_target("gmail") == toolset_name
 
 
 def test_discovery_slot_is_claimed_per_profile(profiles):
