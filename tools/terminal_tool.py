@@ -34,6 +34,7 @@ Usage:
 """
 
 import importlib.util
+import hashlib
 import json
 import logging
 import os
@@ -1382,11 +1383,26 @@ def _resolve_container_task_id(task_id: Optional[str]) -> str:
     ``delegate_task`` children keep sharing the parent's container via the
     alias registry (``register_container_alias``).
     """
+    resolved_task_id = "default"
     if task_id and _has_isolation_overrides(task_id):
-        return task_id
-    if task_id and _docker_session_isolation_enabled():
-        return _resolve_container_alias(task_id)
-    return "default"
+        resolved_task_id = task_id
+    elif task_id and _docker_session_isolation_enabled():
+        resolved_task_id = _resolve_container_alias(task_id)
+
+    from agent.secret_scope import is_multiplex_active
+
+    if not is_multiplex_active():
+        return resolved_task_id
+
+    from hermes_constants import get_hermes_home
+
+    profile_home = str(Path(get_hermes_home()).expanduser().resolve())
+    backend = str(get_terminal_setting("TERMINAL_ENV", "local")).strip().lower()
+    backend = backend or "local"
+    scope_digest = hashlib.sha256(
+        f"{profile_home}\0{backend}".encode("utf-8")
+    ).hexdigest()[:16]
+    return f"{resolved_task_id}-{backend}-{scope_digest}"
 
 
 def resolve_task_overrides(task_id: Optional[str]) -> Dict[str, Any]:
