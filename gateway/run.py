@@ -18197,7 +18197,9 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 from agent.context_references import preprocess_context_references_async
                 from agent.model_metadata import get_model_context_length_async
 
-                _msg_cwd = os.environ.get("TERMINAL_CWD", os.path.expanduser("~"))
+                from tools.terminal_tool import get_terminal_setting
+
+                _msg_cwd = get_terminal_setting("TERMINAL_CWD", os.path.expanduser("~"))
                 _msg_config_ctx = None
                 _msg_cfg = None
                 _msg_model_cfg = {}
@@ -20191,13 +20193,15 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             _footer_line = ""
             try:
                 from gateway.runtime_footer import build_footer_line as _bfl
+                from tools.terminal_tool import get_terminal_setting
+
                 _footer_line = _bfl(
                     user_config=_load_gateway_config(),
                     platform_key=_platform_config_key(source.platform),
                     model=agent_result.get("model"),
                     context_tokens=agent_result.get("last_prompt_tokens", 0) or 0,
                     context_length=agent_result.get("context_length") or None,
-                    cwd=os.environ.get("TERMINAL_CWD", ""),
+                    cwd=get_terminal_setting("TERMINAL_CWD", ""),
                     turn_seconds=_turn_seconds,
                 )
             except Exception as _footer_err:

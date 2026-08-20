@@ -11051,11 +11051,13 @@ def build_worker_context(conn: sqlite3.Connection, task_id: str) -> str:
         lines.append(f"Tenant:   {task.tenant}")
     lines.append(f"Workspace: {task.workspace_kind} @ {task.workspace_path or '(unresolved)'}")
     if task.max_runtime_seconds is not None:
+        from tools.terminal_tool import get_terminal_setting
+
         terminal_timeout = _worker_terminal_timeout_env(
             task.max_runtime_seconds,
-            os.environ.get("TERMINAL_TIMEOUT"),
+            get_terminal_setting("TERMINAL_TIMEOUT"),
         )
-        effective_terminal_timeout = terminal_timeout or os.environ.get("TERMINAL_TIMEOUT")
+        effective_terminal_timeout = terminal_timeout or get_terminal_setting("TERMINAL_TIMEOUT")
         lines.append(f"Max runtime: {task.max_runtime_seconds}s")
         if effective_terminal_timeout:
             lines.append(f"Terminal timeout: {effective_terminal_timeout}s")
