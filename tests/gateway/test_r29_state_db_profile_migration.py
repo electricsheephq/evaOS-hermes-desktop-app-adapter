@@ -98,6 +98,28 @@ def _read_destination(path: Path, session_id: str) -> None:
         conn.close()
 
 
+def _seed_other_profile_with_scope(home: Path) -> None:
+    """Add a second valid profile row whose routing scope conflicts."""
+    from hermes_state import SessionDB
+
+    db = SessionDB(db_path=home / "state.db")
+    db._conn.execute(
+        "INSERT INTO sessions(id, source, started_at, profile_name) VALUES (?, ?, ?, ?)",
+        ("synthetic-other-session", "synthetic", 5.0, "other"),
+    )
+    db._conn.execute(
+        "INSERT INTO gateway_routing(scope, session_key, entry_json, updated_at) VALUES (?, ?, ?, ?)",
+        (
+            "conflicting-scope",
+            "agent:other:synthetic:dm:opaque",
+            json.dumps({"session_id": "synthetic-other-session"}),
+            6.0,
+        ),
+    )
+    db._conn.commit()
+    db.close()
+
+
 def test_copy_parity_fk_and_resume_regression(tmp_path, monkeypatch):
     home = _make_home(tmp_path, monkeypatch)
     session_id, _prompt_hash = _seed_root(home)
@@ -226,3 +248,20 @@ def test_routing_scope_variance_fails_closed(tmp_path, monkeypatch):
 
     with pytest.raises(migration.MigrationError, match="scope varies"):
         migration.run_migration(home)
+
+
+def test_cross_profile_scope_mismatch_prevalidated_before_destination_open(
+    tmp_path, monkeypatch
+):
+    home = _make_home(tmp_path, monkeypatch)
+    (home / "profiles" / "other").mkdir()
+    _seed_root(home)
+    _seed_other_profile_with_scope(home)
+
+    with pytest.raises(migration.MigrationError, match="scope varies"):
+        migration.run_migration(home)
+
+    # The source/profile scan must finish before either destination is opened
+    # writable.  This guards against a partial A-then-fail-on-B migration.
+    assert not (home / "profiles" / "fitness" / "state.db").exists()
+    assert not (home / "profiles" / "other" / "state.db").exists()

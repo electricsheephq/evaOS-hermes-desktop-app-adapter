@@ -629,26 +629,23 @@ def run_migration(
 
     profile_results: dict[str, Any] = {}
     with _open_readonly(source_path) as source:
-        source_by_profile: dict[str, dict[str, Snapshot]] = {}
+        # Read and validate every selected source/profile pair before opening
+        # any destination writable.  A late scope mismatch must leave even an
+        # alphabetically earlier profile untouched.
+        source_by_profile: dict[str, dict[str, Snapshot]] = {
+            profile: _source_profile_snapshots(source, profile)
+            for profile in profile_dirs
+        }
+        all_scopes = {
+            str(row.get("scope") or "")
+            for snapshots in source_by_profile.values()
+            for row in snapshots["gateway_routing"].rows
+        }
+        if len(all_scopes) > 1:
+            raise MigrationError("gateway_routing.scope varies per profile")
+
         for profile, profile_dir in profile_dirs.items():
-            source_snapshots = _source_profile_snapshots(source, profile)
-            source_by_profile[profile] = source_snapshots
-            # A multiplexed SessionStore uses one routing scope for the shared
-            # root index.  Different scopes would make an unchanged routing
-            # row land outside the destination store's lookup namespace, so
-            # fail closed before opening any destination writable.
-            profile_scopes = {
-                str(row.get("scope") or "")
-                for row in source_snapshots["gateway_routing"].rows
-            }
-            if profile_scopes:
-                all_scopes = {
-                    str(row.get("scope") or "")
-                    for snapshots in source_by_profile.values()
-                    for row in snapshots["gateway_routing"].rows
-                }
-                if len(all_scopes) > 1:
-                    raise MigrationError("gateway_routing.scope varies per profile")
+            source_snapshots = source_by_profile[profile]
             profile_result: dict[str, Any] = {
                 "destination": str(profile_dir / "state.db"),
                 "dry_run": dry_run,
