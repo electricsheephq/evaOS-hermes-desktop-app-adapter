@@ -32,6 +32,54 @@ def _write_profile(home: Path, slug: str, value: str, *, failing: bool = False) 
     return home
 
 
+def _write_import_time_override_profile(
+    home: Path,
+    value: str,
+    *,
+    target: str,
+) -> Path:
+    """Write one profile plugin that overrides a built-in during import."""
+    schema = {
+        "name": target,
+        "description": "scoped",
+        "parameters": {"type": "object", "properties": {}},
+    }
+    plugin_dir = home / "plugins" / "shared"
+    plugin_dir.mkdir(parents=True)
+    (plugin_dir / "plugin.yaml").write_text(
+        yaml.safe_dump({"name": "shared", "version": "0.1.0"}),
+        encoding="utf-8",
+    )
+    (plugin_dir / "__init__.py").write_text(
+        "from tools.registry import registry\n"
+        f"VALUE = {value!r}\n"
+        "def _handler(args, **kwargs):\n"
+        "    return VALUE\n"
+        "registry.register(\n"
+        f"    name={target!r},\n"
+        "    toolset='shared',\n"
+        f"    schema={schema!r},\n"
+        "    handler=_handler,\n"
+        "    override=True,\n"
+        ")\n"
+        "def register(ctx):\n"
+        "    pass\n",
+        encoding="utf-8",
+    )
+    (home / "config.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "plugins": {
+                    "enabled": ["shared"],
+                    "entries": {"shared": {"allow_tool_override": True}},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    return home
+
+
 @pytest.fixture(autouse=True)
 def _isolated_plugin_state(tmp_path, monkeypatch):
     from agent.secret_scope import is_multiplex_active, set_multiplex_active
@@ -170,3 +218,54 @@ def test_failed_import_is_not_reused_by_a_sibling_profile(tmp_path):
     assert managers[0].invoke_hook("transform_llm_output") == []
     assert _loaded(managers[1], "shared").error is None
     assert managers[1].invoke_hook("transform_llm_output") == ["b"]
+
+
+def test_profiles_apply_import_time_tool_override_policy_independently(tmp_path):
+    """The scoped override policy must exist before each module body executes."""
+    from gateway.run import _profile_runtime_scope
+    from tools.registry import registry
+
+    target = "r29_import_time_override_target"
+    registry.register(
+        name=target,
+        toolset="built_in",
+        schema={
+            "name": target,
+            "description": "built in",
+            "parameters": {"type": "object", "properties": {}},
+        },
+        handler=lambda args, **kwargs: "built-in",
+    )
+    managers = []
+    homes = [
+        _write_import_time_override_profile(tmp_path / "a", "a", target=target),
+        _write_import_time_override_profile(tmp_path / "b", "b", target=target),
+    ]
+    try:
+        for home in homes:
+            with _profile_runtime_scope(home):
+                plugins_mod.discover_plugins()
+                manager = plugins_mod.get_plugin_manager()
+                managers.append(manager)
+                entry = registry.get_entry(target)
+                assert entry is not None
+                assert entry.handler({}) == home.name
+
+        loaded_a = _loaded(managers[0], "shared").module
+        loaded_b = _loaded(managers[1], "shared").module
+        assert loaded_a is not loaded_b
+        assert loaded_a.__name__ != loaded_b.__name__
+        assert registry.snapshot_plugin_override_policy(
+            loaded_a.__name__, scope=managers[0].scope_key
+        ) is not None
+        assert registry.snapshot_plugin_override_policy(
+            loaded_b.__name__, scope=managers[1].scope_key
+        ) is not None
+    finally:
+        with registry._lock:
+            for manager in managers:
+                scoped = registry._scoped_tools.get(manager.scope_key, {})
+                scoped.pop(target, None)
+                if not scoped:
+                    registry._scoped_tools.pop(manager.scope_key, None)
+        registry.deregister(target)
