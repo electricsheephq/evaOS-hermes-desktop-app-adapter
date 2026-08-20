@@ -511,6 +511,25 @@ class TestMattermostMentionBehavior:
             call("users?in_channel=chan_456&page=1&per_page=200"),
         ]
 
+    @pytest.mark.asyncio
+    async def test_single_bot_channel_is_inert_after_own_mention_cleanup(self):
+        """A channel without peer bots preserves the admitted message bytes."""
+        self.adapter._api_get = AsyncMock(return_value=[
+            {"username": "hermes-bot", "is_bot": True},
+            {"username": "human-user", "is_bot": False},
+        ])
+        expected = "value  =  expression for @human-user"
+
+        await self.adapter._handle_ws_event(
+            self._make_event(f"@hermes-bot {expected}")
+        )
+
+        message = self.adapter.handle_message.call_args[0][0]
+        assert message.text == expected
+        self.adapter._api_get.assert_awaited_once_with(
+            "users?in_channel=chan_456&page=0&per_page=200"
+        )
+
 
 class TestMattermostChannelAndDMAllowlists:
     """Per-channel and DM sender allowlists in upstream config vocabulary.
@@ -840,4 +859,3 @@ async def test_mattermost_top_level_channel_post_is_thread_root():
     assert msg_event.source.thread_id == "top_post_123"
     assert msg_event.source.message_id == "top_post_123"
     assert msg_event.message_id == "top_post_123"
-
