@@ -45,7 +45,7 @@ from collections import OrderedDict
 from contextvars import copy_context
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
-from typing import Awaitable, Callable, Dict, Optional, Any, List, Tuple, Union, cast
+from typing import Awaitable, Callable, Dict, Optional, Any, List, Set, Tuple, Union, cast
 
 from agent.async_utils import consume_detached_task_result, safe_schedule_threadsafe
 from agent.conversation_compression import (
@@ -2077,6 +2077,15 @@ class SecondaryPortBindingConfigError(MultiplexConfigError):
     """A secondary profile conflicts with the multiplexer's shared listener."""
 
 
+class ProfileConnectivityError(MultiplexConfigError):
+    """A served profile did not come online and the operator demanded it.
+
+    Only raised when ``gateway.require_all_profiles_connected`` is on: adapter
+    failures are otherwise logged and skipped, which is right for one profile
+    and wrong once one process serves several.
+    """
+
+
 def _multiplex_profile_homes(config: object) -> list[tuple[str, "Path"]]:
     """Return the authoritative profile set for one multiplex gateway config."""
     from hermes_cli.profiles import profiles_to_serve
@@ -2089,11 +2098,27 @@ def _multiplex_profile_homes(config: object) -> list[tuple[str, "Path"]]:
     )
 
 
+def _load_profile_terminal_config() -> Dict[str, str]:
+    """Resolve the active profile's terminal config into terminal env vars."""
+    try:
+        from hermes_cli.config import apply_terminal_config_to_env, read_raw_config
+
+        raw_config = read_raw_config()
+        if not isinstance(raw_config.get("terminal"), dict):
+            return {}
+        return apply_terminal_config_to_env(
+            env={}, config=raw_config, override=True
+        )
+    except Exception:
+        logger.debug("Could not load profile terminal config", exc_info=True)
+        return {}
+
+
 @_contextmanager
 def _profile_runtime_scope(profile_home: "Path"):
     """Scope config/skills/memory AND credentials to a profile for one turn.
 
-    Combines the two seams the multiplexer needs:
+    Combines the three seams the multiplexer needs:
       1. ``set_hermes_home_override`` — redirects ``get_hermes_home()`` (config,
          skills, memory, SOUL, sessions) to the profile's home. Contextvar, so
          it propagates into the agent worker thread via ``copy_context()``.
@@ -2101,6 +2126,8 @@ def _profile_runtime_scope(profile_home: "Path"):
          authoritative credential source, so ``get_secret`` reads this profile's
          keys and never the process-global ``os.environ`` (which in a
          multiplexer may hold another profile's values).
+      3. ``set_terminal_config_scope`` — redirects terminal.* configuration to
+         this profile instead of the process-global terminal environment.
 
     Only used on the multiplexed inbound path. Single-profile gateways never
     enter this scope, so their behavior is unchanged. Loading the profile's
@@ -2115,15 +2142,44 @@ def _profile_runtime_scope(profile_home: "Path"):
         reset_secret_scope,
     )
     from hermes_cli.env_loader import hydrate_profile_secret_sources
+    from tools.terminal_tool import (
+        reset_terminal_config_scope,
+        set_terminal_config_scope,
+    )
 
     home_token = set_hermes_home_override(str(profile_home))
     hydrate_profile_secret_sources(Path(profile_home))
+    terminal_token = set_terminal_config_scope(_load_profile_terminal_config())
     secret_token = set_secret_scope(build_profile_secret_scope(Path(profile_home)))
     try:
         yield
     finally:
         reset_secret_scope(secret_token)
+        reset_terminal_config_scope(terminal_token)
         reset_hermes_home_override(home_token)
+
+
+def _prepare_mcp_registry_for_gateway_agent() -> None:
+    """Complete profile-scoped MCP discovery before an agent snapshots tools."""
+    from agent.secret_scope import is_multiplex_active
+
+    if not is_multiplex_active():
+        return
+    try:
+        from tools.mcp_tool import discover_mcp_tools
+
+        discover_mcp_tools()
+    except Exception as exc:
+        logger.warning(
+            "Profile-scoped MCP discovery failed before agent build: %s", exc
+        )
+        raise
+
+
+def _create_gateway_agent(agent_factory, **kwargs):
+    """Build an agent only after scoped MCP discovery completes."""
+    _prepare_mcp_registry_for_gateway_agent()
+    return agent_factory(**kwargs)
 
 
 def load_gateway_config_for_runner() -> "GatewayConfig":
@@ -2514,6 +2570,7 @@ from gateway.config import (
 )
 from gateway.session import (
     AsyncSessionStore,
+    MultiplexSessionCollisionError,
     SessionEntry,
     SessionStore,
     SessionSource,
@@ -5604,7 +5661,8 @@ class TurnRunner:
 
         if agent is None:
             # Config changed or first message — create fresh agent
-            agent = ctx.AIAgent(
+            agent = _create_gateway_agent(
+                ctx.AIAgent,
                 model=turn_route["model"],
                 **turn_route["runtime"],
                 **_checkpoint_agent_kwargs(ctx.user_config),
@@ -5617,6 +5675,12 @@ class TurnRunner:
                 prefill_messages=self._runner._prefill_messages or None,
                 reasoning_config=reasoning_config,
                 service_tier=self._runner._service_tier,
+                fast_auto_on_seconds=cfg_get(
+                    ctx.user_config,
+                    "agent",
+                    "fast_auto_on_seconds",
+                    default=60,
+                ),
                 request_overrides=turn_route.get("request_overrides"),
                 providers_allowed=pr.get("only"),
                 providers_ignored=pr.get("ignore"),
@@ -5730,6 +5794,16 @@ class TurnRunner:
         agent.event_callback = ctx._event_callback_sync
         agent.reasoning_config = reasoning_config
         agent.service_tier = self._runner._service_tier
+        from agent.fast_mode import normalize_fast_auto_on_seconds
+
+        agent.fast_auto_on_seconds = normalize_fast_auto_on_seconds(
+            cfg_get(
+                ctx.user_config,
+                "agent",
+                "fast_auto_on_seconds",
+                default=60,
+            )
+        )
         agent.request_overrides = turn_route.get("request_overrides") or {}
         # Must-deliver notes for THIS turn ride the current user message
         # (api_content sidecar), never the system prompt: staged by
@@ -6687,6 +6761,12 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         # sites are untouched when multiplexing is off (this dict is empty).
         # Populated by _start_secondary_profile_adapters().
         self._profile_adapters: Dict[str, Dict[Platform, BasePlatformAdapter]] = {}
+        # Per-profile startup failures, read only by
+        # _assert_all_profiles_connected(); empty unless something failed.
+        self._profile_startup_failures: Dict[str, List[str]] = {}
+        # Profiles served only through the shared Relay ingress, which end
+        # startup with zero adapters by design rather than by failure.
+        self._profile_relay_served: Set[str] = set()
         self._warn_if_docker_media_delivery_is_risky()
         _gateway_runner_ref = _weakref.ref(self)
 
@@ -8047,7 +8127,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         }
 
         service_tier = getattr(self, "_service_tier", None)
-        if not service_tier:
+        if not service_tier or service_tier in {"auto", "cold"}:
             route["request_overrides"] = {}
             return route
 
@@ -9324,7 +9404,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
     ) -> None:
         """Set or clear the session-scoped /fast override.
 
-        ``service_tier`` is "priority" or None (explicit normal). Pass
+        ``service_tier`` is "priority", "auto", "cold", or None. Pass
         ``clear=True`` to remove the override entirely (fall back to config).
         """
         if not session_key:
@@ -9342,7 +9422,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         """Load Priority Processing setting from config.yaml.
 
         Reads agent.service_tier from config.yaml. Accepted values mirror the CLI:
-        "fast"/"priority"/"on" => "priority", while "normal"/"off" disables it.
+        "fast"/"priority"/"on" => "priority"; "auto"/"cold" are policies.
         Returns None when unset or unsupported.
         """
         cfg = _load_gateway_runtime_config()
@@ -9353,6 +9433,8 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             return None
         if value in {"fast", "priority", "on"}:
             return "priority"
+        if value in {"auto", "cold"}:
+            return value
         logger.warning("Unknown service_tier '%s', ignoring", raw)
         return None
 
@@ -12317,7 +12399,34 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             )
         if await self._abort_startup_if_shutdown_requested():
             return True
-        
+
+        # Multiplexed adapters must not connect while two profile namespaces
+        # point at one session: from the first inbound message the two share a
+        # cache, a transcript, and a turn lease. Load the routing index and
+        # fail closed with a redacted operator error before any platform can
+        # receive traffic. Covers the root/legacy routing scope — see
+        # SessionStore.assert_no_cross_profile_session_aliases.
+        if getattr(self.config, "multiplex_profiles", False):
+            try:
+                await (
+                    self.async_session_store
+                    .assert_no_cross_profile_session_aliases()
+                )
+            except MultiplexSessionCollisionError as exc:
+                reason = str(exc)
+                logger.error("Gateway multiplex session collision: %s", reason)
+                try:
+                    from gateway.status import write_runtime_status
+                    write_runtime_status(
+                        gateway_state="startup_failed",
+                        exit_reason="multiplex_session_collision",
+                    )
+                except Exception:
+                    pass
+                self._exit_code = GATEWAY_FATAL_CONFIG_EXIT_CODE
+                self._request_clean_exit(reason)
+                return True
+
         # Warn if no user allowlists are configured and open access is not opted in
         _builtin_allowed_vars = (
             "TELEGRAM_ALLOWED_USERS", "DISCORD_ALLOWED_USERS",
@@ -14961,10 +15070,13 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 if isinstance(retry_claim, tuple):
                     claimed[retry_claim] = active
 
+        self._profile_startup_failures = {}
         profile_homes = _multiplex_profile_homes(self.config)
+        served_secondaries: List[str] = []
         for profile_name, profile_home in profile_homes:
             if profile_name == active:
                 continue  # handled by the primary startup loop
+            served_secondaries.append(profile_name)
             try:
                 connected += await self._start_one_profile_adapters(
                     profile_name, profile_home, claimed
@@ -14975,6 +15087,9 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     profile_name,
                     e,
                 )
+                self._record_profile_startup_failure(
+                    profile_name, "*", f"port-binding config error: {e}"
+                )
             except MultiplexConfigError:
                 raise
             except Exception as e:
@@ -14982,6 +15097,11 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     "Failed to start adapters for profile '%s': %s",
                     profile_name, e, exc_info=True,
                 )
+                self._record_profile_startup_failure(
+                    profile_name, "*", f"profile startup raised {e}"
+                )
+
+        self._assert_all_profiles_connected(served_secondaries, active)
 
         # Record the authoritative served set in runtime status for `hermes status`.
         # "Served" means eligible for shared routing, HTTP prefixes, cron, and
@@ -15010,11 +15130,99 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
 
         return connected
 
+    def _assert_all_profiles_connected(
+        self, served_secondaries: List[str], active: str = ""
+    ) -> None:
+        """Refuse to finish startup with a served profile offline.
+
+        No-op unless ``gateway.require_all_profiles_connected`` is set; the
+        default log-and-continue behavior is kept for everyone else. A profile
+        fails the check when it recorded any adapter failure *or* ended startup
+        with zero connected adapters.
+
+        The *active* profile is covered too when its name is passed; its
+        adapters come up in the primary startup loop, so its state is read from
+        ``self.adapters`` and ``self._failed_platforms`` instead. Leaving it out
+        would let a multiplexed host pass this gate with the active profile
+        offline. A Relay-only profile is exempt from the zero-adapters rule:
+        multiplex mode skips its Relay adapter by design (see
+        ``_start_one_profile_adapters``), so an empty map is expected.
+        """
+        # Only a literal True arms this. Its effect is to ABORT startup, so it
+        # must not be armable by a config object whose attribute access returns
+        # a truthy sentinel rather than a stored value (duck-typed configs and
+        # MagicMock test runners both do). GatewayConfig stores a real bool
+        # here via _coerce_bool, so the strict check is free on that path.
+        if getattr(self.config, "require_all_profiles_connected", False) is not True:
+            return
+
+        recorded = getattr(self, "_profile_startup_failures", None) or {}
+        relay_served = getattr(self, "_profile_relay_served", None) or set()
+        no_adapter_reason = (
+            "no platform adapter connected (check that this profile's "
+            "config.yaml enables a platform and its credentials are present)"
+        )
+        offline: Dict[str, List[str]] = {}
+        for profile_name in served_secondaries:
+            reasons = list(recorded.get(profile_name, ()))
+            if (
+                not self._profile_adapters.get(profile_name)
+                and profile_name not in relay_served
+            ):
+                reasons.append(no_adapter_reason)
+            if reasons:
+                offline[profile_name] = reasons
+
+        checked = len(served_secondaries) + (1 if active else 0)
+        if active:
+            active_reasons = [
+                f"{platform.value}: queued for background reconnection"
+                for platform in getattr(self, "_failed_platforms", {})
+            ]
+            if not self.adapters and active not in relay_served:
+                active_reasons.append(no_adapter_reason)
+            if active_reasons:
+                offline[active] = active_reasons
+
+        if not offline:
+            logger.info(
+                "[MULTIPLEX] require_all_profiles_connected: all %d served "
+                "profile(s) connected",
+                checked,
+            )
+            return
+
+        detail = "; ".join(
+            f"{name} ({', '.join(reasons)})" for name, reasons in sorted(offline.items())
+        )
+        raise ProfileConnectivityError(
+            f"gateway.require_all_profiles_connected is on and "
+            f"{len(offline)} of {checked} served profile(s) did "
+            f"not come online: {detail}. Fix the profile(s) or turn the flag off."
+        )
+
+    def _record_profile_startup_failure(
+        self, profile_name: str, platform_value: str, reason: str
+    ) -> None:
+        """Note that one of *profile_name*'s platforms did not come online.
+
+        Recorded unconditionally so the log-and-continue path and the
+        assertion cannot drift apart; only consulted when the flag is on.
+        """
+        failures = getattr(self, "_profile_startup_failures", None)
+        if failures is None:
+            failures = {}
+            self._profile_startup_failures = failures
+        failures.setdefault(profile_name, []).append(f"{platform_value}: {reason}")
+
     async def _start_one_profile_adapters(
         self, profile_name: str, profile_home: "Path", claimed: Dict[tuple, str]
     ) -> int:
         """Create+connect one profile's adapters under its runtime scope."""
         from gateway.config import load_gateway_config
+
+        def _record_failure(platform_value: str, reason: str) -> None:
+            self._record_profile_startup_failure(profile_name, platform_value, reason)
 
         with _profile_runtime_scope(profile_home):
             profile_runtime_cfg = _load_gateway_runtime_config()
@@ -15061,6 +15269,13 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 getattr(self.config, "multiplex_profiles", False)
                 and platform is Platform.RELAY
             ):
+                # Note the skip: a Relay-only profile ends this loop with zero
+                # adapters by design, which the connectivity assertion must
+                # tell apart from "everything failed".
+                self._profile_relay_served = (
+                    getattr(self, "_profile_relay_served", None) or set()
+                )
+                self._profile_relay_served.add(profile_name)
                 continue
             try:
                 with _profile_runtime_scope(profile_home):
@@ -15073,6 +15288,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     e,
                     exc_info=True,
                 )
+                _record_failure(platform.value, f"adapter creation raised {e}")
                 continue
             if not adapter:
                 logger.warning(
@@ -15080,6 +15296,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     profile_name,
                     platform.value,
                 )
+                _record_failure(platform.value, "adapter creation returned None")
                 continue
 
             # Same-token conflict detection — refuse a duplicate poll.
@@ -15109,6 +15326,10 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     # resources to clean up. Calling disconnect here can mutate
                     # the shared platform state and, for a same-credential Photon
                     # adapter, shut down the primary profile's live sidecar.
+                    _record_failure(
+                        platform.value,
+                        f"same credential already claimed by profile '{owner}'",
+                    )
                     continue
 
             listener_claim = self._adapter_listener_claim(platform, adapter)
@@ -15142,6 +15363,10 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     )
                     # Like credential conflicts, this adapter never connected
                     # and owns no resources that should be disconnected.
+                    _record_failure(
+                        platform.value,
+                        f"sidecar {bind}:{port} already claimed by profile '{owner}'",
+                    )
                     continue
 
             self._configure_profile_adapter(adapter, profile_name, platform)
@@ -15161,9 +15386,11 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     logger.info("✓ %s connected (profile: %s)", platform.value, profile_name)
                 else:
                     logger.warning("✗ %s failed to connect (profile: %s)", platform.value, profile_name)
+                    _record_failure(platform.value, "failed to connect")
                     await self._safe_adapter_disconnect(adapter, platform)
             except Exception as e:
                 logger.error("✗ %s error (profile: %s): %s", platform.value, profile_name, e)
+                _record_failure(platform.value, f"connect raised {e}")
                 await self._safe_adapter_disconnect(adapter, platform)
         return connected
 
@@ -17283,6 +17510,9 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         if canonical == "codex-runtime":
             return await self._handle_codex_runtime_command(event)
 
+        if canonical == "login":
+            return await self._handle_login_command(event)
+
         if canonical == "personality":
             return await self._handle_personality_command(event)
 
@@ -18173,7 +18403,9 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 from agent.context_references import preprocess_context_references_async
                 from agent.model_metadata import get_model_context_length_async
 
-                _msg_cwd = os.environ.get("TERMINAL_CWD", os.path.expanduser("~"))
+                from tools.terminal_tool import get_terminal_setting
+
+                _msg_cwd = get_terminal_setting("TERMINAL_CWD", os.path.expanduser("~"))
                 _msg_config_ctx = None
                 _msg_cfg = None
                 _msg_model_cfg = {}
@@ -20167,13 +20399,15 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             _footer_line = ""
             try:
                 from gateway.runtime_footer import build_footer_line as _bfl
+                from tools.terminal_tool import get_terminal_setting
+
                 _footer_line = _bfl(
                     user_config=_load_gateway_config(),
                     platform_key=_platform_config_key(source.platform),
                     model=agent_result.get("model"),
                     context_tokens=agent_result.get("last_prompt_tokens", 0) or 0,
                     context_length=agent_result.get("context_length") or None,
-                    cwd=os.environ.get("TERMINAL_CWD", ""),
+                    cwd=get_terminal_setting("TERMINAL_CWD", ""),
                     turn_seconds=_turn_seconds,
                 )
             except Exception as _footer_err:
@@ -20934,6 +21168,137 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             if time.time() - requested_at > 300:
                 return False
         return True
+
+
+    async def _handle_login_command(self, event: MessageEvent) -> str:
+        """Add a Codex account from an authorized private gateway session."""
+        source = event.source
+        provider = event.get_command_args().strip().lower() or "codex"
+        if provider not in {"codex", "openai-codex", "openai_codex"}:
+            return "Usage: /login codex"
+
+        if (source.chat_type or "").strip().lower() not in {
+            "",
+            "dm",
+            "direct",
+            "private",
+        }:
+            return (
+                "For safety, Codex login codes are only sent in a private "
+                "conversation. DM this bot `/login codex` to add an account."
+            )
+
+        adapter = self._adapter_for_source(source)
+        if adapter is None:
+            return "Codex login could not find a private response path for this conversation."
+
+        # When command roles are configured, only an explicit admin may add
+        # credentials. Resolve roles from the source adapter so a multiplexed
+        # profile cannot inherit the primary profile's command policy.
+        from gateway.slash_access import policy_for_source
+
+        policy_config = self.config
+        adapter_config = getattr(adapter, "config", None)
+        if adapter_config is not None:
+            from types import SimpleNamespace
+
+            policy_config = SimpleNamespace(
+                platforms={source.platform: adapter_config},
+            )
+        policy = policy_for_source(policy_config, source)
+        if not policy.is_admin(source.user_id):
+            return "⛔ /login is admin-only because it adds Hermes credentials."
+
+        if getattr(self.config, "multiplex_profiles", False):
+            profile_home = self._resolve_profile_home_for_source(source)
+        else:
+            from hermes_constants import get_hermes_home
+
+            profile_home = get_hermes_home()
+
+        flow_key = (
+            str(profile_home),
+            source.platform.value if source.platform else "",
+            str(source.chat_id or ""),
+            str(source.thread_id or ""),
+            str(source.user_id or ""),
+        )
+        active_flows = getattr(self, "_active_codex_login_flows", None)
+        if active_flows is None:
+            active_flows = set()
+            self._active_codex_login_flows = active_flows
+        active_workers = getattr(self, "_active_codex_login_workers", None)
+        if active_workers is None:
+            active_workers = {}
+            self._active_codex_login_workers = active_workers
+        if flow_key in active_flows:
+            return (
+                "A Codex login code is already active for this conversation. "
+                "Complete it, or wait for it to expire before requesting a new one."
+            )
+
+        loop = asyncio.get_running_loop()
+        metadata = self._thread_metadata_for_source(
+            source,
+            self._reply_anchor_for_event(event),
+        )
+
+        def _send_verification(prompt) -> None:
+            minutes = max(1, round(prompt.expires_in_seconds / 60))
+            message = (
+                "Open this link in your browser and enter the Codex pairing code:\n\n"
+                f"{prompt.verification_url}\n\n"
+                f"Code: `{prompt.user_code}`\n\n"
+                f"The code expires in about {minutes} minutes. Never share it."
+            )
+            future = asyncio.run_coroutine_threadsafe(
+                adapter.send(str(source.chat_id), message, metadata=metadata),
+                loop,
+            )
+            result = future.result(timeout=30)
+            if getattr(result, "success", True) is False:
+                raise RuntimeError("private device-code delivery failed")
+
+        async def _run_login_worker() -> bool:
+            from hermes_cli.auth import login_openai_codex_to_pool
+
+            try:
+                if getattr(self.config, "multiplex_profiles", False):
+                    with _profile_runtime_scope(profile_home):
+                        await asyncio.to_thread(
+                            login_openai_codex_to_pool,
+                            _send_verification,
+                        )
+                else:
+                    await asyncio.to_thread(
+                        login_openai_codex_to_pool,
+                        _send_verification,
+                    )
+                return True
+            except Exception:
+                logger.warning(
+                    "Codex device-code login failed for %s:%s",
+                    source.platform.value if source.platform else "?",
+                    source.user_id,
+                )
+                return False
+            finally:
+                active_flows.discard(flow_key)
+                current_worker = asyncio.current_task()
+                if active_workers.get(flow_key) is current_worker:
+                    active_workers.pop(flow_key, None)
+
+        active_flows.add(flow_key)
+        worker = asyncio.create_task(_run_login_worker())
+        active_workers[flow_key] = worker
+
+        # Shield the owned worker so cancelling this message handler does not
+        # release the dedupe key while asyncio.to_thread continues running.
+        # Handler cancellation still propagates to the caller immediately.
+        completed = await asyncio.shield(worker)
+        if completed:
+            return "Codex login complete. The account was added to this profile."
+        return "Codex login did not complete. Send `/login codex` to request a new code."
 
 
 
@@ -22258,6 +22623,12 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     disabled_toolsets=disabled_toolsets,
                     reasoning_config=reasoning_config,
                     service_tier=self._service_tier,
+                    fast_auto_on_seconds=cfg_get(
+                        user_config,
+                        "agent",
+                        "fast_auto_on_seconds",
+                        default=60,
+                    ),
                     request_overrides=turn_route.get("request_overrides"),
                     providers_allowed=pr.get("only"),
                     providers_ignored=pr.get("ignore"),
@@ -23077,28 +23448,69 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         wrapper can invoke the same path whether the user confirmed via
         button, text reply, or has the confirm gate disabled.
         """
-        loop = asyncio.get_running_loop()
+        multiplex = bool(
+            getattr(getattr(self, "config", None), "multiplex_profiles", False)
+        )
+        target_profile = str(getattr(event.source, "profile", "") or "").strip()
+        target_namespace = (
+            "main" if target_profile in {"", "default"} else target_profile
+        )
+
+        if multiplex:
+            profile_home = self._resolve_profile_home_for_source(event.source)
+            with _profile_runtime_scope(profile_home):
+                return await self._execute_mcp_reload_in_current_scope(
+                    event,
+                    multiplex=True,
+                    target_namespace=target_namespace,
+                )
+
+        return await self._execute_mcp_reload_in_current_scope(
+            event,
+            multiplex=False,
+            target_namespace=target_namespace,
+        )
+
+    async def _execute_mcp_reload_in_current_scope(
+        self,
+        event: MessageEvent,
+        *,
+        multiplex: bool,
+        target_namespace: str,
+    ) -> str:
         try:
-            from tools.mcp_tool import shutdown_mcp_servers, discover_mcp_tools, _servers, _lock
+            from tools.mcp_tool import (
+                discover_mcp_tools,
+                get_mcp_server_inventory_for_current_profile,
+                shutdown_mcp_servers,
+                shutdown_mcp_servers_for_current_scope,
+            )
 
             # Capture old server names before shutdown
-            with _lock:
-                old_servers = set(_servers.keys())
+            old_servers, _ = get_mcp_server_inventory_for_current_profile()
 
             # Read new config before shutting down, so we know what will be added/removed
             # Shutdown existing connections
-            await loop.run_in_executor(None, shutdown_mcp_servers)
+            shutdown = (
+                shutdown_mcp_servers_for_current_scope
+                if multiplex
+                else shutdown_mcp_servers
+            )
+            await self._run_in_executor_with_context(shutdown)
 
             # Reconnect by discovering tools (reads config.yaml fresh)
-            new_tools = await loop.run_in_executor(None, discover_mcp_tools)
+            new_tools = await self._run_in_executor_with_context(
+                discover_mcp_tools
+            )
 
             # Compute what changed
-            with _lock:
-                connected_servers = set(_servers.keys())
+            available_servers, connected_servers = (
+                get_mcp_server_inventory_for_current_profile()
+            )
 
-            added = connected_servers - old_servers
-            removed = old_servers - connected_servers
-            reconnected = connected_servers & old_servers
+            added = available_servers - old_servers
+            removed = old_servers - available_servers
+            reconnected = available_servers & old_servers & connected_servers
 
             lines = [t("gateway.reload_mcp.header")]
             if reconnected:
@@ -23107,10 +23519,10 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 lines.append(t("gateway.reload_mcp.added", names=", ".join(sorted(added))))
             if removed:
                 lines.append(t("gateway.reload_mcp.removed", names=", ".join(sorted(removed))))
-            if not connected_servers:
+            if not available_servers:
                 lines.append(t("gateway.reload_mcp.none_connected"))
             else:
-                lines.append(t("gateway.reload_mcp.tools_available", tools=len(new_tools), servers=len(connected_servers)))
+                lines.append(t("gateway.reload_mcp.tools_available", tools=len(new_tools), servers=len(available_servers)))
 
             # Refresh cached agents so existing sessions see new MCP tools on
             # their next turn — without this, the user has to `/new` (which
@@ -23125,6 +23537,10 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 if _cache_lock is not None and _cache:
                     with _cache_lock:
                         for _sess_key, _entry in list(_cache.items()):
+                            if multiplex and not str(_sess_key).startswith(
+                                f"agent:{target_namespace}:"
+                            ):
+                                continue
                             try:
                                 _agent = _entry[0] if isinstance(_entry, tuple) else _entry
                             except Exception:
@@ -24156,6 +24572,24 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         _adapters = getattr(self, "adapters", None) or {}
         _adapter = _adapters.get(context.source.platform)
         _async_delivery = getattr(_adapter, "supports_async_delivery", True)
+        _session_cwd: str | None = ""
+        if getattr(getattr(self, "config", None), "multiplex_profiles", False):
+            # The caller has already entered _profile_runtime_scope for the
+            # routed profile. Read terminal.cwd from that scoped config and pin
+            # it in the task-local session context. Without this, secondary
+            # profiles inherit the launch profile's process-wide TERMINAL_CWD,
+            # so context discovery can load another profile's AGENTS.md.
+            _session_cwd = None
+            try:
+                from tools.terminal_tool import get_terminal_setting
+
+                _session_cwd = get_terminal_setting("TERMINAL_CWD", None)
+            except Exception:
+                logger.warning(
+                    "Could not resolve routed profile terminal.cwd; "
+                    "session context will mask the process default cwd",
+                    exc_info=True,
+                )
         return set_session_vars(
             platform=context.source.platform.value,
             chat_id=context.source.chat_id,
@@ -24171,6 +24605,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             session_key=context.session_key,
             message_id=str(context.source.message_id) if context.source.message_id else "",
             profile=getattr(context.source, "profile", "") or "",
+            cwd=_session_cwd,
             async_delivery=_async_delivery,
             cron_session="",
         )
@@ -30460,6 +30895,7 @@ async def start_gateway(config: Optional[GatewayConfig] = None, replace: bool = 
                 return False
             try:
                 from tools.mcp_tool import shutdown_mcp_servers
+                # Deliberately global: this is process/gateway teardown.
                 shutdown_mcp_servers()
             except Exception:
                 pass
@@ -30619,6 +31055,7 @@ async def start_gateway(config: Optional[GatewayConfig] = None, replace: bool = 
     # Close MCP server connections
     try:
         from tools.mcp_tool import shutdown_mcp_servers
+        # Deliberately global: the gateway process is exiting.
         shutdown_mcp_servers()
     except Exception:
         pass

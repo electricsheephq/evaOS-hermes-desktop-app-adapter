@@ -106,6 +106,47 @@ class TestGetProfileDir:
         result = get_profile_dir("default")
         assert result == tmp_path / ".hermes"
 
+    def test_named_profile_is_normalized_and_contained(self, profile_env):
+        # Valid names still resolve, and title-case input is normalized to the
+        # lowercase on-disk id under profiles/.
+        tmp_path = profile_env
+        result = get_profile_dir("Coder")
+        assert result == tmp_path / ".hermes" / "profiles" / "coder"
+
+    @pytest.mark.parametrize(
+        "name", ["..", "../x", "../../.bashrc", "a/b", "/tmp/escape", "has space"]
+    )
+    def test_unsafe_profile_name_cannot_escape_profiles_root(self, profile_env, name):
+        # Hardening: a malformed or relative profile name must be rejected
+        # before it is joined into the profiles root, so it can never resolve
+        # outside profiles/ (e.g. get_profile_dir("..") used to return the
+        # profiles-root parent).
+        with pytest.raises(ValueError):
+            get_profile_dir(name)
+
+
+class TestProfileExists:
+    """Tests for profile_exists()."""
+
+    def test_default_always_exists(self, profile_env):
+        assert profiles.profile_exists("default") is True
+
+    def test_existing_named_profile_found_and_normalized(self, profile_env):
+        create_profile("coder", no_alias=True)
+        assert profiles.profile_exists("coder") is True
+        assert profiles.profile_exists("Coder") is True
+
+    def test_missing_named_profile_is_false(self, profile_env):
+        assert profiles.profile_exists("ghost") is False
+
+    @pytest.mark.parametrize(
+        "name", [None, "", "..", "../x", "a/b", "has space", object()]
+    )
+    def test_invalid_name_does_not_confirm(self, profile_env, name):
+        # Must never report an out-of-tree directory as an existing profile;
+        # profile-routing probes fail closed instead of raising into startup.
+        assert profiles.profile_exists(name) is False
+
 
 # ===================================================================
 # TestCreateProfile
@@ -1123,5 +1164,4 @@ class TestResolveProfileEnvSpelling:
         # No HERMES_HOME: the platform default root applies (existing contract).
         monkeypatch.delenv("HERMES_HOME", raising=False)
         assert Path(resolve_profile_env("default")) == _get_default_hermes_home()
-
 

@@ -329,6 +329,14 @@ def _resolve_restart_drain_timeout() -> float:
         return DEFAULT_GATEWAY_RESTART_DRAIN_TIMEOUT
 
 
+def _initialize_managed_profile_scope() -> None:
+    """Bind dashboard authorization to the configured multiplex topology."""
+    from agent.secret_scope import set_multiplex_active
+    from gateway.config import load_gateway_config
+
+    set_multiplex_active(bool(load_gateway_config().multiplex_profiles))
+
+
 def _eager_reconcile_own_session_db() -> None:
     """One writable open of this process's own state.db at startup.
 
@@ -385,6 +393,7 @@ async def _lifespan(app: "FastAPI"):
     # run_in_executor still froze the event loop for 15-22 s, causing the
     # Desktop's 10-second WebSocket ready-probe to time out (GH-73083).
     _warm_gateway_module()
+    _initialize_managed_profile_scope()
 
     # Desktop-spawned backends (HERMES_DESKTOP=1) fire cron jobs themselves,
     # since the app has no gateway running the scheduler. Server `hermes
@@ -854,6 +863,92 @@ async def _token_auth_seam(request: Request, call_next):
     return await token_auth_middleware(request, call_next)
 
 
+_MANAGED_NON_ADMIN_BLOCKED_PREFIXES = (
+    "/api/console",
+    "/api/pty",
+    "/api/fs/",
+    "/api/process",
+    "/api/ssh/",
+    "/api/system",
+    "/api/terminal",
+    "/api/shell",
+    "/api/update",
+    "/api/hermes/update",
+)
+
+
+def _managed_websocket_profile(
+    ws: WebSocket,
+    requested_profile: str | None,
+    *,
+    admin_required: bool = False,
+) -> str | None:
+    """Resolve a managed WebSocket's profile before accepting the socket."""
+    from hermes_cli.profile_scope import (
+        managed_profile_context,
+        principal_from_headers,
+        require_profile,
+    )
+
+    principal = principal_from_headers(ws.headers)
+    if admin_required and principal is not None and not principal.admin:
+        raise PermissionError("administrator access required")
+    with managed_profile_context(principal):
+        return require_profile(requested_profile)
+
+
+@app.middleware("http")
+async def evaos_managed_profile_scope_middleware(request: Request, call_next):
+    """Bind VM-proxy-authenticated evaOS profile authority to this request."""
+    from hermes_cli.profile_scope import (
+        managed_profile_context,
+        principal_from_headers,
+        require_profile,
+    )
+
+    try:
+        principal = principal_from_headers(request.headers)
+    except ValueError:
+        return JSONResponse({"detail": "invalid managed profile scope"}, status_code=403)
+    if principal is None:
+        try:
+            require_profile(None)
+        except PermissionError:
+            return JSONResponse({"detail": "profile is not authorized"}, status_code=403)
+        return await call_next(request)
+
+    with managed_profile_context(principal):
+        try:
+            requested_profile = (request.query_params.get("profile") or "").strip()
+            effective_profile = principal.primary_profile
+            if requested_profile:
+                selected = require_profile(requested_profile, allow_selectors={"all"})
+                if selected != "all":
+                    effective_profile = selected
+            profile_route = re.match(r"^/api/profiles/([^/]+)", request.url.path)
+            if profile_route and profile_route.group(1) not in {"active", "sessions"}:
+                effective_profile = require_profile(profile_route.group(1))
+        except PermissionError:
+            return JSONResponse({"detail": "profile is not authorized"}, status_code=403)
+
+    with managed_profile_context(principal, effective_profile=effective_profile):
+        if not principal.admin:
+            path = request.url.path
+            manages_profiles = (
+                path == "/api/profiles" and request.method != "GET"
+            ) or (
+                path.startswith("/api/profiles/")
+                and request.method not in {"GET", "HEAD"}
+            )
+            if manages_profiles or path.startswith(_MANAGED_NON_ADMIN_BLOCKED_PREFIXES):
+                return JSONResponse(
+                    {"detail": "administrator access required"},
+                    status_code=403,
+                )
+
+        return await call_next(request)
+
+
 # ---------------------------------------------------------------------------
 # Dashboard component health — in-process error/self-test counters that feed
 # the ``components`` dict on ``/api/status``.  That endpoint is in
@@ -1151,8 +1246,12 @@ _SCHEMA_OVERRIDES: Dict[str, Dict[str, Any]] = {
     },
     "agent.service_tier": {
         "type": "select",
-        "description": "API service tier (OpenAI/Anthropic)",
-        "options": ["", "auto", "default", "flex"],
+        "description": "Speed policy (normal, fast, bounded auto, or first-turn cold)",
+        "options": ["normal", "fast", "auto", "cold"],
+    },
+    "agent.fast_auto_on_seconds": {
+        "type": "number",
+        "description": "Fast window in seconds for auto/cold policies",
     },
     "delegation.reasoning_effort": {
         "type": "select",
@@ -5308,14 +5407,21 @@ async def speak_stream_ws(ws: "WebSocket") -> None:
     if not _ws_request_is_allowed(ws):
         await ws.close(code=4403)
         return
+
+    try:
+        profile = _managed_websocket_profile(
+            ws,
+            ws.query_params.get("profile") or None,
+        )
+    except (PermissionError, ValueError):
+        await ws.close(code=4403)
+        return
     await ws.accept()
 
     # Profile via query param, like /api/pty and /api/console: the provider
     # chain + API keys must resolve from the requesting profile's config, not
     # the dashboard's own. The streamer captures its config at resolve time,
     # so scoping resolution scopes the whole session.
-    profile = (ws.query_params.get("profile") or "").strip() or None
-
     loop = asyncio.get_running_loop()
 
     def _resolve():
@@ -10719,8 +10825,37 @@ def _build_oauth_catalog() -> list[Dict[str, Any]]:
     return rows
 
 
+def _oauth_status_response(status: Dict[str, Any]) -> Dict[str, Any]:
+    """Return the authenticated Accounts API's non-secret status fields.
+
+    Provider status helpers are also used by local CLI/runtime paths and may
+    include a short token preview or a credential-store path for display.
+    Neither belongs in the HTTP response: a preview still discloses credential
+    material, and local filesystem paths disclose usernames and layout.
+    """
+    public_status = dict(status)
+    public_status.pop("token_preview", None)
+
+    source_label = public_status.get("source_label")
+    if isinstance(source_label, str):
+        # Catch direct paths as well as labels such as
+        # ``Hermes PKCE (/Users/alice/.hermes/...)`` or a Windows UNC path.
+        # URLs and ordinary provider labels remain useful to the authenticated
+        # client.
+        if re.search(
+            r"(?:^|[\s(=])(?:~[/\\]|/(?!/)[^/\s)]*|[A-Za-z]:[\\/]|\\\\[^\\/\s)]+[\\/])",
+            source_label,
+        ):
+            public_status.pop("source_label", None)
+
+    return public_status
+
+
 @app.get("/api/providers/oauth")
-async def list_oauth_providers(profile: Optional[str] = None):
+async def list_oauth_providers(
+    request: Request,
+    profile: Optional[str] = None,
+):
     """Enumerate every OAuth-capable LLM provider with current status.
 
     Response shape (per provider):
@@ -10734,8 +10869,7 @@ async def list_oauth_providers(profile: Optional[str] = None):
         status:
           logged_in        bool — currently has usable creds
           source           short slug ("hermes_pkce", "claude_code", ...)
-          source_label     human-readable origin (file path, env var name)
-          token_preview    last N chars of the token, never the full token
+          source_label     human-readable non-filesystem origin, when available
           expires_at       ISO timestamp string or null
           has_refresh_token bool
 
@@ -10743,6 +10877,8 @@ async def list_oauth_providers(profile: Optional[str] = None):
     sync with the `hermes model` picker; _OAUTH_OVERRIDES supplies per-provider
     flow/status/cli metadata.
     """
+    _require_token(request)
+
     def _run():
         with _profile_scope(profile):
             providers = []
@@ -10758,7 +10894,7 @@ async def list_oauth_providers(profile: Optional[str] = None):
                     "disconnect_hint": disconnect_hint,
                     "disconnect_command": _oauth_provider_disconnect_command(p),
                     "disconnectable": disconnect_hint is None,
-                    "status": status,
+                    "status": _oauth_status_response(status),
                 })
             return {"providers": providers}
 
@@ -10938,15 +11074,22 @@ def _new_oauth_session(
     return sid, sess
 
 
-def _oauth_session_profile(
-    session_id: str,
-    fallback: Optional[str] = None,
-) -> Optional[str]:
-    """Return the profile that owns an OAuth session, if one was provided."""
-    with _oauth_sessions_lock:
-        sess = _oauth_sessions.get(session_id)
-        profile = sess.get("profile") if sess else None
-    return profile or _oauth_profile_name(fallback)
+def _reject_oauth_profile_substitution(
+    sess: Dict[str, Any],
+    profile: Optional[str],
+) -> None:
+    """Reject an explicit profile that differs from the session owner.
+
+    Omitting ``profile`` remains backward compatible for existing clients; all
+    persistence still uses the profile captured at start. A supplied profile
+    may only restate that captured owner, never redirect the session.
+    """
+    requested = _oauth_profile_name(profile)
+    if requested is not None and requested != sess.get("profile"):
+        raise HTTPException(
+            status_code=400,
+            detail="Profile mismatch for OAuth session",
+        )
 
 
 def _save_anthropic_oauth_creds(access_token: str, refresh_token: str, expires_at_ms: int) -> None:
@@ -11043,6 +11186,7 @@ def _submit_anthropic_pkce(
         sess = _oauth_sessions.get(session_id)
     if not sess or sess["provider"] != "anthropic" or sess["flow"] != "pkce":
         raise HTTPException(status_code=404, detail="Unknown or expired session")
+    _reject_oauth_profile_substitution(sess, profile)
     if sess["status"] != "pending":
         return {"ok": False, "status": sess["status"], "message": sess.get("error_message")}
 
@@ -11100,7 +11244,7 @@ def _submit_anthropic_pkce(
 
     expires_at_ms = int(time.time() * 1000) + (expires_in * 1000)
     try:
-        with _profile_scope(_oauth_session_profile(session_id, profile)):
+        with _profile_scope(sess.get("profile")):
             _save_anthropic_oauth_creds(access_token, refresh_token, expires_at_ms)
     except Exception as e:
         with _oauth_sessions_lock:
@@ -11337,6 +11481,7 @@ def _nous_poller(session_id: str) -> None:
         sess = _oauth_sessions.get(session_id)
     if not sess:
         return
+    session_profile = sess.get("profile")
     portal_base_url = sess["portal_base_url"]
     client_id = sess["client_id"]
     device_code = sess["device_code"]
@@ -11371,7 +11516,7 @@ def _nous_poller(session_id: str) -> None:
             ),
             "expires_in": token_ttl,
         }
-        with _profile_scope(_oauth_session_profile(session_id)):
+        with _profile_scope(session_profile):
             full_state = refresh_nous_oauth_from_state(
                 auth_state,
                 timeout_seconds=15.0,
@@ -11413,6 +11558,7 @@ def _minimax_poller(session_id: str) -> None:
         sess = _oauth_sessions.get(session_id)
     if not sess:
         return
+    session_profile = sess.get("profile")
     portal_base_url = sess["portal_base_url"]
     client_id = sess["client_id"]
     user_code = sess["user_code"]
@@ -11461,7 +11607,7 @@ def _minimax_poller(session_id: str) -> None:
             ).isoformat(),
             "expires_in": expires_in_s,
         }
-        with _profile_scope(_oauth_session_profile(session_id)):
+        with _profile_scope(session_profile):
             _minimax_save_auth_state(auth_state)
         with _oauth_sessions_lock:
             sess["status"] = "approved"
@@ -11488,6 +11634,7 @@ def _xai_device_poller(session_id: str) -> None:
         sess = _oauth_sessions.get(session_id)
     if not sess:
         return
+    session_profile = sess.get("profile")
     device_code = sess["device_code"]
     interval = int(sess["interval"])
     expires_in = max(60, int(sess["expires_at"] - time.time()))
@@ -11511,7 +11658,7 @@ def _xai_device_poller(session_id: str) -> None:
             "expires_in": token_data.get("expires_in"),
             "token_type": str(token_data.get("token_type") or "Bearer").strip() or "Bearer",
         }
-        with _profile_scope(_oauth_session_profile(session_id)):
+        with _profile_scope(session_profile):
             _save_xai_oauth_tokens(
                 tokens,
                 discovery=discovery,
@@ -11602,10 +11749,13 @@ def _codex_full_login_worker(session_id: str) -> None:
     ``authorization_code`` + ``code_verifier`` that get exchanged at
     CODEX_OAUTH_TOKEN_URL with grant_type=authorization_code.
 
-    The flow is replicated inline (rather than calling
-    _codex_device_code_login) because that helper prints/blocks/polls in a
-    single function — we need to surface the user_code to the dashboard the
-    moment we receive it, well before polling completes.
+    The transport is replicated inline (rather than calling
+    _codex_device_code_login) because this worker must also abort mid-poll
+    when the dashboard cancels the session, and because it rewords the
+    device-authorization start failure for a browser audience. Persistence is
+    NOT replicated: it goes through the shared
+    ``append_codex_pool_credential`` seam so a dashboard login lands as its
+    own pooled account like the terminal and gateway paths.
     """
     try:
         import httpx
@@ -11705,7 +11855,7 @@ def _codex_full_login_worker(session_id: str) -> None:
         if not access_token:
             raise RuntimeError("token exchange did not return access_token")
 
-        from hermes_cli.auth import _save_codex_tokens
+        from hermes_cli.auth import append_codex_pool_credential
 
         # The cancellation check and the save must be one atomic critical
         # section under the same lock cancel_oauth_session() uses. Checking
@@ -11720,7 +11870,7 @@ def _codex_full_login_worker(session_id: str) -> None:
                 _log.info("oauth/device: openai-codex login cancelled before token save (session=%s)", session_id)
                 return
             with _profile_scope(session_profile):
-                _save_codex_tokens({
+                append_codex_pool_credential({
                     "access_token": access_token,
                     "refresh_token": refresh_token,
                 })
@@ -11793,20 +11943,23 @@ async def submit_oauth_code(
 async def poll_oauth_session(
     provider_id: str,
     session_id: str,
+    request: Request,
     profile: Optional[str] = None,
 ):
-    """Poll a session's status (no auth — read-only state).
+    """Poll an authenticated client's profile-bound OAuth session status.
 
     Shared by the device-code flows (Nous, OpenAI Codex, MiniMax, xAI).
     Each surfaces progress through the same background-worker-updated
     ``status`` field, so a single poll endpoint serves them all.
     """
+    _require_token(request)
     with _oauth_sessions_lock:
         sess = _oauth_sessions.get(session_id)
     if not sess:
         raise HTTPException(status_code=404, detail="Session not found or expired")
     if sess["provider"] != provider_id:
         raise HTTPException(status_code=400, detail="Provider mismatch for session")
+    _reject_oauth_profile_substitution(sess, profile)
     return {
         "session_id": session_id,
         "status": sess["status"],
@@ -11833,6 +11986,7 @@ async def cancel_oauth_session(
     with _oauth_sessions_lock:
         sess = _oauth_sessions.get(session_id)
         if sess is not None:
+            _reject_oauth_profile_substitution(sess, profile)
             sess["cancelled"] = True
         _oauth_sessions.pop(session_id, None)
     if sess is None:
@@ -14329,7 +14483,7 @@ async def delete_hook(body: HookDelete):
                     del hooks_cfg[event]
                 if not hooks_cfg:
                     cfg.pop("hooks", None)
-                save_config(cfg)
+                save_config(cfg, removed_root_keys={"hooks"} if not hooks_cfg else None)
 
         # Revoke consent regardless so a re-add re-prompts.
         try:
@@ -14688,7 +14842,7 @@ def _write_profile_mcp_servers(profile_dir: Path, servers: List["MCPServerCreate
             # We created an empty mcp_servers dict but wrote nothing — don't
             # leave a stray empty key in the new profile's config.
             cfg.pop("mcp_servers", None)
-            save_config(cfg)
+            save_config(cfg, removed_root_keys={"mcp_servers"})
     finally:
         reset_hermes_home_override(token)
     return written
@@ -15227,7 +15381,7 @@ async def update_config_raw(body: RawConfigUpdate, profile: Optional[str] = None
             # Full-document replacement: the editor owns the whole file; do not
             # merge omitted sections back from disk (#62723).
             approvals_mode_changed = _approval_mode_of(parsed) != _approval_mode_of(read_raw_config())
-            save_config(parsed, merge_existing=False)
+            save_config(parsed, full_replace=True)
         # Same indicator refresh as the schema-driven save above.
         if approvals_mode_changed and not _is_other_profile(body.profile or profile):
             _broadcast_gateway_session_info()
@@ -16572,9 +16726,18 @@ async def console_ws(ws: WebSocket) -> None:
         await ws.close(code=4408, reason=_ws_close_reason(client_reason))
         return
 
+    try:
+        profile = _managed_websocket_profile(
+            ws,
+            _console_profile_from_ws(ws),
+            admin_required=True,
+        )
+    except (PermissionError, ValueError):
+        await ws.close(code=4403, reason="administrator access required")
+        return
+
     await ws.accept()
 
-    profile = _console_profile_from_ws(ws)
     send_lock = asyncio.Lock()
 
     try:
@@ -16928,6 +17091,16 @@ async def pty_ws(ws: WebSocket) -> None:
         await ws.close(code=4408, reason=_ws_close_reason(client_reason))
         return
 
+    try:
+        profile = _managed_websocket_profile(
+            ws,
+            ws.query_params.get("profile") or None,
+            admin_required=True,
+        )
+    except (PermissionError, ValueError):
+        await ws.close(code=4403, reason="administrator access required")
+        return
+
     await ws.accept()
     _log.info("pty accepted peer=%s mode=%s cred=%s", peer, mode, cred)
 
@@ -16946,7 +17119,6 @@ async def pty_ws(ws: WebSocket) -> None:
     # --- spawn PTY ------------------------------------------------------
     raw_resume = ws.query_params.get("resume") or None
     resume = raw_resume
-    profile = ws.query_params.get("profile") or None
     channel = _channel_or_close_code(ws)
     sidecar_url = _build_sidecar_url(channel) if channel else None
     force_fresh = (ws.query_params.get("fresh") or "").strip().lower() in {
@@ -17096,8 +17268,22 @@ async def gateway_ws(ws: WebSocket) -> None:
         return
 
     from tui_gateway.ws import handle_ws
+    from hermes_cli.profile_scope import (
+        managed_profile_context,
+        principal_from_headers,
+        require_profile,
+    )
 
-    await handle_ws(ws)
+    try:
+        principal = principal_from_headers(ws.headers)
+        with managed_profile_context(principal):
+            requested_profile = (ws.query_params.get("profile") or "").strip()
+            effective_profile = require_profile(requested_profile)
+    except (PermissionError, ValueError):
+        await ws.close(code=4403)
+        return
+    with managed_profile_context(principal, effective_profile=effective_profile):
+        await handle_ws(ws)
 
 
 # ---------------------------------------------------------------------------

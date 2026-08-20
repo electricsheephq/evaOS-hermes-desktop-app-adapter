@@ -3339,7 +3339,9 @@ class GatewaySlashCommandsMixin:
             max_file_size_mb=cp_kwargs["checkpoint_max_file_size_mb"],
         )
 
-        cwd = os.getenv("TERMINAL_CWD", str(Path.home()))
+        from tools.terminal_tool import get_terminal_setting
+
+        cwd = get_terminal_setting("TERMINAL_CWD", str(Path.home()))
         arg = event.get_command_args().strip()
 
         # --all / --force: classic full restore, overwriting user edits too.
@@ -3417,7 +3419,9 @@ class GatewaySlashCommandsMixin:
             elif low == "session":
                 mode = "session"
 
-        cwd = os.getenv("TERMINAL_CWD", str(Path.home()))
+        from tools.terminal_tool import get_terminal_setting
+
+        cwd = get_terminal_setting("TERMINAL_CWD", str(Path.home()))
 
         if mode == "session":
             return await self._gateway_session_diff(cwd, stat_only)
@@ -3910,6 +3914,10 @@ class GatewaySlashCommandsMixin:
                 tier = None
                 saved_value = "normal"
                 label = t("gateway.fast.label_normal")
+            elif value in {"auto", "cold"}:
+                tier = value
+                saved_value = value
+                label = value.upper()
             else:
                 return t("gateway.fast.unknown_arg", arg=value)
             self._service_tier = tier
@@ -3931,8 +3939,19 @@ class GatewaySlashCommandsMixin:
             return t("gateway.fast.session_only", label=label)
 
         if not args or args == "status":
-            is_fast = self._service_tier == "priority"
-            status = t("gateway.fast.status_fast") if is_fast else t("gateway.fast.status_normal")
+            mode = (
+                "fast"
+                if self._service_tier == "priority"
+                else self._service_tier or "normal"
+            )
+            is_fast = mode == "fast"
+            status = (
+                t("gateway.fast.status_fast")
+                if is_fast
+                else t("gateway.fast.status_normal")
+                if mode == "normal"
+                else mode
+            )
 
             async def _on_fast_choice(_chat_id: str, value: str) -> str:
                 return _apply_fast_selection(value, persist=persist_global)
@@ -3950,7 +3969,17 @@ class GatewaySlashCommandsMixin:
                     {
                         "value": "normal",
                         "label": t("gateway.fast.choice_normal"),
-                        "is_current": not is_fast,
+                        "is_current": mode == "normal",
+                    },
+                    {
+                        "value": "auto",
+                        "label": "AUTO",
+                        "is_current": mode == "auto",
+                    },
+                    {
+                        "value": "cold",
+                        "label": "COLD",
+                        "is_current": mode == "cold",
                     },
                 ],
                 on_choice_selected=_on_fast_choice,

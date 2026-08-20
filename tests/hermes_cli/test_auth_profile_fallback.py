@@ -200,6 +200,145 @@ def test_write_credential_pool_targets_profile_not_global(profile_env):
     assert [e["id"] for e in read_credential_pool("openrouter")] == ["prof-new"]
 
 
+def test_codex_pool_append_never_copies_global_rows_into_profile(
+    profile_env, monkeypatch
+):
+    """A profile login must not clone the root account into the profile.
+
+    ``read_credential_pool`` hydrates the global-root rows whenever the
+    profile slice is empty, so a persistence path that rewrites its whole
+    in-memory pool copies the root's tokens into the profile's auth.json.
+    That silently forks the root credential: the copy refreshes and gets
+    exhausted independently, and removing the account at the root leaves a
+    live duplicate behind in every profile that ever logged in.
+    """
+    import hermes_cli.auth as auth
+
+    global_auth = profile_env["global"] / "auth.json"
+    _write(global_auth, _make_auth_store(pool={
+        "openai-codex": [{
+            "id": "glob-codex",
+            "label": "root-account",
+            "auth_type": "oauth",
+            "priority": 0,
+            "source": "manual:device_code",
+            "access_token": "root-access",
+            "refresh_token": "root-refresh",
+        }],
+    }))
+    global_bytes = global_auth.read_bytes()
+
+    # The profile sees the root account through the read-only fallback.
+    assert [e["id"] for e in auth.read_credential_pool("openai-codex")] == [
+        "glob-codex"
+    ]
+
+    monkeypatch.setattr(auth, "_codex_device_code_login", lambda **_kwargs: {
+        "tokens": {
+            "access_token": "profile-access",
+            "refresh_token": "profile-refresh",
+        },
+        "base_url": "https://chatgpt.com/backend-api/codex",
+        "last_refresh": "2026-02-26T00:00:00Z",
+    })
+
+    entry = auth.login_openai_codex_to_pool()
+
+    profile_rows = json.loads(
+        (profile_env["profile"] / "auth.json").read_text()
+    )["credential_pool"]["openai-codex"]
+    assert [row["id"] for row in profile_rows] == [entry.id]
+    assert [row["access_token"] for row in profile_rows] == ["profile-access"]
+    assert not any(
+        row.get("refresh_token") == "root-refresh" for row in profile_rows
+    )
+
+    # The root store is a read-only fallback: the login must not touch it.
+    assert global_auth.read_bytes() == global_bytes
+
+
+def test_codex_root_fallback_is_preserved_until_profile_login(
+    profile_env, monkeypatch
+):
+    """A profile with no Codex entry keeps the existing root fallback."""
+    import hermes_cli.auth as auth
+
+    _write(profile_env["global"] / "auth.json", _make_auth_store(pool={
+        "openai-codex": [{
+            "id": "root-codex",
+            "label": "root-account",
+            "auth_type": "oauth",
+            "priority": 0,
+            "source": "manual:device_code",
+            "access_token": "root-access",
+            "refresh_token": "root-refresh",
+        }],
+    }))
+    _write(profile_env["profile"] / "auth.json", _make_auth_store(pool={}))
+
+    # No profile credential exists yet, so the pre-login root fallback remains
+    # available exactly as it was before this optional login feature.
+    assert [row["id"] for row in auth.read_credential_pool("openai-codex")] == [
+        "root-codex"
+    ]
+
+    monkeypatch.setattr(auth, "_codex_device_code_login", lambda **_kwargs: {
+        "tokens": {
+            "access_token": "profile-access",
+            "refresh_token": "profile-refresh",
+        },
+        "base_url": "https://chatgpt.com/backend-api/codex",
+        "last_refresh": "2026-02-26T00:00:00Z",
+    })
+    entry = auth.login_openai_codex_to_pool()
+
+    # The first profile-owned entry shadows only this provider's root fallback;
+    # it does not copy or alter the root credential.
+    assert [row["id"] for row in auth.read_credential_pool("openai-codex")] == [
+        entry.id
+    ]
+    assert json.loads(
+        (profile_env["profile"] / "auth.json").read_text()
+    )["credential_pool"]["openai-codex"][0]["access_token"] == "profile-access"
+
+
+def test_codex_credentials_never_cross_profile_boundaries(profile_env, monkeypatch):
+    """Two profile homes cannot observe one another's Codex credential."""
+    import hermes_cli.auth as auth
+
+    profile_b = profile_env["global"] / "profiles" / "reviewer"
+    profile_b.mkdir(parents=True)
+    _write(profile_env["profile"] / "auth.json", _make_auth_store(pool={
+        "openai-codex": [{
+            "id": "profile-a",
+            "auth_type": "oauth",
+            "priority": 0,
+            "source": "manual:device_code",
+            "access_token": "profile-a-access",
+            "refresh_token": "profile-a-refresh",
+        }],
+    }))
+    _write(profile_b / "auth.json", _make_auth_store(pool={
+        "openai-codex": [{
+            "id": "profile-b",
+            "auth_type": "oauth",
+            "priority": 0,
+            "source": "manual:device_code",
+            "access_token": "profile-b-access",
+            "refresh_token": "profile-b-refresh",
+        }],
+    }))
+
+    monkeypatch.setenv("HERMES_HOME", str(profile_env["profile"]))
+    assert [row["id"] for row in auth.read_credential_pool("openai-codex")] == [
+        "profile-a"
+    ]
+    monkeypatch.setenv("HERMES_HOME", str(profile_b))
+    assert [row["id"] for row in auth.read_credential_pool("openai-codex")] == [
+        "profile-b"
+    ]
+
+
 
 
 def test_auth_lock_reentrancy_is_scoped_after_profile_context_switch(profile_env):

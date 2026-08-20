@@ -23,6 +23,51 @@ from hermes_cli.config import (
 )
 
 
+def _managed_headers(*, admin: bool = False) -> dict[str, str]:
+    return {
+        "x-evaos-allowed-profiles": "jane,louis",
+        "x-evaos-primary-profile": "jane",
+        "x-evaos-profile-admin": "1" if admin else "0",
+        "x-evaos-principal-user": "user-1",
+        "x-evaos-session-id": "session-1",
+    }
+
+
+def test_managed_scope_middleware_execution_order():
+    from hermes_cli.web_server import app
+
+    dispatch_order = [
+        middleware.kwargs["dispatch"].__name__
+        for middleware in app.user_middleware
+        if "dispatch" in middleware.kwargs
+    ]
+    assert dispatch_order.index("_dashboard_health_middleware") < dispatch_order.index(
+        "evaos_managed_profile_scope_middleware"
+    ) < dispatch_order.index("_token_auth_seam")
+
+
+def test_web_startup_initializes_managed_profile_scope(monkeypatch):
+    from agent import secret_scope
+    from gateway import config as gateway_config
+    from hermes_cli import web_server
+
+    observed = []
+    monkeypatch.setattr(
+        gateway_config,
+        "load_gateway_config",
+        lambda: SimpleNamespace(multiplex_profiles=True),
+    )
+    monkeypatch.setattr(
+        secret_scope,
+        "set_multiplex_active",
+        lambda active: observed.append(active),
+    )
+
+    web_server._initialize_managed_profile_scope()
+
+    assert observed == [True]
+
+
 # ---------------------------------------------------------------------------
 # Shared fixtures
 # ---------------------------------------------------------------------------
@@ -258,6 +303,183 @@ class TestWebServerEndpoints:
 
         self.client = TestClient(app)
         self.client.headers[_SESSION_HEADER_NAME] = _SESSION_TOKEN
+
+    def test_multiplex_http_rejects_unassigned_token(self, monkeypatch):
+        from agent import secret_scope
+
+        monkeypatch.setattr(secret_scope, "_MULTIPLEX_ACTIVE", True)
+
+        response = self.client.get("/api/sessions?limit=1")
+
+        assert response.status_code == 403
+        assert response.json()["detail"] == "profile is not authorized"
+
+    def test_speak_stream_ws_rejects_unassigned_multiplex_token(self, monkeypatch):
+        from agent import secret_scope
+        from hermes_cli.web_server import _SESSION_TOKEN
+        from starlette.websockets import WebSocketDisconnect
+
+        monkeypatch.setattr(secret_scope, "_MULTIPLEX_ACTIVE", True)
+
+        with pytest.raises(WebSocketDisconnect) as exc:
+            with self.client.websocket_connect(
+                f"/api/audio/speak-stream?token={_SESSION_TOKEN}"
+            ) as socket:
+                socket.receive_json()
+        assert exc.value.code == 4403
+
+    def test_managed_non_admin_blocked_prefixes_fail_closed(self):
+        from hermes_cli.web_server import _MANAGED_NON_ADMIN_BLOCKED_PREFIXES
+
+        for prefix in _MANAGED_NON_ADMIN_BLOCKED_PREFIXES:
+            response = self.client.get(prefix, headers=_managed_headers())
+            assert response.status_code == 403, prefix
+            assert response.json()["detail"] == "administrator access required"
+
+        update = self.client.post(
+            "/api/hermes/update",
+            headers=_managed_headers(),
+        )
+        assert update.status_code == 403
+        assert update.json()["detail"] == "administrator access required"
+        update_check = self.client.get(
+            "/api/hermes/update/check",
+            headers=_managed_headers(),
+        )
+        assert update_check.status_code == 403
+        assert update_check.json()["detail"] == "administrator access required"
+
+    @pytest.mark.parametrize(
+        ("method", "suffix", "request_kwargs"),
+        [
+            ("GET", "", {}),
+            ("GET", "/latest-descendant", {}),
+            ("GET", "/messages", {}),
+            ("DELETE", "", {}),
+            ("PATCH", "", {"json": {"title": "blocked"}}),
+            ("GET", "/export", {}),
+        ],
+    )
+    def test_managed_session_record_guards_all_six_handlers(
+        self,
+        method,
+        suffix,
+        request_kwargs,
+    ):
+        from hermes_constants import get_hermes_home
+        from hermes_state import SessionDB
+
+        db = SessionDB(db_path=get_hermes_home() / "state.db")
+        try:
+            db.create_session(
+                "conflicting-session",
+                source="tui",
+                profile_name="louis",
+            )
+        finally:
+            db.close()
+
+        response = self.client.request(
+            method,
+            f"/api/sessions/conflicting-session{suffix}",
+            headers=_managed_headers(admin=True),
+            **request_kwargs,
+        )
+
+        assert response.status_code == 403
+        assert response.json()["detail"] == "Session profile is not authorized"
+
+    def test_managed_session_detail_allows_effective_profile(self):
+        from hermes_constants import get_hermes_home
+        from hermes_state import SessionDB
+
+        db = SessionDB(db_path=get_hermes_home() / "state.db")
+        try:
+            db.create_session(
+                "owned-session",
+                source="tui",
+                profile_name="jane",
+            )
+        finally:
+            db.close()
+
+        response = self.client.get(
+            "/api/sessions/owned-session",
+            headers=_managed_headers(admin=True),
+        )
+
+        assert response.status_code == 200
+        assert response.json()["id"] == "owned-session"
+
+    @pytest.mark.parametrize("enumeration_mode", ["happy", "fallback"])
+    def test_managed_profile_session_endpoints_filter_targets_and_cache(
+        self,
+        monkeypatch,
+        tmp_path,
+        enumeration_mode,
+    ):
+        from hermes_cli import profiles as profiles_mod
+        from hermes_cli.web_routers import profiles as profiles_router
+        from hermes_state import SessionDB
+
+        profiles_root = tmp_path / "profiles"
+        homes = {}
+        for name in ("jane", "other"):
+            home = profiles_root / name
+            home.mkdir(parents=True)
+            homes[name] = home
+            db = SessionDB(db_path=home / "state.db")
+            try:
+                db.create_session(
+                    f"session-{name}",
+                    source="cli",
+                    profile_name=name,
+                )
+                db.append_message(f"session-{name}", role="user", content="hello")
+            finally:
+                db.close()
+
+        monkeypatch.setattr(profiles_mod, "_get_profiles_root", lambda: profiles_root)
+        if enumeration_mode == "happy":
+            monkeypatch.setattr(
+                profiles_mod,
+                "profiles_to_serve",
+                lambda multiplex: list(homes.items()),
+            )
+        else:
+            def fail_enumeration(*_args, **_kwargs):
+                raise RuntimeError("exercise managed fallback")
+
+            monkeypatch.setattr(profiles_mod, "profiles_to_serve", fail_enumeration)
+
+        profiles_router.get_profiles_sessions_sidebar.cache_clear()
+        profiles_router._sidebar_profile_cache_clear()
+
+        def headers_for(name):
+            return {
+                "x-evaos-allowed-profiles": name,
+                "x-evaos-primary-profile": name,
+                "x-evaos-profile-admin": "0",
+                "x-evaos-principal-user": f"user-{name}",
+            }
+
+        for name in ("jane", "other"):
+            aggregate = self.client.get(
+                "/api/profiles/sessions",
+                headers=headers_for(name),
+            )
+            assert aggregate.status_code == 200
+            assert {row["profile"] for row in aggregate.json()["sessions"]} == {name}
+            assert set(aggregate.json()["profile_totals"]) == {name}
+
+            sidebar = self.client.get(
+                "/api/profiles/sessions/sidebar",
+                headers=headers_for(name),
+            )
+            assert sidebar.status_code == 200
+            payload = sidebar.json()
+            assert {row["profile"] for row in payload["recents"]["sessions"]} == {name}
+            assert set(payload["recents"]["profiles_usage"]) == {name}
 
     @pytest.mark.requires_wal
     def test_get_sessions_poll_preserves_pending_wal(self):
@@ -2276,6 +2498,25 @@ class TestConfigRoundTrip:
         self.client = TestClient(app)
         self.client.headers[_SESSION_HEADER_NAME] = _SESSION_TOKEN
 
+    def test_raw_editor_replaces_the_whole_file(self):
+        """The raw YAML editor intentionally deletes omitted root keys."""
+        from hermes_cli import config as config_mod
+
+        config_path = config_mod.get_config_path()
+        config_path.write_text(
+            "multiplex_profiles: true\napprovals:\n  mode: off\ntimezone: UTC\n",
+            encoding="utf-8",
+        )
+
+        response = self.client.put(
+            "/api/config/raw",
+            json={"yaml_text": "timezone: Asia/Bangkok\n"},
+        )
+
+        assert response.status_code == 200
+        persisted = config_mod.read_raw_config()
+        assert persisted == {"timezone": "Asia/Bangkok", "agent": {}}
+
 
 
 
@@ -4179,7 +4420,16 @@ class TestPtyWebSocket:
         q = {"token": tok, **params}
         return f"/api/pty?{urlencode(q)}"
 
+    def test_managed_non_admin_cannot_open_pty(self):
+        from starlette.websockets import WebSocketDisconnect
 
+        with pytest.raises(WebSocketDisconnect) as exc:
+            with self.client.websocket_connect(
+                self._url(profile="louis"),
+                headers=_managed_headers(),
+            ):
+                pass
+        assert exc.value.code == 4403
 
     def test_tui_python_command_uses_child_path(self, tmp_path):
         """Bare Python commands are resolved from the TUI child's PATH."""

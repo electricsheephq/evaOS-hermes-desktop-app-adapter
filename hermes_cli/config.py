@@ -2284,16 +2284,13 @@ def _persist_migration(config: Dict[str, Any]) -> None:
     reports).
 
     Every migration step MUST route its write through this helper instead of
-    calling ``save_config`` directly. It is a thin wrapper over
-    ``save_config(config)`` (default-stripping ON, no ``merge_existing``);
-    centralising the call makes the invariant impossible to regress one
-    migration at a time. Callers must pass the full raw config returned by
-    ``read_raw_config()`` after in-place mutations (including key removals);
-    deep-merging the on-disk file back in would resurrect keys the migration
-    just deleted. Partial-save preservation for unrelated top-level sections
-    belongs on ``save_config(..., merge_existing=True)``, not here.
+    calling ``save_config`` directly. This wrapper names only the root keys the
+    migration explicitly removed, so ordinary root preservation cannot
+    resurrect them. Callers must pass the full raw config returned by
+    ``read_raw_config()`` after in-place mutations (including key removals).
     """
-    save_config(config)
+    raw = read_raw_config()
+    save_config(config, removed_root_keys=set(raw) - set(config))
 
 
 def migrate_config(interactive: bool = True, quiet: bool = False) -> Dict[str, Any]:
@@ -2578,6 +2575,25 @@ def _merge_partial_save(raw: dict, override: dict) -> dict:
             result[key] = copy.deepcopy(value)
         elif isinstance(result.get(key), dict) and isinstance(value, dict):
             result[key] = _deep_merge(value, result[key])
+    return result
+
+
+def _preserve_missing_root_keys(
+    raw: dict,
+    replacement: dict,
+    removed_root_keys: Optional[Set[str]] = None,
+) -> dict:
+    """Preserve raw roots omitted by an ordinary section save.
+
+    Nested mappings are intentionally not merged here: callers that own a
+    section may still replace that section. Explicit root deletions are named
+    by the caller so a replacement cannot resurrect them.
+    """
+    result = copy.deepcopy(replacement)
+    removed_root_keys = removed_root_keys or set()
+    for key, value in raw.items():
+        if key not in result and key not in removed_root_keys:
+            result[key] = copy.deepcopy(value)
     return result
 
 
@@ -3777,6 +3793,8 @@ def save_config(
     strip_defaults: bool = True,
     preserve_keys: Optional[Set[Tuple[str, ...]]] = None,
     merge_existing: bool = False,
+    full_replace: bool = False,
+    removed_root_keys: Optional[Set[str]] = None,
 ):
     """Save configuration to ~/.hermes/config.yaml.\n
 
@@ -3786,32 +3804,24 @@ def save_config(
     contaminated with schema defaults on every save, which makes future
     default changes invisible to users.
 
-    When ``merge_existing`` is True, the on-disk raw config is deep-merged
-    under *config* before writing so partial callers (migration steps via
-    ``_persist_migration``) cannot drop unrelated sections the caller omitted.
-    Full-document replacement callers (dashboard raw YAML editor, callers that
-    already deep-merge) must leave this False so intentional deletions survive.
+    Ordinary saves preserve on-disk root keys omitted from *config*.
+    ``merge_existing=True`` additionally deep-merges nested mappings for
+    partial-document callers. ``full_replace=True`` permits omitted roots to
+    be deleted and is reserved for the dashboard raw YAML editor. Migrations
+    may name exact ``removed_root_keys`` for explicit root deletions.
     """
+    if full_replace and (merge_existing or removed_root_keys):
+        raise ValueError(
+            "full_replace cannot be combined with merge_existing or removed_root_keys"
+        )
+
     with _CONFIG_LOCK:
         if is_managed():
             managed_error("save configuration")
             return
-        # Managed scope: strip any leaf the managed layer pins, so a bulk write
-        # (wizard / programmatic save) never persists a user value that would
-        # silently lose to managed on the next load. Single-key `config set`
-        # hard-rejects (see set_config_value); this is the mechanical safety net
-        # for bulk writes so the unmanaged remainder still lands.
         from hermes_cli import managed_scope
 
         managed_keys = managed_scope.managed_config_keys()
-        if managed_keys:
-            config, _stripped = _strip_dotted_keys(copy.deepcopy(config), managed_keys)
-            if _stripped:
-                print(
-                    f"Note: {len(_stripped)} managed setting(s) were not saved "
-                    f"(managed by your administrator): {', '.join(sorted(_stripped))}",
-                    file=sys.stderr,
-                )
         from utils import atomic_yaml_write
 
         ensure_hermes_home()
@@ -3825,8 +3835,32 @@ def save_config(
         explicit_raw_paths: Optional[Set[Tuple[str, ...]]] = (
             _explicit_config_paths(_raw_for_paths) if _raw_for_paths else None
         )
-        if merge_existing and _raw_for_paths:
-            config = _merge_partial_save(_raw_for_paths, config)
+        if _raw_for_paths:
+            if merge_existing:
+                config = _merge_partial_save(_raw_for_paths, config)
+            elif not full_replace:
+                config = _preserve_missing_root_keys(
+                    _raw_for_paths,
+                    config,
+                    removed_root_keys,
+                )
+        # Managed scope: strip any leaf the managed layer pins, so a bulk write
+        # (wizard / programmatic save) never persists a user value that would
+        # silently lose to managed on the next load. Single-key `config set`
+        # hard-rejects (see set_config_value); this is the mechanical safety net
+        # for bulk writes so the unmanaged remainder still lands.
+        # This must run AFTER _merge_partial_save: the merge folds the on-disk
+        # document back in, so stripping the caller's partial dict beforehand
+        # leaves a stale pinned leaf on disk that would become active if the
+        # managed policy is later removed.
+        if managed_keys:
+            config, _stripped = _strip_dotted_keys(copy.deepcopy(config), managed_keys)
+            if _stripped:
+                print(
+                    f"Note: {len(_stripped)} managed setting(s) were not saved "
+                    f"(managed by your administrator): {', '.join(sorted(_stripped))}",
+                    file=sys.stderr,
+                )
         # ----------------------------------------------------------------
 
         current_normalized = _normalize_root_model_keys(_normalize_max_turns_config(config))

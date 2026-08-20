@@ -174,3 +174,59 @@ async def test_reload_mcp_preserves_per_agent_toolset_overrides():
     assert captured_calls, "get_tool_definitions was never called to refresh the cache"
     assert captured_calls[0]["enabled_toolsets"] == ["safe"]
     assert captured_calls[0]["disabled_toolsets"] == ["terminal"]
+
+
+@pytest.mark.asyncio
+async def test_multiplex_reload_scopes_executor_and_cached_agent_refresh(
+    tmp_path, monkeypatch
+):
+    """The command path keeps discovery and cache refresh in profile A."""
+    from agent import secret_scope
+    from hermes_constants import get_hermes_home
+
+    home_a = tmp_path / "profiles" / "profile-a"
+    home_a.mkdir(parents=True)
+    runner = _make_runner_with_cached_agents(num_agents=0)
+    runner.config.multiplex_profiles = True
+    runner._resolve_profile_home_for_source = lambda _source: home_a
+
+    agent_a = SimpleNamespace(enabled_toolsets=None, disabled_toolsets=None)
+    agent_b = SimpleNamespace(enabled_toolsets=None, disabled_toolsets=None)
+    runner._agent_cache["agent:profile-a:telegram:dm:a"] = (agent_a, "a")
+    runner._agent_cache["agent:profile-b:telegram:dm:b"] = (agent_b, "b")
+
+    event = _make_event()
+    event.source.profile = "profile-a"
+    observed_homes = []
+    refreshed = []
+
+    def observe_scope():
+        observed_homes.append(get_hermes_home().resolve())
+
+    monkeypatch.setattr(secret_scope, "_MULTIPLEX_ACTIVE", True)
+    with (
+        patch(
+            "tools.mcp_tool.get_mcp_server_inventory_for_current_profile",
+            return_value=({"synthetic"}, {"synthetic"}),
+        ),
+        patch(
+            "tools.mcp_tool.shutdown_mcp_servers_for_current_scope",
+            side_effect=observe_scope,
+        ),
+        patch(
+            "tools.mcp_tool.discover_mcp_tools",
+            side_effect=lambda: (observe_scope(), ["synthetic"])[1],
+        ),
+        patch(
+            "tools.mcp_tool.refresh_agent_mcp_tools",
+            side_effect=lambda agent, **_kwargs: refreshed.append(agent),
+        ),
+    ):
+        try:
+            result = await runner._execute_mcp_reload(event)
+        finally:
+            runner._shutdown_executor()
+
+    assert isinstance(result, str)
+    assert observed_homes == [home_a.resolve(), home_a.resolve()]
+    assert refreshed == [agent_a]

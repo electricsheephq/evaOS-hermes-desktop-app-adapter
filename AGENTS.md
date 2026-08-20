@@ -1,5 +1,31 @@
 # Hermes Agent - Development Guide
 
+## Dispatched work: the Lane Contract is mandatory
+
+Every dispatched lane (Codex, Claude subagent, workflow agent) that writes code, configs, boxes,
+or trackers MUST carry a Lane Contract in its spec: Observable outcome · Done when (evidence,
+not task-list) · Resume identity (repo/branch/base SHA) · Proof-claim boundary · Stop conditions
+(200-LOC integration budget; scope drift → stop and report) · Evidence path · Secret boundary.
+Template on the office Mac: `~/.claude/skills/lane-contract/LANE-SPEC-TEMPLATE.md`. When that
+template is unavailable, include the seven fields above literally; its absence never waives the
+contract.
+
+Claim discipline: closeouts state a claim class (`advisory` / `pr_ready` / `merge_ready` /
+`release_ready` / `runtime_safe` / `customer_ready`) and what the result does NOT prove.
+`customer_ready` requires REAL end-user-session evidence (Telegram/Mattermost/Desktop) with
+pass-rates — in-process/loopback smokes are `loopback-only` and close no customer claim.
+Test harnesses never mutate customer-visible settings (approval modes, configs) to make a test
+fire. Integration UX problems get skills/runbooks/aliases before product code.
+
+## Pipedream / MCP-connector work: the gate ladder is mandatory
+
+Any change touching the Pipedream/MCP path (`tools/evaos_mcp_lease.py`, `tools/mcp_tool.py`,
+gateway MCP discovery) follows `docs/PIPEDREAM-WORKING-GATE.md` IN THIS REPO: debug bottom-up
+from Layer 0 (one lease request plus two fence requests against production — client error strings
+lie), and no
+release r-tag ships above a red layer. Customer-facing claims come only from the Layer-3
+real-workflow matrices + a Layer-4 real turn.
+
 Instructions for AI coding assistants and developers working on the hermes-agent codebase.
 
 **Never give up on the right solution.**

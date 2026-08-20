@@ -2855,6 +2855,11 @@ def set_orchestration_settings(payload: OrchestrationSettingsBody):
                     )
             except HTTPException:
                 raise
+            except ValueError:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"invalid profile name '{name}'",
+                )
             except Exception:
                 pass  # fail open if the lookup itself errors
         kanban_section["orchestrator_profile"] = name
@@ -2870,6 +2875,11 @@ def set_orchestration_settings(payload: OrchestrationSettingsBody):
                     )
             except HTTPException:
                 raise
+            except ValueError:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"invalid profile name '{name}'",
+                )
             except Exception:
                 pass
         kanban_section["default_assignee"] = name

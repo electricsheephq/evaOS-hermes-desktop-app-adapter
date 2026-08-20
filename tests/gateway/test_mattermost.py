@@ -3,7 +3,7 @@ import json
 import os
 import time
 import pytest
-from unittest.mock import MagicMock, patch, AsyncMock
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 from gateway.config import Platform, PlatformConfig
 from gateway.platforms.base import MessageType
@@ -275,13 +275,14 @@ class TestMattermostWebSocketParsing:
         self.adapter.handle_message = AsyncMock()
 
     @pytest.mark.asyncio
-    async def test_parse_posted_event(self):
-        """'posted' events should extract message from double-encoded post JSON."""
+    async def test_parse_mention_preserves_sender_and_thread(self):
+        """Mention cleanup must preserve sender and thread attribution."""
         post_data = {
             "id": "post_abc",
             "user_id": "user_123",
             "channel_id": "chan_456",
             "message": "@bot_user_id Hello from Matrix!",
+            "root_id": "thread_root_789",
         }
         event = {
             "event": "posted",
@@ -298,6 +299,8 @@ class TestMattermostWebSocketParsing:
         # @mention is stripped from the message text
         assert msg_event.text == "Hello from Matrix!"
         assert msg_event.message_id == "post_abc"
+        assert msg_event.source.user_name == "alice"
+        assert msg_event.source.thread_id == "thread_root_789"
 
 
     @pytest.mark.asyncio
@@ -392,6 +395,270 @@ class TestMattermostMentionBehavior:
             os.environ.pop("MATTERMOST_REQUIRE_MENTION", None)
             await self.adapter._handle_ws_event(self._make_event("hello", channel_id="chan_456"))
             assert self.adapter.handle_message.called
+
+    @pytest.mark.asyncio
+    async def test_multi_bot_fanout_strips_peer_bots_but_preserves_humans(self):
+        self.adapter._api_get = AsyncMock(return_value=[
+            {"username": "hermes-bot", "is_bot": True},
+            {"username": "agent-one", "is_bot": True},
+            {"username": "agent-two", "is_bot": True},
+            {"username": "human-user", "is_bot": False},
+        ])
+
+        await self.adapter._handle_ws_event(
+            self._make_event(
+                "ping @hermes-bot @agent-one @agent-two for @human-user"
+            )
+        )
+
+        message = self.adapter.handle_message.call_args[0][0]
+        assert message.text == "ping for @human-user"
+        self.adapter._api_get.assert_awaited_once_with(
+            "users?in_channel=chan_456&page=0&per_page=200"
+        )
+
+    @pytest.mark.asyncio
+    async def test_multi_bot_fanout_preserves_unrelated_whitespace(self):
+        self.adapter._api_get = AsyncMock(return_value=[
+            {"username": "agent-one", "is_bot": True},
+        ])
+
+        await self.adapter._handle_ws_event(
+            self._make_event("value  =  expression @hermes-bot @agent-one")
+        )
+
+        message = self.adapter.handle_message.call_args[0][0]
+        assert message.text == "value  =  expression"
+
+    @pytest.mark.asyncio
+    async def test_multi_bot_fanout_finds_peer_bot_on_second_users_page(self):
+        first_page = [
+            {"username": f"human-{index}", "is_bot": False}
+            for index in range(200)
+        ]
+        second_page = [{"username": "agent-one", "is_bot": True}]
+        self.adapter._api_get = AsyncMock(side_effect=[first_page, second_page])
+
+        await self.adapter._handle_ws_event(
+            self._make_event("ping @hermes-bot @agent-one")
+        )
+
+        message = self.adapter.handle_message.call_args[0][0]
+        assert message.text == "ping"
+        assert self.adapter._api_get.await_args_list == [
+            call("users?in_channel=chan_456&page=0&per_page=200"),
+            call("users?in_channel=chan_456&page=1&per_page=200"),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_peer_bot_lookup_failure_preserves_message(self):
+        self.adapter._api_get = AsyncMock(side_effect=RuntimeError("lookup failed"))
+
+        await self.adapter._handle_ws_event(
+            self._make_event("ping @hermes-bot @agent-one")
+        )
+
+        message = self.adapter.handle_message.call_args[0][0]
+        assert message.text == "ping  @agent-one"
+
+    @pytest.mark.asyncio
+    async def test_special_mentions_cost_no_member_lookups(self):
+        """@channel/@here/@all are never members; they must not paginate."""
+        self.adapter._api_get = AsyncMock()
+
+        await self.adapter._handle_ws_event(
+            self._make_event("@hermes-bot please tell @channel about X")
+        )
+
+        message = self.adapter.handle_message.call_args[0][0]
+        assert message.text == "please tell @channel about X"
+        self.adapter._api_get.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_special_mentions_do_not_block_peer_bot_lookup(self):
+        """A real handle alongside a special mention still resolves."""
+        self.adapter._api_get = AsyncMock(return_value=[
+            {"username": "agent-one", "is_bot": True},
+        ])
+
+        await self.adapter._handle_ws_event(
+            self._make_event("@hermes-bot @agent-one tell @here")
+        )
+
+        message = self.adapter.handle_message.call_args[0][0]
+        assert message.text == "tell @here"
+        self.adapter._api_get.assert_awaited_once_with(
+            "users?in_channel=chan_456&page=0&per_page=200"
+        )
+
+    @pytest.mark.asyncio
+    async def test_unresolved_mention_stops_when_pagination_stalls(self):
+        """A server that keeps returning the same page must not loop forever."""
+        stalled_page = [
+            {"username": f"human-{index}", "is_bot": False}
+            for index in range(200)
+        ]
+        self.adapter._api_get = AsyncMock(return_value=list(stalled_page))
+
+        await self.adapter._handle_ws_event(
+            self._make_event("ping @hermes-bot @never-resolves")
+        )
+
+        message = self.adapter.handle_message.call_args[0][0]
+        assert message.text == "ping  @never-resolves"
+        assert self.adapter._api_get.await_args_list == [
+            call("users?in_channel=chan_456&page=0&per_page=200"),
+            call("users?in_channel=chan_456&page=1&per_page=200"),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_single_bot_channel_is_inert_after_own_mention_cleanup(self):
+        """A channel without peer bots preserves the admitted message bytes."""
+        self.adapter._api_get = AsyncMock(return_value=[
+            {"username": "hermes-bot", "is_bot": True},
+            {"username": "human-user", "is_bot": False},
+        ])
+        expected = "value  =  expression for @human-user"
+
+        await self.adapter._handle_ws_event(
+            self._make_event(f"@hermes-bot {expected}")
+        )
+
+        message = self.adapter.handle_message.call_args[0][0]
+        assert message.text == expected
+        self.adapter._api_get.assert_awaited_once_with(
+            "users?in_channel=chan_456&page=0&per_page=200"
+        )
+
+
+class TestMattermostChannelAndDMAllowlists:
+    """Per-channel and DM sender allowlists in upstream config vocabulary.
+
+    ``platforms.mattermost.extra.groups.<channel_id>.allow_from`` narrows a
+    channel; ``platforms.mattermost.extra.allow_from`` narrows DMs. The two are
+    independent, and an unset allowlist inherits existing behavior (no new
+    denial) — only an explicitly configured allowlist restricts senders.
+    """
+
+    def setup_method(self):
+        self.adapter = _make_adapter()
+        self.adapter._bot_user_id = "bot_user_id"
+        self.adapter._bot_username = "hermes-bot"
+        self.adapter.handle_message = AsyncMock()
+
+    def _event(self, *, user_id="user_allowed", channel_type="D", channel_id="dm_1"):
+        # Non-DM posts must mention the bot to clear the default mention gate.
+        message = "synthetic" if channel_type == "D" else "@hermes-bot synthetic"
+        return {
+            "event": "posted",
+            "data": {
+                "post": json.dumps({
+                    "id": f"post_{user_id}_{channel_id}",
+                    "user_id": user_id,
+                    "channel_id": channel_id,
+                    "message": message,
+                }),
+                "channel_type": channel_type,
+                "sender_name": "@synthetic",
+            },
+        }
+
+    @pytest.mark.asyncio
+    async def test_per_channel_allow_passes_listed_sender(self):
+        self.adapter.config.extra.update({
+            "groups": {"agent_private": {"allow_from": ["user_allowed"]}},
+        })
+        await self.adapter._handle_ws_event(
+            self._event(channel_type="P", channel_id="agent_private")
+        )
+        assert self.adapter.handle_message.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_per_channel_allow_denies_unlisted_sender_and_other_channel(self):
+        self.adapter.config.extra.update({
+            "groups": {"agent_private": {"allow_from": ["user_allowed"]}},
+        })
+        # Unlisted sender in the restricted channel is dropped.
+        await self.adapter._handle_ws_event(
+            self._event(user_id="user_denied", channel_type="P", channel_id="agent_private")
+        )
+        assert not self.adapter.handle_message.called
+
+        # A channel with no configured allowlist inherits existing behavior.
+        await self.adapter._handle_ws_event(
+            self._event(user_id="user_denied", channel_type="P", channel_id="other_private")
+        )
+        assert self.adapter.handle_message.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_dm_allow_passes_listed_and_denies_unlisted(self):
+        self.adapter.config.extra.update({"allow_from": ["user_allowed"]})
+
+        await self.adapter._handle_ws_event(self._event(user_id="user_allowed"))
+        assert self.adapter.handle_message.call_count == 1
+
+        await self.adapter._handle_ws_event(self._event(user_id="user_denied"))
+        assert self.adapter.handle_message.call_count == 1  # unchanged: denied
+
+    @pytest.mark.asyncio
+    async def test_dm_allowlist_does_not_restrict_channels(self):
+        # Asymmetry: a DM allowlist must not narrow channel access.
+        self.adapter.config.extra.update({"allow_from": ["user_allowed"]})
+        await self.adapter._handle_ws_event(
+            self._event(user_id="user_denied", channel_type="P", channel_id="any_channel")
+        )
+        assert self.adapter.handle_message.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_unset_allowlist_inherits_existing_behavior(self):
+        # No allow_from / groups configured: DM and channel preserve the
+        # pre-allowlist event shape, rather than merely reaching the callback.
+        await self.adapter._handle_ws_event(self._event(user_id="anyone"))
+        await self.adapter._handle_ws_event(
+            self._event(user_id="anyone", channel_type="P", channel_id="agent_private")
+        )
+        assert self.adapter.handle_message.call_count == 2
+        dm_event, channel_event = [call.args[0] for call in self.adapter.handle_message.call_args_list]
+        assert (
+            dm_event.text,
+            dm_event.message_id,
+            dm_event.source.user_id,
+            dm_event.source.user_name,
+            dm_event.source.chat_id,
+            dm_event.source.thread_id,
+        ) == (
+            "synthetic",
+            "post_anyone_dm_1",
+            "anyone",
+            "synthetic",
+            "dm_1",
+            None,
+        )
+        assert (
+            channel_event.text,
+            channel_event.message_id,
+            channel_event.source.user_id,
+            channel_event.source.user_name,
+            channel_event.source.chat_id,
+            channel_event.source.thread_id,
+        ) == (
+            "synthetic",
+            "post_anyone_agent_private",
+            "anyone",
+            "synthetic",
+            "agent_private",
+            None,
+        )
+
+    @pytest.mark.asyncio
+    async def test_normalized_id_set_from_comma_string(self):
+        # A comma-separated scalar with whitespace normalizes to a member set.
+        self.adapter.config.extra.update({"allow_from": " user_allowed , user_two "})
+        await self.adapter._handle_ws_event(self._event(user_id="user_two"))
+        assert self.adapter.handle_message.call_count == 1
+
+        await self.adapter._handle_ws_event(self._event(user_id="user_denied"))
+        assert self.adapter.handle_message.call_count == 1  # unchanged: denied
 
 
 # ---------------------------------------------------------------------------
@@ -592,5 +859,3 @@ async def test_mattermost_top_level_channel_post_is_thread_root():
     assert msg_event.source.thread_id == "top_post_123"
     assert msg_event.source.message_id == "top_post_123"
     assert msg_event.message_id == "top_post_123"
-
-

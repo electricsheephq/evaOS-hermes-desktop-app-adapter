@@ -1,5 +1,6 @@
 import json
 import os
+import queue
 import subprocess
 import sys
 import threading
@@ -257,6 +258,11 @@ def test_default_config_seeds_dashboard_process_isolation_keys():
 
 
 def test_prompt_submit_dispatches_to_compute_host_when_turn_isolation_enabled(monkeypatch):
+    class _DeadLocalThread:
+        @staticmethod
+        def is_alive():
+            return False
+
     class FakeSupervisor:
         def __init__(self):
             self.frames = []
@@ -270,6 +276,7 @@ def test_prompt_submit_dispatches_to_compute_host_when_turn_isolation_enabled(mo
     fake_supervisor = FakeSupervisor()
     seed_history = [{"role": "user", "content": "previous"}]
     server._sessions["iso-sid"] = _session(history=list(seed_history))
+    server._sessions["iso-sid"]["_run_thread"] = _DeadLocalThread()
     server._sessions["iso-sid"]["agent"] = None
     server._sessions["iso-sid"]["agent_ready"] = threading.Event()
     parent_writes = {"ensure_session": 0, "persist_seed": 0}
@@ -310,6 +317,12 @@ def test_prompt_submit_dispatches_to_compute_host_when_turn_isolation_enabled(mo
         assert server._sessions["iso-sid"]["history"] == seed_history
         assert parent_writes == {"ensure_session": 0, "persist_seed": 0}
         assert server._sessions["iso-sid"]["running"] is True
+        assert "_run_thread" not in server._sessions["iso-sid"]
+
+        live = server._live_session_payload(
+            "iso-sid", server._sessions["iso-sid"], omit_messages=True
+        )
+        assert live["running"] is True
 
         fake_supervisor.callback(
             {
@@ -673,8 +686,10 @@ def test_profile_scoped_mcp_discovery_uses_target_home(monkeypatch, tmp_path):
 
     seen = []
 
-    monkeypatch.setattr(mcp_startup, "_mcp_discovery_started", False)
-    monkeypatch.setattr(mcp_startup, "_mcp_discovery_thread", None)
+    # Discovery state is keyed by profile home, so these are a set and a map
+    # rather than a bool and a single thread.
+    monkeypatch.setattr(mcp_startup, "_mcp_discovery_started", set())
+    monkeypatch.setattr(mcp_startup, "_mcp_discovery_threads", {})
     # ensure_mcp_discovery_started flips this module global; monkeypatch it so
     # the enablement doesn't leak into sibling tests in this file.
     monkeypatch.setattr(entry, "_mcp_discovery_enabled", False)
@@ -686,13 +701,13 @@ def test_profile_scoped_mcp_discovery_uses_target_home(monkeypatch, tmp_path):
 
     try:
         entry.ensure_mcp_discovery_started()
-        thread = mcp_startup._mcp_discovery_thread
+        # The slot must belong to the selected profile, not the launch home.
+        assert set(mcp_startup._mcp_discovery_threads) == {str(profile_home)}
+        thread = mcp_startup._mcp_discovery_threads[str(profile_home)]
         assert thread is not None
         thread.join(timeout=2)
     finally:
         reset_hermes_home_override(token)
-        mcp_startup._mcp_discovery_thread = None
-        mcp_startup._mcp_discovery_started = False
 
     assert seen == [str(profile_home)]
 
@@ -4714,6 +4729,35 @@ def test_finalize_session_closes_slash_worker(monkeypatch):
     assert closed["count"] == 1
 
 
+def test_teardown_empty_session_ends_context_before_agent_close(monkeypatch):
+    """Even an empty TUI session must end the context engine before shutdown."""
+    events = []
+
+    class _Agent:
+        session_id = "empty-session"
+        model = "test"
+        platform = "tui"
+
+        def commit_memory_session(self, messages):
+            events.append(("session_end", messages))
+
+        def close(self):
+            events.append(("close", None))
+
+    monkeypatch.setattr(server, "_notify_session_boundary", lambda *a, **k: None)
+    monkeypatch.setattr(server, "_get_db", lambda: None)
+
+    server._teardown_session(
+        _session(
+            agent=_Agent(),
+            history=[],
+            session_key="empty-session",
+        )
+    )
+
+    assert events == [("session_end", []), ("close", None)]
+
+
 def test_ws_orphan_reap_spares_reattached_session(monkeypatch):
     """A session that rebinds a live transport is NOT considered orphaned."""
 
@@ -5963,6 +6007,76 @@ def test_completion_ownership_lineage_lookup_failure_fails_closed(monkeypatch):
     assert isolated_queue.get_nowait() is event
 
 
+@pytest.mark.parametrize("drain_only", [False, True])
+def test_notification_poller_releases_claim_when_dispatch_is_rejected(
+    monkeypatch, drain_only
+):
+    """A rejected turn must stay pending instead of being acknowledged.
+
+    ``_run_prompt_submit`` returns False without starting a turn when the
+    session is closing or has been re-registered. Calling
+    ``complete_event_delivery`` anyway consumes the only copy of the event, so
+    the notification is lost. Both the live loop and the shutdown drain must
+    release the claim and hand the event back to the queue instead.
+    """
+    import queue as _queue_mod
+
+    from tools import async_delegation
+    from tools.process_registry import process_registry
+
+    session = _session(session_key="closing-notification-owner")
+    event = {
+        "type": "async_delegation",
+        "delegation_id": "delegation-close-race",
+        "session_key": "closing-notification-owner",
+        "goal": "return the completed result",
+        "summary": "done",
+        "status": "completed",
+    }
+    isolated_queue: _queue_mod.Queue = _queue_mod.Queue()
+    isolated_queue.put(event)
+    completed = []
+    released = []
+
+    monkeypatch.setattr(process_registry, "completion_queue", isolated_queue)
+    monkeypatch.setattr(server, "_get_db", lambda: None)
+    monkeypatch.setattr(server, "_emit", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(server, "_run_prompt_submit", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(
+        async_delegation,
+        "claim_event_delivery",
+        lambda _event, _consumer: "close-race-claim",
+    )
+    monkeypatch.setattr(
+        async_delegation,
+        "complete_event_delivery",
+        lambda claimed_event, claim: completed.append((claimed_event, claim)),
+    )
+    monkeypatch.setattr(
+        async_delegation,
+        "release_event_delivery",
+        lambda claimed_event, claim: released.append((claimed_event, claim)),
+    )
+    server._sessions["sid-closing-notification"] = session
+    stop = threading.Event() if drain_only else _StopAfterOneNotificationPoll()
+    if drain_only:
+        stop.set()
+
+    try:
+        server._notification_poller_loop(stop, "sid-closing-notification", session)
+
+        assert completed == []
+        assert released == [(event, "close-race-claim")]
+        assert session["running"] is False
+        # Handed back to the queue exactly once, for a later delivery.
+        assert isolated_queue.qsize() == 1
+        assert isolated_queue.get_nowait() is event
+    finally:
+        server._sessions.pop("sid-closing-notification", None)
+        while not isolated_queue.empty():
+            isolated_queue.get_nowait()
+
+
 @pytest.mark.parametrize(
     "routing",
     [
@@ -6139,6 +6253,115 @@ def test_notification_poller_delivers_owned_events(
             process_registry.completion_queue.get_nowait()
 
 
+def _delegation_delivery_row(home, delegation_id):
+    """Read one delegation's delivery columns out of *home*'s state.db."""
+    token = set_hermes_home_override(home)
+    try:
+        with ad._DB_LOCK, ad._transaction() as conn:
+            return conn.execute(
+                """SELECT delivery_state, delivery_attempts, delivered_at
+                   FROM async_delegations WHERE delegation_id=?""",
+                (delegation_id,),
+            ).fetchone()
+    finally:
+        reset_hermes_home_override(token)
+
+
+def test_notification_poller_thread_acks_routed_profile_db(monkeypatch, tmp_path):
+    """The real poller thread must claim and ack in the session's profile store.
+
+    The HERMES_HOME override is a ContextVar, so a bare poller thread resolves
+    async_delegation._db_path() against the LAUNCH profile — the claim finds no
+    row there, returns None, and the completion is silently never delivered.
+    """
+    import queue as _queue_mod
+
+    from tools.process_registry import process_registry
+
+    launch_home = tmp_path / "launch"
+    profile_home = tmp_path / "profiles" / "routed"
+    launch_home.mkdir()
+    profile_home.mkdir(parents=True)
+    monkeypatch.setenv("HERMES_HOME", str(launch_home))
+
+    event = {
+        "type": "async_delegation",
+        "delegation_id": "deleg_profile_ack",
+        "session_key": "session-a",
+        "origin_ui_session_id": "sid-profile",
+        "origin_session_id": "",
+        "status": "success",
+        "summary": "done",
+    }
+    now = time.time()
+    token = set_hermes_home_override(profile_home)
+    try:
+        with ad._DB_LOCK, ad._transaction() as conn:
+            conn.execute(
+                """INSERT INTO async_delegations
+                   (delegation_id, origin_session, origin_ui_session_id, state,
+                    dispatched_at, completed_at, updated_at, event_json,
+                    delivery_state, delivery_attempts)
+                   VALUES (?, ?, ?, 'success', ?, ?, ?, ?, 'pending', 0)""",
+                (
+                    event["delegation_id"],
+                    event["session_key"],
+                    event["origin_ui_session_id"],
+                    now,
+                    now,
+                    now,
+                    json.dumps(event),
+                ),
+            )
+    finally:
+        reset_hermes_home_override(token)
+
+    isolated_queue: _queue_mod.Queue = _queue_mod.Queue()
+    isolated_queue.put(event)
+    monkeypatch.setattr(process_registry, "completion_queue", isolated_queue)
+    monkeypatch.setattr(server, "_emit", lambda *_args, **_kwargs: None)
+    turns = []
+    monkeypatch.setattr(
+        server,
+        "_run_prompt_submit",
+        lambda _rid, _sid, _session, text, **kwargs: turns.append((text, kwargs)),
+    )
+    session = _session(
+        session_key="session-a",
+        profile_home=str(profile_home),
+    )
+    server._sessions["sid-profile"] = session
+
+    # Spawn through the real entry point so the registry/reap bookkeeping and
+    # the thread's home binding are both exercised as production wires them.
+    stop = server._start_notification_poller("sid-profile", session)
+    worker = server._notification_pollers[-1][1]
+    assert worker.name == "tui-notif-poller-sid-profile"
+    try:
+        deadline = time.time() + 5
+        row = _delegation_delivery_row(profile_home, event["delegation_id"])
+        while row[0] != "delivered" and time.time() < deadline:
+            time.sleep(0.01)
+            row = _delegation_delivery_row(profile_home, event["delegation_id"])
+
+        assert row[0] == "delivered"
+        assert row[1] == 1
+        assert row[2] is not None
+        # The launch profile must be untouched: a claim that landed there is
+        # the bug, and it would leave the session's own row pending forever.
+        assert _delegation_delivery_row(launch_home, event["delegation_id"]) is None
+        assert len(turns) == 1
+        assert turns[0][1]["display_kind"] == "async_delegation_complete"
+        assert isolated_queue.empty()
+    finally:
+        stop.set()
+        worker.join(timeout=2)
+        assert not worker.is_alive()
+        server._sessions.pop("sid-profile", None)
+        while not isolated_queue.empty():
+            isolated_queue.get_nowait()
+
+
 def _configure_immediate_prompt_run(
     monkeypatch, tmp_path, *, immediate_threads=True
 ):
@@ -6239,6 +6462,59 @@ class _RecordingAgent:
     def run_conversation(self, prompt, conversation_history=None, stream_callback=None, **_kwargs):
         self._turns.append(prompt)
         return {"final_response": "", "messages": []}
+
+
+@pytest.mark.requires_wal
+def test_prompt_submit_turn_workers_return_bounded_reader_permits(
+    monkeypatch, tmp_path
+):
+    """Turn workers need no explicit release with ``SessionDB._read_ctx``."""
+    from hermes_state import SessionDB, _READ_POOL_MAX
+
+    _configure_immediate_prompt_run(monkeypatch, tmp_path, immediate_threads=False)
+    db = SessionDB(db_path=tmp_path / "state.db")
+    db.create_session(session_id="turn-permit", source="tui", model="m")
+    turns = []
+
+    class _Agent(_RecordingAgent):
+        session_id = "turn-permit"
+        _session_db = db
+
+        def run_conversation(self, prompt, **_kwargs):
+            assert self._session_db.get_session(self.session_id)["id"] == self.session_id
+            turns.append(prompt)
+            return {"final_response": "", "messages": []}
+
+    sid = "turn-permit-ui"
+    session = _session(
+        agent=_Agent(turns),
+        session_key="turn-permit",
+        running=True,
+    )
+    server._sessions[sid] = session
+    try:
+        for turn in range(25):
+            assert server._run_prompt_submit("rid", sid, session, f"turn {turn}") is True
+            worker = session["_run_thread"]
+            worker.join(timeout=5)
+            assert not worker.is_alive(), "turn worker did not settle"
+
+        assert len(turns) == 25
+        assert db._read_permit_exhausted == 0
+        while True:
+            try:
+                db._close_read_conn(db._read_pool.get_nowait())
+            except queue.Empty:
+                break
+        held = [db._read_permits.acquire(blocking=False) for _ in range(_READ_POOL_MAX)]
+        assert all(held), "turn workers stranded a reader permit"
+        assert not db._read_permits.acquire(blocking=False)
+        for acquired in held:
+            if acquired:
+                db._read_permits.release()
+    finally:
+        server._sessions.pop(sid, None)
+        db.close()
 
 
 def test_run_prompt_submit_rejects_worker_when_close_wins_publication(
@@ -14547,6 +14823,107 @@ def test_session_active_list_excludes_finalized_sessions(monkeypatch):
     assert [row["id"] for row in session_rows] == ["sid-live"]
 
 
+def test_managed_session_registry_hides_and_refuses_other_profile(monkeypatch, tmp_path):
+    from hermes_cli import profiles
+    from hermes_cli.profile_scope import managed_profile_context, principal_from_headers
+
+    profiles_root = tmp_path / "profiles"
+    jane_home = profiles_root / "jane"
+    louis_home = profiles_root / "louis"
+    jane_home.mkdir(parents=True)
+    louis_home.mkdir(parents=True)
+    monkeypatch.setattr(profiles, "_get_profiles_root", lambda: profiles_root)
+    monkeypatch.setattr(server, "_get_db", lambda: None)
+
+    previous_sessions = dict(server._sessions)
+    server._sessions.clear()
+    server._sessions["sid-jane"] = _session(
+        session_key="key-jane",
+        profile_home=str(jane_home),
+    )
+    server._sessions["sid-louis"] = _session(
+        session_key="key-louis",
+        profile_home=str(louis_home),
+    )
+    principal = principal_from_headers(
+        {
+            "x-evaos-allowed-profiles": "jane,louis",
+            "x-evaos-primary-profile": "jane",
+            "x-evaos-profile-admin": "1",
+            "x-evaos-principal-user": "user-1",
+            "x-evaos-session-id": "session-1",
+        }
+    )
+    try:
+        with managed_profile_context(principal, effective_profile="jane"):
+            listed = server.handle_request(
+                {
+                    "id": "list",
+                    "method": "session.active_list",
+                    "params": {},
+                }
+            )
+            denied = server.handle_request(
+                {
+                    "id": "activate",
+                    "method": "session.activate",
+                    "params": {"session_id": "sid-louis"},
+                }
+            )
+            assert server._find_live_session_by_key("key-louis") is None
+    finally:
+        server._sessions.clear()
+        server._sessions.update(previous_sessions)
+
+    assert [row["id"] for row in listed["result"]["sessions"]] == ["sid-jane"]
+    assert denied["error"]["code"] == 4001
+
+
+@pytest.mark.parametrize("recorded_profile", [None, "louis"])
+def test_managed_session_resume_refuses_unassigned_or_conflicting_profile(
+    monkeypatch,
+    recorded_profile,
+):
+    from hermes_cli.profile_scope import managed_profile_context, principal_from_headers
+
+    class _DB:
+        def get_session(self, session_id):
+            assert session_id == "target"
+            return {"id": session_id, "profile_name": recorded_profile}
+
+        def get_session_by_title(self, title):
+            return None
+
+        def reopen_session(self, session_id):
+            raise AssertionError("refused resume must not write")
+
+    db = _DB()
+    monkeypatch.setattr(server, "_profile_home", lambda _profile: None)
+    monkeypatch.setattr(server, "_get_db", lambda: db)
+    principal = principal_from_headers(
+        {
+            "x-evaos-allowed-profiles": "jane,louis",
+            "x-evaos-primary-profile": "jane",
+            "x-evaos-profile-admin": "1",
+            "x-evaos-principal-user": "user-1",
+        }
+    )
+
+    with managed_profile_context(principal, effective_profile="jane"):
+        response = server.handle_request(
+            {
+                "id": "resume",
+                "method": "session.resume",
+                "params": {"session_id": "target"},
+            }
+        )
+
+    assert response["error"] == {
+        "code": 4003,
+        "message": "session profile is not authorized",
+    }
+
+
 
 def test_session_activate_returns_inflight_stream_before_completion(monkeypatch):
     """Switching into a still-running live session must hydrate partial output.
@@ -14638,6 +15015,96 @@ def test_session_activate_returns_inflight_stream_before_completion(monkeypatch)
         release.set()
         done.wait(2)
         server._sessions.pop("sid-live", None)
+
+
+def test_session_activate_clears_stale_busy_state_after_prompt_worker_exits(monkeypatch):
+    class _DeadThread:
+        @staticmethod
+        def is_alive():
+            return False
+
+    agent = types.SimpleNamespace(model="model-stale")
+    session = _session(
+        agent=agent,
+        running=True,
+        inflight_turn={
+            "assistant": "stale partial",
+            "status": "streaming",
+            "user": "already completed",
+        },
+    )
+    session["_run_thread"] = _DeadThread()
+    server._sessions["sid-stale"] = session
+    monkeypatch.setattr(server, "_get_db", lambda: None)
+    monkeypatch.setattr(server, "_session_info", lambda _agent: {"model": "model-stale"})
+
+    try:
+        resp = server.handle_request(
+            {
+                "id": "activate",
+                "method": "session.activate",
+                "params": {"session_id": "sid-stale"},
+            }
+        )
+    finally:
+        server._sessions.pop("sid-stale", None)
+
+    assert resp["result"]["running"] is False
+    assert resp["result"]["status"] == "idle"
+    assert "inflight" not in resp["result"]
+    assert session["running"] is False
+    assert session.get("inflight_turn") is None
+
+
+def test_live_payload_rebinds_expired_owner_and_clears_finished_worker(monkeypatch):
+    """The F3 ownership guard and F4 stale-run repair compose in one payload."""
+
+    class _DeadThread:
+        @staticmethod
+        def is_alive():
+            return False
+
+    class _Transport:
+        def __init__(self, last_inbound_at):
+            self.closed = False
+            self.last_inbound_at = last_inbound_at
+
+        def write(self, _obj):
+            return True
+
+    owner = _Transport(time.monotonic() - 46)
+    contender = _Transport(time.monotonic())
+    session = _session(
+        agent=types.SimpleNamespace(model="model-composed"),
+        running=True,
+        inflight_turn={
+            "assistant": "stale partial",
+            "status": "streaming",
+            "user": "already completed",
+        },
+        transport=owner,
+    )
+    session["_run_thread"] = _DeadThread()
+    monkeypatch.setattr(server, "_session_info", lambda _agent: {"model": "model-composed"})
+    server._live_transports.clear()
+    server.register_live_transport(owner)
+    try:
+        payload = server._live_session_payload(
+            "sid-composed",
+            session,
+            transport=contender,
+            omit_messages=True,
+        )
+    finally:
+        server.unregister_live_transport(owner)
+        server._live_transports.clear()
+
+    assert session["transport"] is contender
+    assert session["running"] is False
+    assert session.get("inflight_turn") is None
+    assert payload["running"] is False
+    assert payload["status"] == "idle"
+    assert "inflight" not in payload
 
 
 def test_session_activate_returns_prompt_queued_during_busy_turn(monkeypatch):
@@ -17064,6 +17531,13 @@ def test_session_create_records_ui_model_as_session_override(monkeypatch):
         )
         normal_sess = server._sessions[normal["result"]["session_id"]]
         assert normal_sess["create_service_tier_override"] == ""
+
+        for mode in ("auto", "cold"):
+            dynamic = server._methods["session.create"](
+                f"r-{mode}", {"cols": 80, "fast": False, "service_tier": mode}
+            )
+            dynamic_sess = server._sessions[dynamic["result"]["session_id"]]
+            assert dynamic_sess["create_service_tier_override"] == mode
 
         # No knobs → no overrides; the session builds from the profile default.
         plain = server._methods["session.create"]("r3", {"cols": 80})

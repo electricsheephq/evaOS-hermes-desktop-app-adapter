@@ -373,18 +373,50 @@ def validate_alias_name(name: str) -> None:
 
 def get_profile_dir(name: str) -> Path:
     """Resolve a profile name to its HERMES_HOME directory."""
+    from hermes_cli.profile_scope import current_principal, require_profile
+
+    if current_principal() is not None:
+        name = require_profile(name)
     canon = normalize_profile_name(name)
     if canon == "default":
         return _get_default_hermes_home()
-    return _get_profiles_root() / canon
+    # Defense-in-depth: normalize_profile_name only lowercases/strips, so a
+    # malformed or relative name (``..``, ``../x``, ``a/b``) would otherwise be
+    # joined straight into the profiles root and resolve outside ``profiles/``.
+    # validate_profile_name (via _PROFILE_ID_RE) already exists but was never
+    # called on this path. Enforce a plain basename first, then validate, so
+    # the joined component is always a single safe id. Fail closed.
+    safe_name = os.path.basename(canon)
+    if safe_name != canon:
+        raise ValueError(
+            f"Invalid profile name {name!r}: path components are not allowed"
+        )
+    validate_profile_name(safe_name)
+    return _get_profiles_root() / safe_name
 
 
 def profile_exists(name: str) -> bool:
     """Check whether a profile directory exists."""
-    canon = normalize_profile_name(name)
-    if canon == "default":
-        return True
-    return get_profile_dir(canon).is_dir()
+    from hermes_cli.profile_scope import current_principal, require_profile
+
+    if current_principal() is not None:
+        try:
+            name = require_profile(name)
+        except PermissionError:
+            return False
+    try:
+        canon = normalize_profile_name(name)
+        if canon == "default":
+            return True
+        # Validate before touching the filesystem so a malformed/relative name
+        # can never confirm an out-of-tree directory.
+        validate_profile_name(canon)
+        return any(
+            entry.name == canon and entry.is_dir()
+            for entry in _get_profiles_root().iterdir()
+        )
+    except (OSError, TypeError, ValueError):
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -999,7 +1031,10 @@ def list_profiles() -> List[ProfileInfo]:
                 display_name=meta.get("display_name", ""),
             ))
 
-    return profiles
+    from hermes_cli.profile_scope import filter_profile_names
+
+    allowed = filter_profile_names(profile.name for profile in profiles)
+    return [profile for profile in profiles if profile.name in allowed]
 
 
 def profiles_to_serve(

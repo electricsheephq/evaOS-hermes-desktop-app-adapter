@@ -1225,8 +1225,20 @@ def test_specify_happy_path(client, monkeypatch):
     assert "**Goal**" in (detail["body"] or "")
 
 
+def test_orchestration_rejects_unsafe_profile_before_save(client, monkeypatch):
+    saved = []
+    monkeypatch.setattr("hermes_cli.config.save_config", saved.append)
+
+    response = client.put(
+        "/api/plugins/kanban/orchestration",
+        json={"orchestrator_profile": "../x"},
+    )
+
+    assert response.status_code == 400
+    assert saved == []
+
+
 # ---------------------------------------------------------------------------
 # Final result visibility for Done cards
 # ---------------------------------------------------------------------------
-
 

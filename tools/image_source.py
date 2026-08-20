@@ -215,7 +215,9 @@ def _is_local_terminal_backend() -> bool:
     Mirrors ``tools.browser_tool._is_local_backend`` and terminal_tool's own
     dispatch, which key off ``TERMINAL_ENV``.
     """
-    return os.getenv("TERMINAL_ENV", "local").strip().lower() in ("local", "")
+    from tools.terminal_tool import get_terminal_setting
+
+    return get_terminal_setting("TERMINAL_ENV", "local").strip().lower() in ("local", "")
 
 
 def _media_cache_roots() -> list:

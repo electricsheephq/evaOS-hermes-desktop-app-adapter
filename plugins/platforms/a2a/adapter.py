@@ -113,14 +113,19 @@ def _profile_home(profile: str) -> Optional[str]:
     try:
         from hermes_cli.profiles import get_profile_dir
         return str(get_profile_dir(profile))
+    except ValueError:
+        if profile and profile != "default":
+            raise
     except Exception:
-        if not profile or profile == "default":
-            try:
-                from hermes_cli.config import get_hermes_home
-                return str(get_hermes_home())
-            except Exception:
-                return None
-        return os.path.expanduser(f"~/.hermes/profiles/{profile}")
+        pass
+
+    if not profile or profile == "default":
+        try:
+            from hermes_cli.config import get_hermes_home
+            return str(get_hermes_home())
+        except Exception:
+            return None
+    return None
 
 def _safe_context_slug(value: str, max_len: int = 96) -> str:
     """Sanitize attacker-provided context ids before using in session titles."""

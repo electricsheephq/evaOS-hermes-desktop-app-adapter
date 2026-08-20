@@ -399,12 +399,14 @@ def _parse_reasoning_config(effort) -> dict | None:
 
 
 def _parse_service_tier_config(raw: str) -> str | None:
-    """Parse a persisted service-tier preference into a Responses API value."""
+    """Parse a persisted normal/fast/auto/cold preference."""
     value = str(raw or "").strip().lower()
     if not value or value in {"normal", "default", "standard", "off", "none"}:
         return None
     if value in {"fast", "priority", "on"}:
         return "priority"
+    if value in {"auto", "cold"}:
+        return value
     logger.warning("Unknown service_tier '%s', ignoring", raw)
     return None
 
@@ -480,6 +482,7 @@ def load_cli_config() -> Dict[str, Any]:
             "prefill_messages_file": "",
             "reasoning_effort": "",
             "service_tier": "",
+            "fast_auto_on_seconds": 60,
             # Built-in personalities live in hermes_cli.personality
             # (BUILTIN_PERSONALITIES) — the single owner. Entries here are
             # user-defined additions/overrides merged on top by name.
@@ -1281,6 +1284,15 @@ def _run_cleanup(*, notify_session_finalize: bool = True):
                     _active_agent_ref.shutdown_memory_provider()
         except Exception as e:
             logger.warning("CLI cleanup memory shutdown failed: %s", e, exc_info=True)
+        # The session-end hook above flushes logical state; close() releases
+        # context-engine SQLite handles and the agent's remaining resources.
+        # Keep these best-effort steps separate so one failure cannot skip the
+        # other, and preserve on_session_end -> shutdown ordering.
+        try:
+            if _active_agent_ref and hasattr(_active_agent_ref, "close"):
+                _active_agent_ref.close()
+        except Exception as e:
+            logger.warning("CLI cleanup agent close failed: %s", e, exc_info=True)
     finally:
         _cleanup_in_progress = False
 

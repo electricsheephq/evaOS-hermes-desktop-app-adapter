@@ -665,12 +665,6 @@ def _agent_visible_path(path: Path) -> str:
     host path when the backend is local or translation is unavailable.
     """
     try:
-        # Desktop/in-process gateways may not have bridged ``terminal.*``
-        # config into ``TERMINAL_ENV`` at startup; run the idempotent bridge so
-        # the credential_files translation gate sees the active backend.
-        from tools.terminal_tool import _ensure_terminal_env_bridged
-
-        _ensure_terminal_env_bridged()
         from tools.credential_files import to_agent_visible_cache_path
 
         return to_agent_visible_cache_path(str(path))

@@ -168,6 +168,38 @@ class TestCollectKanbanNotifications:
         assert len(rows) == 1
         assert rows[0]["last_event_id"] == pre_cursor
 
+    def test_two_profiles_claim_only_their_own_subscriptions(self, tmp_path):
+        """A profile poller never advances or returns its sibling's route."""
+        profile_a = "profile-a-session"
+        profile_b = "profile-b-session"
+        task_a = _create_subscribed_task(chat_id=profile_a)
+        task_b = _create_subscribed_task(chat_id=profile_b)
+        pre_b_cursor = _sub_rows(task_b)[0]["last_event_id"]
+        _complete(task_a, summary="profile a only")
+        _complete(task_b, summary="profile b only")
+
+        texts_a = _collect_kanban_notifications(
+            {
+                "session_key": profile_a,
+                "profile_home": str(tmp_path / "profiles" / "a"),
+            }
+        )
+
+        assert len(texts_a) == 1
+        assert task_a in texts_a[0]
+        assert task_b not in texts_a[0]
+        assert _sub_rows(task_b)[0]["last_event_id"] == pre_b_cursor
+
+        texts_b = _collect_kanban_notifications(
+            {
+                "session_key": profile_b,
+                "profile_home": str(tmp_path / "profiles" / "b"),
+            }
+        )
+        assert len(texts_b) == 1
+        assert task_b in texts_b[0]
+        assert task_a not in texts_b[0]
+
     def test_probe_error_falls_back_to_writable_delivery(self, monkeypatch):
         tid = _create_subscribed_task()
         _complete(tid, summary="fallback delivery")
@@ -284,7 +316,7 @@ class TestNotificationPollerLoopKanbanWiring:
         monkeypatch.setattr(
             server,
             "_run_prompt_submit",
-            lambda rid, sid, sess, text: submits.append(text),
+            lambda rid, sid, sess, text, **kwargs: submits.append(text),
         )
         stop = threading.Event()
         thread = threading.Thread(
@@ -360,3 +392,189 @@ class TestNotificationPollerLoopKanbanWiring:
         assert any(tid in text for text in submits), submits
         assert session["_kanban_pending"] == []
         assert session["running"] is True
+
+    def test_rejected_dispatch_keeps_batch_for_retry(self, monkeypatch):
+        """A rejected turn must not consume the batch.
+
+        ``_collect_kanban_notifications`` advances the subscription cursor when
+        it claims the events, so once they are buffered the batch is the only
+        remaining copy — the DB will never hand them out again. When
+        ``_run_prompt_submit`` returns False (session closing / queued-prompt
+        generation mismatch) without starting a turn, dropping the batch loses
+        the notification permanently.
+        """
+        import threading
+        import tui_gateway.server as server
+
+        tid = _create_subscribed_task()
+        _complete(tid, summary="rejected then retried")
+        session = self._poller_session(running=False)
+
+        submits: list = []
+        rejected = threading.Event()
+
+        def _submit(rid, sid, sess, text, **kwargs):
+            submits.append(text)
+            if len(submits) == 1:
+                # First dispatch is refused before any turn starts.
+                rejected.set()
+                return False
+            assert kwargs["on_turn_recorded"]() is True
+            return True
+
+        monkeypatch.setattr(server, "_KANBAN_POLL_SECONDS", 0.01)
+        monkeypatch.setattr(server, "_emit", lambda *a, **kw: None)
+        monkeypatch.setattr(server, "_run_prompt_submit", _submit)
+
+        stop = threading.Event()
+        thread = threading.Thread(
+            target=server._notification_poller_loop,
+            args=(stop, "sid-kanban-reject", session),
+            daemon=True,
+        )
+        thread.start()
+        try:
+            assert self._wait_for(rejected.is_set), "dispatch was never attempted"
+            assert _sub_rows(tid)[0]["pending_event_ids"]
+            # Retained for retry, and the retry actually happens.
+            assert self._wait_for(lambda: len(submits) >= 2), (
+                f"rejected batch was never retried (pending="
+                f"{session.get('_kanban_pending')!r})"
+            )
+        finally:
+            stop.set()
+            thread.join(timeout=5)
+
+        # The retry carries the same notification — not a truncated or
+        # duplicated one — and the accepted dispatch clears the buffer.
+        assert tid in submits[0]
+        assert submits[1] == submits[0]
+        assert submits.count(submits[0]) == 2, submits
+        assert session["_kanban_pending"] == []
+        assert _sub_rows(tid)[0]["pending_event_ids"] is None
+
+    def test_rejected_dispatch_attempts_are_bounded_with_terminal_notice(
+        self, monkeypatch
+    ):
+        """Persistent rejection gets three attempts and one terminal notice."""
+        import threading
+        import tui_gateway.server as server
+
+        tid = _create_subscribed_task()
+        _complete(tid, summary="bounded retry")
+        session = self._poller_session(running=False)
+        submits: list[str] = []
+        calls: list[tuple] = []
+        emits: list[tuple] = []
+
+        def _submit(rid, _sid, _sess, text, **kwargs):
+            submits.append(text)
+            calls.append((rid, text, kwargs))
+            return False
+
+        monkeypatch.setattr(server, "_KANBAN_POLL_SECONDS", 0.01)
+        monkeypatch.setattr(
+            server, "_emit", lambda event, sid, payload=None: emits.append(
+                (event, sid, payload)
+            )
+        )
+        monkeypatch.setattr(server, "_run_prompt_submit", _submit)
+
+        stop = threading.Event()
+        thread = threading.Thread(
+            target=server._notification_poller_loop,
+            args=(stop, "sid-kanban-bound", session),
+            daemon=True,
+        )
+        thread.start()
+        try:
+            assert self._wait_for(
+                lambda: len(calls) == 3
+                and any(event == "notification.show" for event, _, _ in emits)
+            )
+        finally:
+            stop.set()
+            thread.join(timeout=5)
+
+        assert all(text == submits[0] for text in submits)
+        assert tid in submits[0]
+        assert len(calls) == 3
+        assert len({call[0] for call in calls}) == 1
+        batch_id = calls[0][0]
+        assert len(batch_id) == 64
+        assert all(char in "0123456789abcdef" for char in batch_id)
+        # The opaque request ID is stable, but the synthetic notification must
+        # not acquire display metadata that persists as a user transcript row.
+        assert all("display_kind" not in call[2] for call in calls)
+        terminal = [
+            payload
+            for event, _, payload in emits
+            if event == "notification.show"
+        ]
+        assert len(terminal) == 1
+        assert terminal[0]["key"] == f"kanban-dispatch:{batch_id}"
+        assert terminal[0]["id"] == terminal[0]["key"]
+        assert terminal[0]["level"] == "warn"
+        assert terminal[0]["kind"] == "sticky"
+        assert tid in terminal[0]["text"]
+        assert "retry manually" in terminal[0]["text"]
+        assert session["_kanban_pending"] == []
+
+        # Terminal in-memory handling does not remove the subscription; a
+        # later event remains eligible for collection.
+        rows = _sub_rows(tid)
+        assert len(rows) == 1
+        conn = kb.connect()
+        try:
+            with kb.write_txn(conn):
+                conn.execute(
+                    "UPDATE tasks SET status = 'ready' WHERE id = ?", (tid,)
+                )
+                kb._append_event(conn, tid, "status", {"status": "ready"})
+            kb.complete_task(conn, tid, summary="later event")
+        finally:
+            conn.close()
+        later = _collect_kanban_notifications(session)
+        assert any("later event" in text for text in later)
+        assert len(_sub_rows(tid)) == 1
+
+    def test_accepted_batch_is_not_dispatched_again_when_session_idles(
+        self, monkeypatch
+    ):
+        """A successfully accepted batch is delivered once, not replayed."""
+        import threading
+        import time
+        import tui_gateway.server as server
+
+        tid = _create_subscribed_task()
+        _complete(tid, summary="accepted exactly once")
+        session = self._poller_session(running=False)
+        submits: list[str] = []
+
+        monkeypatch.setattr(server, "_KANBAN_POLL_SECONDS", 0.01)
+        monkeypatch.setattr(server, "_emit", lambda *a, **kw: None)
+        monkeypatch.setattr(
+            server,
+            "_run_prompt_submit",
+            lambda _rid, _sid, _sess, text, **kwargs: submits.append(text),
+        )
+
+        stop = threading.Event()
+        thread = threading.Thread(
+            target=server._notification_poller_loop,
+            args=(stop, "sid-kanban-once", session),
+            daemon=True,
+        )
+        thread.start()
+        try:
+            assert self._wait_for(lambda: len(submits) == 1)
+            with session["history_lock"]:
+                session["running"] = False
+            time.sleep(0.1)
+            assert submits == [submits[0]]
+        finally:
+            stop.set()
+            thread.join(timeout=5)
+
+        assert tid in submits[0]
+        assert session["_kanban_pending"] == []
