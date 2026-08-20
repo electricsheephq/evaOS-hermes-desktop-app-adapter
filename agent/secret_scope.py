@@ -131,6 +131,11 @@ _GLOBAL_ENV_EXACT = frozenset({
     "GATEWAY_RELAY_PLATFORMS", "GATEWAY_RELAY_BOT_IDS",
     "GATEWAY_RELAY_ROUTE_KEYS", "GATEWAY_RELAY_INSTANCE_ID",
     "GATEWAY_RELAY_WAKE_URL", "GATEWAY_RELAY_DISPLAY_NAME",
+    # Managed evaOS desktop broker deployment settings. The secret remains
+    # inside the root-controlled file; only its path is process-global.
+    "EVAOS_DESKTOP_RUNTIME_SESSION_URL",
+    "PIPEDREAM_AGENT_BROKER_SECRET_FILE",
+    "CREDENTIALS_DIRECTORY",
 })
 _GLOBAL_ENV_PREFIXES = (
     "HERMES_KANBAN_",
