@@ -270,7 +270,7 @@ def test_terminal_scope_propagates_through_copy_context(tmp_path):
     assert config["docker_image"] == "thread-image"
 
 
-def test_missing_terminal_section_fails_open(tmp_path, monkeypatch):
+def test_missing_terminal_section_masks_gateway_defaults(tmp_path, monkeypatch):
     from gateway.run import _profile_runtime_scope
     from tools import terminal_tool
 
@@ -282,9 +282,16 @@ def test_missing_terminal_section_fails_open(tmp_path, monkeypatch):
     gateway_config = _seed_gateway_terminal_config(monkeypatch, gateway_home)
 
     with _profile_runtime_scope(routed_home):
-        routed_config = terminal_tool._get_env_config()
+        with mock.patch.object(
+            terminal_tool,
+            "_ensure_terminal_env_bridged",
+            side_effect=AssertionError("empty profile scope used the global bridge"),
+        ):
+            routed_config = terminal_tool._get_env_config()
 
-    assert routed_config == gateway_config
+    assert gateway_config["vercel_runtime"] == "node24"
+    assert routed_config["vercel_runtime"] == ""
+    assert routed_config != gateway_config
 
 
 def test_profile_terminal_mapping_is_precedence_neutral_for_empty_target(monkeypatch):

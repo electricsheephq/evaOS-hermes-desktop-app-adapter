@@ -2098,20 +2098,20 @@ def _multiplex_profile_homes(config: object) -> list[tuple[str, "Path"]]:
     )
 
 
-def _load_profile_terminal_config() -> Optional[Dict[str, str]]:
+def _load_profile_terminal_config() -> Dict[str, str]:
     """Resolve the active profile's terminal config into terminal env vars."""
     try:
         from hermes_cli.config import apply_terminal_config_to_env, read_raw_config
 
         raw_config = read_raw_config()
         if not isinstance(raw_config.get("terminal"), dict):
-            return None
+            return {}
         return apply_terminal_config_to_env(
             env={}, config=raw_config, override=True
         )
     except Exception:
         logger.debug("Could not load profile terminal config", exc_info=True)
-        return None
+        return {}
 
 
 @_contextmanager
@@ -24354,18 +24354,9 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             # so context discovery can load another profile's AGENTS.md.
             _session_cwd = None
             try:
-                from hermes_cli.config import (
-                    apply_terminal_config_to_env,
-                    load_config_readonly,
-                )
+                from tools.terminal_tool import get_terminal_setting
 
-                _cwd_env: Dict[str, str] = {}
-                apply_terminal_config_to_env(
-                    env=_cwd_env,
-                    config=load_config_readonly(),
-                    override=True,
-                )
-                _session_cwd = _cwd_env.get("TERMINAL_CWD")
+                _session_cwd = get_terminal_setting("TERMINAL_CWD", None)
             except Exception:
                 logger.warning(
                     "Could not resolve routed profile terminal.cwd; "

@@ -179,6 +179,149 @@ def test_multiplex_profile_without_config_masks_process_default_cwd(monkeypatch,
             runner._clear_session_env(tokens)
 
 
+def test_multiplex_session_resolves_terminal_config_once(monkeypatch, tmp_path):
+    """The routed scope loads config; _set_session_env must not load it again."""
+    import gateway.run as gateway_run
+    import hermes_cli.config as hermes_config
+
+    home = tmp_path / "profile" / "home"
+    workspace = tmp_path / "profile" / "workspace"
+    home.mkdir(parents=True)
+    workspace.mkdir(parents=True)
+    (home / "config.yaml").write_text(
+        f"terminal:\n  cwd: {workspace}\n", encoding="utf-8"
+    )
+
+    resolution_calls = 0
+    original_resolver = gateway_run._load_profile_terminal_config
+
+    def counted_resolver():
+        nonlocal resolution_calls
+        resolution_calls += 1
+        return original_resolver()
+
+    def reject_second_loader(*args, **kwargs):
+        raise AssertionError("_set_session_env must use the active terminal scope")
+
+    monkeypatch.setattr(gateway_run, "_load_profile_terminal_config", counted_resolver)
+    monkeypatch.setattr(hermes_config, "load_config_readonly", reject_second_loader)
+
+    runner = object.__new__(GatewayRunner)
+    runner.config = SimpleNamespace(multiplex_profiles=True)
+    runner.adapters = {}
+    context = SessionContext(
+        source=SessionSource(
+            platform=Platform.DISCORD,
+            chat_id="profile",
+            chat_type="channel",
+            user_id="profile-user",
+            profile="profile",
+        ),
+        connected_platforms=[],
+        home_channels={},
+    )
+
+    with _profile_runtime_scope(home):
+        assert resolution_calls == 1
+        tokens = runner._set_session_env(context)
+        runner._clear_session_env(tokens)
+        assert resolution_calls == 1
+
+    assert resolution_calls == 1
+
+
+def test_multiplex_profile_without_cwd_isolated_from_configured_sibling(monkeypatch, tmp_path):
+    """An empty routed profile must not inherit its configured sibling's context."""
+    from agent.prompt_builder import build_context_files_prompt
+    from agent.runtime_cwd import resolve_context_cwd
+
+    configured_home = tmp_path / "configured" / "home"
+    configured_workspace = tmp_path / "configured" / "workspace"
+    empty_home = tmp_path / "empty" / "home"
+    configured_home.mkdir(parents=True)
+    configured_workspace.mkdir(parents=True)
+    empty_home.mkdir(parents=True)
+    (configured_workspace / "AGENTS.md").write_text(
+        "# configured profile only\n", encoding="utf-8"
+    )
+    (configured_home / "config.yaml").write_text(
+        f"terminal:\n  cwd: {configured_workspace}\n", encoding="utf-8"
+    )
+    monkeypatch.setenv("TERMINAL_CWD", str(configured_workspace))
+
+    runner = object.__new__(GatewayRunner)
+    runner.config = SimpleNamespace(multiplex_profiles=True)
+    runner.adapters = {}
+
+    async def bind(profile, home):
+        context = SessionContext(
+            source=SessionSource(
+                platform=Platform.DISCORD,
+                chat_id=profile,
+                chat_type="channel",
+                user_id=f"{profile}-user",
+                profile=profile,
+            ),
+            connected_platforms=[],
+            home_channels={},
+        )
+        with _profile_runtime_scope(home):
+            tokens = runner._set_session_env(context)
+            try:
+                await asyncio.sleep(0)
+                cwd = resolve_context_cwd()
+                return cwd, build_context_files_prompt(cwd=cwd, skip_soul=True)
+            finally:
+                runner._clear_session_env(tokens)
+
+    async def run():
+        return await asyncio.gather(
+            bind("configured", configured_home),
+            bind("empty", empty_home),
+        )
+
+    configured, empty = asyncio.run(run())
+    assert configured[0] == configured_workspace
+    assert "configured profile only" in configured[1]
+    assert empty == (None, "")
+
+
+def test_single_profile_session_cwd_remains_unpinned(monkeypatch, tmp_path):
+    """Single-profile gateways keep cwd='' and process-setting fallback."""
+    import gateway.session_context as session_context
+    from agent.runtime_cwd import resolve_context_cwd
+
+    monkeypatch.setenv("TERMINAL_CWD", str(tmp_path))
+    captured = {}
+    original_set_session_vars = session_context.set_session_vars
+
+    def capture_set_session_vars(**kwargs):
+        captured["cwd"] = kwargs.get("cwd")
+        return original_set_session_vars(**kwargs)
+
+    monkeypatch.setattr(session_context, "set_session_vars", capture_set_session_vars)
+    runner = object.__new__(GatewayRunner)
+    runner.config = SimpleNamespace(multiplex_profiles=False)
+    runner.adapters = {}
+    context = SessionContext(
+        source=SessionSource(
+            platform=Platform.DISCORD,
+            chat_id="single",
+            chat_type="channel",
+            user_id="single-user",
+        ),
+        connected_platforms=[],
+        home_channels={},
+    )
+
+    tokens = runner._set_session_env(context)
+    try:
+        assert captured["cwd"] == ""
+        assert resolve_context_cwd() == tmp_path
+    finally:
+        runner._clear_session_env(tokens)
+
+
 def test_clear_session_env_restores_previous_state(monkeypatch):
     """_clear_session_env should restore contextvars to their pre-handler values."""
     runner = object.__new__(GatewayRunner)
