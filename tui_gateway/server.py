@@ -10164,6 +10164,25 @@ def _kanban_dispatch_batch_id(items: list[dict]) -> str:
     return hashlib.sha256(b"hermes.tui.kanban.dispatch.v1\0" + material).hexdigest()
 
 
+def _restore_async_kanban_batch(sid: str, session: dict, batch: dict) -> None:
+    """Restore a batch rejected after its turn thread already started."""
+    attempts = int(batch.get("attempts") or 0)
+    with session["history_lock"]:
+        if attempts < 3:
+            pending = list(session.get("_kanban_pending") or [])
+            if not any(item.get("batch_id") == batch.get("batch_id") for item in pending):
+                session["_kanban_pending"] = [batch, *pending]
+        session["running"] = False
+    if attempts >= 3:
+        key = f"kanban-dispatch:{batch['batch_id']}"
+        text = "\n".join(str(item["text"]) for item in batch["items"])
+        _emit("notification.show", sid, {
+            "text": f"{text}\n\nKanban notification delivery failed after 3 attempts; please retry manually.",
+            "level": "warn", "kind": "sticky", "ttl_ms": None,
+            "key": key, "id": key,
+        })
+
+
 def _notification_poller_loop(
     stop_event: threading.Event, sid: str, session: dict
 ) -> None:
@@ -10276,6 +10295,9 @@ def _notification_poller_loop(
                                 session,
                                 _batch_text,
                                 on_turn_recorded=_settle_recorded_claim,
+                                on_turn_rejected=lambda batch=_batch: _restore_async_kanban_batch(
+                                    sid, session, batch
+                                ),
                             )
                             is False
                         )
@@ -10860,6 +10882,7 @@ def _run_prompt_submit(
     image_paths: list[str] | None = None,
     queued_prompt_generation: int | None = None,
     on_turn_recorded: Callable[[], bool] | None = None,
+    on_turn_rejected: Callable[[], None] | None = None,
 ) -> bool:
     with session["history_lock"]:
         if session.get("_closing"):
@@ -10945,6 +10968,8 @@ def _run_prompt_submit(
         if isinstance(marker_text, str) and marker_text.strip():
             durable_ready = record_turn_start(marker_home, marker_key, marker_text, attempts=marker_attempt) and (on_turn_recorded is None or on_turn_recorded())
         if not durable_ready:
+            if on_turn_rejected is not None:
+                on_turn_rejected()
             _emit_terminal_turn_error(
                 sid, session, RuntimeError("durable notification turn could not be recorded")
             )
