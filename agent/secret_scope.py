@@ -114,6 +114,11 @@ _GLOBAL_ENV_EXACT = frozenset({
     # profile-scoped.
     "API_SERVER_ENABLED", "API_SERVER_HOST", "API_SERVER_PORT",
     "API_SERVER_CORS_ORIGINS",
+    # Managed evaOS desktop broker deployment settings. The secret remains
+    # inside the root-controlled file; only its path is process-global.
+    "EVAOS_DESKTOP_RUNTIME_SESSION_URL",
+    "PIPEDREAM_AGENT_BROKER_SECRET_FILE",
+    "CREDENTIALS_DIRECTORY",
 })
 _GLOBAL_ENV_PREFIXES = (
     "HERMES_KANBAN_",
