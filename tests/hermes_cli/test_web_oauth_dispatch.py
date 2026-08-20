@@ -137,6 +137,135 @@ def test_oauth_provider_status_uses_profile_query(tmp_path, monkeypatch):
     assert observed_homes == [profile_home]
 
 
+def test_oauth_provider_status_requires_session_token():
+    resp = client.get("/api/providers/oauth")
+
+    assert resp.status_code == 401
+
+
+def test_oauth_provider_status_omits_token_preview_and_filesystem_label(monkeypatch):
+    from hermes_cli import web_server as ws
+
+    fake_catalog = [{
+        "id": "fake-oauth",
+        "name": "Fake OAuth",
+        "flow": "pkce",
+        "cli_command": "hermes auth add fake-oauth",
+        "docs_url": "https://example.com",
+        "status_fn": lambda: {
+            "logged_in": True,
+            "source": "hermes_pkce",
+            "source_label": "Hermes PKCE (/Users/alice/.hermes/oauth.json)",
+            "token_preview": "…secret",
+            "expires_at": "2026-08-04T12:00:00Z",
+            "has_refresh_token": True,
+        },
+    }]
+    monkeypatch.setattr(ws, "_build_oauth_catalog", lambda: fake_catalog)
+
+    resp = client.get("/api/providers/oauth", headers=HEADERS)
+
+    assert resp.status_code == 200, resp.text
+    status = resp.json()["providers"][0]["status"]
+    assert status == {
+        "logged_in": True,
+        "source": "hermes_pkce",
+        "expires_at": "2026-08-04T12:00:00Z",
+        "has_refresh_token": True,
+    }
+
+
+def test_oauth_poll_requires_token_and_rejects_profile_substitution():
+    from hermes_cli import web_server as ws
+
+    session_id = "profile-bound-poll"
+    ws._oauth_sessions[session_id] = {
+        "session_id": session_id,
+        "provider": "nous",
+        "flow": "device_code",
+        "profile": "coder",
+        "created_at": time.time(),
+        "status": "pending",
+        "error_message": None,
+        "expires_at": time.time() + 600,
+    }
+    path = f"/api/providers/oauth/nous/poll/{session_id}"
+    try:
+        unauthenticated = client.get(path)
+        mismatch = client.get(f"{path}?profile=reviewer", headers=HEADERS)
+        matching = client.get(f"{path}?profile=coder", headers=HEADERS)
+        legacy_omitted = client.get(path, headers=HEADERS)
+
+        assert unauthenticated.status_code == 401
+        assert mismatch.status_code == 400
+        assert mismatch.json()["detail"] == "Profile mismatch for OAuth session"
+        assert matching.status_code == 200
+        assert matching.json()["status"] == "pending"
+        # Existing clients may omit the query; the session remains bound to
+        # its captured profile for every persistence operation.
+        assert legacy_omitted.status_code == 200
+    finally:
+        ws._oauth_sessions.pop(session_id, None)
+
+
+def test_oauth_submit_rejects_profile_substitution_before_exchange():
+    from hermes_cli import web_server as ws
+
+    session_id = "profile-bound-submit"
+    ws._oauth_sessions[session_id] = {
+        "session_id": session_id,
+        "provider": "anthropic",
+        "flow": "pkce",
+        "profile": "coder",
+        "created_at": time.time(),
+        "status": "pending",
+        "error_message": None,
+        "verifier": "verifier",
+        "state": "state",
+    }
+    try:
+        resp = client.post(
+            "/api/providers/oauth/anthropic/submit?profile=reviewer",
+            headers=HEADERS,
+            json={"session_id": session_id, "code": "authorization-code"},
+        )
+
+        assert resp.status_code == 400
+        assert resp.json()["detail"] == "Profile mismatch for OAuth session"
+        assert ws._oauth_sessions[session_id]["status"] == "pending"
+    finally:
+        ws._oauth_sessions.pop(session_id, None)
+
+
+def test_oauth_cancel_rejects_profile_substitution_without_removing_session():
+    from hermes_cli import web_server as ws
+
+    session_id = "profile-bound-cancel"
+    ws._oauth_sessions[session_id] = {
+        "session_id": session_id,
+        "provider": "openai-codex",
+        "flow": "device_code",
+        "profile": "coder",
+        "created_at": time.time(),
+        "status": "pending",
+        "error_message": None,
+    }
+    path = f"/api/providers/oauth/sessions/{session_id}"
+    try:
+        mismatch = client.delete(f"{path}?profile=reviewer", headers=HEADERS)
+
+        assert mismatch.status_code == 400
+        assert mismatch.json()["detail"] == "Profile mismatch for OAuth session"
+        assert session_id in ws._oauth_sessions
+        assert "cancelled" not in ws._oauth_sessions[session_id]
+
+        matching = client.delete(f"{path}?profile=coder", headers=HEADERS)
+        assert matching.status_code == 200
+        assert session_id not in ws._oauth_sessions
+    finally:
+        ws._oauth_sessions.pop(session_id, None)
+
+
 def test_oauth_start_stores_profile_for_background_completion(tmp_path, monkeypatch):
     from hermes_cli import web_server as ws
 
@@ -478,6 +607,235 @@ def test_nous_dashboard_poller_preserves_effective_scope_when_token_omits_scope(
         ws._oauth_sessions.pop(session_id, None)
 
 
+def test_anthropic_submit_persists_to_captured_session_profile(monkeypatch):
+    """The PKCE save must use the profile captured by the OAuth session."""
+    from hermes_cli import web_server as ws
+
+    session_id = "anthropic-captured-profile-test"
+    ws._oauth_sessions[session_id] = {
+        "session_id": session_id,
+        "provider": "anthropic",
+        "flow": "pkce",
+        "profile": "coder",
+        "created_at": time.time(),
+        "status": "pending",
+        "error_message": None,
+        "verifier": "verifier",
+        "state": "state",
+    }
+    captured_profiles = []
+
+    class _Scope:
+        def __init__(self, profile):
+            captured_profiles.append(profile)
+
+        def __enter__(self):
+            return None
+
+        def __exit__(self, *args):
+            return False
+
+    class _Response:
+        def read(self):
+            return json.dumps({
+                "access_token": "access-token",
+                "refresh_token": "refresh-token",
+                "expires_in": 3600,
+            }).encode()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    monkeypatch.setattr(ws, "_profile_scope", _Scope)
+    monkeypatch.setattr(ws, "_save_anthropic_oauth_creds", lambda *args: None)
+    monkeypatch.setattr(ws.urllib.request, "urlopen", lambda *args, **kwargs: _Response())
+
+    try:
+        result = ws._submit_anthropic_pkce(session_id, "authorization-code")
+        assert result == {"ok": True, "status": "approved"}
+        assert captured_profiles == ["coder"]
+    finally:
+        ws._oauth_sessions.pop(session_id, None)
+
+
+def test_nous_poller_uses_captured_session_profile_for_persistence(monkeypatch):
+    from hermes_cli import auth as auth_mod
+    from hermes_cli import web_server as ws
+
+    session_id = "nous-captured-profile-test"
+    ws._oauth_sessions[session_id] = {
+        "session_id": session_id,
+        "provider": "nous",
+        "flow": "device_code",
+        "profile": "coder",
+        "created_at": time.time(),
+        "status": "pending",
+        "error_message": None,
+        "portal_base_url": "https://portal.nousresearch.com",
+        "client_id": "hermes-cli",
+        "device_code": "device-code",
+        "interval": 5,
+        "expires_at": time.time() + 600,
+        "scope": auth_mod.DEFAULT_NOUS_SCOPE,
+    }
+    captured_profiles = []
+
+    class _Scope:
+        def __init__(self, profile):
+            captured_profiles.append(profile)
+
+        def __enter__(self):
+            return None
+
+        def __exit__(self, *args):
+            return False
+
+    def fake_poll_for_token(**kwargs):
+        ws._oauth_sessions[session_id]["profile"] = "reviewer"
+        return {
+            "access_token": "access-token",
+            "refresh_token": "refresh-token",
+            "expires_in": 3600,
+            "token_type": "Bearer",
+        }
+
+    monkeypatch.setattr(ws, "_profile_scope", _Scope)
+    monkeypatch.setattr(auth_mod, "_poll_for_token", fake_poll_for_token)
+    monkeypatch.setattr(
+        auth_mod,
+        "refresh_nous_oauth_from_state",
+        lambda state, **kwargs: state,
+    )
+    monkeypatch.setattr(auth_mod, "persist_nous_credentials", lambda state: None)
+
+    try:
+        ws._nous_poller(session_id)
+        assert captured_profiles == ["coder"]
+        assert ws._oauth_sessions[session_id]["status"] == "approved"
+    finally:
+        ws._oauth_sessions.pop(session_id, None)
+
+
+def test_minimax_poller_uses_captured_session_profile_for_persistence(monkeypatch):
+    from hermes_cli import auth as auth_mod
+    from hermes_cli import web_server as ws
+
+    session_id = "minimax-captured-profile-test"
+    ws._oauth_sessions[session_id] = {
+        "session_id": session_id,
+        "provider": "minimax-oauth",
+        "flow": "device_code",
+        "profile": "coder",
+        "created_at": time.time(),
+        "status": "pending",
+        "error_message": None,
+        "portal_base_url": "https://api.minimax.io",
+        "client_id": "hermes-cli",
+        "user_code": "user-code",
+        "code_verifier": "verifier",
+        "interval_ms": 2000,
+        "expired_in_raw": 600,
+        "region": "global",
+    }
+    captured_profiles = []
+
+    class _Scope:
+        def __init__(self, profile):
+            captured_profiles.append(profile)
+
+        def __enter__(self):
+            return None
+
+        def __exit__(self, *args):
+            return False
+
+    def fake_poll_token(**kwargs):
+        ws._oauth_sessions[session_id]["profile"] = "reviewer"
+        return {
+            "access_token": "access-token",
+            "refresh_token": "refresh-token",
+            "expired_in": 1_900_000_000,
+            "token_type": "Bearer",
+        }
+
+    monkeypatch.setattr(ws, "_profile_scope", _Scope)
+    monkeypatch.setattr(auth_mod, "_minimax_poll_token", fake_poll_token)
+    monkeypatch.setattr(
+        auth_mod,
+        "_minimax_resolve_token_expiry_unix",
+        lambda _expired_in, now: now.timestamp() + 3600,
+    )
+    monkeypatch.setattr(auth_mod, "_minimax_save_auth_state", lambda state: None)
+
+    try:
+        ws._minimax_poller(session_id)
+        assert captured_profiles == ["coder"]
+        assert ws._oauth_sessions[session_id]["status"] == "approved"
+    finally:
+        ws._oauth_sessions.pop(session_id, None)
+
+
+def test_xai_poller_uses_captured_session_profile_for_persistence(monkeypatch):
+    from hermes_cli import auth as auth_mod
+    from hermes_cli import web_server as ws
+
+    session_id = "xai-captured-profile-test"
+    ws._oauth_sessions[session_id] = {
+        "session_id": session_id,
+        "provider": "xai-oauth",
+        "flow": "device_code",
+        "profile": "coder",
+        "created_at": time.time(),
+        "status": "pending",
+        "error_message": None,
+        "device_code": "device-code",
+        "interval": 5,
+        "expires_at": time.time() + 600,
+    }
+    captured_profiles = []
+
+    class _Scope:
+        def __init__(self, profile):
+            captured_profiles.append(profile)
+
+        def __enter__(self):
+            return None
+
+        def __exit__(self, *args):
+            return False
+
+    def fake_poll_device_token(*args, **kwargs):
+        ws._oauth_sessions[session_id]["profile"] = "reviewer"
+        return {
+            "access_token": "access-token",
+            "refresh_token": "refresh-token",
+            "id_token": "",
+            "expires_in": 3600,
+            "token_type": "Bearer",
+        }
+
+    monkeypatch.setattr(ws, "_profile_scope", _Scope)
+    monkeypatch.setattr(
+        auth_mod,
+        "_xai_oauth_discovery",
+        lambda *args, **kwargs: {"token_endpoint": "https://auth.x.ai/token"},
+    )
+    monkeypatch.setattr(auth_mod, "_xai_oauth_poll_device_token", fake_poll_device_token)
+    monkeypatch.setattr(auth_mod, "_save_xai_oauth_tokens", lambda *args, **kwargs: None)
+    monkeypatch.setattr(auth_mod, "mark_provider_active_if_unset", lambda *args: None)
+    monkeypatch.setattr(auth_mod, "unsuppress_credential_source", lambda *args: None)
+
+    try:
+        ws._xai_device_poller(session_id)
+        assert captured_profiles == ["coder"]
+        assert ws._oauth_sessions[session_id]["status"] == "approved"
+    finally:
+        ws._oauth_sessions.pop(session_id, None)
+
+
 
 
 def test_xai_oauth_listed_as_device_code_flow():
@@ -693,7 +1051,5 @@ def test_status_falls_through_to_generic_dispatcher_for_catalog_only_provider():
     assert out["token_preview"] and "sk-future-secret-token-xyz" not in out["token_preview"]
     assert out["expires_at"] == "2026-12-01T00:00:00Z"
     assert out["has_refresh_token"] is True
-
-
 
 
