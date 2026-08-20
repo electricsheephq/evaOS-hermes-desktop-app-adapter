@@ -10070,7 +10070,6 @@ def _restore_async_kanban_batch(sid: str, session: dict, batch: dict) -> None:
             pending = list(session.get("_kanban_pending") or [])
             if not any(item.get("batch_id") == batch.get("batch_id") for item in pending):
                 session["_kanban_pending"] = [batch, *pending]
-        session["running"] = False
     if attempts >= 3:
         key = f"kanban-dispatch:{batch['batch_id']}"
         text = "\n".join(str(item["text"]) for item in batch["items"])
