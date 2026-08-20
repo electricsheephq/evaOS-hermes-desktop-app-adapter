@@ -86,6 +86,23 @@ def _(rid, params: dict) -> dict:
 def _(rid, params: dict) -> dict:
     session = _sessions.get(params.get("session_id", ""))
     try:
+        if session:
+            requested_profile = str(params.get("profile") or "").strip()
+            requested_home = _profile_home(requested_profile) or _hermes_home
+            session_home = session.get("profile_home") or _hermes_home
+            requested_key = os.path.normcase(
+                os.path.realpath(os.path.expanduser(str(requested_home)))
+            )
+            session_key = os.path.normcase(
+                os.path.realpath(os.path.expanduser(str(session_home)))
+            )
+            if requested_key != session_key:
+                return _err(
+                    rid,
+                    4003,
+                    "session does not belong to the requested profile",
+                )
+
         # Gate: /reload-mcp invalidates the prompt cache for this session.
         # Respect the ``approvals.mcp_reload_confirm`` config toggle — if
         # set (default true) AND the caller did not pass ``confirm=true``
@@ -2330,7 +2347,17 @@ def _(rid, params: dict) -> dict:
         servers = _get_mcp_servers()
         if name not in servers:
             return _err(rid, 4064, f"server '{name}' not found")
-        cfg = dict(servers[name])
+        entry = servers[name]
+        if (
+            isinstance(entry, dict)
+            and str(entry.get("auth") or "").lower().strip() == "evaos_lease"
+        ):
+            return _err(
+                rid,
+                4092,
+                f"server '{name}' is managed by the dashboard; disconnect the app there",
+            )
+        cfg = dict(entry)
         if not cfg.get("url"):
             return _err(
                 rid, 4001, "stdio servers authenticate via env keys, not OAuth"

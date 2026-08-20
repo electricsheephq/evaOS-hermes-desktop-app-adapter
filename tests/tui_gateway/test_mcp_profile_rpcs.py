@@ -260,6 +260,31 @@ def test_lease_managed_server_rejects_local_mutation(hermes_root, method, extra)
     assert not (hermes_root / "profiles" / "work" / ".env").exists()
 
 
+def test_lease_managed_server_rejects_oauth_start_before_worker(
+    hermes_root, monkeypatch
+):
+    from tui_gateway import mcp_oauth_sessions
+
+    config_path = _write_lease_server(hermes_root, "work")
+    before = config_path.read_bytes()
+    worker_calls = []
+    monkeypatch.setattr(
+        mcp_oauth_sessions,
+        "start_flow",
+        lambda *_args, **_kwargs: worker_calls.append(True),
+    )
+
+    response = _call(
+        "mcp.servers.oauth.start",
+        {"profile": "work", "name": "managed"},
+    )
+
+    assert response["error"]["code"] == 4092
+    assert "dashboard" in response["error"]["message"].lower()
+    assert worker_calls == []
+    assert config_path.read_bytes() == before
+
+
 def test_add_requires_transport(hermes_root):
     resp = _call("mcp.servers.add", {"profile": "work", "name": "empty", "config": {}})
     assert "error" in resp
@@ -290,6 +315,17 @@ def test_reload_mcp_runs_shutdown_and_discovery_in_requested_profile(
     from tools import mcp_tool
 
     observed = []
+    session_id = "work-session"
+    monkeypatch.setitem(
+        server._sessions,
+        session_id,
+        {
+            "agent": object(),
+            "profile_home": str(hermes_root / "profiles" / "work"),
+        },
+    )
+    monkeypatch.setattr(server, "_session_info", lambda *_args: {})
+    monkeypatch.setattr(server, "_emit", lambda *_args: None)
 
     def record(operation):
         observed.append((operation, get_hermes_home().resolve()))
@@ -304,11 +340,56 @@ def test_reload_mcp_runs_shutdown_and_discovery_in_requested_profile(
         "discover_mcp_tools",
         lambda: record("discover") or [],
     )
+    monkeypatch.setattr(mcp_tool, "refresh_agent_mcp_tools", lambda *_args, **_kwargs: None)
 
     result = _result(
-        _call("reload.mcp", {"profile": "work", "confirm": True})
+        _call(
+            "reload.mcp",
+            {"profile": "work", "session_id": session_id, "confirm": True},
+        )
     )
 
     work_home = (hermes_root / "profiles" / "work").resolve()
     assert result["status"] == "reloaded"
     assert observed == [("shutdown", work_home), ("discover", work_home)]
+
+
+def test_reload_mcp_rejects_session_from_another_profile_before_reload(
+    hermes_root, monkeypatch
+):
+    from tools import mcp_tool
+
+    session_id = "other-session"
+    monkeypatch.setitem(
+        server._sessions,
+        session_id,
+        {
+            "agent": object(),
+            "profile_home": str(hermes_root / "profiles" / "other"),
+        },
+    )
+    monkeypatch.setattr(
+        mcp_tool,
+        "shutdown_mcp_servers_for_current_scope",
+        lambda: pytest.fail("mismatched session reached shutdown"),
+    )
+    monkeypatch.setattr(
+        mcp_tool,
+        "discover_mcp_tools",
+        lambda: pytest.fail("mismatched session reached discovery"),
+    )
+    monkeypatch.setattr(
+        mcp_tool,
+        "refresh_agent_mcp_tools",
+        lambda *_args, **_kwargs: pytest.fail(
+            "mismatched session reached cache refresh"
+        ),
+    )
+
+    response = _call(
+        "reload.mcp",
+        {"profile": "work", "session_id": session_id, "confirm": True},
+    )
+
+    assert response["error"]["code"] == 4003
+    assert "requested profile" in response["error"]["message"]
