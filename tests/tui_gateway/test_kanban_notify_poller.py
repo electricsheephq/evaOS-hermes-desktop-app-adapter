@@ -500,12 +500,9 @@ class TestNotificationPollerLoopKanbanWiring:
         batch_id = calls[0][0]
         assert len(batch_id) == 64
         assert all(char in "0123456789abcdef" for char in batch_id)
-        assert all(call[2]["display_kind"] == "kanban_notification" for call in calls)
-        assert all(
-            call[2]["display_metadata"] == calls[0][2]["display_metadata"]
-            for call in calls
-        )
-        assert calls[0][2]["display_metadata"]["batch_id"] == batch_id
+        # The opaque request ID is stable, but the synthetic notification must
+        # not acquire display metadata that persists as a user transcript row.
+        assert all(call[2] == {} for call in calls)
         terminal = [
             payload
             for event, _, payload in emits
@@ -514,6 +511,8 @@ class TestNotificationPollerLoopKanbanWiring:
         assert len(terminal) == 1
         assert terminal[0]["key"] == f"kanban-dispatch:{batch_id}"
         assert terminal[0]["id"] == terminal[0]["key"]
+        assert terminal[0]["level"] == "warn"
+        assert terminal[0]["kind"] == "sticky"
         assert tid in terminal[0]["text"]
         assert "retry manually" in terminal[0]["text"]
         assert session["_kanban_pending"] == []

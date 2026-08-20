@@ -10076,7 +10076,7 @@ def _notification_poller_loop(
                 _batch_id = _kanban_dispatch_batch_id(_kanban_items)
                 session.setdefault("_kanban_pending", []).append(
                     {"batch_id": _batch_id, "items": list(_kanban_items),
-                     "attempts": 0, "display_metadata": {"batch_id": _batch_id}}
+                     "attempts": 0}
                 )
             _pending = session.get("_kanban_pending") or []
             if _pending:
@@ -10108,8 +10108,6 @@ def _notification_poller_loop(
                                 sid,
                                 session,
                                 _batch_text,
-                                display_kind="kanban_notification",
-                                display_metadata=_batch["display_metadata"],
                             )
                             is False
                         )
@@ -10131,8 +10129,8 @@ def _notification_poller_loop(
                                     "Kanban notification delivery failed after "
                                     "3 attempts; please retry manually."
                                 ),
-                                "level": "warning",
-                                "kind": "kanban",
+                                "level": "warn",
+                                "kind": "sticky",
                                 "ttl_ms": None,
                                 "key": _terminal_key,
                                 "id": _terminal_key,
