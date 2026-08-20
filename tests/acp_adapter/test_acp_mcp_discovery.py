@@ -67,7 +67,7 @@ def _reset_mcp_startup_state():
     mcp_startup._mcp_discovery_started.clear()
     mcp_startup._mcp_discovery_threads.clear()
     yield
-    for thread in mcp_startup._mcp_discovery_threads.values():
+    for thread in list(mcp_startup._mcp_discovery_threads.values()):
         if thread.is_alive():
             thread.join(timeout=2.0)
     mcp_startup._mcp_discovery_started.clear()
