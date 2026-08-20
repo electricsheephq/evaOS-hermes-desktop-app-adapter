@@ -10772,9 +10772,13 @@ def _oauth_status_response(status: Dict[str, Any]) -> Dict[str, Any]:
     source_label = public_status.get("source_label")
     if isinstance(source_label, str):
         # Catch direct paths as well as labels such as
-        # ``Hermes PKCE (/Users/alice/.hermes/...)``. URLs and ordinary
-        # provider labels remain useful to the authenticated client.
-        if re.search(r"(?:^|[\s(=])(?:~[/\\]|/(?!/)[^/\s)]*|[A-Za-z]:[\\/])", source_label):
+        # ``Hermes PKCE (/Users/alice/.hermes/...)`` or a Windows UNC path.
+        # URLs and ordinary provider labels remain useful to the authenticated
+        # client.
+        if re.search(
+            r"(?:^|[\s(=])(?:~[/\\]|/(?!/)[^/\s)]*|[A-Za-z]:[\\/]|\\\\[^\\/\s)]+[\\/])",
+            source_label,
+        ):
             public_status.pop("source_label", None)
 
     return public_status
