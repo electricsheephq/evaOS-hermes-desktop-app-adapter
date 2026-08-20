@@ -73,6 +73,17 @@ class TestBindSafety:
         assert security.resolve_bind_host() == "localhost"
 
 
+def test_profile_home_rejects_unsafe_named_profile(monkeypatch, tmp_path):
+    from plugins.platforms.a2a.adapter import _profile_home
+
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+
+    with pytest.raises(ValueError):
+        _profile_home("..")
+
+    assert _profile_home("default") == str(tmp_path)
+
+
 class TestPeerIdentity:
     """authenticate() maps presented credentials to identities; the body
     never asserts who the peer is."""
