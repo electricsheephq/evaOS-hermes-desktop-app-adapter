@@ -373,6 +373,10 @@ def validate_alias_name(name: str) -> None:
 
 def get_profile_dir(name: str) -> Path:
     """Resolve a profile name to its HERMES_HOME directory."""
+    from hermes_cli.profile_scope import current_principal, require_profile
+
+    if current_principal() is not None:
+        name = require_profile(name)
     canon = normalize_profile_name(name)
     if canon == "default":
         return _get_default_hermes_home()
@@ -393,6 +397,13 @@ def get_profile_dir(name: str) -> Path:
 
 def profile_exists(name: str) -> bool:
     """Check whether a profile directory exists."""
+    from hermes_cli.profile_scope import current_principal, require_profile
+
+    if current_principal() is not None:
+        try:
+            name = require_profile(name)
+        except PermissionError:
+            return False
     canon = normalize_profile_name(name)
     if canon == "default":
         return True
@@ -978,7 +989,10 @@ def list_profiles() -> List[ProfileInfo]:
                 description_auto=meta.get("description_auto", False),
             ))
 
-    return profiles
+    from hermes_cli.profile_scope import filter_profile_names
+
+    allowed = filter_profile_names(profile.name for profile in profiles)
+    return [profile for profile in profiles if profile.name in allowed]
 
 
 def profiles_to_serve(
