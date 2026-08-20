@@ -16,6 +16,20 @@ import pytest
 from hermes_state import SessionDB
 
 
+def _assert_all_read_permits_available(db):
+    """Prove the bounded pool returned every permit, without over-release."""
+    from hermes_state import _READ_POOL_MAX
+
+    while db._read_pool.qsize():
+        db._close_read_conn(db._read_pool.get_nowait())
+    held = [db._read_permits.acquire(blocking=False) for _ in range(_READ_POOL_MAX)]
+    assert all(held), "a reader permit remained held after the exercised path"
+    assert not db._read_permits.acquire(blocking=False)
+    for acquired in held:
+        if acquired:
+            db._read_permits.release()
+
+
 @pytest.fixture()
 def db(tmp_path):
     d = SessionDB(db_path=tmp_path / "state.db")
@@ -53,6 +67,41 @@ def test_read_conn_reused_via_pool(db):
         assert first is not None
     with db._read_ctx() as second:
         assert second is first, "sequential readers must reuse the pooled conn"
+
+
+@pytest.mark.requires_wal
+def test_auto_title_workers_return_permits_after_many_turns(db, monkeypatch):
+    """Fresh auto-title workers need no call-site release with ``_read_ctx``."""
+    from agent import title_generator
+
+    monkeypatch.setattr(title_generator, "generate_title", lambda *a, **k: None)
+    monkeypatch.setattr(title_generator, "_title_language", lambda: "")
+
+    for turn in range(25):
+        session_id = f"title-permit-{turn}"
+        db.create_session(session_id=session_id, source="cli", model="m")
+        worker = threading.Thread(
+            target=title_generator.auto_title_session,
+            args=(db, session_id, f"title turn {turn}"),
+        )
+        worker.start()
+        worker.join(timeout=5)
+        assert not worker.is_alive(), "auto-title worker did not settle"
+
+    assert db._read_permit_exhausted == 0
+    _assert_all_read_permits_available(db)
+
+
+def test_naive_reader_release_cannot_over_release_bounded_permits(db):
+    """A legacy call-site release without an acquired reader must fail closed."""
+
+    class _NotAcquired:
+        def close(self):
+            return None
+
+    with pytest.raises(ValueError):
+        db._close_read_conn(_NotAcquired())
+    _assert_all_read_permits_available(db)
 
 
 @pytest.mark.requires_wal

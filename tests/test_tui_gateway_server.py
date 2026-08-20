@@ -1,5 +1,6 @@
 import json
 import os
+import queue
 import subprocess
 import sys
 import threading
@@ -6461,6 +6462,59 @@ class _RecordingAgent:
     def run_conversation(self, prompt, conversation_history=None, stream_callback=None, **_kwargs):
         self._turns.append(prompt)
         return {"final_response": "", "messages": []}
+
+
+@pytest.mark.requires_wal
+def test_prompt_submit_turn_workers_return_bounded_reader_permits(
+    monkeypatch, tmp_path
+):
+    """Turn workers need no explicit release with ``SessionDB._read_ctx``."""
+    from hermes_state import SessionDB, _READ_POOL_MAX
+
+    _configure_immediate_prompt_run(monkeypatch, tmp_path, immediate_threads=False)
+    db = SessionDB(db_path=tmp_path / "state.db")
+    db.create_session(session_id="turn-permit", source="tui", model="m")
+    turns = []
+
+    class _Agent(_RecordingAgent):
+        session_id = "turn-permit"
+        _session_db = db
+
+        def run_conversation(self, prompt, **_kwargs):
+            assert self._session_db.get_session(self.session_id)["id"] == self.session_id
+            turns.append(prompt)
+            return {"final_response": "", "messages": []}
+
+    sid = "turn-permit-ui"
+    session = _session(
+        agent=_Agent(turns),
+        session_key="turn-permit",
+        running=True,
+    )
+    server._sessions[sid] = session
+    try:
+        for turn in range(25):
+            assert server._run_prompt_submit("rid", sid, session, f"turn {turn}") is True
+            worker = session["_run_thread"]
+            worker.join(timeout=5)
+            assert not worker.is_alive(), "turn worker did not settle"
+
+        assert len(turns) == 25
+        assert db._read_permit_exhausted == 0
+        while True:
+            try:
+                db._close_read_conn(db._read_pool.get_nowait())
+            except queue.Empty:
+                break
+        held = [db._read_permits.acquire(blocking=False) for _ in range(_READ_POOL_MAX)]
+        assert all(held), "turn workers stranded a reader permit"
+        assert not db._read_permits.acquire(blocking=False)
+        for acquired in held:
+            if acquired:
+                db._read_permits.release()
+    finally:
+        server._sessions.pop(sid, None)
+        db.close()
 
 
 def test_run_prompt_submit_rejects_worker_when_close_wins_publication(
