@@ -314,6 +314,20 @@ class TestWebServerEndpoints:
         assert response.status_code == 403
         assert response.json()["detail"] == "profile is not authorized"
 
+    def test_speak_stream_ws_rejects_unassigned_multiplex_token(self, monkeypatch):
+        from agent import secret_scope
+        from hermes_cli.web_server import _SESSION_TOKEN
+        from starlette.websockets import WebSocketDisconnect
+
+        monkeypatch.setattr(secret_scope, "_MULTIPLEX_ACTIVE", True)
+
+        with pytest.raises(WebSocketDisconnect) as exc:
+            with self.client.websocket_connect(
+                f"/api/audio/speak-stream?token={_SESSION_TOKEN}"
+            ) as socket:
+                socket.receive_json()
+        assert exc.value.code == 4403
+
     def test_managed_non_admin_blocked_prefixes_fail_closed(self):
         from hermes_cli.web_server import _MANAGED_NON_ADMIN_BLOCKED_PREFIXES
 
@@ -396,6 +410,76 @@ class TestWebServerEndpoints:
 
         assert response.status_code == 200
         assert response.json()["id"] == "owned-session"
+
+    @pytest.mark.parametrize("enumeration_mode", ["happy", "fallback"])
+    def test_managed_profile_session_endpoints_filter_targets_and_cache(
+        self,
+        monkeypatch,
+        tmp_path,
+        enumeration_mode,
+    ):
+        from hermes_cli import profiles as profiles_mod
+        from hermes_cli.web_routers import profiles as profiles_router
+        from hermes_state import SessionDB
+
+        profiles_root = tmp_path / "profiles"
+        homes = {}
+        for name in ("jane", "other"):
+            home = profiles_root / name
+            home.mkdir(parents=True)
+            homes[name] = home
+            db = SessionDB(db_path=home / "state.db")
+            try:
+                db.create_session(
+                    f"session-{name}",
+                    source="cli",
+                    profile_name=name,
+                )
+                db.append_message(f"session-{name}", role="user", content="hello")
+            finally:
+                db.close()
+
+        monkeypatch.setattr(profiles_mod, "_get_profiles_root", lambda: profiles_root)
+        if enumeration_mode == "happy":
+            monkeypatch.setattr(
+                profiles_mod,
+                "profiles_to_serve",
+                lambda multiplex: list(homes.items()),
+            )
+        else:
+            def fail_enumeration(*_args, **_kwargs):
+                raise RuntimeError("exercise managed fallback")
+
+            monkeypatch.setattr(profiles_mod, "profiles_to_serve", fail_enumeration)
+
+        profiles_router.get_profiles_sessions_sidebar.cache_clear()
+        profiles_router._sidebar_profile_cache_clear()
+
+        def headers_for(name):
+            return {
+                "x-evaos-allowed-profiles": name,
+                "x-evaos-primary-profile": name,
+                "x-evaos-profile-admin": "0",
+                "x-evaos-principal-user": f"user-{name}",
+            }
+
+        for name in ("jane", "other"):
+            aggregate = self.client.get(
+                "/api/profiles/sessions",
+                headers=headers_for(name),
+            )
+            assert aggregate.status_code == 200
+            assert {row["profile"] for row in aggregate.json()["sessions"]} == {name}
+            assert set(aggregate.json()["profile_totals"]) == {name}
+
+            sidebar = self.client.get(
+                "/api/profiles/sessions/sidebar",
+                headers=headers_for(name),
+            )
+            assert sidebar.status_code == 200
+            payload = sidebar.json()
+            assert {row["profile"] for row in payload["recents"]["sessions"]} == {name}
+            assert set(payload["recents"]["profiles_usage"]) == {name}
 
     @pytest.mark.requires_wal
     def test_get_sessions_poll_preserves_pending_wal(self):

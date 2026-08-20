@@ -46,6 +46,29 @@ def test_managed_scope_defaults_to_primary_and_rejects_other_profile(monkeypatch
         assert require_profile(None) == "louis"
 
 
+def test_managed_default_principal_binds_default_hermes_home(monkeypatch, tmp_path):
+    from hermes_constants import get_hermes_home
+
+    default_home = tmp_path / ".hermes"
+    profiles_root = default_home / "profiles"
+    default_home.mkdir()
+    profiles_root.mkdir()
+    monkeypatch.setattr(profiles, "_get_default_hermes_home", lambda: default_home)
+    monkeypatch.setattr(profiles, "_get_profiles_root", lambda: profiles_root)
+    principal = principal_from_headers(
+        {
+            "x-evaos-allowed-profiles": "default,jane",
+            "x-evaos-primary-profile": "default",
+            "x-evaos-principal-user": "user-1",
+        }
+    )
+
+    with managed_profile_context(principal):
+        assert current_effective_profile() == "default"
+        assert get_hermes_home() == default_home
+        assert profiles.get_profile_dir("default") == default_home
+
+
 def test_managed_profile_header_rejects_primary_outside_allowlist():
     with pytest.raises(ValueError):
         principal_from_headers(
