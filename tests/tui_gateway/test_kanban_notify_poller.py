@@ -419,6 +419,7 @@ class TestNotificationPollerLoopKanbanWiring:
                 # First dispatch is refused before any turn starts.
                 rejected.set()
                 return False
+            assert kwargs["on_turn_recorded"]() is True
             return True
 
         monkeypatch.setattr(server, "_KANBAN_POLL_SECONDS", 0.01)
@@ -434,6 +435,7 @@ class TestNotificationPollerLoopKanbanWiring:
         thread.start()
         try:
             assert self._wait_for(rejected.is_set), "dispatch was never attempted"
+            assert _sub_rows(tid)[0]["pending_event_ids"]
             # Retained for retry, and the retry actually happens.
             assert self._wait_for(lambda: len(submits) >= 2), (
                 f"rejected batch was never retried (pending="
@@ -449,6 +451,7 @@ class TestNotificationPollerLoopKanbanWiring:
         assert submits[1] == submits[0]
         assert submits.count(submits[0]) == 2, submits
         assert session["_kanban_pending"] == []
+        assert _sub_rows(tid)[0]["pending_event_ids"] is None
 
     def test_rejected_dispatch_attempts_are_bounded_with_terminal_notice(
         self, monkeypatch
@@ -502,7 +505,7 @@ class TestNotificationPollerLoopKanbanWiring:
         assert all(char in "0123456789abcdef" for char in batch_id)
         # The opaque request ID is stable, but the synthetic notification must
         # not acquire display metadata that persists as a user transcript row.
-        assert all(call[2] == {} for call in calls)
+        assert all("display_kind" not in call[2] for call in calls)
         terminal = [
             payload
             for event, _, payload in emits

@@ -9877,6 +9877,7 @@ _KANBAN_NOTIFY_KINDS = (
 )
 _KANBAN_SILENT_KINDS = frozenset({"archived", "unblocked"})
 _KANBAN_POLL_SECONDS = 5.0
+_KANBAN_DELIVERY_OWNER = uuid.uuid4().hex
 _LOOP_POLL_SECONDS = 5.0
 
 
@@ -10094,6 +10095,8 @@ def _collect_kanban_notifications(session: dict, *, include_identity: bool = Fal
                     continue
                 if sub.get("chat_id") != session_key:
                     continue
+                claim_kwargs = {"persist_delivery": include_identity,
+                                "delivery_owner": _KANBAN_DELIVERY_OWNER}
                 _old, _new, events = _kb.claim_unseen_events_for_sub(
                     conn,
                     task_id=sub["task_id"],
@@ -10101,6 +10104,7 @@ def _collect_kanban_notifications(session: dict, *, include_identity: bool = Fal
                     chat_id=sub["chat_id"],
                     thread_id=sub.get("thread_id") or "",
                     kinds=_KANBAN_NOTIFY_KINDS,
+                    **claim_kwargs,
                 )
                 if not events:
                     continue
@@ -10124,11 +10128,20 @@ def _collect_kanban_notifications(session: dict, *, include_identity: bool = Fal
                             texts.append({"text": text, "identity": identity})
                         else:
                             texts.append(text)
+                event_ids = [int(event.id) for event in events]
+                if include_identity and texts:
+                    # One durable claim per turn keeps settlement all-or-nothing.
+                    return texts
+                if include_identity:
+                    _kb.complete_notify_delivery(
+                        conn, task_id=sub["task_id"], platform=sub["platform"],
+                        chat_id=sub["chat_id"], thread_id=sub.get("thread_id") or "",
+                        event_ids=event_ids, delivery_owner=_KANBAN_DELIVERY_OWNER)
                 # Unsubscribe only on archive. ``done`` is reversible in
                 # review/controller flows, so retaining the subscription lets
                 # a later reopen notify the same originating TUI/Desktop
                 # session. The claimed cursor prevents historical replay.
-                if task and getattr(task, "status", "") == "archived":
+                if not include_identity and task and getattr(task, "status", "") == "archived":
                     try:
                         _kb.remove_notify_sub(
                             conn,
@@ -10169,6 +10182,7 @@ def _notification_poller_loop(
     same way (status.update + agent turn) — the delivery path
     tools/kanban_tools.py documents for platform="tui" rows (issue #59890).
     """
+    from hermes_cli import kanban_db as _kb
     from tools.process_registry import process_registry, format_process_notification
 
     _emitted = set()  # dedup re-queued events so same completion isn't emitted 50 times while session is busy
@@ -10239,6 +10253,20 @@ def _notification_poller_loop(
                     # back (ahead of anything collected since, preserving
                     # order) so the next poll retries it.
                     _restore_batch = False
+                    def _settle_recorded_claim() -> bool:
+                        identity = tuple(_batch_items[0]["identity"])
+                        board, task_id, platform, chat_id, thread_id = identity[:5]
+                        event_ids = [int(item["identity"][5]) for item in _batch_items]
+                        try:
+                            with contextlib.closing(_kb.connect(board=board)) as conn:
+                                return _kb.complete_notify_delivery(
+                                    conn, task_id=task_id, platform=platform,
+                                    chat_id=chat_id, thread_id=thread_id,
+                                    event_ids=event_ids,
+                                    delivery_owner=_KANBAN_DELIVERY_OWNER,
+                                )
+                        except Exception:
+                            return False
                     try:
                         _emit("message.start", sid)
                         _restore_batch = (
@@ -10247,6 +10275,7 @@ def _notification_poller_loop(
                                 sid,
                                 session,
                                 _batch_text,
+                                on_turn_recorded=_settle_recorded_claim,
                             )
                             is False
                         )
@@ -10830,6 +10859,7 @@ def _run_prompt_submit(
     display_metadata: dict | None = None,
     image_paths: list[str] | None = None,
     queued_prompt_generation: int | None = None,
+    on_turn_recorded: Callable[[], bool] | None = None,
 ) -> bool:
     with session["history_lock"]:
         if session.get("_closing"):
@@ -10911,8 +10941,17 @@ def _run_prompt_submit(
         marker_key = str(session.get("session_key") or "")
         marker_attempt = int(session.pop("_auto_continue_attempt", 0) or 0)
         marker_text = session.pop("_auto_continue_prompt", None) or text
+        durable_ready = on_turn_recorded is None
         if isinstance(marker_text, str) and marker_text.strip():
-            record_turn_start(marker_home, marker_key, marker_text, attempts=marker_attempt)
+            durable_ready = record_turn_start(marker_home, marker_key, marker_text, attempts=marker_attempt) and (on_turn_recorded is None or on_turn_recorded())
+        if not durable_ready:
+            _emit_terminal_turn_error(
+                sid, session, RuntimeError("durable notification turn could not be recorded")
+            )
+            with session["history_lock"]:
+                session["running"] = False
+                session["last_active"] = time.time()
+            return
         try:
             from tools.approval import (
                 reset_current_session_key,
