@@ -50,6 +50,15 @@ _session_latest_descendant = late("_session_latest_descendant")
 _strip_session_list_rows = late("_strip_session_list_rows")
 
 
+def _require_session_record_profile(session: dict) -> None:
+    from hermes_cli.profile_scope import require_session_profile
+
+    try:
+        require_session_profile(session.get("profile_name"))
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="Session profile is not authorized")
+
+
 @list_router.get("/api/sessions")
 def get_sessions(
     # ``le=100`` caps the page size (idea from #39200): an unbounded limit
@@ -560,6 +569,7 @@ async def get_session_detail(session_id: str, profile: Optional[str] = None):
         session = db.get_session(sid) if sid else None
         if not session:
             raise HTTPException(status_code=404, detail="Session not found")
+        _require_session_record_profile(session)
         # Always stamp the owning profile — the serving profile is known even
         # when the request carries no ``?profile=`` (it's this process's own
         # profile). Stamping only on explicit ``?profile=`` left rows for the
@@ -583,7 +593,11 @@ async def get_session_latest_descendant(
     def _lookup():
         db = _open_session_db_for_profile(profile, read_only=True)
         try:
-            return _session_latest_descendant(session_id, db)
+            latest, path = _session_latest_descendant(session_id, db)
+            if latest:
+                session = db.get_session(latest)
+                _require_session_record_profile(session or {})
+            return latest, path
         finally:
             db.close()
 
@@ -620,6 +634,8 @@ async def get_session_messages(
             if not sid:
                 return None
             sid = db.resolve_resume_session_id(sid)
+            session = db.get_session(sid)
+            _require_session_record_profile(session or {})
             # Always page this endpoint. An omitted limit used to load an
             # entire transcript, which can be hundreds of thousands of rows
             # for a runaway session and exhaust the dashboard process. Keep
@@ -674,6 +690,8 @@ async def delete_session_endpoint(session_id: str, profile: Optional[str] = None
             sid = db.resolve_session_id(session_id)
             if not sid:
                 return {"ok": True, "already_absent": True}
+            session = db.get_session(sid)
+            _require_session_record_profile(session or {})
             db.delete_session(sid)
             return {"ok": True}
         finally:
@@ -698,6 +716,8 @@ async def rename_session_endpoint(session_id: str, body: SessionRename):
         sid = db.resolve_session_id(session_id)
         if not sid:
             raise HTTPException(status_code=404, detail="Session not found")
+        session = db.get_session(sid)
+        _require_session_record_profile(session or {})
         if (
             body.title is None
             and body.archived is None
@@ -739,7 +759,10 @@ async def export_session_endpoint(session_id: str, profile: Optional[str] = None
         db = _open_session_db_for_profile(profile, read_only=True)
         try:
             sid = db.resolve_session_id(session_id)
-            return (sid, db.get_session(sid)) if sid else None
+            session = db.get_session(sid) if sid else None
+            if sid:
+                _require_session_record_profile(session or {})
+            return (sid, session) if sid else None
         finally:
             db.close()
 

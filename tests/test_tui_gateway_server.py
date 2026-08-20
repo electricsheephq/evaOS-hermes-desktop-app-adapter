@@ -14769,6 +14769,107 @@ def test_session_active_list_excludes_finalized_sessions(monkeypatch):
     assert [row["id"] for row in session_rows] == ["sid-live"]
 
 
+def test_managed_session_registry_hides_and_refuses_other_profile(monkeypatch, tmp_path):
+    from hermes_cli import profiles
+    from hermes_cli.profile_scope import managed_profile_context, principal_from_headers
+
+    profiles_root = tmp_path / "profiles"
+    jane_home = profiles_root / "jane"
+    louis_home = profiles_root / "louis"
+    jane_home.mkdir(parents=True)
+    louis_home.mkdir(parents=True)
+    monkeypatch.setattr(profiles, "_get_profiles_root", lambda: profiles_root)
+    monkeypatch.setattr(server, "_get_db", lambda: None)
+
+    previous_sessions = dict(server._sessions)
+    server._sessions.clear()
+    server._sessions["sid-jane"] = _session(
+        session_key="key-jane",
+        profile_home=str(jane_home),
+    )
+    server._sessions["sid-louis"] = _session(
+        session_key="key-louis",
+        profile_home=str(louis_home),
+    )
+    principal = principal_from_headers(
+        {
+            "x-evaos-allowed-profiles": "jane,louis",
+            "x-evaos-primary-profile": "jane",
+            "x-evaos-profile-admin": "1",
+            "x-evaos-principal-user": "user-1",
+            "x-evaos-session-id": "session-1",
+        }
+    )
+    try:
+        with managed_profile_context(principal, effective_profile="jane"):
+            listed = server.handle_request(
+                {
+                    "id": "list",
+                    "method": "session.active_list",
+                    "params": {},
+                }
+            )
+            denied = server.handle_request(
+                {
+                    "id": "activate",
+                    "method": "session.activate",
+                    "params": {"session_id": "sid-louis"},
+                }
+            )
+            assert server._find_live_session_by_key("key-louis") is None
+    finally:
+        server._sessions.clear()
+        server._sessions.update(previous_sessions)
+
+    assert [row["id"] for row in listed["result"]["sessions"]] == ["sid-jane"]
+    assert denied["error"]["code"] == 4001
+
+
+@pytest.mark.parametrize("recorded_profile", [None, "louis"])
+def test_managed_session_resume_refuses_unassigned_or_conflicting_profile(
+    monkeypatch,
+    recorded_profile,
+):
+    from hermes_cli.profile_scope import managed_profile_context, principal_from_headers
+
+    class _DB:
+        def get_session(self, session_id):
+            assert session_id == "target"
+            return {"id": session_id, "profile_name": recorded_profile}
+
+        def get_session_by_title(self, title):
+            return None
+
+        def reopen_session(self, session_id):
+            raise AssertionError("refused resume must not write")
+
+    db = _DB()
+    monkeypatch.setattr(server, "_profile_home", lambda _profile: None)
+    monkeypatch.setattr(server, "_get_db", lambda: db)
+    principal = principal_from_headers(
+        {
+            "x-evaos-allowed-profiles": "jane,louis",
+            "x-evaos-primary-profile": "jane",
+            "x-evaos-profile-admin": "1",
+            "x-evaos-principal-user": "user-1",
+        }
+    )
+
+    with managed_profile_context(principal, effective_profile="jane"):
+        response = server.handle_request(
+            {
+                "id": "resume",
+                "method": "session.resume",
+                "params": {"session_id": "target"},
+            }
+        )
+
+    assert response["error"] == {
+        "code": 4003,
+        "message": "session profile is not authorized",
+    }
+
+
 
 def test_session_activate_returns_inflight_stream_before_completion(monkeypatch):
     """Switching into a still-running live session must hydrate partial output.

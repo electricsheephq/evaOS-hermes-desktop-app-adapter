@@ -322,7 +322,10 @@ def _(rid, params: dict) -> dict:
     # ``profile`` (app-global remote mode): resume a session that lives in another
     # local profile's state.db. None/own profile → the launch profile (unchanged).
     profile = (params.get("profile") or "").strip() or None
-    profile_home = _profile_home(profile)
+    try:
+        profile_home = _profile_home(profile)
+    except PermissionError:
+        return _err(rid, 4003, "profile is not authorized")
     defer_history = is_truthy_value(params.get("defer_history", False))
     # Desktop hydrates persisted transcripts through the authenticated REST
     # route in parallel. Suppress the duplicate WebSocket transcript only when
@@ -366,6 +369,13 @@ def _(rid, params: dict) -> dict:
             else:
                 return _err(rid, 4007, "session not found")
 
+        from hermes_cli.profile_scope import require_session_profile
+
+        try:
+            require_session_profile(found.get("profile_name") if found else None)
+        except PermissionError:
+            return _err(rid, 4003, "session profile is not authorized")
+
         # Follow the compression-continuation chain to the live tip so a resume on
         # a rotated-out parent id binds to the descendant that actually holds the
         # post-compression turns. Auto-compression ends the session and forks a
@@ -385,6 +395,10 @@ def _(rid, params: dict) -> dict:
             if tip and tip != target:
                 target = tip
                 found = db.get_session(target) or found
+                try:
+                    require_session_profile(found.get("profile_name"))
+                except PermissionError:
+                    return _err(rid, 4003, "session profile is not authorized")
 
         # Every interactive resume path materializes the model history, even when
         # omit_messages suppresses the response copy. Count the complete lineage
@@ -1037,6 +1051,7 @@ def _(rid, params: dict) -> dict:
         _session_live_item(sid, session, current)
         for sid, session in snapshot
         if not session.get("_finalized")
+        and _managed_session_is_authorized(session)
     ]
     return _ok(rid, {"sessions": rows})
 

@@ -329,6 +329,14 @@ def _resolve_restart_drain_timeout() -> float:
         return DEFAULT_GATEWAY_RESTART_DRAIN_TIMEOUT
 
 
+def _initialize_managed_profile_scope() -> None:
+    """Bind dashboard authorization to the configured multiplex topology."""
+    from agent.secret_scope import set_multiplex_active
+    from gateway.config import load_gateway_config
+
+    set_multiplex_active(bool(load_gateway_config().multiplex_profiles))
+
+
 def _eager_reconcile_own_session_db() -> None:
     """One writable open of this process's own state.db at startup.
 
@@ -385,6 +393,7 @@ async def _lifespan(app: "FastAPI"):
     # run_in_executor still froze the event loop for 15-22 s, causing the
     # Desktop's 10-second WebSocket ready-probe to time out (GH-73083).
     _warm_gateway_module()
+    _initialize_managed_profile_scope()
 
     # Desktop-spawned backends (HERMES_DESKTOP=1) fire cron jobs themselves,
     # since the app has no gateway running the scheduler. Server `hermes
@@ -852,6 +861,92 @@ async def _token_auth_seam(request: Request, call_next):
     """
     from hermes_cli.dashboard_auth.token_auth import token_auth_middleware
     return await token_auth_middleware(request, call_next)
+
+
+_MANAGED_NON_ADMIN_BLOCKED_PREFIXES = (
+    "/api/console",
+    "/api/pty",
+    "/api/fs/",
+    "/api/process",
+    "/api/ssh/",
+    "/api/system",
+    "/api/terminal",
+    "/api/shell",
+    "/api/update",
+    "/api/hermes/update",
+)
+
+
+def _managed_websocket_profile(
+    ws: WebSocket,
+    requested_profile: str | None,
+    *,
+    admin_required: bool = False,
+) -> str | None:
+    """Resolve a managed WebSocket's profile before accepting the socket."""
+    from hermes_cli.profile_scope import (
+        managed_profile_context,
+        principal_from_headers,
+        require_profile,
+    )
+
+    principal = principal_from_headers(ws.headers)
+    if admin_required and principal is not None and not principal.admin:
+        raise PermissionError("administrator access required")
+    with managed_profile_context(principal):
+        return require_profile(requested_profile)
+
+
+@app.middleware("http")
+async def evaos_managed_profile_scope_middleware(request: Request, call_next):
+    """Bind VM-proxy-authenticated evaOS profile authority to this request."""
+    from hermes_cli.profile_scope import (
+        managed_profile_context,
+        principal_from_headers,
+        require_profile,
+    )
+
+    try:
+        principal = principal_from_headers(request.headers)
+    except ValueError:
+        return JSONResponse({"detail": "invalid managed profile scope"}, status_code=403)
+    if principal is None:
+        try:
+            require_profile(None)
+        except PermissionError:
+            return JSONResponse({"detail": "profile is not authorized"}, status_code=403)
+        return await call_next(request)
+
+    with managed_profile_context(principal):
+        try:
+            requested_profile = (request.query_params.get("profile") or "").strip()
+            effective_profile = principal.primary_profile
+            if requested_profile:
+                selected = require_profile(requested_profile, allow_selectors={"all"})
+                if selected != "all":
+                    effective_profile = selected
+            profile_route = re.match(r"^/api/profiles/([^/]+)", request.url.path)
+            if profile_route and profile_route.group(1) not in {"active", "sessions"}:
+                effective_profile = require_profile(profile_route.group(1))
+        except PermissionError:
+            return JSONResponse({"detail": "profile is not authorized"}, status_code=403)
+
+    with managed_profile_context(principal, effective_profile=effective_profile):
+        if not principal.admin:
+            path = request.url.path
+            manages_profiles = (
+                path == "/api/profiles" and request.method != "GET"
+            ) or (
+                path.startswith("/api/profiles/")
+                and request.method not in {"GET", "HEAD"}
+            )
+            if manages_profiles or path.startswith(_MANAGED_NON_ADMIN_BLOCKED_PREFIXES):
+                return JSONResponse(
+                    {"detail": "administrator access required"},
+                    status_code=403,
+                )
+
+        return await call_next(request)
 
 
 # ---------------------------------------------------------------------------
@@ -16572,9 +16667,18 @@ async def console_ws(ws: WebSocket) -> None:
         await ws.close(code=4408, reason=_ws_close_reason(client_reason))
         return
 
+    try:
+        profile = _managed_websocket_profile(
+            ws,
+            _console_profile_from_ws(ws),
+            admin_required=True,
+        )
+    except (PermissionError, ValueError):
+        await ws.close(code=4403, reason="administrator access required")
+        return
+
     await ws.accept()
 
-    profile = _console_profile_from_ws(ws)
     send_lock = asyncio.Lock()
 
     try:
@@ -16928,6 +17032,16 @@ async def pty_ws(ws: WebSocket) -> None:
         await ws.close(code=4408, reason=_ws_close_reason(client_reason))
         return
 
+    try:
+        profile = _managed_websocket_profile(
+            ws,
+            ws.query_params.get("profile") or None,
+            admin_required=True,
+        )
+    except (PermissionError, ValueError):
+        await ws.close(code=4403, reason="administrator access required")
+        return
+
     await ws.accept()
     _log.info("pty accepted peer=%s mode=%s cred=%s", peer, mode, cred)
 
@@ -16946,7 +17060,6 @@ async def pty_ws(ws: WebSocket) -> None:
     # --- spawn PTY ------------------------------------------------------
     raw_resume = ws.query_params.get("resume") or None
     resume = raw_resume
-    profile = ws.query_params.get("profile") or None
     channel = _channel_or_close_code(ws)
     sidecar_url = _build_sidecar_url(channel) if channel else None
     force_fresh = (ws.query_params.get("fresh") or "").strip().lower() in {
@@ -17096,8 +17209,22 @@ async def gateway_ws(ws: WebSocket) -> None:
         return
 
     from tui_gateway.ws import handle_ws
+    from hermes_cli.profile_scope import (
+        managed_profile_context,
+        principal_from_headers,
+        require_profile,
+    )
 
-    await handle_ws(ws)
+    try:
+        principal = principal_from_headers(ws.headers)
+        with managed_profile_context(principal):
+            requested_profile = (ws.query_params.get("profile") or "").strip()
+            effective_profile = require_profile(requested_profile)
+    except (PermissionError, ValueError):
+        await ws.close(code=4403)
+        return
+    with managed_profile_context(principal, effective_profile=effective_profile):
+        await handle_ws(ws)
 
 
 # ---------------------------------------------------------------------------
