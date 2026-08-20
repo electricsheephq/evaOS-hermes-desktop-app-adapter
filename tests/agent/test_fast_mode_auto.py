@@ -275,3 +275,36 @@ def test_policy_never_mutates_prompt_or_message_roles():
         "assistant",
         "tool",
     ]
+
+
+def test_default_off_request_and_transcript_are_byte_identical():
+    """The opt-in policy is inert when no dynamic mode is configured."""
+    agent = _agent(
+        service_tier=None,
+        request_overrides={"timeout": 9, "extra_body": {"trace": "keep"}},
+    )
+    messages = [
+        {"role": "system", "content": "stable prompt"},
+        {"role": "user", "content": "hello"},
+    ]
+    before_messages = [dict(message) for message in messages]
+    request = {
+        "model": agent.model,
+        "messages": messages,
+        "timeout": 9,
+        "extra_body": {"trace": "keep"},
+    }
+    before_request = {
+        key: ([dict(message) for message in value] if key == "messages" else value)
+        for key, value in request.items()
+    }
+
+    begin_fast_mode_turn(agent, messages, now=100.0)
+
+    assert effective_request_overrides(agent, now=100.0) == {
+        "timeout": 9,
+        "extra_body": {"trace": "keep"},
+    }
+    dispatched = revalidate_fast_mode_request(agent, request)
+    assert dispatched == before_request
+    assert messages == before_messages

@@ -53,6 +53,35 @@ def test_is_destructive_command_treats_cp_as_mutating():
     assert run_agent._is_destructive_command("cp .env.local .env") is True
 
 
+def test_default_off_conversation_emits_no_fast_metadata(agent):
+    """The normal conversation path stays byte-equivalent when opt-in is absent."""
+    agent._cached_system_prompt = "You are helpful."
+    agent._use_prompt_caching = False
+    agent.compression_enabled = False
+    agent.save_trajectories = False
+    agent.service_tier = None
+    agent.request_overrides = {"timeout": 9}
+    captured = {}
+
+    def _capture_request(api_kwargs):
+        captured.update(api_kwargs)
+        return _mock_response(content="done")
+
+    with (
+        patch.object(agent, "_interruptible_api_call", side_effect=_capture_request),
+        patch.object(agent, "_persist_session"),
+        patch.object(agent, "_save_trajectory"),
+        patch.object(agent, "_cleanup_task_resources"),
+    ):
+        result = agent.run_conversation("hello")
+
+    assert result["completed"] is True
+    assert result["final_response"] == "done"
+    assert captured["timeout"] == 9
+    assert "service_tier" not in captured
+    assert "speed" not in captured
+
+
 
 
 
