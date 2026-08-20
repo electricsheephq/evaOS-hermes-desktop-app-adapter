@@ -1942,6 +1942,11 @@ def _submit_prompt_to_compute_host(
     except Exception as exc:
         return _err(rid, 5019, f"compute-host dispatch failed: {exc}")
     with session["history_lock"]:
+        # A prior in-process turn can leave its completed worker handle on the
+        # session.  The compute-host path has no local worker for this turn, so
+        # retaining that dead handle lets reconnect reconciliation mistake the
+        # active isolated turn for a finished local one.
+        session.pop("_run_thread", None)
         session["_compute_host_active"] = True
         if image_paths is None:
             session["attached_images"] = []

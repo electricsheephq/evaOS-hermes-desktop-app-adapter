@@ -257,6 +257,11 @@ def test_default_config_seeds_dashboard_process_isolation_keys():
 
 
 def test_prompt_submit_dispatches_to_compute_host_when_turn_isolation_enabled(monkeypatch):
+    class _DeadLocalThread:
+        @staticmethod
+        def is_alive():
+            return False
+
     class FakeSupervisor:
         def __init__(self):
             self.frames = []
@@ -270,6 +275,7 @@ def test_prompt_submit_dispatches_to_compute_host_when_turn_isolation_enabled(mo
     fake_supervisor = FakeSupervisor()
     seed_history = [{"role": "user", "content": "previous"}]
     server._sessions["iso-sid"] = _session(history=list(seed_history))
+    server._sessions["iso-sid"]["_run_thread"] = _DeadLocalThread()
     server._sessions["iso-sid"]["agent"] = None
     server._sessions["iso-sid"]["agent_ready"] = threading.Event()
     parent_writes = {"ensure_session": 0, "persist_seed": 0}
@@ -310,6 +316,12 @@ def test_prompt_submit_dispatches_to_compute_host_when_turn_isolation_enabled(mo
         assert server._sessions["iso-sid"]["history"] == seed_history
         assert parent_writes == {"ensure_session": 0, "persist_seed": 0}
         assert server._sessions["iso-sid"]["running"] is True
+        assert "_run_thread" not in server._sessions["iso-sid"]
+
+        live = server._live_session_payload(
+            "iso-sid", server._sessions["iso-sid"], omit_messages=True
+        )
+        assert live["running"] is True
 
         fake_supervisor.callback(
             {
