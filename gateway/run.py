@@ -2159,6 +2159,29 @@ def _profile_runtime_scope(profile_home: "Path"):
         reset_hermes_home_override(home_token)
 
 
+def _prepare_mcp_registry_for_gateway_agent() -> None:
+    """Complete profile-scoped MCP discovery before an agent snapshots tools."""
+    from agent.secret_scope import is_multiplex_active
+
+    if not is_multiplex_active():
+        return
+    try:
+        from tools.mcp_tool import discover_mcp_tools
+
+        discover_mcp_tools()
+    except Exception as exc:
+        logger.warning(
+            "Profile-scoped MCP discovery failed before agent build: %s", exc
+        )
+        raise
+
+
+def _create_gateway_agent(agent_factory, **kwargs):
+    """Build an agent only after scoped MCP discovery completes."""
+    _prepare_mcp_registry_for_gateway_agent()
+    return agent_factory(**kwargs)
+
+
 def load_gateway_config_for_runner() -> "GatewayConfig":
     """Load gateway config for the process-level GatewayRunner.
 
@@ -5638,7 +5661,8 @@ class TurnRunner:
 
         if agent is None:
             # Config changed or first message — create fresh agent
-            agent = ctx.AIAgent(
+            agent = _create_gateway_agent(
+                ctx.AIAgent,
                 model=turn_route["model"],
                 **turn_route["runtime"],
                 **_checkpoint_agent_kwargs(ctx.user_config),
@@ -23266,28 +23290,69 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         wrapper can invoke the same path whether the user confirmed via
         button, text reply, or has the confirm gate disabled.
         """
-        loop = asyncio.get_running_loop()
+        multiplex = bool(
+            getattr(getattr(self, "config", None), "multiplex_profiles", False)
+        )
+        target_profile = str(getattr(event.source, "profile", "") or "").strip()
+        target_namespace = (
+            "main" if target_profile in {"", "default"} else target_profile
+        )
+
+        if multiplex:
+            profile_home = self._resolve_profile_home_for_source(event.source)
+            with _profile_runtime_scope(profile_home):
+                return await self._execute_mcp_reload_in_current_scope(
+                    event,
+                    multiplex=True,
+                    target_namespace=target_namespace,
+                )
+
+        return await self._execute_mcp_reload_in_current_scope(
+            event,
+            multiplex=False,
+            target_namespace=target_namespace,
+        )
+
+    async def _execute_mcp_reload_in_current_scope(
+        self,
+        event: MessageEvent,
+        *,
+        multiplex: bool,
+        target_namespace: str,
+    ) -> str:
         try:
-            from tools.mcp_tool import shutdown_mcp_servers, discover_mcp_tools, _servers, _lock
+            from tools.mcp_tool import (
+                discover_mcp_tools,
+                get_mcp_server_inventory_for_current_profile,
+                shutdown_mcp_servers,
+                shutdown_mcp_servers_for_current_scope,
+            )
 
             # Capture old server names before shutdown
-            with _lock:
-                old_servers = set(_servers.keys())
+            old_servers, _ = get_mcp_server_inventory_for_current_profile()
 
             # Read new config before shutting down, so we know what will be added/removed
             # Shutdown existing connections
-            await loop.run_in_executor(None, shutdown_mcp_servers)
+            shutdown = (
+                shutdown_mcp_servers_for_current_scope
+                if multiplex
+                else shutdown_mcp_servers
+            )
+            await self._run_in_executor_with_context(shutdown)
 
             # Reconnect by discovering tools (reads config.yaml fresh)
-            new_tools = await loop.run_in_executor(None, discover_mcp_tools)
+            new_tools = await self._run_in_executor_with_context(
+                discover_mcp_tools
+            )
 
             # Compute what changed
-            with _lock:
-                connected_servers = set(_servers.keys())
+            available_servers, connected_servers = (
+                get_mcp_server_inventory_for_current_profile()
+            )
 
-            added = connected_servers - old_servers
-            removed = old_servers - connected_servers
-            reconnected = connected_servers & old_servers
+            added = available_servers - old_servers
+            removed = old_servers - available_servers
+            reconnected = available_servers & old_servers & connected_servers
 
             lines = [t("gateway.reload_mcp.header")]
             if reconnected:
@@ -23296,10 +23361,10 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 lines.append(t("gateway.reload_mcp.added", names=", ".join(sorted(added))))
             if removed:
                 lines.append(t("gateway.reload_mcp.removed", names=", ".join(sorted(removed))))
-            if not connected_servers:
+            if not available_servers:
                 lines.append(t("gateway.reload_mcp.none_connected"))
             else:
-                lines.append(t("gateway.reload_mcp.tools_available", tools=len(new_tools), servers=len(connected_servers)))
+                lines.append(t("gateway.reload_mcp.tools_available", tools=len(new_tools), servers=len(available_servers)))
 
             # Refresh cached agents so existing sessions see new MCP tools on
             # their next turn — without this, the user has to `/new` (which
@@ -23314,6 +23379,10 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 if _cache_lock is not None and _cache:
                     with _cache_lock:
                         for _sess_key, _entry in list(_cache.items()):
+                            if multiplex and not str(_sess_key).startswith(
+                                f"agent:{target_namespace}:"
+                            ):
+                                continue
                             try:
                                 _agent = _entry[0] if isinstance(_entry, tuple) else _entry
                             except Exception:
@@ -30668,6 +30737,7 @@ async def start_gateway(config: Optional[GatewayConfig] = None, replace: bool = 
                 return False
             try:
                 from tools.mcp_tool import shutdown_mcp_servers
+                # Deliberately global: this is process/gateway teardown.
                 shutdown_mcp_servers()
             except Exception:
                 pass
@@ -30827,6 +30897,7 @@ async def start_gateway(config: Optional[GatewayConfig] = None, replace: bool = 
     # Close MCP server connections
     try:
         from tools.mcp_tool import shutdown_mcp_servers
+        # Deliberately global: the gateway process is exiting.
         shutdown_mcp_servers()
     except Exception:
         pass

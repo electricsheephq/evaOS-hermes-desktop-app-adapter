@@ -78,8 +78,13 @@ def _clean_mcp_state():
             mcp._lazy_server_configs,
             mcp._lazy_server_fingerprints,
             mcp._lazy_server_tool_names,
+            mcp._server_connect_retry_after,
+            mcp._server_connect_failures,
+            mcp._server_error_counts,
+            mcp._server_breaker_opened_at,
             mcp._server_trust_levels,
             mcp._tool_read_only_hints,
+            mcp._parallel_safe_servers,
             mcp._mcp_tool_server_names,
         ):
             container._by_scope.clear()
@@ -308,6 +313,97 @@ def test_shutdown_reaps_every_profiles_servers(profiles):
 
     assert {s.name for s in mcp._servers.all_values()} == {"a-server", "b-server"}
     assert mcp._servers.total_len() == 2
+
+
+def test_inventory_reports_only_current_profile_and_lazy_availability(profiles):
+    home_a, home_b = profiles
+    with _scoped_to(home_a):
+        mcp._servers["connected-a"] = _fake_server("connected-a")
+        mcp._lazy_server_tool_names["lazy-a"] = ["mcp__lazy_a__ping"]
+        assert mcp.get_mcp_server_inventory_for_current_profile() == (
+            {"connected-a", "lazy-a"},
+            {"connected-a"},
+        )
+
+    with _scoped_to(home_b):
+        mcp._servers["connected-b"] = _fake_server("connected-b")
+        assert mcp.get_mcp_server_inventory_for_current_profile() == (
+            {"connected-b"},
+            {"connected-b"},
+        )
+
+
+def test_scoped_shutdown_preserves_sibling_connection_and_tools(
+    profiles, monkeypatch
+):
+    """Profile A reload must leave profile B's live session and tool intact."""
+    from agent import secret_scope
+
+    home_a, home_b = profiles
+    monkeypatch.setattr(secret_scope, "_MULTIPLEX_ACTIVE", True)
+    tool_a = "mcp__profile_a__ping"
+    tool_b = "mcp__profile_b__ping"
+    schema = {
+        "name": tool_a,
+        "description": "Synthetic profile A tool",
+        "parameters": {"type": "object", "properties": {}},
+    }
+
+    def server(name, home, tool_name):
+        item = _fake_server(name)
+        item._registered_scope = hermes_home_key(home)
+
+        async def shutdown():
+            item.session = None
+            registry.deregister(tool_name, scope=item._registered_scope)
+
+        item.shutdown = shutdown
+        return item
+
+    try:
+        for home, name, tool_name in (
+            (home_a, "server-a", tool_a),
+            (home_b, "server-b", tool_b),
+        ):
+            with _scoped_to(home):
+                tool_schema = dict(schema, name=tool_name)
+                registry.register(
+                    name=tool_name,
+                    toolset=f"mcp-{name}",
+                    schema=tool_schema,
+                    handler=lambda **_: None,
+                    scope=hermes_home_key(home),
+                )
+                mcp._servers[name] = server(name, home, tool_name)
+
+        mcp._ensure_mcp_loop()
+        with _scoped_to(home_a):
+            mcp.shutdown_mcp_servers_for_current_scope()
+            assert not mcp._servers
+            assert registry.get_entry(tool_a) is None
+
+        with _scoped_to(home_b):
+            sibling = mcp._servers["server-b"]
+            assert sibling.session is not None
+            assert registry.get_entry(tool_b) is not None
+    finally:
+        with _scoped_to(home_a):
+            registry.deregister(tool_a, scope=hermes_home_key(home_a))
+        with _scoped_to(home_b):
+            registry.deregister(tool_b, scope=hermes_home_key(home_b))
+        mcp._stop_mcp_loop()
+
+
+def test_scoped_shutdown_uses_global_path_outside_multiplex(monkeypatch):
+    from agent import secret_scope
+
+    calls = []
+    monkeypatch.setattr(secret_scope, "_MULTIPLEX_ACTIVE", False)
+    monkeypatch.setattr(mcp, "shutdown_mcp_servers", lambda: calls.append("global"))
+
+    mcp.shutdown_mcp_servers_for_current_scope()
+
+    assert calls == ["global"]
 
 
 def test_idle_check_sees_other_profiles_servers(profiles):

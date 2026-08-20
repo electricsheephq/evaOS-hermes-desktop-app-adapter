@@ -58,6 +58,18 @@ def _read_yaml(path: Path) -> dict:
         return yaml.safe_load(f) or {}
 
 
+def _write_lease_server(root: Path, profile: str, name: str = "managed") -> Path:
+    path = root / "profiles" / profile / "config.yaml"
+    path.write_text(
+        "mcp_servers:\n"
+        f"  {name}:\n"
+        "    url: https://example.invalid/mcp\n"
+        "    auth: evaos_lease\n",
+        encoding="utf-8",
+    )
+    return path
+
+
 def test_add_lands_in_named_profile_only(hermes_root):
     root = hermes_root
     resp = _call(
@@ -225,6 +237,29 @@ def test_add_duplicate_and_missing_errors(hermes_root):
     assert bad_profile["error"]["code"] == 4064
 
 
+@pytest.mark.parametrize(
+    ("method", "extra"),
+    [
+        ("mcp.servers.add", {"config": {"command": "replacement"}}),
+        ("mcp.servers.set_api_key", {"value": "synthetic-test-value"}),
+        ("mcp.servers.remove", {}),
+    ],
+)
+def test_lease_managed_server_rejects_local_mutation(hermes_root, method, extra):
+    config_path = _write_lease_server(hermes_root, "work")
+    before = config_path.read_bytes()
+
+    response = _call(
+        method,
+        {"profile": "work", "name": "managed", **extra},
+    )
+
+    assert response["error"]["code"] == 4092
+    assert "dashboard" in response["error"]["message"].lower()
+    assert config_path.read_bytes() == before
+    assert not (hermes_root / "profiles" / "work" / ".env").exists()
+
+
 def test_add_requires_transport(hermes_root):
     resp = _call("mcp.servers.add", {"profile": "work", "name": "empty", "config": {}})
     assert "error" in resp
@@ -246,3 +281,34 @@ def test_default_profile_add_when_profile_omitted(hermes_root):
     assert "rootsvc" not in _read_yaml(root / "profiles" / "work" / "config.yaml").get(
         "mcp_servers", {}
     )
+
+
+def test_reload_mcp_runs_shutdown_and_discovery_in_requested_profile(
+    hermes_root, monkeypatch
+):
+    from hermes_constants import get_hermes_home
+    from tools import mcp_tool
+
+    observed = []
+
+    def record(operation):
+        observed.append((operation, get_hermes_home().resolve()))
+
+    monkeypatch.setattr(
+        mcp_tool,
+        "shutdown_mcp_servers_for_current_scope",
+        lambda: record("shutdown"),
+    )
+    monkeypatch.setattr(
+        mcp_tool,
+        "discover_mcp_tools",
+        lambda: record("discover") or [],
+    )
+
+    result = _result(
+        _call("reload.mcp", {"profile": "work", "confirm": True})
+    )
+
+    work_home = (hermes_root / "profiles" / "work").resolve()
+    assert result["status"] == "reloaded"
+    assert observed == [("shutdown", work_home), ("discover", work_home)]
