@@ -1839,7 +1839,9 @@ def _video_to_base64_data_url(video_path: Path, mime_type: Optional[str] = None)
 
 
 def _terminal_backend_is_local() -> bool:
-    backend = os.getenv("TERMINAL_ENV", "local").strip().lower()
+    from tools.terminal_tool import get_terminal_setting
+
+    backend = get_terminal_setting("TERMINAL_ENV", "local").strip().lower()
     return backend in ("", "local")
 
 

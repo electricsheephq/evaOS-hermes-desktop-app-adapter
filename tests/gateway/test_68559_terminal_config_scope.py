@@ -342,6 +342,44 @@ def test_profile_ssh_tilde_cwd_remains_remote_unexpanded(monkeypatch):
     }
 
 
+def test_routed_helpers_ignore_conflicting_process_terminal_settings(monkeypatch, tmp_path):
+    from agent.runtime_cwd import resolve_agent_cwd
+    from gateway.platforms.base import _parse_docker_volume_mounts
+    from tools.file_tools import _configured_terminal_cwd, _terminal_env_type_for_task
+    from tools.image_generation_tool import _agent_cache_base_for_env
+    from tools.image_source import _is_local_terminal_backend
+    from tools.skills_tool import _get_terminal_backend_name
+    from tools.terminal_tool import reset_terminal_config_scope, set_terminal_config_scope
+    from tools.vision_tools import _terminal_backend_is_local
+
+    process_cwd = tmp_path / "process"
+    routed_cwd = tmp_path / "routed"
+    process_cwd.mkdir()
+    routed_cwd.mkdir()
+    monkeypatch.setenv("TERMINAL_ENV", "local")
+    monkeypatch.setenv("TERMINAL_CWD", str(process_cwd))
+
+    scope = {
+        "TERMINAL_ENV": "docker",
+        "TERMINAL_CWD": str(routed_cwd),
+        "TERMINAL_DOCKER_VOLUMES": '["/host:/container:ro"]',
+    }
+    token = set_terminal_config_scope(scope)
+    try:
+        assert resolve_agent_cwd() == routed_cwd
+        assert _configured_terminal_cwd() == str(routed_cwd)
+        assert _terminal_env_type_for_task() == "docker"
+        assert _agent_cache_base_for_env(None) == "/root/.hermes"
+        assert _get_terminal_backend_name() == "docker"
+        assert not _is_local_terminal_backend()
+        assert not _terminal_backend_is_local()
+        assert [(str(host), str(container)) for host, container in _parse_docker_volume_mounts()] == [
+            ("/host", "/container")
+        ]
+    finally:
+        reset_terminal_config_scope(token)
+
+
 # --- Guard: no module may reintroduce a process-global TERMINAL_* read -------
 #
 # Every fix above is a conversion of one direct ``os.environ`` read into
@@ -354,10 +392,24 @@ def test_profile_ssh_tilde_cwd_remains_remote_unexpanded(monkeypatch):
 
 # Modules that must resolve terminal settings through the accessor.
 _GUARDED_MODULES = (
+    "agent/context_references.py",
     "tools/terminal_tool.py",
     "tools/browser_tool.py",
     "tools/env_probe.py",
     "agent/prompt_builder.py",
+    "agent/runtime_cwd.py",
+    "cron/scheduler.py",
+    "gateway/platforms/base.py",
+    "gateway/run.py",
+    "gateway/slash_commands.py",
+    "hermes_cli/kanban_db.py",
+    "tools/credential_files.py",
+    "tools/file_tools.py",
+    "tools/image_generation_tool.py",
+    "tools/image_source.py",
+    "tools/process_registry.py",
+    "tools/skills_tool.py",
+    "tools/vision_tools.py",
 )
 
 # The only functions allowed to touch the process environment for TERMINAL_*:
@@ -365,6 +417,22 @@ _GUARDED_MODULES = (
 # delegates to on the unscoped path.
 _ENV_READ_ALLOWED_IN = frozenset(
     {"get_terminal_setting", "_ensure_terminal_env_bridged"}
+)
+
+# These reads are deliberately process-global rather than routed-profile
+# configuration: gateway startup/diagnostics, the host-wide local worker memory
+# safety cap, and cron's serialized environment override. Keep the exceptions
+# narrow to the exact module, function, and setting.
+_PROCESS_GLOBAL_READS = frozenset(
+    {
+        ("gateway/run.py", "<module>", "TERMINAL_CWD"),
+        ("gateway/run.py", "<module>", "TERMINAL_ENV"),
+        ("gateway/run.py", "<module>", "TERMINAL_DOCKER_MOUNT_CWD_TO_WORKSPACE"),
+        ("gateway/run.py", "_warn_if_docker_media_delivery_is_risky", "TERMINAL_ENV"),
+        ("gateway/run.py", "_warn_if_docker_media_delivery_is_risky", "TERMINAL_DOCKER_VOLUMES"),
+        ("tools/process_registry.py", "_worker_memory_max_bytes", "TERMINAL_LOCAL_MEMORY_MAX_MB"),
+        ("cron/scheduler.py", "run_job", "TERMINAL_CWD"),
+    }
 )
 
 
@@ -420,6 +488,9 @@ def test_no_module_reads_terminal_config_from_process_environment():
         for lineno, function, expression in _terminal_env_reads(
             path.read_text(encoding="utf-8")
         ):
+            setting = expression.split("'", 2)[1]
+            if (relative, function, setting) in _PROCESS_GLOBAL_READS:
+                continue
             violations.append(f"{relative}:{lineno} in {function}(): {expression}")
 
     assert not violations, (

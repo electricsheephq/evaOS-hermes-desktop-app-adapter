@@ -64,7 +64,9 @@ def resolve_agent_cwd() -> Path:
         if p.is_dir():
             return p
         logger.warning("configured working directory does not exist: %s", override)
-    raw = os.environ.get("TERMINAL_CWD", "").strip()
+    from tools.terminal_tool import get_terminal_setting
+
+    raw = get_terminal_setting("TERMINAL_CWD", "").strip()
     if raw:
         p = Path(raw).expanduser()
         if p.is_dir():
@@ -90,7 +92,9 @@ def resolve_context_cwd() -> Path | None:
         else:
             return p
         return None
-    raw = os.environ.get("TERMINAL_CWD", "").strip()
+    from tools.terminal_tool import get_terminal_setting
+
+    raw = get_terminal_setting("TERMINAL_CWD", "").strip()
     if raw:
         p = Path(raw).expanduser()
         if not p.is_dir():

@@ -203,9 +203,13 @@ def _terminal_env_type_for_task(task_id: str = "default") -> str:
             if "daytona" in name:
                 return "daytona"
         cfg = _get_env_config()
-        return str(cfg.get("env_type") or os.getenv("TERMINAL_ENV") or "local").lower()
+        from tools.terminal_tool import get_terminal_setting
+
+        return str(cfg.get("env_type") or get_terminal_setting("TERMINAL_ENV") or "local").lower()
     except Exception:
-        return str(os.getenv("TERMINAL_ENV") or "local").lower()
+        from tools.terminal_tool import get_terminal_setting
+
+        return str(get_terminal_setting("TERMINAL_ENV") or "local").lower()
 
 
 def _uses_container_paths(task_id: str = "default") -> bool:
@@ -252,7 +256,9 @@ def _configured_terminal_cwd() -> str | None:
     relative to, which is exactly the ambiguity that misroutes worktree edits.
     Only an absolute, sentinel-free value is honored.
     """
-    return _sentinel_free_abs_cwd(os.environ.get("TERMINAL_CWD"))
+    from tools.terminal_tool import get_terminal_setting
+
+    return _sentinel_free_abs_cwd(get_terminal_setting("TERMINAL_CWD"))
 
 
 def _registered_task_cwd_override(task_id: str = "default") -> str | None:

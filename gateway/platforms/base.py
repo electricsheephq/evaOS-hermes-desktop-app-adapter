@@ -1485,7 +1485,9 @@ def _parse_docker_volume_mounts() -> List[Tuple[Path, Path]]:
     Named volumes and non-absolute hosts are skipped because they cannot be
     resolved on the gateway host for media delivery.
     """
-    raw = os.getenv("TERMINAL_DOCKER_VOLUMES", "").strip()
+    from tools.terminal_tool import get_terminal_setting
+
+    raw = get_terminal_setting("TERMINAL_DOCKER_VOLUMES", "").strip()
     if not raw:
         return []
     try:
@@ -1533,9 +1535,11 @@ def _parse_docker_volume_mounts() -> List[Tuple[Path, Path]]:
 
 def _default_docker_workspace_host_root() -> Optional[Path]:
     """Host path for Docker's default persistent ``/workspace`` mount."""
-    if os.getenv("TERMINAL_ENV", "").strip().lower() != "docker":
+    from tools.terminal_tool import get_terminal_setting
+
+    if get_terminal_setting("TERMINAL_ENV", "").strip().lower() != "docker":
         return None
-    if os.getenv("TERMINAL_CONTAINER_PERSISTENT", "true").strip().lower() not in {
+    if get_terminal_setting("TERMINAL_CONTAINER_PERSISTENT", "true").strip().lower() not in {
         "1",
         "true",
         "yes",
@@ -1543,13 +1547,13 @@ def _default_docker_workspace_host_root() -> Optional[Path]:
     }:
         return None
     # Explicit cwd mount takes over /workspace when enabled.
-    if os.getenv("TERMINAL_DOCKER_MOUNT_CWD_TO_WORKSPACE", "false").strip().lower() in {
+    if get_terminal_setting("TERMINAL_DOCKER_MOUNT_CWD_TO_WORKSPACE", "false").strip().lower() in {
         "1",
         "true",
         "yes",
         "on",
     }:
-        cwd = os.getenv("TERMINAL_CWD") or os.getcwd()
+        cwd = get_terminal_setting("TERMINAL_CWD") or os.getcwd()
         try:
             host = Path(os.path.expanduser(cwd)).resolve(strict=False)
         except (OSError, RuntimeError, ValueError):
@@ -1573,9 +1577,11 @@ def _docker_persistent_home_host_root() -> Optional[Path]:
     the workspace mount: the gateway's container sharing resolves to the
     ``default`` task sandbox.
     """
-    if os.getenv("TERMINAL_ENV", "").strip().lower() != "docker":
+    from tools.terminal_tool import get_terminal_setting
+
+    if get_terminal_setting("TERMINAL_ENV", "").strip().lower() != "docker":
         return None
-    if os.getenv("TERMINAL_CONTAINER_PERSISTENT", "true").strip().lower() not in {
+    if get_terminal_setting("TERMINAL_CONTAINER_PERSISTENT", "true").strip().lower() not in {
         "1",
         "true",
         "yes",
@@ -1600,7 +1606,9 @@ def _cache_dir_container_mounts() -> List[Tuple[Path, Path]]:
     longer prefixes than the ``/root`` home mount, so longest-prefix matching
     picks the cache translation over the home translation for them.
     """
-    if os.getenv("TERMINAL_ENV", "").strip().lower() != "docker":
+    from tools.terminal_tool import get_terminal_setting
+
+    if get_terminal_setting("TERMINAL_ENV", "").strip().lower() != "docker":
         return []
     try:
         from tools.credential_files import get_cache_directory_mounts
@@ -1623,17 +1631,6 @@ def _translate_docker_container_media_path(candidate: Path) -> Optional[Path]:
     """
     if not candidate.is_absolute():
         return None
-
-    # In-process gateways (Desktop backend, `hermes serve`) may not have
-    # bridged terminal.* config into TERMINAL_* env vars — run the idempotent
-    # bridge so the mount parsing below sees the active backend and volumes
-    # (same guard _binary_reference_block applies for inbound attachments).
-    try:
-        from tools.terminal_tool import _ensure_terminal_env_bridged
-
-        _ensure_terminal_env_bridged()
-    except Exception:
-        pass
 
     mounts = list(_parse_docker_volume_mounts())
     mounts.extend(_cache_dir_container_mounts())
