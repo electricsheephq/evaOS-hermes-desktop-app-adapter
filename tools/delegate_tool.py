@@ -2423,6 +2423,24 @@ def _apply_summary_budget(results: List[Dict[str, Any]], parent_agent) -> None:
         )
 
 
+def _finalize_child_agent_resources(child) -> None:
+    """Finalize a delegated session before releasing its owned resources."""
+    try:
+        if child is not None and hasattr(child, "shutdown_memory_provider"):
+            session_messages = getattr(child, "_session_messages", None)
+            if isinstance(session_messages, list):
+                child.shutdown_memory_provider(session_messages)
+            else:
+                child.shutdown_memory_provider()
+    except Exception:
+        logger.debug("Failed to finalize child agent after delegation")
+    try:
+        if child is not None and hasattr(child, "close"):
+            child.close()
+    except Exception:
+        logger.debug("Failed to close child agent after delegation")
+
+
 def _run_single_child(
     task_index: int,
     goal: str,
@@ -3336,14 +3354,9 @@ def _run_single_child(
             except (ValueError, UnboundLocalError) as e:
                 logger.debug("Could not remove child from active_children: %s", e)
 
-        # Close tool resources (terminal sandboxes, browser daemons,
-        # background processes, httpx clients) so subagent subprocesses
-        # don't outlive the delegation.
-        try:
-            if hasattr(child, "close"):
-                child.close()
-        except Exception:
-            logger.debug("Failed to close child agent after delegation")
+        # Flush the completed child session before releasing tool resources
+        # and context-engine handles.
+        _finalize_child_agent_resources(child)
 
         # The AIAgent turn boundary normally closes the child scope itself. This
         # fallback covers failures before that boundary starts, but must not pop

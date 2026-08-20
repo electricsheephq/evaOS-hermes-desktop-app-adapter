@@ -4728,6 +4728,35 @@ def test_finalize_session_closes_slash_worker(monkeypatch):
     assert closed["count"] == 1
 
 
+def test_teardown_empty_session_ends_context_before_agent_close(monkeypatch):
+    """Even an empty TUI session must end the context engine before shutdown."""
+    events = []
+
+    class _Agent:
+        session_id = "empty-session"
+        model = "test"
+        platform = "tui"
+
+        def commit_memory_session(self, messages):
+            events.append(("session_end", messages))
+
+        def close(self):
+            events.append(("close", None))
+
+    monkeypatch.setattr(server, "_notify_session_boundary", lambda *a, **k: None)
+    monkeypatch.setattr(server, "_get_db", lambda: None)
+
+    server._teardown_session(
+        _session(
+            agent=_Agent(),
+            history=[],
+            session_key="empty-session",
+        )
+    )
+
+    assert events == [("session_end", []), ("close", None)]
+
+
 def test_ws_orphan_reap_spares_reattached_session(monkeypatch):
     """A session that rebinds a live transport is NOT considered orphaned."""
 
