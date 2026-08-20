@@ -174,6 +174,28 @@ class TestSessionStoreUnmultiplexedRecovery:
         assert recovered.session_key == "agent:main:telegram:dm:99"
         assert store._db.reopened == ["sess-coder"]
 
+    def test_flag_off_query_path_keeps_peer_fallback(self, tmp_path):
+        """The lock-free recovery query retains the same flag-off fallback."""
+        row = {
+            "id": "sess-coder",
+            "started_at": 1700000000,
+            "session_key": "agent:coder:telegram:dm:99",
+        }
+        store = self._store_with_row(tmp_path, row)
+        source = _src(chat_id="99", chat_type="dm")
+
+        with patch("hermes_cli.profiles.get_active_profile_name", return_value="coder"):
+            recovered = store._query_recoverable_session(
+                session_key="agent:main:telegram:dm:99",
+                source=source,
+                now=datetime.fromtimestamp(1700000001),
+            )
+
+        assert recovered is not None
+        assert recovered.session_id == "sess-coder"
+        assert recovered.session_key == "agent:main:telegram:dm:99"
+        assert store._db.reopened == []
+
 
 # ── Cross-profile recovery inside one state.db ───────────────────────────────
 # Peer tuple shared by both namespaces below: one Telegram DM, one owner.

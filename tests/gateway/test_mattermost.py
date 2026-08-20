@@ -275,13 +275,14 @@ class TestMattermostWebSocketParsing:
         self.adapter.handle_message = AsyncMock()
 
     @pytest.mark.asyncio
-    async def test_parse_posted_event(self):
-        """'posted' events should extract message from double-encoded post JSON."""
+    async def test_parse_mention_preserves_sender_and_thread(self):
+        """Mention cleanup must preserve sender and thread attribution."""
         post_data = {
             "id": "post_abc",
             "user_id": "user_123",
             "channel_id": "chan_456",
             "message": "@bot_user_id Hello from Matrix!",
+            "root_id": "thread_root_789",
         }
         event = {
             "event": "posted",
@@ -298,6 +299,8 @@ class TestMattermostWebSocketParsing:
         # @mention is stripped from the message text
         assert msg_event.text == "Hello from Matrix!"
         assert msg_event.message_id == "post_abc"
+        assert msg_event.source.user_name == "alice"
+        assert msg_event.source.thread_id == "thread_root_789"
 
 
     @pytest.mark.asyncio
@@ -474,12 +477,44 @@ class TestMattermostChannelAndDMAllowlists:
 
     @pytest.mark.asyncio
     async def test_unset_allowlist_inherits_existing_behavior(self):
-        # No allow_from / groups configured: DM and channel both pass unchanged.
+        # No allow_from / groups configured: DM and channel preserve the
+        # pre-allowlist event shape, rather than merely reaching the callback.
         await self.adapter._handle_ws_event(self._event(user_id="anyone"))
         await self.adapter._handle_ws_event(
             self._event(user_id="anyone", channel_type="P", channel_id="agent_private")
         )
         assert self.adapter.handle_message.call_count == 2
+        dm_event, channel_event = [call.args[0] for call in self.adapter.handle_message.call_args_list]
+        assert (
+            dm_event.text,
+            dm_event.message_id,
+            dm_event.source.user_id,
+            dm_event.source.user_name,
+            dm_event.source.chat_id,
+            dm_event.source.thread_id,
+        ) == (
+            "synthetic",
+            "post_anyone_dm_1",
+            "anyone",
+            "synthetic",
+            "dm_1",
+            None,
+        )
+        assert (
+            channel_event.text,
+            channel_event.message_id,
+            channel_event.source.user_id,
+            channel_event.source.user_name,
+            channel_event.source.chat_id,
+            channel_event.source.thread_id,
+        ) == (
+            "synthetic",
+            "post_anyone_agent_private",
+            "anyone",
+            "synthetic",
+            "agent_private",
+            None,
+        )
 
     @pytest.mark.asyncio
     async def test_normalized_id_set_from_comma_string(self):
@@ -690,5 +725,4 @@ async def test_mattermost_top_level_channel_post_is_thread_root():
     assert msg_event.source.thread_id == "top_post_123"
     assert msg_event.source.message_id == "top_post_123"
     assert msg_event.message_id == "top_post_123"
-
 
