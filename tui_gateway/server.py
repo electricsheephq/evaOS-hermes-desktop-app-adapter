@@ -9881,7 +9881,7 @@ def _format_kanban_event_text(sub: dict, task, ev, board_slug: str) -> Optional[
     return None
 
 
-def _collect_kanban_notifications(session: dict) -> list:
+def _collect_kanban_notifications(session: dict, *, include_identity: bool = False) -> list:
     """Claim unseen terminal kanban events for this TUI session's subscriptions.
 
     ``kanban_create`` auto-subscribes TUI/desktop sessions with
@@ -9969,7 +9969,22 @@ def _collect_kanban_notifications(session: dict) -> list:
                 for ev in events:
                     text = _format_kanban_event_text(sub, task, ev, slug)
                     if text:
-                        texts.append(text)
+                        if include_identity:
+                            identity = tuple(
+                                str(value or "")
+                                for value in (
+                                    slug,
+                                    sub.get("task_id"),
+                                    sub.get("platform"),
+                                    sub.get("chat_id"),
+                                    sub.get("thread_id"),
+                                    getattr(ev, "id", ""),
+                                )
+                            )
+                            # Never derive identity from rendered/customer text.
+                            texts.append({"text": text, "identity": identity})
+                        else:
+                            texts.append(text)
                 # Unsubscribe only on archive. ``done`` is reversible in
                 # review/controller flows, so retaining the subscription lets
                 # a later reopen notify the same originating TUI/Desktop
@@ -9988,6 +10003,13 @@ def _collect_kanban_notifications(session: dict) -> list:
         finally:
             conn.close()
     return texts
+
+
+def _kanban_dispatch_batch_id(items: list[dict]) -> str:
+    """Derive an opaque, stable ID from subscription/event identities only."""
+    identities = [tuple(item.get("identity") or ()) for item in items]
+    material = json.dumps(identities, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(b"hermes.tui.kanban.dispatch.v1\0" + material).hexdigest()
 
 
 def _notification_poller_loop(
@@ -10036,30 +10058,39 @@ def _notification_poller_loop(
         if _now - _last_kanban_poll >= _KANBAN_POLL_SECONDS:
             _last_kanban_poll = _now
             try:
-                _kanban_texts = _collect_kanban_notifications(session)
+                _kanban_items = _collect_kanban_notifications(
+                    session, include_identity=True
+                )
             except Exception as _kb_exc:
                 print(
                     f"[tui_gateway] kanban notification poll failed: "
                     f"{type(_kb_exc).__name__}: {_kb_exc}",
                     file=sys.stderr,
                 )
-                _kanban_texts = []
-            if _kanban_texts:
-                for _kb_text in _kanban_texts:
-                    _emit("status.update", sid, {"kind": "process", "text": _kb_text})
-                # Events are cursor-claimed (never re-queued), so buffer them
-                # until the session is idle instead of dropping the agent turn.
-                session.setdefault("_kanban_pending", []).extend(_kanban_texts)
+                _kanban_items = []
+            if _kanban_items:
+                for _kb_item in _kanban_items:
+                    _emit("status.update", sid, {"kind": "process", "text": _kb_item["text"]})
+                # Events are cursor-claimed (never re-queued), so buffer a
+                # stable identity-bearing batch until the session is idle.
+                _batch_id = _kanban_dispatch_batch_id(_kanban_items)
+                session.setdefault("_kanban_pending", []).append(
+                    {"batch_id": _batch_id, "items": list(_kanban_items),
+                     "attempts": 0, "display_metadata": {"batch_id": _batch_id}}
+                )
             _pending = session.get("_kanban_pending") or []
             if _pending:
-                _batch: list = []
+                _batch: dict | None = None
                 with session["history_lock"]:
                     if not session.get("running"):
                         session["running"] = True
-                        _batch = list(_pending)
-                        session["_kanban_pending"] = []
+                        _batch = _pending.pop(0)
                 if _batch:
-                    rid = f"__notif__{int(time.time() * 1000)}"
+                    _batch_id = str(_batch["batch_id"])
+                    _batch_items = _batch["items"]
+                    _batch_text = "\n".join(str(item["text"]) for item in _batch_items)
+                    _attempt = int(_batch.get("attempts") or 0) + 1
+                    _batch["attempts"] = _attempt
                     # ``claim_unseen_events_for_sub`` advanced the subscription
                     # cursor when these events were collected, so the buffer is
                     # the only remaining copy. _run_prompt_submit returns False
@@ -10072,7 +10103,14 @@ def _notification_poller_loop(
                     try:
                         _emit("message.start", sid)
                         _restore_batch = (
-                            _run_prompt_submit(rid, sid, session, "\n".join(_batch))
+                            _run_prompt_submit(
+                                _batch_id,
+                                sid,
+                                session,
+                                _batch_text,
+                                display_kind="kanban_notification",
+                                display_metadata=_batch["display_metadata"],
+                            )
                             is False
                         )
                     except Exception as exc:
@@ -10082,9 +10120,29 @@ def _notification_poller_loop(
                             file=sys.stderr,
                         )
                         _restore_batch = True
-                    if _restore_batch:
+                    if _restore_batch and _attempt >= 3:
+                        _terminal_key = f"kanban-dispatch:{_batch_id}"
+                        _emit(
+                            "notification.show",
+                            sid,
+                            {
+                                "text": (
+                                    f"{_batch_text}\n\n"
+                                    "Kanban notification delivery failed after "
+                                    "3 attempts; please retry manually."
+                                ),
+                                "level": "warning",
+                                "kind": "kanban",
+                                "ttl_ms": None,
+                                "key": _terminal_key,
+                                "id": _terminal_key,
+                            },
+                        )
                         with session["history_lock"]:
-                            session["_kanban_pending"] = _batch + list(
+                            session["running"] = False
+                    elif _restore_batch:
+                        with session["history_lock"]:
+                            session["_kanban_pending"] = [_batch] + list(
                                 session.get("_kanban_pending") or []
                             )
                             session["running"] = False
