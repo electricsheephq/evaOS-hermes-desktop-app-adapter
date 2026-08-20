@@ -253,6 +253,31 @@ async def test_lease_mint_401_surfaces_sanitized_server_body(tmp_path):
     )
 
 
+@pytest.mark.asyncio
+async def test_lease_mint_redacts_compact_json_credentials(tmp_path):
+    now = datetime(2026, 8, 8, tzinfo=timezone.utc)
+    source, _ = _source(tmp_path)
+
+    async def transport(url, headers, payload):
+        return _Response(
+            401,
+            {},
+            text=(
+                '{"Authorization":"lease-token-under-test",'
+                '"x-api-key":"api-key-under-test"}'
+            ),
+        )
+
+    manager = EvaosLeaseManager(source=source, transport=transport, now=lambda: now)
+    with pytest.raises(EvaosLeaseError) as caught:
+        await manager.get_lease()
+
+    detail = str(caught.value)
+    assert "lease-token-under-test" not in detail
+    assert "api-key-under-test" not in detail
+    assert "[redacted]" in detail
+
+
 def test_source_rejects_cross_profile_and_unsafe_files(tmp_path):
     source, broker = _source(tmp_path)
     source._profile_resolver = lambda: "profile-b"

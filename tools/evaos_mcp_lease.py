@@ -43,8 +43,9 @@ _AGENT_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 _CREDENTIAL_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
 _MAX_ERROR_BODY_LENGTH = 512
 _SENSITIVE_ERROR_VALUE_RE = re.compile(
-    r"(?i)\b(?:authorization|proxy-authorization|cookie|set-cookie|"
-    r"x-[\w-]*(?:secret|token|key))\s*[:=]\s*(?:Bearer\s+)?[^,;\s}]+"
+    r"(?i)[\"']?(?:authorization|proxy-authorization|cookie|set-cookie|"
+    r"x-[\w-]*(?:secret|token|key))[\"']?\s*[:=]\s*[\"']?"
+    r"(?:Bearer\s+)?[^\"',;\s}]+"
 )
 _BEARER_TOKEN_RE = re.compile(r"(?i)\bBearer\s+\S+")
 _LEASE_ENDPOINT_PATH = "/functions/v1/desktop-runtime-session"
