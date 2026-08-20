@@ -21,9 +21,19 @@ def test_async_durable_precondition_failure_restores_batch(monkeypatch, marker_r
         "session_key": "synthetic-session",
     }
     settlement_calls = []
+    terminal_states = []
     monkeypatch.setattr(server, "record_turn_start", lambda *a, **k: marker_recorded)
-    monkeypatch.setattr(server, "_emit", lambda *a, **k: None)
-    monkeypatch.setattr(server, "_emit_terminal_turn_error", lambda *a, **k: None)
+    monkeypatch.setattr(server, "_retire_turn_marker", lambda *a, **k: None)
+    monkeypatch.setattr(server, "_get_usage", lambda *a, **k: {})
+    monkeypatch.setattr(server, "render_message", lambda *a, **k: "")
+
+    def capture_emit(method, _sid, _payload=None):
+        if method == "message.complete":
+            terminal_states.append(
+                (session["running"], session["inflight_turn"]["status"])
+            )
+
+    monkeypatch.setattr(server, "_emit", capture_emit)
 
     started = server._run_prompt_submit(
         "rid", "sid", session, "synthetic kanban completion",
@@ -38,3 +48,9 @@ def test_async_durable_precondition_failure_restores_batch(monkeypatch, marker_r
     assert session["_kanban_pending"] == [batch]
     assert session["running"] is False
     assert settlement_calls == ([True] if marker_recorded else [])
+    assert terminal_states == [(True, "error")]
+
+    with session["history_lock"]:
+        server._start_inflight_turn(session, "later user prompt")
+    assert session["inflight_turn"]["user"] == "later user prompt"
+    assert session["inflight_turn"].get("status") != "error"
