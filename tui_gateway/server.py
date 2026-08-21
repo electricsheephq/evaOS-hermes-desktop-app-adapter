@@ -1687,11 +1687,25 @@ _TRANSPORT_OWNERSHIP_LIVE_S = 45.0
 
 
 def register_live_transport(transport: Transport | None) -> None:
-    """Track a connected client transport for global broadcasts. Idempotent."""
+    """Track a connected client transport for profile-scoped broadcasts."""
     if transport is None:
         return
     with _live_transports_lock:
         _live_transports.add(transport)
+
+
+def _transport_profile_home(transport: Transport) -> str:
+    """Return the normalized profile home owned by a live transport."""
+    configured = getattr(transport, "profile_home", None)
+    home = configured if isinstance(configured, str) and configured else _hermes_home
+    return str(Path(home).expanduser().resolve(strict=False))
+
+
+def _watcher_homes() -> set[str]:
+    """Snapshot the launch home plus every connected profile home."""
+    launch = str(Path(_hermes_home).expanduser().resolve(strict=False))
+    with _live_transports_lock:
+        return {launch, *(_transport_profile_home(item) for item in _live_transports)}
 
 
 def unregister_live_transport(transport: Transport | None) -> None:
@@ -1742,14 +1756,24 @@ def _bind_session_transport(session: dict, candidate: Transport | None) -> bool:
 
 
 def _broadcast_global_event(event: str, payload: dict | None = None) -> None:
-    """Fan a session-less, surface-global event (``skin.changed``) to every
-    connected client. Emitters like the skin watcher run on background threads
-    where ``write_json``'s ladder bottoms out at stdio and WS peers never see
-    the frame. No registered transports (stdio TUI, tests) → plain ``_emit``,
-    which that path already tees where it needs to go.
+    """Fan a session-less event to clients in the current profile scope.
+
+    Without an active profile override this preserves the legacy process-wide
+    broadcast. Emitters like the watcher run on background threads where
+    ``write_json`` bottoms out at stdio, so the watcher installs each home
+    override before calling here.
     """
     with _live_transports_lock:
         targets = list(_live_transports)
+
+    override = get_hermes_home_override()
+    if isinstance(override, str) and override:
+        target_home = str(Path(override).expanduser().resolve(strict=False))
+        targets = [
+            transport
+            for transport in targets
+            if _transport_profile_home(transport) == target_home
+        ]
 
     if not targets:
         _emit(event, "", payload)
@@ -3431,7 +3455,9 @@ def _save_cfg(cfg: dict):
 
     from utils import atomic_roundtrip_yaml_save
 
-    path = _hermes_home / "config.yaml"
+    override = get_hermes_home_override()
+    home = Path(override) if isinstance(override, str) and override else Path(_hermes_home)
+    path = home / "config.yaml"
     # Comment-, ordering-, and Unicode-preserving full-state write.
     # Replaces the previous `yaml.safe_dump(cfg, f)` (and later
     # `atomic_config_write`, which is not comment-preserving) which clobbered
@@ -3638,6 +3664,7 @@ def resolve_skin() -> dict:
 # per-tool reconcile fire ``skin.changed`` on any real move — a name switch OR a
 # live color edit to the active skin — and nothing else.
 _last_skin_sig: tuple[str, float | None] | None = None
+_last_skin_sigs: dict[str, tuple[str, float | None]] = {}
 
 
 def _skin_sig() -> tuple[str, float | None]:
@@ -3658,12 +3685,18 @@ def _note_skin_broadcast() -> None:
     check doesn't re-broadcast the skin /skin just applied."""
     global _last_skin_sig
     try:
-        _last_skin_sig = _skin_sig()
+        sig = _skin_sig()
+        override = get_hermes_home_override()
+        if isinstance(override, str) and override:
+            key = str(Path(override).expanduser().resolve(strict=False))
+            _last_skin_sigs[key] = sig
+        else:
+            _last_skin_sig = sig
     except Exception:
         pass
 
 
-def _broadcast_skin_if_changed() -> None:
+def _broadcast_skin_if_changed(*, target_home: str | None = None) -> None:
     """Emit ``skin.changed`` when the active skin moved — the agent switched it
     (``hermes config set display.skin``) OR edited the active skin's colors in
     place ("I don't like that coral" → tweak the YAML).
@@ -3677,9 +3710,16 @@ def _broadcast_skin_if_changed() -> None:
         sig = _skin_sig()
     except Exception:
         return
-    if sig == _last_skin_sig:
+    if target_home and target_home not in _last_skin_sigs:
+        _last_skin_sigs[target_home] = sig
         return
-    _last_skin_sig = sig
+    previous = _last_skin_sigs.get(target_home) if target_home else _last_skin_sig
+    if sig == previous:
+        return
+    if target_home:
+        _last_skin_sigs[target_home] = sig
+    else:
+        _last_skin_sig = sig
     try:
         _broadcast_global_event("skin.changed", resolve_skin())
     except Exception:
@@ -3822,36 +3862,41 @@ _CHANGE_WATCHES: dict[str, tuple[float, Any, Any]] = {
 # included — a floored change keeps its old signature and re-fires next tick).
 _CHANGE_BROADCAST_FLOOR_S = {"sessions.changed": 2.0, "platforms.changed": 5.0}
 
-_change_sigs: dict[str, Any] = {}
-_change_checked_at: dict[str, float] = {}
-_change_broadcast_at: dict[str, float] = {}
+_change_sigs: dict[Any, Any] = {}
+_change_checked_at: dict[Any, float] = {}
+_change_broadcast_at: dict[Any, float] = {}
 
 
-def _broadcast_watched_changes(now: float | None = None) -> None:
+def _broadcast_watched_changes(
+    now: float | None = None,
+    *,
+    target_home: str | None = None,
+) -> None:
     """One pass over ``_CHANGE_WATCHES``: recompute due signatures, broadcast
     the events whose signature moved. First sighting seeds silently so a
     gateway boot never fires a spurious refresh storm."""
     now = time.monotonic() if now is None else now
     for event, (interval, sig_fn, payload_fn) in _CHANGE_WATCHES.items():
-        if now - _change_checked_at.get(event, -interval) < interval:
+        state_key = (target_home, event) if target_home else event
+        if now - _change_checked_at.get(state_key, -interval) < interval:
             continue
-        _change_checked_at[event] = now
+        _change_checked_at[state_key] = now
         try:
             sig = sig_fn()
         except Exception:  # noqa: BLE001 - a broken probe must not kill the loop
             continue
-        if event not in _change_sigs:
-            _change_sigs[event] = sig
+        if state_key not in _change_sigs:
+            _change_sigs[state_key] = sig
             continue
-        if sig == _change_sigs[event]:
+        if sig == _change_sigs[state_key]:
             continue
         floor = _CHANGE_BROADCAST_FLOOR_S.get(event, 0.0)
-        if floor and now - _change_broadcast_at.get(event, -floor) < floor:
+        if floor and now - _change_broadcast_at.get(state_key, -floor) < floor:
             # Floored: leave the old signature in place so the change re-fires
             # once the window opens (the trailing edge of the burst).
             continue
-        _change_sigs[event] = sig
-        _change_broadcast_at[event] = now
+        _change_sigs[state_key] = sig
+        _change_broadcast_at[state_key] = now
         try:
             _broadcast_global_event(event, payload_fn())
         except Exception:  # noqa: BLE001
@@ -3877,8 +3922,13 @@ def _ensure_skin_watcher() -> None:
     def _loop() -> None:
         while True:
             time.sleep(0.5)
-            _broadcast_skin_if_changed()
-            _broadcast_watched_changes()
+            for home in _watcher_homes():
+                token = set_hermes_home_override(home)
+                try:
+                    _broadcast_skin_if_changed(target_home=home)
+                    _broadcast_watched_changes(target_home=home)
+                finally:
+                    reset_hermes_home_override(token)
 
     threading.Thread(target=_loop, name="hermes-change-watcher", daemon=True).start()
 

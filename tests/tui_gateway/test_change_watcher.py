@@ -191,3 +191,43 @@ def test_broken_probe_never_kills_the_pass(watcher_home, monkeypatch):
 
     # The broken cron probe is skipped; sessions still broadcasts.
     assert ("sessions.changed", {}) in events
+
+
+def test_watcher_home_snapshot_includes_each_live_profile(tmp_path, monkeypatch):
+    """The single watcher loop must poll every connected profile home."""
+    launch = tmp_path / "launch"
+    profile = tmp_path / "profile"
+    launch.mkdir()
+    profile.mkdir()
+    monkeypatch.setattr(server, "_hermes_home", launch)
+
+    class Transport:
+        profile_home = str(profile.resolve())
+
+    transport = Transport()
+    server.register_live_transport(transport)
+    try:
+        assert server._watcher_homes() == {
+            str(launch.resolve()),
+            str(profile.resolve()),
+        }
+    finally:
+        server.unregister_live_transport(transport)
+
+
+def test_profile_skin_watcher_seeds_before_broadcast(monkeypatch, tmp_path):
+    """A newly connected profile must not receive a false initial change."""
+    home = str(tmp_path.resolve())
+    monkeypatch.setattr(server, "_last_skin_sigs", {})
+    monkeypatch.setattr(server, "_skin_sig", lambda: ("default", None))
+    emitted = []
+    monkeypatch.setattr(
+        server,
+        "_broadcast_global_event",
+        lambda event, payload=None: emitted.append((event, payload)),
+    )
+
+    server._broadcast_skin_if_changed(target_home=home)
+
+    assert emitted == []
+    assert server._last_skin_sigs[home] == ("default", None)

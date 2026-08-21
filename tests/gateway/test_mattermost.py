@@ -624,6 +624,28 @@ class TestMattermostChannelAndDMAllowlists:
         assert self.adapter.handle_message.call_count == 1  # unchanged: denied
 
     @pytest.mark.asyncio
+    async def test_dm_allowlist_preserves_an_approved_pairing_grant(self):
+        """The intake filter must not discard the central pairing union grant."""
+        self.adapter.config.extra.update({"allow_from": ["listed_user"]})
+
+        class Store:
+            def is_approved(self, platform, sender):
+                return platform == "mattermost" and sender == "paired_user"
+
+        class Runner:
+            def _profile_name_for_source(self, _source):
+                return "eve"
+
+            def _pairing_store_for(self, _source):
+                return Store()
+
+        self.adapter.gateway_runner = Runner()
+        await self.adapter._handle_ws_event(self._event(user_id="paired_user"))
+
+        assert self.adapter.handle_message.call_count == 1
+        assert self.adapter.handle_message.call_args.args[0].source.profile == "eve"
+
+    @pytest.mark.asyncio
     async def test_dm_allowlist_does_not_restrict_channels(self):
         # Asymmetry: a DM allowlist must not narrow channel access.
         self.adapter.config.extra.update({"allow_from": ["user_allowed"]})

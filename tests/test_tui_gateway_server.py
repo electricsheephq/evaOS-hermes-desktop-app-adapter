@@ -19268,6 +19268,30 @@ def test_save_cfg_keeps_unicode_personalities_readable(tmp_path, monkeypatch):
     assert "\\u4f60" not in text
 
 
+def test_save_cfg_writes_only_the_routed_profile(tmp_path, monkeypatch):
+    """A multiplex config mutation must not replace the launch profile file."""
+    from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+
+    launch_home = tmp_path / "launch"
+    profile_home = tmp_path / "profiles" / "jane"
+    launch_home.mkdir()
+    profile_home.mkdir(parents=True)
+    launch_cfg = launch_home / "config.yaml"
+    profile_cfg = profile_home / "config.yaml"
+    launch_cfg.write_text("approvals:\n  mode: manual\n", encoding="utf-8")
+    profile_cfg.write_text("approvals:\n  mode: ask\n", encoding="utf-8")
+    monkeypatch.setattr(server, "_hermes_home", launch_home)
+
+    token = set_hermes_home_override(profile_home)
+    try:
+        server._save_cfg({"approvals": {"mode": "auto"}})
+    finally:
+        reset_hermes_home_override(token)
+
+    assert "mode: manual" in launch_cfg.read_text(encoding="utf-8")
+    assert "mode: auto" in profile_cfg.read_text(encoding="utf-8")
+
+
 def test_personality_marker_does_not_shift_truncate_ordinal(monkeypatch):
     """A personality pivot must not occupy a slot in the ordinal address space.
 

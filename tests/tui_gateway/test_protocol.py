@@ -997,6 +997,33 @@ class _RecordingTransport:
         pass
 
 
+def test_profile_scoped_broadcast_reaches_only_matching_transport(capture, tmp_path):
+    """A routed profile event must never repaint a sibling profile client."""
+    from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+
+    server, _buf = capture
+    home_a = tmp_path / "a"
+    home_b = tmp_path / "b"
+    home_a.mkdir()
+    home_b.mkdir()
+    a = _RecordingTransport()
+    b = _RecordingTransport()
+    a.profile_home = str(home_a.resolve())
+    b.profile_home = str(home_b.resolve())
+    server.register_live_transport(a)
+    server.register_live_transport(b)
+    token = set_hermes_home_override(home_a)
+    try:
+        server._broadcast_global_event("skin.changed", {"name": "a"})
+    finally:
+        reset_hermes_home_override(token)
+        server.unregister_live_transport(a)
+        server.unregister_live_transport(b)
+
+    assert [frame["params"]["payload"] for frame in a.frames] == [{"name": "a"}]
+    assert b.frames == []
+
+
 def test_unregister_live_transport_stops_delivery(capture):
     """A disconnected peer (unregistered in the ws finally block) receives nothing
     — and a stale write is never attempted against its closed socket."""

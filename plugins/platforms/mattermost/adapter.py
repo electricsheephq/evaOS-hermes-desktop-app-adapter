@@ -123,6 +123,8 @@ def _intake_scope_allows(
     sender_id: str,
     channel_type_raw: str,
     channel_id: str,
+    *,
+    pairing_approved: bool = False,
 ) -> bool:
     """Enforce optional per-channel / DM sender allowlists at intake.
 
@@ -136,6 +138,8 @@ def _intake_scope_allows(
     gate. ``"*"`` allows any sender.
     """
     if not isinstance(extra, dict):
+        return True
+    if pairing_approved:
         return True
 
     if channel_type_raw == "D":
@@ -929,6 +933,29 @@ class MattermostAdapter(BasePlatformAdapter):
         sender_id = post.get("user_id", "")
         sender_name = data.get("sender_name", "").lstrip("@") or sender_id
 
+        # Pairing is a union grant in central authorization. Resolve the routed
+        # source before the config-only intake filter so an operator-approved
+        # sender is not discarded before that central check can run.
+        intake_source = self.build_source(
+            chat_id=channel_id,
+            chat_type=chat_type,
+            user_id=sender_id,
+            user_name=sender_name,
+            message_id=post_id,
+        )
+        pairing_approved = False
+        runner = getattr(self, "gateway_runner", None)
+        pairing_store_for = getattr(runner, "_pairing_store_for", None)
+        if callable(pairing_store_for):
+            try:
+                store = pairing_store_for(intake_source)
+                pairing_approved = bool(
+                    store is not None
+                    and store.is_approved(self.platform.value, sender_id)
+                )
+            except Exception:
+                pairing_approved = False
+
         # Optional per-channel / DM sender allowlists, expressed in upstream's
         # existing config vocabulary (config.yaml
         # ``platforms.mattermost.extra.allow_from`` for DMs and
@@ -936,7 +963,11 @@ class MattermostAdapter(BasePlatformAdapter):
         # gateway/authz_mixin.py reads). Unset inherits existing platform-wide
         # behavior; an explicit allowlist narrows who may reach the agent.
         if not _intake_scope_allows(
-            self.config.extra or {}, sender_id, channel_type_raw, channel_id
+            self.config.extra or {},
+            sender_id,
+            channel_type_raw,
+            channel_id,
+            pairing_approved=pairing_approved,
         ):
             logger.debug(
                 "Mattermost: ignoring sender outside configured allowlist "

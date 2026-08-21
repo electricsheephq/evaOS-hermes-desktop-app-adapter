@@ -94,6 +94,9 @@ class WSTransport:
         self._ws = ws
         self._loop = loop
         self._peer = peer
+        from hermes_constants import get_hermes_home
+
+        self.profile_home = str(get_hermes_home().expanduser().resolve(strict=False))
         self._closed = False
         self._last_inbound_at = time.monotonic()
         # Token-coalescing buffer (CF-2). Streamed token frames land here and a
