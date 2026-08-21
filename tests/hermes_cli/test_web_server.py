@@ -139,13 +139,15 @@ async def test_managed_scope_preserves_token_authenticated_route():
 def test_managed_omitted_profile_uses_effective_profile_for_dashboard_helpers(
     monkeypatch, tmp_path
 ):
+    from fastapi import HTTPException
+
     import hermes_state
     from hermes_cli import profiles as profiles_mod
     from hermes_cli import web_server
     from hermes_cli.profile_scope import ManagedProfilePrincipal, managed_profile_context
     from hermes_constants import get_hermes_home
 
-    homes = {name: tmp_path / name for name in ("jane", "louis")}
+    homes = {name: tmp_path / name for name in ("jane", "louis", "foreign")}
     for home in homes.values():
         home.mkdir()
     unmanaged_db = tmp_path / "unmanaged" / "state.db"
@@ -177,10 +179,22 @@ def test_managed_omitted_profile_uses_effective_profile_for_dashboard_helpers(
         web_server._open_session_db_for_profile("louis", read_only=True)
         assert web_server._cron_default_profile() == "jane"
         assert web_server._cron_profile_home(None) == ("jane", homes["jane"])
+        assert web_server._cron_profile_home("default") == ("jane", homes["jane"])
 
         # Explicit profile selection remains an explicit route to louis.
         with web_server._config_profile_scope("louis"):
             assert get_hermes_home() == homes["louis"]
+        with pytest.raises(HTTPException) as denied:
+            with web_server._profile_scope("foreign"):
+                pass
+        assert denied.value.status_code == 403
+        with pytest.raises(HTTPException) as denied:
+            with web_server._config_profile_scope("foreign"):
+                pass
+        assert denied.value.status_code == 403
+        with pytest.raises(HTTPException) as denied:
+            web_server._resolve_profile_dir("foreign")
+        assert denied.value.status_code == 403
 
     web_server._open_session_db_for_profile(None, read_only=True)
     assert observed_db_paths == [
@@ -457,6 +471,24 @@ class TestWebServerEndpoints:
             response = self.client.get(prefix, headers=_managed_headers())
             assert response.status_code == 403, prefix
             assert response.json()["detail"] == "administrator access required"
+
+    def test_managed_body_profile_rejects_unassigned_existing_profile(self):
+        from hermes_cli.profiles import get_profile_dir
+
+        foreign_home = get_profile_dir("foreign")
+        foreign_home.mkdir(parents=True)
+        response = self.client.put(
+            "/api/config",
+            headers=_managed_headers(admin=True),
+            json={
+                "profile": "foreign",
+                "config": {"timezone": "Asia/Bangkok"},
+            },
+        )
+
+        assert response.status_code == 403
+        assert response.json()["detail"] == "profile is not authorized"
+        assert not (foreign_home / "config.yaml").exists()
 
         update = self.client.post(
             "/api/hermes/update",

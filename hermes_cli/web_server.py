@@ -883,14 +883,29 @@ def _managed_websocket_profile(
 
 
 def _managed_profile_or_current(profile: Optional[str]) -> Optional[str]:
-    """Use the request's managed profile when a route omits ``profile``.
+    """Resolve and authorize a dashboard profile under managed authority.
 
     Managed middleware stores the selected profile in a ContextVar, while a
     few dashboard helpers historically treated an omitted argument as the
-    launch/default profile.  Explicit names (including ``current``) remain
-    untouched so their existing validation and routing rules still apply.
+    launch/default profile. Reserved aliases resolve to that effective profile;
+    explicit names must belong to the managed principal.
     """
-    if (profile or "").strip():
+    requested = (profile or "").strip()
+    try:
+        from hermes_cli.profile_scope import current_principal, require_profile
+
+        if current_principal() is not None:
+            try:
+                return require_profile(requested)
+            except PermissionError as exc:
+                raise HTTPException(
+                    status_code=403, detail="profile is not authorized"
+                ) from exc
+    except HTTPException:
+        raise
+    except Exception:
+        return profile
+    if requested:
         return profile
     try:
         from hermes_cli.profile_scope import current_effective_profile
@@ -14744,6 +14759,15 @@ def _fallback_profile_dicts(profiles_mod) -> List[Dict[str, Any]]:
 def _resolve_profile_dir(name: str) -> Path:
     """Validate ``name`` and resolve to its directory or raise an HTTPException."""
     from hermes_cli import profiles as profiles_mod
+    from hermes_cli.profile_scope import current_principal, require_profile
+
+    if current_principal() is not None:
+        try:
+            name = require_profile(name)
+        except PermissionError as exc:
+            raise HTTPException(
+                status_code=403, detail="profile is not authorized"
+            ) from exc
     try:
         profiles_mod.validate_profile_name(name)
     except ValueError as e:

@@ -170,6 +170,28 @@ def test_second_run_is_idempotent_and_hash_stable(tmp_path, monkeypatch):
         )
 
 
+def test_second_run_ignores_unrelated_destination_sessions(tmp_path, monkeypatch):
+    home = _make_home(tmp_path, monkeypatch)
+    _seed_root(home)
+    migration.run_migration(home)
+
+    destination = home / "profiles" / "fitness" / "state.db"
+    with sqlite3.connect(destination) as connection:
+        connection.execute(
+            """
+            INSERT INTO sessions(id, source, started_at, profile_name)
+            VALUES (?, ?, ?, ?)
+            """,
+            ("post-migration-session", "synthetic", 9.0, "fitness"),
+        )
+
+    result = migration.run_migration(home)
+
+    assert result["status"] == "PASS"
+    assert result["profiles"]["fitness"]["parity"] is True
+    assert result["profiles"]["fitness"]["new_rows"] == 0
+
+
 def test_dry_run_reads_and_compares_without_creating_destination(tmp_path, monkeypatch):
     home = _make_home(tmp_path, monkeypatch)
     _seed_root(home)

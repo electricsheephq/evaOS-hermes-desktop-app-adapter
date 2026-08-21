@@ -345,15 +345,17 @@ def _source_profile_snapshots(
 
 def _destination_snapshots(
     destination: sqlite3.Connection,
-    profile: str,
+    _profile: str,
     source_snapshots: Mapping[str, Snapshot],
 ) -> dict[str, Snapshot]:
-    sessions_all = _fetch_rows(destination, "sessions")
-    sessions = Snapshot(
-        sessions_all.columns,
-        tuple(row for row in sessions_all.rows if _normalize_profile(row.get("profile_name")) == profile),
-    ) if sessions_all.columns and "profile_name" in sessions_all.columns else Snapshot((), ())
     ids = [row.get("id") for row in source_snapshots["sessions"].rows]
+    sessions = _fetch_rows(
+        destination,
+        "sessions",
+        where=f"id IN ({','.join('?' for _ in ids)})" if ids else "0",
+        params=ids,
+        columns=source_snapshots["sessions"].columns or None,
+    )
     prompt_keys = [row.get("hash") for row in source_snapshots["system_prompts"].rows]
     route_keys = [(_row["scope"], _row["session_key"]) for _row in source_snapshots["gateway_routing"].rows]
     messages = _fetch_rows(
