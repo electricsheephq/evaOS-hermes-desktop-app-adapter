@@ -4,7 +4,7 @@ from argparse import Namespace
 from unittest.mock import patch
 
 import pytest
-from hermes_cli.config import DEFAULT_CONFIG, load_config, save_config
+from hermes_cli.config import DEFAULT_CONFIG, load_config, read_raw_config, save_config
 
 
 def _make_setup_args(**overrides):
@@ -47,6 +47,7 @@ class TestNonInteractiveSetup:
         cfg = load_config()
         cfg["model"] = {"provider": "custom", "base_url": "http://localhost:8080/v1", "default": "llama3"}
         cfg["agent"]["max_turns"] = 12
+        cfg["mcp_servers"] = {"old-integration": {"url": "https://example.test/mcp"}}
         save_config(cfg)
 
         args = _make_setup_args(non_interactive=True, reset=True)
@@ -56,6 +57,7 @@ class TestNonInteractiveSetup:
         reloaded = load_config()
         assert reloaded["model"] == DEFAULT_CONFIG["model"]
         assert reloaded["agent"]["max_turns"] == DEFAULT_CONFIG["agent"]["max_turns"]
+        assert "mcp_servers" not in read_raw_config()
         out = capsys.readouterr().out
         assert "Configuration reset to defaults." in out
 
@@ -79,4 +81,3 @@ class TestNonInteractiveSetup:
         mock_setup.assert_not_called()
         out = capsys.readouterr().out
         assert "hermes config set model.provider custom" in out
-
