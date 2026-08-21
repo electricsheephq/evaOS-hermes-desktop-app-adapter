@@ -3687,10 +3687,10 @@ def _note_skin_broadcast() -> None:
     try:
         sig = _skin_sig()
         override = get_hermes_home_override()
-        if isinstance(override, str) and override:
-            key = str(Path(override).expanduser().resolve(strict=False))
-            _last_skin_sigs[key] = sig
-        else:
+        home = override if isinstance(override, str) and override else _hermes_home
+        key = str(Path(home).expanduser().resolve(strict=False))
+        _last_skin_sigs[key] = sig
+        if not (isinstance(override, str) and override):
             _last_skin_sig = sig
     except Exception:
         pass

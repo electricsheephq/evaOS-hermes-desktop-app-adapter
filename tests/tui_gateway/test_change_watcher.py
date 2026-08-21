@@ -231,3 +231,25 @@ def test_profile_skin_watcher_seeds_before_broadcast(monkeypatch, tmp_path):
 
     assert emitted == []
     assert server._last_skin_sigs[home] == ("default", None)
+
+
+def test_launch_skin_change_after_startup_seed_is_not_lost(monkeypatch, tmp_path):
+    """The launch-home baseline must carry into the per-home watcher state."""
+    home = str(tmp_path.resolve())
+    signatures = iter([("default", None), ("midnight", None)])
+    monkeypatch.setattr(server, "_hermes_home", tmp_path)
+    monkeypatch.setattr(server, "_last_skin_sig", None)
+    monkeypatch.setattr(server, "_last_skin_sigs", {})
+    monkeypatch.setattr(server, "_skin_sig", lambda: next(signatures))
+    monkeypatch.setattr(server, "resolve_skin", lambda: {"name": "midnight"})
+    emitted = []
+    monkeypatch.setattr(
+        server,
+        "_broadcast_global_event",
+        lambda event, payload=None: emitted.append((event, payload)),
+    )
+
+    server._note_skin_broadcast()
+    server._broadcast_skin_if_changed(target_home=home)
+
+    assert emitted == [("skin.changed", {"name": "midnight"})]
