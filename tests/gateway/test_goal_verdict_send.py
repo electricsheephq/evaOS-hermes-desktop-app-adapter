@@ -50,9 +50,11 @@ class _RecordingAdapter:
     def __init__(self) -> None:
         self._pending_messages: dict = {}
         self.sends: list[dict] = []
+        self.send_called = asyncio.Event()
 
     async def send(self, chat_id: str, content: str, reply_to=None, metadata=None):
         self.sends.append({"chat_id": chat_id, "content": content, "metadata": metadata})
+        self.send_called.set()
 
         class _R:
             success = True
@@ -115,7 +117,7 @@ async def test_goal_verdict_continue_enqueues_continuation(hermes_home):
             source=src,
             final_response="here's a partial edit",
         )
-        await asyncio.sleep(0.05)
+        await asyncio.wait_for(adapter.send_called.wait(), timeout=1)
 
     # Status line sent back
     assert len(adapter.sends) == 1
@@ -143,7 +145,7 @@ async def test_goal_verdict_budget_exhausted_sends_pause(hermes_home):
             source=src,
             final_response="still partial",
         )
-        await asyncio.sleep(0.05)
+        await asyncio.wait_for(adapter.send_called.wait(), timeout=1)
 
     assert len(adapter.sends) == 1
     content = adapter.sends[0]["content"]
@@ -151,5 +153,4 @@ async def test_goal_verdict_budget_exhausted_sends_pause(hermes_home):
     assert "turns used" in content.lower()
     # No continuation enqueued when budget is exhausted
     assert not adapter._pending_messages
-
 
