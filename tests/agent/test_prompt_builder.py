@@ -3,7 +3,9 @@
 import builtins
 import importlib
 import logging
+import os
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -449,6 +451,94 @@ class TestBuildContextFilesPrompt:
         assert "Ruff for linting" in result
         assert "Project Context" in result
 
+    # --- AGENTS.md directory chain (port of grok-cli instructions.ts) ---
+
+    def test_agents_md_chain_merges_root_to_cwd(self, tmp_path):
+        # git-root AGENTS.md + intermediate + cwd are all merged, root first
+        # and cwd last so deeper guidance takes precedence.
+        (tmp_path / ".git").mkdir()
+        (tmp_path / "AGENTS.md").write_text("Root: use Ruff.")
+        pkg = tmp_path / "packages"
+        pkg.mkdir()
+        (pkg / "AGENTS.md").write_text("Packages: pnpm workspace.")
+        app = pkg / "webapp"
+        app.mkdir()
+        (app / "AGENTS.md").write_text("Webapp: React 19 only.")
+        result = build_context_files_prompt(cwd=str(app), skip_soul=True)
+        assert "Root: use Ruff." in result
+        assert "Packages: pnpm workspace." in result
+        assert "Webapp: React 19 only." in result
+        # order: root before intermediate before cwd
+        assert result.index("Root: use Ruff.") < result.index("Packages: pnpm")
+        assert result.index("Packages: pnpm") < result.index("Webapp: React 19")
+        # provenance headers point at each source file relative to cwd
+        assert f"## {os.path.join('..', '..', 'AGENTS.md')}" in result
+        assert f"## {os.path.join('..', 'AGENTS.md')}" in result
+        assert "## AGENTS.md" in result
+
+    def test_agents_md_chain_skips_gaps(self, tmp_path):
+        # Intermediate dirs without AGENTS.md contribute nothing.
+        (tmp_path / ".git").mkdir()
+        (tmp_path / "AGENTS.md").write_text("Root rules.")
+        deep = tmp_path / "a" / "b" / "c"
+        deep.mkdir(parents=True)
+        result = build_context_files_prompt(cwd=str(deep), skip_soul=True)
+        assert "Root rules." in result
+        assert result.count("## ") == 1
+
+    def test_agents_md_chain_dedupes_identical_content(self, tmp_path):
+        (tmp_path / ".git").mkdir()
+        (tmp_path / "AGENTS.md").write_text("Same rules everywhere.")
+        sub = tmp_path / "sub"
+        sub.mkdir()
+        (sub / "AGENTS.md").write_text("Same rules everywhere.")
+        result = build_context_files_prompt(cwd=str(sub), skip_soul=True)
+        assert result.count("Same rules everywhere.") == 1
+
+    def test_agents_md_single_file_output_unchanged(self, tmp_path):
+        # Zero-regression guarantee: with one AGENTS.md at cwd (git repo or
+        # not), the section is byte-identical to historical single-file form.
+        from agent.prompt_builder import _load_agents_md
+
+        (tmp_path / ".git").mkdir()
+        sub = tmp_path / "sub"
+        sub.mkdir()
+        (sub / "AGENTS.md").write_text("Only file.")
+        assert _load_agents_md(sub) == "## AGENTS.md\n\nOnly file."
+
+    def test_agents_md_no_git_root_stays_cwd_only(self, tmp_path):
+        # Without a git root, parents are never consulted (no picking up an
+        # AGENTS.md planted in /tmp or $HOME).
+        (tmp_path / "AGENTS.md").write_text("Planted in parent.")
+        sub = tmp_path / "sub"
+        sub.mkdir()
+        from agent.prompt_builder import _load_agents_md
+
+        assert _load_agents_md(sub) == ""
+
+    # --- AGENTS.override.md personal override (port of pi#7681) ---
+
+    def test_agents_override_md_wins_over_agents_md(self, tmp_path):
+        (tmp_path / "AGENTS.md").write_text("Use Ruff for linting.")
+        (tmp_path / "AGENTS.override.md").write_text("Use Black instead.")
+        result = build_context_files_prompt(cwd=str(tmp_path))
+        assert "Use Black instead" in result
+        assert "Ruff for linting" not in result
+        assert "AGENTS.override.md" in result
+
+    def test_agents_override_md_loads_alone(self, tmp_path):
+        (tmp_path / "AGENTS.override.md").write_text("Override-only context.")
+        result = build_context_files_prompt(cwd=str(tmp_path))
+        assert "Override-only context" in result
+        assert "Project Context" in result
+
+    def test_hermes_md_still_wins_over_agents_override(self, tmp_path):
+        (tmp_path / ".hermes.md").write_text("Hermes-first context.")
+        (tmp_path / "AGENTS.override.md").write_text("Override context.")
+        result = build_context_files_prompt(cwd=str(tmp_path))
+        assert "Hermes-first context" in result
+        assert "Override context" not in result
+
     def test_skips_agents_md_in_install_tree_on_fallback(self, monkeypatch, tmp_path):
         # A backend that FALLS BACK into the install tree (cwd=None → getcwd,
         # the desktop default) must not load that tree's contributor AGENTS.md
@@ -461,6 +551,21 @@ class TestBuildContextFilesPrompt:
         monkeypatch.chdir(tmp_path)
         result = build_context_files_prompt(cwd=None, skip_soul=True)
         assert "Never give up" not in result
+        assert result == ""
+
+    def test_masked_session_cwd_never_falls_back_to_process_agents(self, monkeypatch, tmp_path):
+        import agent.runtime_cwd as rt
+        from agent.runtime_cwd import set_session_cwd
+
+        (tmp_path / "AGENTS.md").write_text(
+            "Process cwd must not become profile context.", encoding="utf-8"
+        )
+        monkeypatch.chdir(tmp_path)
+        token = set_session_cwd(None)
+        try:
+            result = build_context_files_prompt(cwd=None, skip_soul=True)
+        finally:
+            rt._SESSION_CWD.reset(token)
         assert result == ""
 
 
@@ -683,11 +788,14 @@ class TestEnvironmentHints:
 
 
     def test_build_environment_hints_suppresses_host_on_docker_backend(self, monkeypatch):
-        """Docker/remote backends must hide host info — the agent can only touch the backend."""
+        """Docker/remote backends must hide host info — the agent can only touch the backend.
+
+        Host-independent: suppression is a property of the remote-backend
+        branch, so instead of faking a Windows host we assert no host line of
+        any kind is emitted.
+        """
         import agent.prompt_builder as _pb
-        import sys
         monkeypatch.setattr(_pb, "is_wsl", lambda: False)
-        monkeypatch.setattr(sys, "platform", "win32")
         monkeypatch.setenv("TERMINAL_ENV", "docker")
         # Force the probe to fail so we exercise the static fallback path
         # deterministically (the live probe would try to spin up docker).
@@ -695,7 +803,7 @@ class TestEnvironmentHints:
         _pb._clear_backend_probe_cache()
         result = _pb.build_environment_hints()
         # Host suppression: none of the local-backend lines should appear.
-        assert "Host: Windows" not in result
+        assert "Host:" not in result
         assert "User home directory:" not in result
         assert "PowerShell" not in result
         # Backend info must appear instead.
@@ -765,6 +873,53 @@ class TestEnvironmentHints:
         assert line is not None
         assert "Linux 6.8.0" in line
         assert "root" in line
+
+
+    def test_probe_remote_backend_cache_is_scoped_to_routed_profile(
+        self, monkeypatch, tmp_path
+    ):
+        """Profiles with the same backend/cwd still receive their own probe."""
+        import agent.prompt_builder as _pb
+        import tools.terminal_tool as _tt
+
+        monkeypatch.setattr(
+            _pb,
+            "_terminal_setting",
+            lambda name, default="": {"TERMINAL_CWD": "/workspace"}.get(name, default),
+        )
+        monkeypatch.setattr(_tt, "_get_env_config", lambda: {})
+
+        class _FakeEnv:
+            def __init__(self, home):
+                self.home = home
+
+            def execute(self, cmd, timeout=None):
+                return {
+                    "returncode": 0,
+                    "output": (
+                        "os=Linux\n"
+                        "kernel=6.8.0\n"
+                        f"home={self.home}\n"
+                        "cwd=/workspace\n"
+                        "user=root\n"
+                    ),
+                }
+
+        def _fake_create_environment(*, env_type, **kwargs):
+            return _FakeEnv(f"/remote/{Path(os.environ['HERMES_HOME']).name}")
+
+        monkeypatch.setattr(_tt, "_create_environment", _fake_create_environment)
+        _pb._clear_backend_probe_cache()
+
+        first_home = tmp_path / "profile-one"
+        second_home = tmp_path / "profile-two"
+        monkeypatch.setenv("HERMES_HOME", str(first_home))
+        first = _pb._probe_remote_backend("ssh")
+        monkeypatch.setenv("HERMES_HOME", str(second_home))
+        second = _pb._probe_remote_backend("ssh")
+
+        assert first is not None and "Home: /remote/profile-one" in first
+        assert second is not None and "Home: /remote/profile-two" in second
 
 
     def test_environment_hint_from_env_var_is_appended(self, monkeypatch):
@@ -919,5 +1074,3 @@ class TestParallelToolCallGuidance:
 # =========================================================================
 # Budget warning history stripping
 # =========================================================================
-
-

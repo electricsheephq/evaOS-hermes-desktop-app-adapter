@@ -50,9 +50,11 @@ class _RecordingAdapter:
     def __init__(self) -> None:
         self._pending_messages: dict = {}
         self.sends: list[dict] = []
+        self.send_called = asyncio.Event()
 
     async def send(self, chat_id: str, content: str, reply_to=None, metadata=None):
         self.sends.append({"chat_id": chat_id, "content": content, "metadata": metadata})
+        self.send_called.set()
 
         class _R:
             success = True
@@ -104,8 +106,10 @@ async def test_goal_verdict_continue_enqueues_continuation(hermes_home):
     proceeds on the next turn."""
     runner, adapter, session_entry, src = _make_runner_with_adapter()
 
+    from hermes_cli import goals
     from hermes_cli.goals import GoalManager
 
+    assert await asyncio.to_thread(goals._get_session_db) is not None
     mgr = GoalManager(session_entry.session_id)
     mgr.set("polish the docs")
 
@@ -115,7 +119,7 @@ async def test_goal_verdict_continue_enqueues_continuation(hermes_home):
             source=src,
             final_response="here's a partial edit",
         )
-        await asyncio.sleep(0.05)
+        await asyncio.wait_for(adapter.send_called.wait(), timeout=1)
 
     # Status line sent back
     assert len(adapter.sends) == 1
@@ -130,8 +134,10 @@ async def test_goal_verdict_budget_exhausted_sends_pause(hermes_home):
     and no further continuation enqueued."""
     runner, adapter, session_entry, src = _make_runner_with_adapter()
 
+    from hermes_cli import goals
     from hermes_cli.goals import GoalManager, save_goal
 
+    assert await asyncio.to_thread(goals._get_session_db) is not None
     mgr = GoalManager(session_entry.session_id, default_max_turns=2)
     state = mgr.set("tiny goal", max_turns=2)
     state.turns_used = 2
@@ -143,7 +149,7 @@ async def test_goal_verdict_budget_exhausted_sends_pause(hermes_home):
             source=src,
             final_response="still partial",
         )
-        await asyncio.sleep(0.05)
+        await asyncio.wait_for(adapter.send_called.wait(), timeout=1)
 
     assert len(adapter.sends) == 1
     content = adapter.sends[0]["content"]
@@ -151,5 +157,3 @@ async def test_goal_verdict_budget_exhausted_sends_pause(hermes_home):
     assert "turns used" in content.lower()
     # No continuation enqueued when budget is exhausted
     assert not adapter._pending_messages
-
-

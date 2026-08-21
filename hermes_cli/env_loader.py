@@ -341,9 +341,17 @@ def _sanitize_loaded_credentials() -> None:
 
 def _load_dotenv_with_fallback(path: Path, *, override: bool) -> None:
     try:
-        load_dotenv(dotenv_path=path, override=override, encoding="utf-8")
+        # utf-8-sig strips a leading UTF-8 BOM if present (PowerShell 5.1
+        # Set-Content -Encoding UTF8 / Notepad) and is a no-op for BOM-less
+        # UTF-8. Plain "utf-8" would keep U+FEFF on the first key name and
+        # silently drop it from os.environ under its canonical name.
+        load_dotenv(dotenv_path=path, override=override, encoding="utf-8-sig")
     except UnicodeDecodeError:
-        load_dotenv(dotenv_path=path, override=override, encoding="latin-1")
+        # utf-8-sig can't strip a BOM once we fall back to latin-1 decode.
+        raw = path.read_bytes()
+        if raw.startswith(codecs.BOM_UTF8):
+            raw = raw[len(codecs.BOM_UTF8) :]
+        load_dotenv(stream=io.StringIO(raw.decode("latin-1")), override=override)
     # Strip non-ASCII characters from credential env vars that were just
     # loaded.  API keys must be pure ASCII since they're sent as HTTP
     # header values (httpx encodes headers as ASCII).  Non-ASCII chars
@@ -463,6 +471,7 @@ def load_hermes_dotenv(
     *,
     hermes_home: str | os.PathLike | None = None,
     project_env: str | os.PathLike | None = None,
+    load_external_secrets: bool = True,
 ) -> list[Path]:
     """Load Hermes environment files with user config taking precedence.
 
@@ -471,6 +480,9 @@ def load_hermes_dotenv(
     - project `.env` acts as a dev fallback and only fills missing values when
       the user env exists.
     - if no user env exists, the project `.env` also overrides stale shell vars.
+    - callers that only maintain the installation can set
+      ``load_external_secrets=False`` to avoid loading optional secret-manager
+      dependencies into the process that replaces that same environment.
     """
     loaded: list[Path] = []
 
@@ -509,7 +521,21 @@ def load_hermes_dotenv(
         _load_dotenv_with_fallback(project_env_path, override=not loaded)
         loaded.append(project_env_path)
 
-    _apply_external_secret_sources(home_path)
+    # External secret sources are skipped in two updater situations:
+    # 1. ``load_external_secrets=False`` — the caller is an ``update``
+    #    invocation that must not import optional secret-manager libraries
+    #    (Bitwarden → cryptography → ``_rust.pyd``) into the process that
+    #    replaces that same environment on Windows (#73381, #86735).
+    # 2. A fresh ``hermes update`` retry just completed a deferred dependency
+    #    install before importing this module.  Do not remap native
+    #    secret-source dependencies in that same updater process or the
+    #    self-lock preflight will recreate the marker and exit 2 again.
+    # Dotenv and managed env still load in both cases; only external source
+    # resolution is unnecessary for the updater.
+    from hermes_cli import _early_recovery
+
+    if load_external_secrets and not _early_recovery._should_skip_external_secret_sources():
+        _apply_external_secret_sources(home_path)
     _apply_managed_env()
 
     # config.yaml is the documented source of truth for terminal.* settings,
@@ -559,12 +585,11 @@ def _reapply_terminal_config_bridge(home_path: Path) -> None:
 def _apply_managed_env() -> None:
     """Apply the managed-scope .env last, with override, so it beats user/shell.
 
-    Managed scope is machine-global (independent of HERMES_HOME / profile). v1
-    enforcement is "applied last with override=True" — at the end of startup load
-    ``os.environ`` holds the managed value for every managed key, beating both the
-    user ``.env`` and any pre-existing shell export. This deliberately inverts the
-    usual env-over-config precedence for the pinned keys (see
-    ``docs/design/managed-scope.md`` §4.1).
+    A single-profile managed scope is applied last with override=True, so
+    ``os.environ`` holds each managed value over user ``.env`` and shell
+    exports. A shared serve's selected profile instead resolves managed values
+    through isolated config and secret mappings; they must never be copied into
+    the process-global environment.
 
     This does NOT prevent the agent from later mutating ``os.environ`` in-process
     or ``export``-ing in a subprocess shell; that hard boundary is a documented
@@ -575,6 +600,21 @@ def _apply_managed_env() -> None:
     """
     try:
         from hermes_cli import managed_scope
+        from hermes_constants import get_hermes_home, get_hermes_home_override
+
+        # A shared serve binds profile homes with a ContextVar while its process
+        # environment belongs to the base home. Never copy a selected profile's
+        # managed env into that shared process; managed config expansion and
+        # secret_scope resolve the same values from isolated mappings.
+        if (
+            os.environ.get("EVAOS_HERMES_MANAGED_PROFILE_ROOT")
+            and get_hermes_home_override() is not None
+        ):
+            process_home = Path(
+                os.environ.get("HERMES_HOME", Path.home() / ".hermes")
+            ).resolve()
+            if get_hermes_home().resolve() != process_home:
+                return
 
         managed_dir = managed_scope.get_managed_dir()
     except Exception:  # noqa: BLE001 — managed scope must never block startup
@@ -629,6 +669,23 @@ def _apply_external_secret_sources(home_path: Path) -> None:
         # on its next load_hermes_dotenv() call instead of never.
         return
 
+    # Defer the registry import until we know a secrets source is enabled —
+    # agent.secret_sources.bitwarden eagerly loads cryptography._rust.pyd,
+    # which causes the Windows updater to self-lock before its preflight
+    # (the updater itself maps the .pyd before the dependency sync runs).
+    # A config with no enabled sources costs one dict scan; a config with
+    # enabled sources pays the crypto load exactly once, on demand.
+    # NOTE: only keys that smell like a real secret source trigger the import —
+    # a generic dict entry must not force crypto load on every hermes launch.
+    # We whitelist by *shape* (source dict with enabled flag) rather than
+    # hardcoding names, so plugin/test sources pass through unknown keys.
+    any_enabled = any(
+        isinstance(v, dict) and v.get("enabled") is True
+        for v in cfg.values()
+    )
+    if not any_enabled:
+        return
+
     try:
         from agent.secret_sources.registry import apply_all
     except ImportError:
@@ -677,7 +734,9 @@ def _apply_external_secret_sources(home_path: Path) -> None:
             )
         if src.result.error:
             print(f"  {src.label}: {src.result.error}", file=sys.stderr)
-            hint = _remediation_hint(src.name, src.result.error_kind, cfg)
+            hint = _remediation_hint(
+                src.name, src.result.error_kind, cfg, scope=home_key
+            )
             if hint:
                 print(f"  {src.label}: → {hint}", file=sys.stderr)
         for warn in src.result.warnings:
@@ -686,7 +745,13 @@ def _apply_external_secret_sources(home_path: Path) -> None:
         print(f"  Secret sources: {conflict}", file=sys.stderr)
 
 
-def _remediation_hint(source_name: str, error_kind, secrets_cfg: dict) -> str:
+def _remediation_hint(
+    source_name: str,
+    error_kind,
+    secrets_cfg: dict,
+    *,
+    scope: str | None = None,
+) -> str:
     """Ask the failed source for its one-line fix-it hint.
 
     Defensive wrapper: remediation() is a pure mapping and shouldn't
@@ -696,7 +761,7 @@ def _remediation_hint(source_name: str, error_kind, secrets_cfg: dict) -> str:
     try:
         from agent.secret_sources.registry import get_source
 
-        source = get_source(source_name)
+        source = get_source(source_name, scope=scope)
         if source is None:
             return ""
         src_cfg = secrets_cfg.get(source_name)

@@ -18,18 +18,26 @@ from hermes_cli import mcp_startup
 
 @pytest.fixture(autouse=True)
 def _reset_mcp_startup_state():
-    saved_started = mcp_startup._mcp_discovery_started
-    saved_thread = mcp_startup._mcp_discovery_thread
+    saved_started = set(mcp_startup._mcp_discovery_started)
+    saved_threads = dict(mcp_startup._mcp_discovery_threads)
     try:
-        mcp_startup._mcp_discovery_started = False
-        mcp_startup._mcp_discovery_thread = None
+        mcp_startup._mcp_discovery_started.clear()
+        mcp_startup._mcp_discovery_threads.clear()
         yield
     finally:
-        thread = mcp_startup._mcp_discovery_thread
-        if thread is not None and thread.is_alive():
-            thread.join(timeout=1.0)
-        mcp_startup._mcp_discovery_started = saved_started
-        mcp_startup._mcp_discovery_thread = saved_thread
+        for thread in list(mcp_startup._mcp_discovery_threads.values()):
+            if thread.is_alive():
+                thread.join(timeout=1.0)
+        mcp_startup._mcp_discovery_started.clear()
+        mcp_startup._mcp_discovery_started.update(saved_started)
+        mcp_startup._mcp_discovery_threads.clear()
+        mcp_startup._mcp_discovery_threads.update(saved_threads)
+
+
+def _discovery_thread():
+    return mcp_startup._mcp_discovery_threads.get(
+        mcp_startup._discovery_scope_key()
+    )
 
 
 def _agent_args(**overrides) -> Namespace:
@@ -96,8 +104,8 @@ def test_prepare_agent_startup_backgrounds_blocking_mcp_for_chat(monkeypatch):
         while calls["mcp"] == 0 and time.monotonic() < deadline:
             time.sleep(0.01)
         assert calls["mcp"] == 1
-        assert mcp_startup._mcp_discovery_thread is not None
-        assert mcp_startup._mcp_discovery_thread.is_alive()
+        assert _discovery_thread() is not None
+        assert _discovery_thread().is_alive()
     finally:
         stop.set()
 
@@ -139,11 +147,29 @@ def test_background_mcp_discovery_suppresses_interactive_oauth(monkeypatch):
         logger=types.SimpleNamespace(debug=lambda *_a, **_k: None),
         thread_name="test-mcp-discovery",
     )
-    assert mcp_startup._mcp_discovery_thread is not None
-    mcp_startup._mcp_discovery_thread.join(timeout=1.0)
+    thread = _discovery_thread()
+    if thread is not None:
+        thread.join(timeout=1.0)
 
     assert state["during_discover"] is True
     assert state["active"] is False
+
+
+def test_portable_only_mcp_configuration_opens_startup_gate(monkeypatch):
+    monkeypatch.setitem(
+        sys.modules,
+        "hermes_cli.config",
+        types.SimpleNamespace(read_raw_config=lambda: {}),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "hermes_cli.agent_plugins",
+        types.SimpleNamespace(
+            has_enabled_agent_plugin_mcp=lambda _config: True,
+        ),
+    )
+
+    assert mcp_startup._has_configured_mcp_servers() is True
 
 
 
@@ -180,7 +206,3 @@ def _install_retry_stubs(monkeypatch, *, connected: bool, calls: dict):
             get_mcp_status=lambda: [{"connected": connected}],
         ),
     )
-
-
-
-

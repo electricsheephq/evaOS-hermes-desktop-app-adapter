@@ -714,6 +714,10 @@ class TestConfigSupportFloor:
     }
     _V12_EXPECTED = {
         "_config_version": 33,
+        # agent.verify_on_stop stays materialised here: the fixture's on-disk
+        # config explicitly set it (True), so _explicit_config_paths preserves
+        # the key through the v32 flip even though False now equals the
+        # schema default.
         "agent": {"verify_on_stop": False},
         "auxiliary": {"compression": {"model": "gpt-x"}},
         "compression": {},
@@ -739,7 +743,9 @@ class TestConfigSupportFloor:
     }
     _V20_EXPECTED = {
         "_config_version": 33,
-        "agent": {"verify_on_stop": False},
+        # v31 writes verify_on_stop=False, but False now equals the schema
+        # default (opt-in) so the write invariant strips it from disk.
+        "agent": {},
         "model": {"default": "anthropic/claude-fable-5", "provider": "nous"},
         "model_catalog": {"ttl_hours": 1},
         "plugins": {"disabled": ["foo"], "enabled": []},
@@ -1189,6 +1195,57 @@ class TestMigrationWriteInvariant:
 class TestSaveConfigPartialWritePreservation:
     """Regression for #62723: partial migration writes must not drop unrelated sections."""
 
+    def test_default_save_preserves_extra_root_keys(self, tmp_path):
+        preserved = {
+            "multiplex_profiles": True,
+            "approvals": {"mode": "off", "cron_mode": "approve"},
+            "x_adapter_178_unknown": {"nested": ["keep", {"exact": 7}]},
+        }
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(
+            yaml.safe_dump({**preserved, "timezone": "UTC"}, sort_keys=False),
+            encoding="utf-8",
+        )
+
+        with patch.dict(os.environ, {"HERMES_HOME": str(tmp_path)}):
+            save_config({"timezone": "Asia/Bangkok"})
+            raw = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+
+        assert raw["timezone"] == "Asia/Bangkok"
+        preserved_after = {key: raw[key] for key in preserved}
+        assert yaml.safe_dump(preserved_after, sort_keys=False) == yaml.safe_dump(
+            preserved, sort_keys=False
+        )
+
+    def test_full_replace_deletes_omitted_root_keys(self, tmp_path):
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(
+            "multiplex_profiles: true\napprovals:\n  mode: off\ntimezone: UTC\n",
+            encoding="utf-8",
+        )
+
+        with patch.dict(os.environ, {"HERMES_HOME": str(tmp_path)}):
+            save_config({"timezone": "Asia/Bangkok"}, full_replace=True)
+            raw = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+
+        assert raw["timezone"] == "Asia/Bangkok"
+        assert "multiplex_profiles" not in raw
+        assert "approvals" not in raw
+
+    def test_removed_root_keys_are_not_resurrected(self, tmp_path):
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(
+            "mcp_servers:\n  demo:\n    url: https://mcp.example.test\n"
+            "timezone: UTC\n",
+            encoding="utf-8",
+        )
+
+        with patch.dict(os.environ, {"HERMES_HOME": str(tmp_path)}):
+            save_config({"timezone": "Asia/Bangkok"}, removed_root_keys={"mcp_servers"})
+            raw = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+
+        assert raw == {"timezone": "Asia/Bangkok", "agent": {}}
+
     def test_merge_existing_preserves_platforms_on_partial_write(self, tmp_path):
         body = """_config_version: 30
 model:
@@ -1216,10 +1273,14 @@ feishu:
                 merge_existing=True,
             )
             raw = yaml.safe_load((tmp_path / "config.yaml").read_text(encoding="utf-8"))
+            merged = load_config()
 
         assert raw["platforms"]["feishu"]["extra"]["app_id"] == "cli_xxx"
         assert raw["feishu"]["require_mention"] is True
-        assert raw["agent"]["verify_on_stop"] is False
+        # verify_on_stop=False now equals the schema default (opt-in), so
+        # strip_defaults removes it from disk; deep-merge supplies it at read.
+        assert "verify_on_stop" not in raw.get("agent", {})
+        assert merged["agent"]["verify_on_stop"] is False
 
 
     def test_persist_migration_writes_full_read_raw_config(self, tmp_path):
@@ -1247,7 +1308,10 @@ platforms:
             raw = yaml.safe_load((tmp_path / "config.yaml").read_text(encoding="utf-8"))
 
         assert raw["platforms"]["feishu"]["extra"]["app_id"] == "cli_xxx"
-        assert raw["agent"]["verify_on_stop"] is False
+        # The migration-write invariant strips schema-default values, and
+        # verify_on_stop=False now IS the default — so it must NOT be
+        # materialised to disk by _persist_migration.
+        assert "verify_on_stop" not in raw.get("agent", {})
         assert raw["agent"]["max_turns"] == 60
         assert raw["_config_version"] == 32
 
@@ -1298,6 +1362,54 @@ class TestDelegationCapUnificationMigration:
             raw = yaml.safe_load((tmp_path / "config.yaml").read_text())
         # Migration must not materialize a delegation section it never had.
         assert "delegation" not in raw
+
+
+class TestBackgroundNotificationsConciseMigration:
+    """v34 → v35: move users on the old implicit default 'all' to 'concise'."""
+
+    def _write(self, tmp_path, body):
+        (tmp_path / "config.yaml").write_text(body, encoding="utf-8")
+
+    def test_all_becomes_concise(self, tmp_path):
+        with patch.dict(os.environ, {"HERMES_HOME": str(tmp_path)}):
+            self._write(
+                tmp_path,
+                "_config_version: 34\n"
+                "display:\n"
+                "  background_process_notifications: all\n",
+            )
+            migrate_config(interactive=False, quiet=True)
+            raw = yaml.safe_load((tmp_path / "config.yaml").read_text())
+        assert raw["display"]["background_process_notifications"] == "concise"
+
+    def test_explicit_choices_preserved(self, tmp_path):
+        # NOTE: bare `off` in YAML parses as boolean False — the gateway mode
+        # loader maps False → "off", and the migration must leave it alone.
+        for written, expected in (
+            ("off", False), ("result", "result"),
+            ("error", "error"), ("concise", "concise"),
+        ):
+            with patch.dict(os.environ, {"HERMES_HOME": str(tmp_path)}):
+                self._write(
+                    tmp_path,
+                    "_config_version: 34\n"
+                    "display:\n"
+                    f"  background_process_notifications: {written}\n",
+                )
+                migrate_config(interactive=False, quiet=True)
+                raw = yaml.safe_load((tmp_path / "config.yaml").read_text())
+            assert raw["display"]["background_process_notifications"] == expected
+
+    def test_unset_key_is_not_materialized(self, tmp_path):
+        with patch.dict(os.environ, {"HERMES_HOME": str(tmp_path)}):
+            self._write(tmp_path, "_config_version: 34\nmodel:\n  provider: openrouter\n")
+            migrate_config(interactive=False, quiet=True)
+            raw = yaml.safe_load((tmp_path / "config.yaml").read_text())
+        # Unset users inherit the new default at read time; no write needed.
+        assert "display" not in raw or "background_process_notifications" not in raw.get("display", {})
+
+    def test_default_config_is_concise(self):
+        assert DEFAULT_CONFIG["display"]["background_process_notifications"] == "concise"
 
 
 class TestConfigNormalizationDoesNotOverwriteUserValues:

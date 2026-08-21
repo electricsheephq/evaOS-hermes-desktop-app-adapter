@@ -1,4 +1,6 @@
 """Tests for the profile-scoped credential primitive (Workstream A / Phase 2)."""
+import os
+
 import pytest
 
 from agent import secret_scope as ss
@@ -250,6 +252,63 @@ class TestEnvFileParsing:
         )
 
         assert ss.build_profile_secret_scope(profile) == {}
+
+    def test_build_profile_secret_scope_includes_only_assigned_managed_env(
+        self, tmp_path, monkeypatch
+    ):
+        from hermes_constants import (
+            reset_hermes_home_override,
+            set_hermes_home_override,
+        )
+        from hermes_cli import managed_scope
+
+        profiles = tmp_path / "profiles"
+        managed_root = tmp_path / "managed"
+        profile_a = profiles / "a"
+        profile_b = profiles / "b"
+        for profile in (profile_a, profile_b):
+            profile.mkdir(parents=True)
+        (profile_a / ".env").write_text("SHARED_KEY=user-a\n")
+        (profile_b / ".env").write_text("SHARED_KEY=user-b\n")
+        (managed_root / "a").mkdir(parents=True)
+        (managed_root / "b").mkdir(parents=True)
+        (managed_root / "a" / ".env").write_text(
+            "SHARED_KEY=managed-a\nA_ONLY=managed-a\n"
+        )
+        (managed_root / "b" / ".env").write_text(
+            "SHARED_KEY=managed-b\nB_ONLY=managed-b\n"
+        )
+        monkeypatch.setenv("EVAOS_HERMES_MANAGED_PROFILE_ROOT", str(managed_root))
+        monkeypatch.delenv("HERMES_MANAGED_DIR", raising=False)
+        monkeypatch.setenv("A_ONLY", "process-a")
+        monkeypatch.setenv("B_ONLY", "process-b")
+        managed_scope.invalidate_managed_cache()
+
+        def build_for(profile):
+            token = set_hermes_home_override(profile)
+            try:
+                return ss.build_profile_secret_scope(profile)
+            finally:
+                reset_hermes_home_override(token)
+
+        scope_a = build_for(profile_a)
+        scope_b = build_for(profile_b)
+        assert scope_a["SHARED_KEY"] == "managed-a"
+        assert scope_a["A_ONLY"] == "managed-a"
+        assert "B_ONLY" not in scope_a
+        assert scope_b["SHARED_KEY"] == "managed-b"
+        assert scope_b["B_ONLY"] == "managed-b"
+        assert "A_ONLY" not in scope_b
+        assert os.environ["A_ONLY"] == "process-a"
+        assert os.environ["B_ONLY"] == "process-b"
+
+        ss.set_multiplex_active(True)
+        token = ss.set_secret_scope(scope_a)
+        try:
+            assert ss.get_secret("A_ONLY") == "managed-a"
+            assert ss.get_secret("B_ONLY") is None
+        finally:
+            ss.reset_secret_scope(token)
 
 
 class TestApiServerListenerGlobals:

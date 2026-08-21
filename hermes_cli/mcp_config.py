@@ -113,7 +113,7 @@ def _remove_mcp_server(name: str) -> bool:
     del servers[name]
     if not servers:
         config.pop("mcp_servers", None)
-    save_config(config)
+    save_config(config, removed_root_keys={"mcp_servers"} if not servers else None)
     return True
 
 
@@ -146,7 +146,7 @@ def _replace_mcp_servers(servers: Dict[str, dict]) -> Tuple[bool, List[str]]:
         config["mcp_servers"] = dict(servers)
     else:
         config.pop("mcp_servers", None)
-    save_config(config)
+    save_config(config, removed_root_keys={"mcp_servers"} if not servers else None)
     return True, []
 
 
@@ -321,6 +321,29 @@ def _probe_single_server(
                 if len(desc) > 80:
                     desc = desc[:77] + "..."
                 tools_found.append((t.name, desc))
+            if details is not None:
+                # Per-tool registry-schema sizes so the desktop can estimate the
+                # per-call token cost a server adds. Uses the SAME converted
+                # schema the agent registers (name + description + normalized
+                # parameters) — i.e. what actually rides on every model call.
+                # Additive-optional wire field: best-effort, absent on failure.
+                try:
+                    import json as _json
+
+                    from tools.mcp_tool import _convert_mcp_schema
+
+                    details["schema_chars"] = {
+                        t.name: len(
+                            _json.dumps(
+                                _convert_mcp_schema(name, t),
+                                separators=(",", ":"),
+                                default=str,
+                            )
+                        )
+                        for t in server._tools
+                    }
+                except Exception:  # pragma: no cover — display-only extra
+                    pass
             if details is not None:
                 # Gate the capability probes exactly like runtime utility-tool
                 # registration (tools.mcp_tool._select_utility_schemas):

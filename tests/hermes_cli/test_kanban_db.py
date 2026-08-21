@@ -49,20 +49,28 @@ def _init_git_repo(repo: Path) -> None:
 
 
 
+@pytest.mark.windows_only
 def test_cross_process_init_lock_uses_windows_byte_range_lock(tmp_path, monkeypatch):
     """Windows must use a real (non-blocking) process lock, not a no-op open.
 
     The init lock acquires with LK_NBLCK in a bounded retry loop (#36644) so a
     wedged holder can never block connect() forever; a clean acquire takes the
     lock once and releases it once.
+
+    ``windows_only``: ``msvcrt`` does not exist off Windows, so faking
+    ``_IS_WINDOWS`` on Linux meant injecting a fake ``msvcrt`` module too —
+    the test then asserted against its own stub rather than the byte-range
+    locking API. Here the platform is real; only ``msvcrt.locking`` is
+    instrumented so the call sequence is observable.
     """
     calls: list[tuple[int, int, int]] = []
+    import msvcrt as _msvcrt
+
     fake_msvcrt = types.SimpleNamespace(
-        LK_NBLCK=3,
-        LK_UNLCK=2,
+        LK_NBLCK=_msvcrt.LK_NBLCK,
+        LK_UNLCK=_msvcrt.LK_UNLCK,
         locking=lambda fd, mode, nbytes: calls.append((fd, mode, nbytes)),
     )
-    monkeypatch.setattr(kb, "_IS_WINDOWS", True)
     monkeypatch.setitem(sys.modules, "msvcrt", fake_msvcrt)
 
     db_path = tmp_path / "kanban.db"
@@ -196,6 +204,54 @@ def test_schedule_task_parks_time_delay_without_dispatching(kanban_home):
 
 
 
+
+
+def test_expired_same_owner_durable_claim_is_recoverable(kanban_home):
+    with kb.connect() as conn:
+        task_id = kb.create_task(conn, title="durable retry", assignee="worker")
+        kb.add_notify_sub(
+            conn, task_id=task_id, platform="tui", chat_id="session-1"
+        )
+        kb.complete_task(conn, task_id, summary="retry me")
+        claim_args = dict(
+            task_id=task_id,
+            platform="tui",
+            chat_id="session-1",
+            kinds=["completed"],
+            persist_delivery=True,
+        )
+
+        _, _, claimed = kb.claim_unseen_events_for_sub(
+            conn, **claim_args, delivery_owner="same-process", delivery_now=100
+        )
+        assert len(claimed) == 1
+
+        _, _, live_retry = kb.claim_unseen_events_for_sub(
+            conn, **claim_args, delivery_owner="same-process", delivery_now=101
+        )
+        assert live_retry == []
+        live_pending = kb.list_notify_subs(conn, task_id)[0]["pending_event_ids"]
+        assert kb._decode_pending_delivery(live_pending)[2] == 100
+
+        _, _, recovered = kb.claim_unseen_events_for_sub(
+            conn,
+            **claim_args,
+            delivery_owner="same-process",
+            delivery_now=100 + kb.NOTIFY_DELIVERY_LEASE_SECONDS,
+        )
+        assert [event.id for event in recovered] == [claimed[0].id]
+        recovered_pending = kb.list_notify_subs(conn, task_id)[0]["pending_event_ids"]
+        assert kb._decode_pending_delivery(recovered_pending)[2] == (
+            100 + kb.NOTIFY_DELIVERY_LEASE_SECONDS
+        )
+        assert kb.complete_notify_delivery(
+            conn,
+            task_id=task_id,
+            platform="tui",
+            chat_id="session-1",
+            event_ids=[event.id for event in recovered],
+            delivery_owner="same-process",
+        ) is True
 
 
 def test_stale_claim_reclaim_event_records_diagnostic_payload(
@@ -1237,6 +1293,29 @@ def _make_task(**overrides) -> "kb.Task":
 # dispatch_once — max_in_progress
 # ---------------------------------------------------------------------------
 
+
+def test_dispatch_max_in_progress_blocks_review_when_at_limit(
+    kanban_home, all_assignees_spawnable,
+):
+    """Review-only backlog must still respect max_in_progress."""
+    spawns = []
+
+    def fake_spawn(task, workspace, board=None):
+        spawns.append(task.id)
+        return 42
+
+    with kb.connect() as conn:
+        running = kb.create_task(conn, title="running", assignee="alice")
+        kb.claim_task(conn, running)
+        review = kb.create_task(conn, title="review", assignee="bob")
+        _set_task_status(conn, review, "review")
+        res = kb.dispatch_once(conn, spawn_fn=fake_spawn, max_in_progress=1)
+        review_task = kb.get_task(conn, review)
+
+    assert not res.spawned
+    assert not spawns
+    assert review_task is not None
+    assert review_task.status == "review"
 
 # Review column dispatch
 # ---------------------------------------------------------------------------
