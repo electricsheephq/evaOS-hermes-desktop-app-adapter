@@ -500,6 +500,33 @@ class TestWebServerEndpoints:
         assert response.status_code == 400
         assert response.json()["detail"] == "archive path is required"
 
+    def test_managed_detached_action_includes_effective_profile(
+        self, monkeypatch
+    ):
+        from hermes_cli import web_server
+        from hermes_cli.profiles import get_profile_dir
+
+        spawned = []
+        get_profile_dir("jane").mkdir(parents=True)
+        monkeypatch.setattr(
+            web_server,
+            "_spawn_hermes_action",
+            lambda subcommand, name: spawned.append((subcommand, name))
+            or SimpleNamespace(pid=123),
+        )
+
+        response = self.client.post(
+            "/api/skills/hub/install",
+            headers=_managed_headers(admin=True),
+            json={"identifier": "example-skill"},
+        )
+
+        assert response.status_code == 200
+        assert spawned[0][0] == [
+            "-p", "jane", "skills", "install", "example-skill", "--yes"
+        ]
+        assert spawned[0][1].startswith("skills-install-example-skill-")
+
         update = self.client.post(
             "/api/hermes/update",
             headers=_managed_headers(),

@@ -14557,6 +14557,7 @@ def _profile_cli_args(profile: Optional[str]) -> List[str]:
     ``skills_hub.SKILLS_DIR``. Empty/"current" means the dashboard's own
     profile (no args, legacy behavior).
     """
+    profile = _managed_profile_or_current(profile)
     requested = (profile or "").strip()
     if not requested or requested.lower() in {"current", "default"}:
         return []
