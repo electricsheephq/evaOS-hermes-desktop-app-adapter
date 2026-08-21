@@ -23,11 +23,15 @@ def _clear_config_caches():
 def _profile_scope(home):
     from agent.secret_scope import (
         build_profile_secret_scope,
+        is_multiplex_active,
         reset_secret_scope,
+        set_multiplex_active,
         set_secret_scope,
     )
     from hermes_constants import reset_hermes_home_override, set_hermes_home_override
 
+    previous_multiplex = is_multiplex_active()
+    set_multiplex_active(True)
     home_token = set_hermes_home_override(home)
     secret_token = set_secret_scope(build_profile_secret_scope(home))
     try:
@@ -35,6 +39,7 @@ def _profile_scope(home):
     finally:
         reset_secret_scope(secret_token)
         reset_hermes_home_override(home_token)
+        set_multiplex_active(previous_multiplex)
 
 
 def _setup_scopes(tmp_path, monkeypatch):
@@ -54,11 +59,30 @@ def _setup_scopes(tmp_path, monkeypatch):
     )
     _write_yaml(
         jane / "config.yaml",
-        {"display": {"skin": "jane"}},
+        {
+            "display": {"skin": "jane"},
+            "mcp_servers": {
+                "jane-local-secret": {
+                    "url": "https://jane.local/mcp",
+                    "headers": {
+                        "Authorization": "Bearer ${PROFILE_MCP_TOKEN}",
+                    },
+                },
+            },
+        },
     )
     _write_yaml(
         louis / "config.yaml",
-        {"mcp_servers": {"louis-local": {"url": "https://louis.local/mcp"}}},
+        {
+            "mcp_servers": {
+                "louis-local": {
+                    "url": "https://louis.local/mcp",
+                    "headers": {
+                        "Authorization": "Bearer ${PROFILE_MCP_TOKEN}",
+                    },
+                },
+            },
+        },
     )
     _write_yaml(
         jane_managed / "config.yaml",
@@ -76,6 +100,14 @@ def _setup_scopes(tmp_path, monkeypatch):
         "GBRAIN_TOKEN=jane-managed-token\n",
         encoding="utf-8",
     )
+    (jane / ".env").write_text(
+        "PROFILE_MCP_TOKEN=jane-profile-token\n",
+        encoding="utf-8",
+    )
+    (louis / ".env").write_text(
+        "PROFILE_MCP_TOKEN=louis-profile-token\n",
+        encoding="utf-8",
+    )
     _write_yaml(louis_managed / "config.yaml", {"display": {"skin": "managed"}})
 
     monkeypatch.setenv("HERMES_HOME", str(base))
@@ -83,6 +115,7 @@ def _setup_scopes(tmp_path, monkeypatch):
     monkeypatch.delenv("HERMES_MANAGED_DIR", raising=False)
     monkeypatch.setenv("GBRAIN_URL", "https://process.example/mcp")
     monkeypatch.setenv("GBRAIN_TOKEN", "process-token")
+    monkeypatch.setenv("PROFILE_MCP_TOKEN", "launch-profile-token")
     _clear_config_caches()
     return base, jane, louis
 
@@ -98,10 +131,13 @@ def test_profile_managed_mcp_is_discoverable_with_isolated_env(
         assert mcp_startup._has_configured_mcp_servers() is True
         servers = _load_mcp_config()
 
-    assert set(servers) == {"gbrain"}
+    assert set(servers) == {"gbrain", "jane-local-secret"}
     assert servers["gbrain"]["url"] == "https://jane.gbrain.example/mcp"
     assert servers["gbrain"]["headers"]["Authorization"] == (
         "Bearer jane-managed-token"
+    )
+    assert servers["jane-local-secret"]["headers"]["Authorization"] == (
+        "Bearer jane-profile-token"
     )
     assert os.environ["GBRAIN_URL"] == "https://process.example/mcp"
     assert os.environ["GBRAIN_TOKEN"] == "process-token"
@@ -119,6 +155,9 @@ def test_profile_without_managed_mcp_sees_only_profile_config(
         servers = _load_mcp_config()
 
     assert set(servers) == {"louis-local"}
+    assert servers["louis-local"]["headers"]["Authorization"] == (
+        "Bearer louis-profile-token"
+    )
 
 
 def test_base_scope_mcp_config_is_unchanged(tmp_path, monkeypatch):

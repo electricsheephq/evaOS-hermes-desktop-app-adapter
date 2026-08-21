@@ -20,6 +20,7 @@ from typing import Any, Callable, NamedTuple, Optional
 
 from agent.secret_scope import (
     build_profile_secret_scope,
+    is_multiplex_active,
     reset_secret_scope,
     set_secret_scope,
 )
@@ -1834,6 +1835,7 @@ def _compute_host_turn_frame(
         "cols": int(session.get("cols", 80) or 80),
         "cwd": _session_cwd(session),
         "profile_home": session.get("profile_home") or "",
+        "multiplex_active": is_multiplex_active(),
         "model_override": session.get("model_override"),
         "reasoning_config_override": session.get("create_reasoning_override"),
         "service_tier_override": session.get("create_service_tier_override"),
