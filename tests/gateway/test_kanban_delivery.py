@@ -3,6 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from hermes_cli import kanban_db as kb
 import tui_gateway.server as server
 
 
@@ -54,3 +55,49 @@ def test_async_durable_precondition_failure_restores_batch(monkeypatch, marker_r
         server._start_inflight_turn(session, "later user prompt")
     assert session["inflight_turn"]["user"] == "later user prompt"
     assert session["inflight_turn"].get("status") != "error"
+
+
+def test_visible_and_silent_kanban_claim_settles_every_event_id(tmp_path, monkeypatch):
+    db_path = tmp_path / "kanban.db"
+    hermes_home = tmp_path / ".hermes"
+    hermes_home.mkdir()
+    monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+    monkeypatch.setenv("HERMES_KANBAN_DB", str(db_path))
+    kb.init_db()
+
+    conn = kb.connect()
+    try:
+        task_id = kb.create_task(conn, title="mixed delivery", assignee="worker")
+        kb.add_notify_sub(
+            conn, task_id=task_id, platform="tui", chat_id="session-1"
+        )
+        kb.complete_task(conn, task_id, summary="done")
+        kb.archive_task(conn, task_id)
+        expected_event_ids = [
+            event.id
+            for event in kb.list_events(conn, task_id)
+            if event.kind in {"completed", "archived"}
+        ]
+    finally:
+        conn.close()
+
+    items = server._collect_kanban_notifications(
+        {"session_key": "session-1"}, include_identity=True
+    )
+
+    assert len(items) == 1
+    assert "done" in items[0]["text"]
+    assert server._kanban_batch_event_ids(items) == expected_event_ids
+
+    with kb.connect() as conn:
+        sub = kb.list_notify_subs(conn, task_id)[0]
+        assert kb._decode_pending_delivery(sub["pending_event_ids"])[0] == expected_event_ids
+        assert kb.complete_notify_delivery(
+            conn,
+            task_id=task_id,
+            platform="tui",
+            chat_id="session-1",
+            event_ids=server._kanban_batch_event_ids(items),
+            delivery_owner=server._KANBAN_DELIVERY_OWNER,
+        ) is True
+        assert kb.list_notify_subs(conn, task_id) == []

@@ -11809,7 +11809,11 @@ def claim_unseen_events_for_sub(
         old_cursor = int(row["last_event_id"])
         if persist_delivery and row["pending_event_ids"]:
             pending = _decode_pending_delivery(row["pending_event_ids"])
-            if pending[1] != owner and pending[2] + NOTIFY_DELIVERY_LEASE_SECONDS > now:
+            # A live claim belongs to its current owner until the lease
+            # expires; even that owner must not refresh it on every poll.
+            # Once expired, the same process is allowed to reclaim its own
+            # events just like a replacement process.
+            if pending[2] + NOTIFY_DELIVERY_LEASE_SECONDS > now:
                 return old_cursor, old_cursor, []
             events = _events_by_ids(conn, task_id, event_ids=pending[0])
             encoded = _encode_pending_delivery(pending[0], owner, now)
@@ -11819,7 +11823,7 @@ def claim_unseen_events_for_sub(
                 "AND pending_event_ids = ?",
                 (encoded, task_id, platform, chat_id, thread_id or "", row["pending_event_ids"]),
             )
-            return (old_cursor, old_cursor, events if pending[1] != owner else []) if cur.rowcount == 1 else (old_cursor, old_cursor, [])
+            return (old_cursor, old_cursor, events) if cur.rowcount == 1 else (old_cursor, old_cursor, [])
         new_cursor, events = unseen_events_for_sub(
             conn,
             task_id=task_id,
