@@ -50,8 +50,8 @@ def test_managed_scope_middleware_execution_order():
         if "dispatch" in middleware.kwargs
     ]
     assert dispatch_order.index("_dashboard_health_middleware") < dispatch_order.index(
-        "evaos_managed_profile_scope_middleware"
-    ) < dispatch_order.index("_token_auth_seam")
+        "_token_auth_seam"
+    ) < dispatch_order.index("evaos_managed_profile_scope_middleware")
 
 
 def test_web_startup_initializes_managed_profile_scope(monkeypatch):
@@ -105,6 +105,35 @@ async def test_managed_projects_tree_is_not_treated_as_profile_route(monkeypatch
         Request(scope), call_next
     )
     assert result == "aggregate-reached"
+
+
+@pytest.mark.asyncio
+async def test_managed_scope_preserves_token_authenticated_route():
+    from starlette.requests import Request
+
+    from hermes_cli import web_server
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/api/gateway/drain",
+        "raw_path": b"/api/gateway/drain",
+        "query_string": b"",
+        "headers": [],
+        "scheme": "http",
+        "server": ("testserver", 80),
+        "client": ("testclient", 1234),
+        "root_path": "",
+        "state": {"token_authenticated": True},
+    }
+
+    async def call_next(request):
+        return "token-route-reached"
+
+    result = await web_server.evaos_managed_profile_scope_middleware(
+        Request(scope), call_next
+    )
+    assert result == "token-route-reached"
 
 
 def test_managed_omitted_profile_uses_effective_profile_for_dashboard_helpers(

@@ -512,6 +512,29 @@ class TestMattermostMentionBehavior:
         ]
 
     @pytest.mark.asyncio
+    async def test_unresolved_mention_has_a_bounded_member_scan(self):
+        """Distinct full pages must not turn a typo into an unbounded delay."""
+        pages = [
+            [
+                {"username": f"human-{page}-{index}", "is_bot": False}
+                for index in range(200)
+            ]
+            for page in range(5)
+        ]
+        self.adapter._api_get = AsyncMock(side_effect=pages)
+
+        await self.adapter._handle_ws_event(
+            self._make_event("ping @hermes-bot @never-resolves")
+        )
+
+        message = self.adapter.handle_message.call_args[0][0]
+        assert message.text == "ping  @never-resolves"
+        assert len(self.adapter._api_get.await_args_list) == 5
+        assert self.adapter._api_get.await_args_list[-1] == call(
+            "users?in_channel=chan_456&page=4&per_page=200"
+        )
+
+    @pytest.mark.asyncio
     async def test_single_bot_channel_is_inert_after_own_mention_cleanup(self):
         """A channel without peer bots preserves the admitted message bytes."""
         self.adapter._api_get = AsyncMock(return_value=[

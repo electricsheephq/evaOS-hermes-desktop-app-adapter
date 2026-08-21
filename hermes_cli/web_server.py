@@ -848,20 +848,6 @@ async def auth_middleware(request: Request, call_next):
     return await call_next(request)
 
 
-@app.middleware("http")
-async def _token_auth_seam(request: Request, call_next):
-    """Outermost auth seam: non-interactive bearer-token auth for opted-in routes.
-
-    Registered LAST so it runs FIRST (Starlette middleware is outermost-last).
-    A registered token route is fully owned here — authenticate by token,
-    attach the principal + ``token_authenticated`` flag, and let the downstream
-    cookie/session gates skip enforcement. Non-token routes pass straight
-    through untouched.
-    """
-    from hermes_cli.dashboard_auth.token_auth import token_auth_middleware
-    return await token_auth_middleware(request, call_next)
-
-
 _MANAGED_NON_ADMIN_BLOCKED_PREFIXES = (
     "/api/console",
     "/api/pty",
@@ -917,6 +903,12 @@ def _managed_profile_or_current(profile: Optional[str]) -> Optional[str]:
 @app.middleware("http")
 async def evaos_managed_profile_scope_middleware(request: Request, call_next):
     """Bind VM-proxy-authenticated evaOS profile authority to this request."""
+    # The outer token seam authenticates registered non-interactive routes
+    # before managed browser-profile enforcement. Those callers deliberately
+    # have no x-evaos-* browser headers and must keep their token-owned scope.
+    if getattr(request.state, "token_authenticated", False):
+        return await call_next(request)
+
     from hermes_cli.profile_scope import (
         managed_profile_context,
         principal_from_headers,
@@ -973,6 +965,20 @@ async def evaos_managed_profile_scope_middleware(request: Request, call_next):
                 )
 
         return await call_next(request)
+
+
+@app.middleware("http")
+async def _token_auth_seam(request: Request, call_next):
+    """Outermost auth seam: non-interactive bearer-token auth for opted-in routes.
+
+    Registered LAST so it runs FIRST (Starlette middleware is outermost-last).
+    A registered token route is fully owned here — authenticate by token,
+    attach the principal + ``token_authenticated`` flag, and let the downstream
+    cookie/session and managed-profile gates skip enforcement. Non-token routes
+    pass straight through untouched.
+    """
+    from hermes_cli.dashboard_auth.token_auth import token_auth_middleware
+    return await token_auth_middleware(request, call_next)
 
 
 # ---------------------------------------------------------------------------

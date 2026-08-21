@@ -1287,6 +1287,12 @@ def _run_cleanup(*, notify_session_finalize: bool = True):
         # other, and preserve on_session_end -> shutdown ordering.
         try:
             if _active_agent_ref and hasattr(_active_agent_ref, "close"):
+                session_id = getattr(_active_agent_ref, "session_id", None)
+                if session_id in _handed_off_session_ids:
+                    # The gateway owns this reopened row now. close() must
+                    # still release resources without ending that session as
+                    # agent_close after the handoff boundary.
+                    _active_agent_ref._end_session_on_close = False
                 _active_agent_ref.close()
         except Exception as e:
             logger.warning("CLI cleanup agent close failed: %s", e, exc_info=True)

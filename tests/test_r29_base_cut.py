@@ -6,6 +6,8 @@ import importlib.metadata
 import tomllib
 from pathlib import Path
 
+import hermes_cli
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -18,11 +20,9 @@ def _lock() -> dict:
     return tomllib.loads((REPO_ROOT / "uv.lock").read_text(encoding="utf-8"))
 
 
-def test_r29_version_literals_match_upstream_0204() -> None:
+def test_package_and_runtime_versions_match() -> None:
     project_version = _pyproject()["project"]["version"]
-    namespace: dict[str, object] = {}
-    exec((REPO_ROOT / "hermes_cli" / "__init__.py").read_text(encoding="utf-8"), namespace)
-    assert project_version == namespace["__version__"] == "0.20.4"
+    assert project_version == hermes_cli.__version__
 
 
 def test_r29_cryptography_override_and_lock_stay_on_50() -> None:

@@ -73,6 +73,7 @@ _MATTERMOST_DISABLE_MENTIONS_PROPS = {"disable_mentions": True}
 # Mattermost special mentions.  They match the @username pattern but are never
 # channel members, so trying to resolve them paginates the entire membership.
 _MATTERMOST_SPECIAL_MENTIONS = frozenset({"channel", "here", "all"})
+_MATTERMOST_MEMBER_PAGE_LIMIT = 5
 
 # Reconnect parameters (exponential backoff).
 _RECONNECT_BASE_DELAY = 2.0
@@ -1119,7 +1120,10 @@ class MattermostAdapter(BasePlatformAdapter):
         resolved_usernames: set[str] = set()
         seen_usernames: set[str] = set()
         page = 0
-        while resolved_usernames != mentioned:
+        while (
+            resolved_usernames != mentioned
+            and page < _MATTERMOST_MEMBER_PAGE_LIMIT
+        ):
             try:
                 page_users = await self._api_get(
                     f"users?in_channel={channel_id}&page={page}&per_page=200"

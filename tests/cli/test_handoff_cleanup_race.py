@@ -116,6 +116,8 @@ def test_cleanup_does_not_finalize_handed_off_session():
         cli_mod._run_cleanup()
 
     mock_finalize.assert_not_called()
+    assert agent._end_session_on_close is False
+    agent.close.assert_called_once_with()
 
 
 def test_cleanup_finalizes_normal_session():
