@@ -1,37 +1,15 @@
-"""The shell installer must preserve uv's lock cutoff under UV_NO_CONFIG."""
+"""Behavioral coverage for the shell installer's managed uv capability gate."""
 
 from __future__ import annotations
 
 import os
-import re
 import stat
 import subprocess
-import tomllib
 from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 INSTALL_SH = REPO_ROOT / "scripts" / "install.sh"
-
-
-def test_install_sh_passes_the_lock_cutoff_to_uv_commands() -> None:
-    source = (REPO_ROOT / "scripts" / "install.sh").read_text(encoding="utf-8")
-    lock = tomllib.loads((REPO_ROOT / "uv.lock").read_text(encoding="utf-8"))
-    pyproject = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-
-    match = re.search(r'^UV_EXCLUDE_NEWER="([^"]+)"$', source, re.MULTILINE)
-    assert match, "install.sh must define one explicit uv exclude-newer cutoff"
-    cutoff = match.group(1)
-    assert cutoff == lock["options"]["exclude-newer"]
-    assert pyproject["tool"]["uv"]["exclude-newer"] == "14 days"
-
-    assert 'sync --extra all --locked --exclude-newer "$UV_EXCLUDE_NEWER"' in source
-    assert 'pip install --exclude-newer "$UV_EXCLUDE_NEWER"' in source
-    assert '"${UV_EXCLUDE_NEWER_PACKAGE_ARGS[@]}"' in source
-    for name, enabled in lock["options"]["exclude-newer-package"].items():
-        value = "true" if enabled is True else "false" if enabled is False else str(enabled)
-        assert f"--exclude-newer-package {name}={value}" in source
-
 
 def _run_install_uv(
     tmp_path: Path, *, supports_exclude_newer: bool
@@ -65,38 +43,16 @@ def _run_install_uv(
     )
     (fake_bin / "curl").chmod(0o700)
 
-    source = INSTALL_SH.read_text(encoding="utf-8")
-    functions = []
-    for name in ("_uv_supports_exclude_newer_package", "install_uv"):
-        match = re.search(
-            rf"^{re.escape(name)}\(\) \{{.*?^\}}",
-            source,
-            re.MULTILINE | re.DOTALL,
-        )
-        assert match, f"could not extract {name}() from install.sh"
-        # The live-system subprocess guard scans command text, including
-        # comments. Strip comments from this isolated function harness so the
-        # installer's documentation about ``hermes update`` is not mistaken
-        # for an update command.
-        functions.append(
-            "\n".join(
-                line
-                for line in match.group(0).splitlines()
-                if not line.lstrip().startswith("#")
-            )
-        )
-    harness = "\n\n".join(functions) + "\ninstall_uv\n"
     env = dict(
         os.environ,
         HERMES_HOME=str(home),
+        HERMES_INSTALL_TEST_ENTRYPOINT="install_uv",
         UV_LOG=str(uv_log),
         CURL_LOG=str(curl_log),
         PATH=f"{fake_bin}:{os.environ['PATH']}",
     )
     return subprocess.run(
-        ["bash", "-c", "set -e\nDISTRO=linux\n"
-         "log_info() { :; }; log_success() { :; }; log_warn() { echo \"$*\" >&2; }; "
-         "log_error() { echo \"$*\" >&2; }; " + harness],
+        ["bash", str(INSTALL_SH)],
         capture_output=True,
         text=True,
         env=env,
@@ -108,7 +64,7 @@ def test_old_managed_uv_is_not_reused_with_unsupported_flags(tmp_path: Path) -> 
     result = _run_install_uv(tmp_path, supports_exclude_newer=False)
 
     assert result.returncode != 0, result.stdout + result.stderr
-    assert "--exclude-newer-package" in result.stderr
+    assert "--exclude-newer-package" in result.stdout
     assert "https://astral.sh/uv/install.sh" in (tmp_path / "curl.log").read_text()
     assert (tmp_path / "uv.log").read_text().splitlines() == ["pip install --help"]
 

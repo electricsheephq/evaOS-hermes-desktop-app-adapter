@@ -950,15 +950,15 @@ async def evaos_managed_profile_scope_middleware(request: Request, call_next):
                 if selected != "all":
                     effective_profile = selected
             profile_route = re.match(r"^/api/profiles/([^/]+)", request.url.path)
-            # ``projects/tree`` is an aggregate endpoint, not a request for a
-            # profile named ``projects``.  Keep it in the caller's primary
-            # scope so its handler can use the principal-filtered profile
-            # enumeration rather than rejecting the aggregate prefix here.
+            # These literal routes are profile management/aggregation actions,
+            # not requests for profiles named ``projects`` or ``import``.
             is_projects_aggregate = request.url.path.rstrip("/") == "/api/profiles/projects/tree"
+            is_profile_import = request.url.path.rstrip("/") == "/api/profiles/import"
             if (
                 profile_route
                 and profile_route.group(1) not in {"active", "sessions"}
                 and not is_projects_aggregate
+                and not is_profile_import
             ):
                 effective_profile = require_profile(profile_route.group(1))
         except PermissionError:

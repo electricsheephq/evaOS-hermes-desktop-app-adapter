@@ -3562,7 +3562,12 @@ main() {
     echo "git" > "$INSTALL_DIR/.install_method"
 }
 
-if [ "$MANIFEST_MODE" = true ]; then
+if [ -n "${HERMES_INSTALL_TEST_ENTRYPOINT:-}" ]; then
+    case "$HERMES_INSTALL_TEST_ENTRYPOINT" in
+        install_uv) install_uv ;;
+        *) log_error "Unknown installer test entrypoint"; exit 2 ;;
+    esac
+elif [ "$MANIFEST_MODE" = true ]; then
     emit_manifest
 elif [ -n "$STAGE_NAME" ]; then
     run_stage_protocol "$STAGE_NAME"

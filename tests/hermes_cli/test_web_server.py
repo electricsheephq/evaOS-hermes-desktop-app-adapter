@@ -490,6 +490,16 @@ class TestWebServerEndpoints:
         assert response.json()["detail"] == "profile is not authorized"
         assert not (foreign_home / "config.yaml").exists()
 
+    def test_managed_admin_profile_import_reaches_import_handler(self):
+        response = self.client.post(
+            "/api/profiles/import",
+            headers=_managed_headers(admin=True),
+            json={"archive": ""},
+        )
+
+        assert response.status_code == 400
+        assert response.json()["detail"] == "archive path is required"
+
         update = self.client.post(
             "/api/hermes/update",
             headers=_managed_headers(),
