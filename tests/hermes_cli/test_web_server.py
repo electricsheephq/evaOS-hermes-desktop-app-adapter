@@ -68,6 +68,37 @@ def test_web_startup_initializes_managed_profile_scope(monkeypatch):
     assert observed == [True]
 
 
+@pytest.mark.asyncio
+async def test_managed_projects_tree_is_not_treated_as_profile_route(monkeypatch, tmp_path):
+    from starlette.requests import Request
+
+    from hermes_cli import profiles as profiles_mod
+    from hermes_cli import web_server
+
+    monkeypatch.setattr(profiles_mod, "get_profile_dir", lambda name: tmp_path / name)
+    headers = _managed_headers()
+    scope = {
+        "type": "http",
+        "method": "GET",
+        "path": "/api/profiles/projects/tree",
+        "raw_path": b"/api/profiles/projects/tree",
+        "query_string": b"",
+        "headers": [(key.encode(), value.encode()) for key, value in headers.items()],
+        "scheme": "http",
+        "server": ("testserver", 80),
+        "client": ("testclient", 1234),
+        "root_path": "",
+    }
+
+    async def call_next(request):
+        return "aggregate-reached"
+
+    result = await web_server.evaos_managed_profile_scope_middleware(
+        Request(scope), call_next
+    )
+    assert result == "aggregate-reached"
+
+
 # ---------------------------------------------------------------------------
 # Shared fixtures
 # ---------------------------------------------------------------------------

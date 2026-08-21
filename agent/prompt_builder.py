@@ -15,6 +15,7 @@ from pathlib import Path
 
 from hermes_constants import (
     get_hermes_home,
+    hermes_home_key,
     get_skills_dir,
     is_wsl,
     reset_hermes_home_override,
@@ -1142,11 +1143,14 @@ _BACKEND_FALLBACK_DESCRIPTIONS: dict[str, str] = {
 
 
 # Cache the backend probe result per process so we only pay the probe cost
-# on the first prompt build of a session. Keyed by (env_type, cwd_hint) so
-# a mid-process backend switch rebuilds the string. Kept in-module (not on
-# disk) because the probe captures live backend state that may change
-# across Hermes restarts.
-_BACKEND_PROBE_CACHE: dict[tuple[str, str], str] = {}
+# on the first prompt build of a session. Keyed by (profile_home, env_type,
+# cwd_hint) so a mid-process backend switch or routed-profile switch rebuilds
+# the string. Kept in-module (not on disk) because the probe captures live
+# backend state that may change across Hermes restarts. The routed profile's
+# home is part of the key: two profiles may intentionally use the same backend
+# type and cwd hint while connecting to different backend identities (for
+# example, two SSH hosts).
+_BACKEND_PROBE_CACHE: dict[tuple[str, str, str], str] = {}
 
 
 def _windows_marketing_version() -> str:
@@ -1221,7 +1225,7 @@ def _probe_remote_backend(env_type: str) -> str | None:
     operate on a different machine than the host Hermes runs on.
     """
     cwd_hint = _terminal_setting("TERMINAL_CWD", "")
-    cache_key = (env_type, cwd_hint)
+    cache_key = (hermes_home_key(), env_type, cwd_hint)
     cached = _BACKEND_PROBE_CACHE.get(cache_key)
     if cached is not None:
         return cached or None

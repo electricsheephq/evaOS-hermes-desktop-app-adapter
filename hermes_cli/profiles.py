@@ -1009,7 +1009,8 @@ def profiles_to_serve(
     - ``multiplex=True``: returns the default profile plus every valid named
       profile under ``profiles/``, each paired with its own HERMES_HOME. When
       ``profile_allowlist`` is provided, only selected named profiles are
-      included; the default profile is always served.
+      included; the default profile is always served unless a managed
+      principal is active and has not been assigned ``default``.
 
     Intentionally lightweight (a directory scan + name validation only): no
     per-profile config reads, gateway-running probes, or skill counts like
@@ -1022,7 +1023,13 @@ def profiles_to_serve(
     if not multiplex:
         return [(active, get_profile_dir(active))]
 
-    serve: List[Tuple[str, Path]] = [("default", _get_default_hermes_home())]
+    from hermes_cli.profile_scope import current_principal
+
+    principal = current_principal()
+    principal_allowed = set(principal.allowed_profiles) if principal is not None else None
+    serve: List[Tuple[str, Path]] = []
+    if principal_allowed is None or "default" in principal_allowed:
+        serve.append(("default", _get_default_hermes_home()))
     allowed: Optional[set[str]] = None
     if profile_allowlist is not None:
         allowed = set()
@@ -1036,6 +1043,8 @@ def profiles_to_serve(
                 continue
             if name != "default":
                 allowed.add(name)
+        if principal_allowed is not None:
+            allowed.intersection_update(principal_allowed)
 
     profiles_root = _get_profiles_root()
     if profiles_root.is_dir():
@@ -1046,6 +1055,8 @@ def profiles_to_serve(
             if name == "default":
                 continue  # default is the built-in entry already added above
             if not _PROFILE_ID_RE.match(name):
+                continue
+            if principal_allowed is not None and name not in principal_allowed:
                 continue
             if allowed is not None and name not in allowed:
                 continue

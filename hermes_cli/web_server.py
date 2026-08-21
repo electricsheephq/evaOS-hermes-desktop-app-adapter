@@ -925,7 +925,16 @@ async def evaos_managed_profile_scope_middleware(request: Request, call_next):
                 if selected != "all":
                     effective_profile = selected
             profile_route = re.match(r"^/api/profiles/([^/]+)", request.url.path)
-            if profile_route and profile_route.group(1) not in {"active", "sessions"}:
+            # ``projects/tree`` is an aggregate endpoint, not a request for a
+            # profile named ``projects``.  Keep it in the caller's primary
+            # scope so its handler can use the principal-filtered profile
+            # enumeration rather than rejecting the aggregate prefix here.
+            is_projects_aggregate = request.url.path.rstrip("/") == "/api/profiles/projects/tree"
+            if (
+                profile_route
+                and profile_route.group(1) not in {"active", "sessions"}
+                and not is_projects_aggregate
+            ):
                 effective_profile = require_profile(profile_route.group(1))
         except PermissionError:
             return JSONResponse({"detail": "profile is not authorized"}, status_code=403)

@@ -1094,6 +1094,32 @@ class TestProfilesToServe:
         assert serve["default"] == _get_default_hermes_home()
         assert serve["coder"] == get_profile_dir("coder")
 
+    def test_managed_principal_gets_assigned_profiles_without_default_alias(
+        self, profile_env, monkeypatch
+    ):
+        from hermes_cli.profile_scope import managed_profile_context, principal_from_headers
+
+        profiles_root = _get_profiles_root()
+        (profiles_root / "jane").mkdir(parents=True)
+        (profiles_root / "other").mkdir(parents=True)
+
+        def principal_for(allowed):
+            return principal_from_headers(
+                {
+                    "x-evaos-allowed-profiles": ",".join(allowed),
+                    "x-evaos-primary-profile": allowed[0],
+                    "x-evaos-principal-user": "user-1",
+                }
+            )
+
+        with managed_profile_context(principal_for(["jane"])):
+            assert dict(profiles_to_serve(multiplex=True)) == {
+                "jane": profiles_root / "jane",
+            }
+
+        with managed_profile_context(principal_for(["default", "jane"])):
+            assert set(dict(profiles_to_serve(multiplex=True))) == {"default", "jane"}
+
     def test_empty_allowlist_serves_only_default(self, profile_env):
         create_profile("worker", no_alias=True)
 
@@ -1164,4 +1190,3 @@ class TestResolveProfileEnvSpelling:
         # No HERMES_HOME: the platform default root applies (existing contract).
         monkeypatch.delenv("HERMES_HOME", raising=False)
         assert Path(resolve_profile_env("default")) == _get_default_hermes_home()
-
