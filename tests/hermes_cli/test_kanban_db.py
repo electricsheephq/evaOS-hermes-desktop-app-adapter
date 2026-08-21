@@ -206,6 +206,54 @@ def test_schedule_task_parks_time_delay_without_dispatching(kanban_home):
 
 
 
+def test_expired_same_owner_durable_claim_is_recoverable(kanban_home):
+    with kb.connect() as conn:
+        task_id = kb.create_task(conn, title="durable retry", assignee="worker")
+        kb.add_notify_sub(
+            conn, task_id=task_id, platform="tui", chat_id="session-1"
+        )
+        kb.complete_task(conn, task_id, summary="retry me")
+        claim_args = dict(
+            task_id=task_id,
+            platform="tui",
+            chat_id="session-1",
+            kinds=["completed"],
+            persist_delivery=True,
+        )
+
+        _, _, claimed = kb.claim_unseen_events_for_sub(
+            conn, **claim_args, delivery_owner="same-process", delivery_now=100
+        )
+        assert len(claimed) == 1
+
+        _, _, live_retry = kb.claim_unseen_events_for_sub(
+            conn, **claim_args, delivery_owner="same-process", delivery_now=101
+        )
+        assert live_retry == []
+        live_pending = kb.list_notify_subs(conn, task_id)[0]["pending_event_ids"]
+        assert kb._decode_pending_delivery(live_pending)[2] == 100
+
+        _, _, recovered = kb.claim_unseen_events_for_sub(
+            conn,
+            **claim_args,
+            delivery_owner="same-process",
+            delivery_now=100 + kb.NOTIFY_DELIVERY_LEASE_SECONDS,
+        )
+        assert [event.id for event in recovered] == [claimed[0].id]
+        recovered_pending = kb.list_notify_subs(conn, task_id)[0]["pending_event_ids"]
+        assert kb._decode_pending_delivery(recovered_pending)[2] == (
+            100 + kb.NOTIFY_DELIVERY_LEASE_SECONDS
+        )
+        assert kb.complete_notify_delivery(
+            conn,
+            task_id=task_id,
+            platform="tui",
+            chat_id="session-1",
+            event_ids=[event.id for event in recovered],
+            delivery_owner="same-process",
+        ) is True
+
+
 def test_stale_claim_reclaim_event_records_diagnostic_payload(
     kanban_home, monkeypatch,
 ):

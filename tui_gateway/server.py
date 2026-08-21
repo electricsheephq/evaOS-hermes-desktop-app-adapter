@@ -10012,6 +10012,7 @@ def _collect_kanban_notifications(session: dict, *, include_identity: bool = Fal
                 if not events:
                     continue
                 task = _kb.get_task(conn, sub["task_id"])
+                event_ids = [int(event.id) for event in events]
                 for ev in events:
                     text = _format_kanban_event_text(sub, task, ev, slug)
                     if text:
@@ -10028,10 +10029,15 @@ def _collect_kanban_notifications(session: dict, *, include_identity: bool = Fal
                                 )
                             )
                             # Never derive identity from rendered/customer text.
-                            texts.append({"text": text, "identity": identity})
+                            # Keep the complete claimed range beside each
+                            # visible item so silent events settle with it.
+                            texts.append({
+                                "text": text,
+                                "identity": identity,
+                                "claimed_event_ids": event_ids,
+                            })
                         else:
                             texts.append(text)
-                event_ids = [int(event.id) for event in events]
                 if include_identity and texts:
                     # One durable claim per turn keeps settlement all-or-nothing.
                     return texts
@@ -10065,6 +10071,29 @@ def _kanban_dispatch_batch_id(items: list[dict]) -> str:
     identities = [tuple(item.get("identity") or ()) for item in items]
     material = json.dumps(identities, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(b"hermes.tui.kanban.dispatch.v1\0" + material).hexdigest()
+
+
+def _kanban_batch_event_ids(items: list[dict]) -> list[int]:
+    """Return every claimed event ID represented by a visible batch.
+
+    Silent events are deliberately absent from the rendered batch items, but
+    remain part of the durable claim. ``claimed_event_ids`` carries that exact
+    claim range; the identity fallback keeps older/in-memory batches
+    settleable while they drain.
+    """
+    event_ids: list[int] = []
+    seen: set[int] = set()
+    for item in items:
+        claimed = item.get("claimed_event_ids")
+        if claimed is None:
+            identity = tuple(item.get("identity") or ())
+            claimed = identity[5:6]
+        for event_id in claimed:
+            event_id = int(event_id)
+            if event_id not in seen:
+                seen.add(event_id)
+                event_ids.append(event_id)
+    return event_ids
 
 
 def _restore_async_kanban_batch(sid: str, session: dict, batch: dict) -> None:
@@ -10177,7 +10206,7 @@ def _notification_poller_loop(
                     def _settle_recorded_claim() -> bool:
                         identity = tuple(_batch_items[0]["identity"])
                         board, task_id, platform, chat_id, thread_id = identity[:5]
-                        event_ids = [int(item["identity"][5]) for item in _batch_items]
+                        event_ids = _kanban_batch_event_ids(_batch_items)
                         try:
                             with contextlib.closing(_kb.connect(board=board)) as conn:
                                 return _kb.complete_notify_delivery(
