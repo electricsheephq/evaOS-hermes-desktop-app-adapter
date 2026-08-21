@@ -106,8 +106,10 @@ async def test_goal_verdict_continue_enqueues_continuation(hermes_home):
     proceeds on the next turn."""
     runner, adapter, session_entry, src = _make_runner_with_adapter()
 
+    from hermes_cli import goals
     from hermes_cli.goals import GoalManager
 
+    assert await asyncio.to_thread(goals._get_session_db) is not None
     mgr = GoalManager(session_entry.session_id)
     mgr.set("polish the docs")
 
@@ -132,8 +134,10 @@ async def test_goal_verdict_budget_exhausted_sends_pause(hermes_home):
     and no further continuation enqueued."""
     runner, adapter, session_entry, src = _make_runner_with_adapter()
 
+    from hermes_cli import goals
     from hermes_cli.goals import GoalManager, save_goal
 
+    assert await asyncio.to_thread(goals._get_session_db) is not None
     mgr = GoalManager(session_entry.session_id, default_max_turns=2)
     state = mgr.set("tiny goal", max_turns=2)
     state.turns_used = 2
@@ -153,4 +157,3 @@ async def test_goal_verdict_budget_exhausted_sends_pause(hermes_home):
     assert "turns used" in content.lower()
     # No continuation enqueued when budget is exhausted
     assert not adapter._pending_messages
-
