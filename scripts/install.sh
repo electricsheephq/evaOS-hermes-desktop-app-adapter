@@ -572,6 +572,11 @@ detect_os() {
 # Dependency checks
 # ============================================================================
 
+_uv_supports_exclude_newer_package() {
+    local uv_bin="$1"
+    "$uv_bin" pip install --help 2>/dev/null | grep -Fq -- "--exclude-newer-package"
+}
+
 install_uv() {
     if [ "$DISTRO" = "termux" ]; then
         log_info "Termux detected — using Python's stdlib venv + pip instead of uv"
@@ -586,10 +591,13 @@ install_uv() {
     local _managed_uv="$HERMES_HOME/bin/uv"
 
     if [ -x "$_managed_uv" ]; then
-        UV_CMD="$_managed_uv"
-        UV_VERSION=$($UV_CMD --version 2>/dev/null)
-        log_success "Managed uv found ($UV_VERSION)"
-        return 0
+        if _uv_supports_exclude_newer_package "$_managed_uv"; then
+            UV_CMD="$_managed_uv"
+            UV_VERSION=$($UV_CMD --version 2>/dev/null)
+            log_success "Managed uv found ($UV_VERSION)"
+            return 0
+        fi
+        log_warn "Managed uv lacks --exclude-newer-package; refreshing it..."
     fi
 
     log_info "Installing managed uv into $HERMES_HOME/bin ..."
@@ -613,12 +621,16 @@ install_uv() {
     # directly into $HERMES_HOME/bin instead of ~/.local/bin.
     if UV_UNMANAGED_INSTALL="$HERMES_HOME/bin" sh "$_uv_installer" >>"$_uv_install_log" 2>&1; then
         rm -f "$_uv_installer"
-        if [ -x "$_managed_uv" ]; then
-            UV_CMD="$_managed_uv"
-        else
+        if [ ! -x "$_managed_uv" ]; then
             log_error "uv installer reported success but binary not found at $_managed_uv"
             log_info "Installer output:"
             sed 's/^/    /' "$_uv_install_log" >&2
+            rm -f "$_uv_install_log"
+            exit 1
+        fi
+        UV_CMD="$_managed_uv"
+        if ! _uv_supports_exclude_newer_package "$UV_CMD"; then
+            log_error "uv installer produced a binary without --exclude-newer-package support"
             rm -f "$_uv_install_log"
             exit 1
         fi
