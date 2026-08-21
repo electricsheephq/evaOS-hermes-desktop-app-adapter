@@ -99,6 +99,51 @@ async def test_managed_projects_tree_is_not_treated_as_profile_route(monkeypatch
     assert result == "aggregate-reached"
 
 
+def test_managed_omitted_profile_uses_effective_profile_for_dashboard_helpers(
+    monkeypatch, tmp_path
+):
+    from hermes_cli import profiles as profiles_mod
+    from hermes_cli import web_server
+    from hermes_cli.profile_scope import ManagedProfilePrincipal, managed_profile_context
+    from hermes_constants import get_hermes_home
+
+    homes = {name: tmp_path / name for name in ("jane", "louis")}
+    for home in homes.values():
+        home.mkdir()
+    monkeypatch.setattr(profiles_mod, "get_profile_dir", lambda name: homes[name])
+    monkeypatch.setattr(profiles_mod, "profile_exists", lambda name: name in homes)
+    monkeypatch.setattr(profiles_mod, "get_active_profile_name", lambda: "default")
+
+    principal = ManagedProfilePrincipal(
+        user_id="user-1",
+        allowed_profiles=("jane", "louis"),
+        primary_profile="jane",
+        admin=True,
+    )
+    observed_db_paths = []
+
+    def fake_open(path, *, read_only):
+        observed_db_paths.append((path, read_only))
+        return object()
+
+    monkeypatch.setattr(web_server, "_open_session_db_at_path", fake_open)
+
+    with managed_profile_context(principal):
+        with web_server._config_profile_scope(None):
+            assert get_hermes_home() == homes["jane"]
+        with web_server._profile_scope(None):
+            assert get_hermes_home() == homes["jane"]
+        web_server._open_session_db_for_profile(None, read_only=True)
+        assert web_server._cron_default_profile() == "jane"
+        assert web_server._cron_profile_home(None) == ("jane", homes["jane"])
+
+        # Explicit profile selection remains an explicit route to louis.
+        with web_server._config_profile_scope("louis"):
+            assert get_hermes_home() == homes["louis"]
+
+    assert observed_db_paths == [(homes["jane"] / "state.db", True)]
+
+
 # ---------------------------------------------------------------------------
 # Shared fixtures
 # ---------------------------------------------------------------------------

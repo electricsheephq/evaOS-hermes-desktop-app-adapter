@@ -184,6 +184,49 @@ class TestStdioPidTracking:
             assert other_pid in _orphan_stdio_pids
             assert _orphan_stdio_pid_servers[other_pid] == "mimir"
 
+    def test_stderr_handles_are_profile_scoped_and_scope_teardown_is_narrow(
+        self, tmp_path, monkeypatch
+    ):
+        """A profile teardown must not close a sibling's MCP stderr handle."""
+        import tools.mcp_tool as mcp
+        from agent import secret_scope
+        from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+
+        home_a = tmp_path / "profile-a"
+        home_b = tmp_path / "profile-b"
+        home_a.mkdir()
+        home_b.mkdir()
+        monkeypatch.setattr(secret_scope, "_MULTIPLEX_ACTIVE", True)
+        mcp._servers.clear_all()
+        mcp._server_connecting._by_scope.clear()
+        mcp._close_all_mcp_stderr_logs()
+
+        token_a = set_hermes_home_override(str(home_a))
+        try:
+            handle_a = mcp._get_mcp_stderr_log()
+        finally:
+            reset_hermes_home_override(token_a)
+        token_b = set_hermes_home_override(str(home_b))
+        try:
+            handle_b = mcp._get_mcp_stderr_log()
+        finally:
+            reset_hermes_home_override(token_b)
+
+        assert handle_a is not handle_b
+        assert handle_a.name == str(home_a / "logs" / "mcp-stderr.log")
+        assert handle_b.name == str(home_b / "logs" / "mcp-stderr.log")
+
+        token_a = set_hermes_home_override(str(home_a))
+        try:
+            mcp.shutdown_mcp_servers_for_current_scope()
+        finally:
+            reset_hermes_home_override(token_a)
+        assert handle_a.closed
+        assert not handle_b.closed
+
+        mcp._close_all_mcp_stderr_logs()
+        assert handle_b.closed
+
 
 # ---------------------------------------------------------------------------
 # Fix 2b: stdio descendant reaping via process group (issue #23799)

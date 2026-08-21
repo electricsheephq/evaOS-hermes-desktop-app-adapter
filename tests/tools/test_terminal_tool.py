@@ -30,6 +30,55 @@ def test_terminal_schema_advertises_persistent_env_state():
     assert "once per session" in description
 
 
+def test_cleanup_vm_resolves_multiplex_key_and_keeps_legacy_key_compatibility(
+    monkeypatch, tmp_path
+):
+    from agent import secret_scope
+    from tools import terminal_tool
+
+    class FakeEnvironment:
+        def __init__(self):
+            self.cleaned = 0
+
+        def cleanup(self, **_kwargs):
+            self.cleaned += 1
+
+    monkeypatch.setattr(secret_scope, "_MULTIPLEX_ACTIVE", True)
+    monkeypatch.setattr(terminal_tool, "_has_isolation_overrides", lambda _task: False)
+    monkeypatch.setattr(terminal_tool, "_docker_session_isolation_enabled", lambda: False)
+    monkeypatch.setattr("hermes_constants.get_hermes_home", lambda: tmp_path)
+    monkeypatch.setattr(terminal_tool, "_active_environments", {})
+    monkeypatch.setattr(terminal_tool, "_last_activity", {})
+    monkeypatch.setattr(terminal_tool, "_creation_locks", {})
+
+    raw_key = "session-a"
+    resolved_key = terminal_tool._resolve_container_task_id(raw_key)
+    env = FakeEnvironment()
+    terminal_tool._active_environments[resolved_key] = env
+    terminal_tool._last_activity[resolved_key] = 1.0
+    terminal_tool._creation_locks[resolved_key] = object()
+
+    terminal_tool.cleanup_vm(raw_key)
+
+    assert env.cleaned == 1
+    assert resolved_key not in terminal_tool._active_environments
+    assert resolved_key not in terminal_tool._last_activity
+    assert resolved_key not in terminal_tool._creation_locks
+
+    # Callers that already hold the resolved key still clean up the same env.
+    resolved_env = FakeEnvironment()
+    terminal_tool._active_environments[resolved_key] = resolved_env
+    terminal_tool.cleanup_vm(resolved_key)
+    assert resolved_env.cleaned == 1
+
+    # Outside multiplexing, cleanup keeps the historical raw-key behavior.
+    monkeypatch.setattr(secret_scope, "_MULTIPLEX_ACTIVE", False)
+    legacy_env = FakeEnvironment()
+    terminal_tool._active_environments["legacy"] = legacy_env
+    terminal_tool.cleanup_vm("legacy")
+    assert legacy_env.cleaned == 1
+
+
 def test_printf_literal_sudo_does_not_trigger_rewrite(monkeypatch):
     monkeypatch.delenv("SUDO_PASSWORD", raising=False)
     monkeypatch.delenv("HERMES_INTERACTIVE", raising=False)
