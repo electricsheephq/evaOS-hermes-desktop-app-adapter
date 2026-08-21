@@ -74,7 +74,17 @@ def _run_install_uv(
             re.MULTILINE | re.DOTALL,
         )
         assert match, f"could not extract {name}() from install.sh"
-        functions.append(match.group(0))
+        # The live-system subprocess guard scans command text, including
+        # comments. Strip comments from this isolated function harness so the
+        # installer's documentation about ``hermes update`` is not mistaken
+        # for an update command.
+        functions.append(
+            "\n".join(
+                line
+                for line in match.group(0).splitlines()
+                if not line.lstrip().startswith("#")
+            )
+        )
     harness = "\n\n".join(functions) + "\ninstall_uv\n"
     env = dict(
         os.environ,
