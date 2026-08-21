@@ -1281,6 +1281,21 @@ def _run_cleanup(*, notify_session_finalize: bool = True):
                     _active_agent_ref.shutdown_memory_provider()
         except Exception as e:
             logger.warning("CLI cleanup memory shutdown failed: %s", e, exc_info=True)
+        # The session-end hook above flushes logical state; close() releases
+        # context-engine SQLite handles and the agent's remaining resources.
+        # Keep these best-effort steps separate so one failure cannot skip the
+        # other, and preserve on_session_end -> shutdown ordering.
+        try:
+            if _active_agent_ref and hasattr(_active_agent_ref, "close"):
+                session_id = getattr(_active_agent_ref, "session_id", None)
+                if session_id in _handed_off_session_ids:
+                    # The gateway owns this reopened row now. close() must
+                    # still release resources without ending that session as
+                    # agent_close after the handoff boundary.
+                    _active_agent_ref._end_session_on_close = False
+                _active_agent_ref.close()
+        except Exception as e:
+            logger.warning("CLI cleanup agent close failed: %s", e, exc_info=True)
     finally:
         _cleanup_in_progress = False
 

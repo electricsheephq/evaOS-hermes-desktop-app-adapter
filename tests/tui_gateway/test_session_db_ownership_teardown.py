@@ -25,6 +25,7 @@ handle is never closed, and a handle that WAS transferred is not closed twice.
 
 from __future__ import annotations
 
+import sqlite3
 import threading
 import types
 
@@ -140,6 +141,149 @@ def test_raising_close_is_swallowed_and_not_retried():
 
     assert attempts == [1]
     assert getattr(agent, "_owns_session_db") is False
+
+
+def test_close_shuts_down_context_engine_sqlite_once(tmp_path):
+    """Logical session finalization must not retain an engine's SQLite handle."""
+    context_path = tmp_path / "context.db"
+
+    class _SQLiteContextEngine:
+        def __init__(self):
+            self.connection = sqlite3.connect(context_path)
+            self.shutdown_count = 0
+
+        def shutdown(self):
+            self.shutdown_count += 1
+            self.connection.close()
+
+    engine = _SQLiteContextEngine()
+    agent = _bare_agent(context_compressor=engine)
+
+    agent.close()
+    agent.close()
+
+    assert engine.shutdown_count == 1
+    with pytest.raises(sqlite3.ProgrammingError):
+        engine.connection.execute("SELECT 1")
+
+
+def test_concurrent_close_selects_context_engine_shutdown_once():
+    """Concurrent teardown must not double-close or hold the lock in plugins."""
+    shutdown_started = threading.Event()
+    release_shutdown = threading.Event()
+
+    class _BlockingContextEngine:
+        shutdown_count = 0
+
+        def shutdown(self):
+            self.shutdown_count += 1
+            shutdown_started.set()
+            assert release_shutdown.wait(timeout=2)
+
+    engine = _BlockingContextEngine()
+    agent = _bare_agent(context_compressor=engine)
+    agent._context_engine_shutdown_lock = threading.Lock()
+    agent._context_engine_shutdown = False
+    first = threading.Thread(target=agent.close)
+    second = threading.Thread(target=agent.close)
+
+    first.start()
+    assert shutdown_started.wait(timeout=2)
+    second.start()
+    second.join(timeout=2)
+    release_shutdown.set()
+    first.join(timeout=2)
+
+    assert not first.is_alive()
+    assert not second.is_alive()
+    assert engine.shutdown_count == 1
+
+
+def test_repeated_cli_cron_delegate_teardown_releases_tracked_handles(
+    tmp_path, monkeypatch
+):
+    """Every ephemeral-agent exit path must return its context DB handles."""
+    import cli as cli_mod
+    import hermes_cli.sqlite_safe_read as tracked
+    from cron.scheduler import _teardown_cron_agent
+    from hermes_state import SessionDB
+    from tools.delegate_tool import _finalize_child_agent_resources
+
+    monkeypatch.setattr(cli_mod, "_arm_exit_watchdog", lambda: None)
+    monkeypatch.setattr(cli_mod, "_reset_terminal_input_modes_on_exit", lambda: None)
+    monkeypatch.setattr(cli_mod, "_cleanup_all_terminals", lambda: None)
+    monkeypatch.setattr(cli_mod, "_cleanup_all_browsers", lambda: None)
+
+    def live_count(path) -> int:
+        with tracked._live_lock:
+            return tracked._live_connections.get(tracked._key(path), 0)
+
+    def agent_for(path):
+        db = SessionDB(db_path=path)
+        db.create_session(session_id="s1", source="test", model="test")
+        db.get_session("s1")  # populate the bounded read pool
+        engine = types.SimpleNamespace(shutdown=db.close)
+        agent = _bare_agent(context_compressor=engine)
+        agent._session_messages = []
+        agent._memory_manager = None
+        agent.shutdown_memory_provider = lambda *_a, **_k: None
+        assert live_count(path) > 0
+        return agent
+
+    for route in ("cli", "cron", "delegate"):
+        for index in range(3):
+            path = tmp_path / f"{route}-{index}.db"
+            agent = agent_for(path)
+            if route == "cli":
+                cli_mod._active_agent_ref = agent
+                cli_mod._cleanup_done = False
+                cli_mod._run_cleanup(notify_session_finalize=False)
+                cli_mod._active_agent_ref = None
+                cli_mod._cleanup_done = False
+            elif route == "cron":
+                _teardown_cron_agent(agent, "ctx-shutdown", timeout_seconds=2)
+            else:
+                _finalize_child_agent_resources(agent)
+            assert live_count(path) == 0
+
+
+def test_context_engine_shutdown_releases_sqlite_lock_for_restart(tmp_path):
+    """A torn-down engine must not leave the next process database-locked."""
+    path = tmp_path / "locked-context.db"
+    connection = sqlite3.connect(path)
+    connection.execute("CREATE TABLE state(value TEXT)")
+    connection.execute("BEGIN IMMEDIATE")
+
+    engine = types.SimpleNamespace(shutdown=connection.close)
+    _bare_agent(context_compressor=engine).close()
+
+    replacement = sqlite3.connect(path, timeout=0)
+    try:
+        replacement.execute("BEGIN IMMEDIATE")
+        replacement.execute("INSERT INTO state VALUES ('ready')")
+        replacement.commit()
+    finally:
+        replacement.close()
+
+
+def test_context_engine_shutdown_is_read_permit_neutral(tmp_path):
+    """Context shutdown must return exactly the bounded read-pool permits."""
+    from hermes_state import SessionDB, _READ_POOL_MAX
+
+    db = SessionDB(db_path=tmp_path / "permit-context.db")
+    held = []
+    for _ in range(_READ_POOL_MAX):
+        assert db._read_permits.acquire(blocking=False)
+        conn = sqlite3.connect(":memory:")
+        held.append(conn)
+        db._read_pool.put_nowait(conn)
+
+    engine = types.SimpleNamespace(shutdown=db.close)
+    _bare_agent(context_compressor=engine).close()
+
+    for _ in range(_READ_POOL_MAX):
+        assert db._read_permits.acquire(blocking=False)
+    assert not db._read_permits.acquire(blocking=False)
 
 
 def test_close_still_ends_the_session_row_before_closing():

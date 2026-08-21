@@ -15,6 +15,7 @@ from pathlib import Path
 
 from hermes_constants import (
     get_hermes_home,
+    hermes_home_key,
     get_skills_dir,
     is_wsl,
     reset_hermes_home_override,
@@ -1142,11 +1143,14 @@ _BACKEND_FALLBACK_DESCRIPTIONS: dict[str, str] = {
 
 
 # Cache the backend probe result per process so we only pay the probe cost
-# on the first prompt build of a session. Keyed by (env_type, cwd_hint) so
-# a mid-process backend switch rebuilds the string. Kept in-module (not on
-# disk) because the probe captures live backend state that may change
-# across Hermes restarts.
-_BACKEND_PROBE_CACHE: dict[tuple[str, str], str] = {}
+# on the first prompt build of a session. Keyed by (profile_home, env_type,
+# cwd_hint) so a mid-process backend switch or routed-profile switch rebuilds
+# the string. Kept in-module (not on disk) because the probe captures live
+# backend state that may change across Hermes restarts. The routed profile's
+# home is part of the key: two profiles may intentionally use the same backend
+# type and cwd hint while connecting to different backend identities (for
+# example, two SSH hosts).
+_BACKEND_PROBE_CACHE: dict[tuple[str, str, str], str] = {}
 
 
 def _windows_marketing_version() -> str:
@@ -1193,6 +1197,25 @@ _WINDOWS_BASH_SHELL_HINT = (
 )
 
 
+def _terminal_setting(name: str, default: str = "") -> str:
+    """Read one ``TERMINAL_*`` setting for the routed profile.
+
+    Goes through ``terminal_tool.get_terminal_setting`` so a multiplexed
+    gateway resolves the setting for the profile this turn is routed to,
+    rather than reading whichever profile bridged its config into
+    ``os.environ`` first.  Imports locally and fails soft to *default* for the
+    same reason ``_probe_remote_backend`` does: ``tools/`` imports are heavy,
+    and prompt construction must not depend on them being available.
+    """
+    try:
+        from tools.terminal_tool import get_terminal_setting
+
+        return get_terminal_setting(name, default)
+    except Exception as e:
+        logger.debug("Terminal setting %s unavailable: %s", name, e)
+        return default
+
+
 def _probe_remote_backend(env_type: str) -> str | None:
     """Run a tiny introspection command inside the active terminal backend.
 
@@ -1201,8 +1224,8 @@ def _probe_remote_backend(env_type: str) -> str | None:
     per process. Used only for non-local backends where the agent's tools
     operate on a different machine than the host Hermes runs on.
     """
-    cwd_hint = os.getenv("TERMINAL_CWD", "")
-    cache_key = (env_type, cwd_hint)
+    cwd_hint = _terminal_setting("TERMINAL_CWD", "")
+    cache_key = (hermes_home_key(), env_type, cwd_hint)
     cached = _BACKEND_PROBE_CACHE.get(cache_key)
     if cached is not None:
         return cached or None
@@ -1347,7 +1370,7 @@ def build_environment_hints() -> str:
 
     hints: list[str] = []
 
-    backend = (os.getenv("TERMINAL_ENV") or "local").strip().lower()
+    backend = (_terminal_setting("TERMINAL_ENV", "local") or "local").strip().lower()
     is_remote_backend = backend in _REMOTE_TERMINAL_BACKENDS
 
     if not is_remote_backend:
@@ -2480,45 +2503,59 @@ def build_context_files_prompt(
     When *skip_soul* is True, SOUL.md is not included here (it was already
     loaded via ``load_soul_md()`` for the identity slot).
     """
+    cwd_is_masked = False
     if cwd is None:
-        cwd = os.getcwd()
-        cwd_is_fallback = True
+        from agent.runtime_cwd import context_cwd_is_masked
+
+        cwd_is_masked = context_cwd_is_masked()
+        if cwd_is_masked:
+            logger.debug(
+                "skipping project-context discovery: session cwd is explicitly masked"
+            )
+            cwd_is_fallback = False
+        else:
+            cwd = os.getcwd()
+            cwd_is_fallback = True
     else:
         cwd_is_fallback = False
 
-    cwd_path = Path(cwd).resolve()
     sections = []
 
-    # Never let a FALLBACK-picked directory inside the Hermes install/source
-    # tree gain system-prompt authority. A backend that self-spawns into that
-    # tree (the desktop app default) would otherwise load this repo's
-    # contributor AGENTS.md as authoritative project context (#64590). An
-    # explicitly configured cwd is honored verbatim — the Hermes tree is a
-    # legitimate workspace when the user deliberately points a session at it —
-    # and CLI-style surfaces pass allow_install_tree_fallback=True because
-    # their launch dir IS the user's shell cwd (developing Hermes in-tree).
-    from agent.runtime_cwd import _is_install_tree
-
-    if (
-        cwd_is_fallback
-        and not allow_install_tree_fallback
-        and _is_install_tree(cwd_path)
-    ):
-        logger.warning(
-            "skipping project-context discovery: working-directory resolution "
-            "fell back to the Hermes install tree (%s) — set terminal.cwd to "
-            "your project directory",
-            cwd_path,
-        )
+    if cwd_is_masked:
         project_context = ""
     else:
-        # Priority-based project context: first match wins
-        project_context = (
-            _load_hermes_md(cwd_path, context_length)
-            or _load_agents_md(cwd_path, context_length)
-            or _load_claude_md(cwd_path, context_length)
-            or _load_cursorrules(cwd_path, context_length)
-        )
+        cwd_path = Path(cwd).resolve()
+
+        # Never let a FALLBACK-picked directory inside the Hermes install/source
+        # tree gain system-prompt authority. A backend that self-spawns into that
+        # tree (the desktop app default) would otherwise load this repo's
+        # contributor AGENTS.md as authoritative project context (#64590). An
+        # explicitly configured cwd is honored verbatim — the Hermes tree is a
+        # legitimate workspace when the user deliberately points a session at it —
+        # and CLI-style surfaces pass allow_install_tree_fallback=True because
+        # their launch dir IS the user's shell cwd (developing Hermes in-tree).
+        from agent.runtime_cwd import _is_install_tree
+
+        if (
+            cwd_is_fallback
+            and not allow_install_tree_fallback
+            and _is_install_tree(cwd_path)
+        ):
+            logger.warning(
+                "skipping project-context discovery: working-directory resolution "
+                "fell back to the Hermes install tree (%s) — set terminal.cwd to "
+                "your project directory",
+                cwd_path,
+            )
+            project_context = ""
+        else:
+            # Priority-based project context: first match wins
+            project_context = (
+                _load_hermes_md(cwd_path, context_length)
+                or _load_agents_md(cwd_path, context_length)
+                or _load_claude_md(cwd_path, context_length)
+                or _load_cursorrules(cwd_path, context_length)
+            )
     if project_context:
         sections.append(project_context)
 

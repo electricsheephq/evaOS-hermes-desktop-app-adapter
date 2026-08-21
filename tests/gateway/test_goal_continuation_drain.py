@@ -152,7 +152,7 @@ async def test_runner_goal_hook_enqueues_into_the_key_the_adapter_drains(hermes_
 
     from gateway.run import GatewayRunner
     from gateway.session import SessionEntry
-    from hermes_cli.goals import GoalManager
+    from hermes_cli import goals
 
     src = _slack_thread_source()
     adapter_key = build_session_key(src)
@@ -179,7 +179,11 @@ async def test_runner_goal_hook_enqueues_into_the_key_the_adapter_drains(hermes_
     adapter = _DrainProbeAdapter()
     runner.adapters = {Platform.SLACK: adapter}
 
-    GoalManager(session_entry.session_id).set("ship it")
+    # This test covers FIFO key agreement, not SessionDB bootstrap latency.
+    # Prime the per-home DB off-loop so a busy CI runner cannot exercise the
+    # intentional 250 ms fail-open path and silently skip test setup.
+    assert await asyncio.to_thread(goals._get_session_db) is not None
+    goals.GoalManager(session_entry.session_id).set("ship it")
     with patch(
         "hermes_cli.goals.judge_goal",
         return_value=("continue", "still needs work", False, None, False),

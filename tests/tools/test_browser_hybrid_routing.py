@@ -26,6 +26,7 @@ def _reset_routing_state(monkeypatch):
     monkeypatch.setattr(browser_tool, "_cloud_provider_resolved", False)
     monkeypatch.setattr(browser_tool, "_auto_local_for_private_urls_resolved", False)
     monkeypatch.setattr(browser_tool, "_cached_auto_local_for_private_urls", True)
+    monkeypatch.setattr(browser_tool, "_cached_auto_local_for_private_urls_by_scope", {})
     monkeypatch.setattr(browser_tool, "_start_browser_cleanup_thread", lambda: None)
     monkeypatch.setattr(browser_tool, "_update_session_activity", lambda t: None)
     # Default: no CDP override, no Camofox
@@ -60,6 +61,36 @@ class TestNavigationSessionKey:
         monkeypatch.setattr(browser_tool, "_get_cloud_provider", lambda: Mock())
         key = browser_tool._navigation_session_key(None, "http://localhost:3000/")
         assert key == "default::local"
+
+    def test_auto_local_config_is_cached_per_profile(self, tmp_path, monkeypatch):
+        from hermes_constants import (
+            get_hermes_home,
+            reset_hermes_home_override,
+            set_hermes_home_override,
+        )
+
+        home_a = tmp_path / "profile-a"
+        home_b = tmp_path / "profile-b"
+        values = {str(home_a): True, str(home_b): False}
+        monkeypatch.setattr(
+            "hermes_cli.config.read_raw_config",
+            lambda: {
+                "browser": {
+                    "auto_local_for_private_urls": values[str(get_hermes_home())]
+                }
+            },
+        )
+
+        def resolve_for(home):
+            token = set_hermes_home_override(home)
+            try:
+                return browser_tool._auto_local_for_private_urls()
+            finally:
+                reset_hermes_home_override(token)
+
+        assert resolve_for(home_a) is True
+        assert resolve_for(home_b) is False
+        assert resolve_for(home_a) is True
 
 
 class TestSessionKeyHelpers:

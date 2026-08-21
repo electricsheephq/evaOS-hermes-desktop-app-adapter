@@ -205,6 +205,39 @@ def test_notify_claim_is_single_owner_and_rewindable(kanban_home):
         conn2.close()
 
 
+def test_durable_notify_claim_survives_replacement_and_settles_once(kanban_home):
+    conn = kb.connect()
+    try:
+        tid = kb.create_task(conn, title="durable notify", assignee="w")
+        kb.add_notify_sub(conn, task_id=tid, platform="tui", chat_id="session-1")
+        kb.complete_task(conn, tid, summary="survives crash")
+        claim_args = dict(task_id=tid, platform="tui", chat_id="session-1",
+                          kinds=["completed"], persist_delivery=True)
+        _, _, claimed = kb.claim_unseen_events_for_sub(
+            conn, **claim_args, delivery_owner="dead-process", delivery_now=100,
+        )
+        assert [event.kind for event in claimed] == ["completed"]
+
+        _, _, leased = kb.claim_unseen_events_for_sub(
+            conn, **claim_args, delivery_owner="replacement", delivery_now=101,
+        )
+        assert leased == []
+
+        _, _, recovered = kb.claim_unseen_events_for_sub(
+            conn, **claim_args, delivery_owner="replacement",
+            delivery_now=100 + kb.NOTIFY_DELIVERY_LEASE_SECONDS,
+        )
+        event_ids = [event.id for event in recovered]
+        assert event_ids == [claimed[0].id]
+        assert kb.complete_notify_delivery(
+            conn, task_id=tid, platform="tui", chat_id="session-1",
+            event_ids=event_ids, delivery_owner="replacement",
+        )
+        assert kb.list_notify_subs(conn, tid)[0]["pending_event_ids"] is None
+    finally:
+        conn.close()
+
+
 # ---------------------------------------------------------------------------
 # GC + retention
 # ---------------------------------------------------------------------------
@@ -371,6 +404,8 @@ def test_migration_renames_legacy_event_kinds(tmp_path, monkeypatch):
         assert "gave_up" in kinds
     finally:
         conn.close()
+
+
 
 
 # ---------------------------------------------------------------------------
@@ -1406,5 +1441,3 @@ def test_notify_sub_starts_caught_up_on_active_task(kanban_home):
         assert events == [], "historical events must not replay to a new sub"
     finally:
         conn.close()
-
-

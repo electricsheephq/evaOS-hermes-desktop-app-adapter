@@ -2861,7 +2861,7 @@ def run_setup_wizard(args):
 
     reset_requested = bool(getattr(args, "reset", False))
     if reset_requested:
-        save_config(copy.deepcopy(DEFAULT_CONFIG))
+        save_config(copy.deepcopy(DEFAULT_CONFIG), full_replace=True)
         print_success("Configuration reset to defaults.")
 
     reconfigure_requested = bool(getattr(args, "reconfigure", False))

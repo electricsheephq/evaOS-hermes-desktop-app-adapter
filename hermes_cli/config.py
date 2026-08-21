@@ -242,11 +242,20 @@ _LAST_EXPANDED_CONFIG_BY_PATH: Dict[str, Any] = {}
 # produces a fresh inode, so stat() sees a new mtime_ns and the next
 # load repopulates automatically — no explicit invalidation hook.
 # Cached tuple is (user_mtime_ns, user_size, managed_mtime_ns, managed_size,
-# merged_value, env_ref_snapshot) — the managed-file signature is folded in so
-# editing the managed-scope config.yaml invalidates the cache (see
-# managed_scope), and the env snapshot invalidates it when a referenced ${VAR}
-# changes value (late .env load, in-process rotation — #58514).
-_LOAD_CONFIG_CACHE: Dict[str, Tuple[int, int, int, int, Dict[str, Any], Dict[str, Optional[str]]]] = {}
+# merged_value, user_env_snapshot, managed_env_snapshot). Separate snapshots
+# preserve process-env and trusted profile-managed-env precedence.
+_LOAD_CONFIG_CACHE: Dict[
+    str,
+    Tuple[
+        int,
+        int,
+        int,
+        int,
+        Dict[str, Any],
+        Dict[str, Optional[str]],
+        Dict[str, Optional[str]],
+    ],
+] = {}
 # (path, mtime_ns, size) -> cached raw yaml dict. Same pattern as
 # _LOAD_CONFIG_CACHE but for read_raw_config() — used when callers want
 # the user's on-disk values without defaults merged in.
@@ -2248,16 +2257,13 @@ def _persist_migration(config: Dict[str, Any]) -> None:
     reports).
 
     Every migration step MUST route its write through this helper instead of
-    calling ``save_config`` directly. It is a thin wrapper over
-    ``save_config(config)`` (default-stripping ON, no ``merge_existing``);
-    centralising the call makes the invariant impossible to regress one
-    migration at a time. Callers must pass the full raw config returned by
-    ``read_raw_config()`` after in-place mutations (including key removals);
-    deep-merging the on-disk file back in would resurrect keys the migration
-    just deleted. Partial-save preservation for unrelated top-level sections
-    belongs on ``save_config(..., merge_existing=True)``, not here.
+    calling ``save_config`` directly. This wrapper names only the root keys the
+    migration explicitly removed, so ordinary root preservation cannot
+    resurrect them. Callers must pass the full raw config returned by
+    ``read_raw_config()`` after in-place mutations (including key removals).
     """
-    save_config(config)
+    raw = read_raw_config()
+    save_config(config, removed_root_keys=set(raw) - set(config))
 
 
 def migrate_config(interactive: bool = True, quiet: bool = False) -> Dict[str, Any]:
@@ -2545,6 +2551,25 @@ def _merge_partial_save(raw: dict, override: dict) -> dict:
     return result
 
 
+def _preserve_missing_root_keys(
+    raw: dict,
+    replacement: dict,
+    removed_root_keys: Optional[Set[str]] = None,
+) -> dict:
+    """Preserve raw roots omitted by an ordinary section save.
+
+    Nested mappings are intentionally not merged here: callers that own a
+    section may still replace that section. Explicit root deletions are named
+    by the caller so a replacement cannot resurrect them.
+    """
+    result = copy.deepcopy(replacement)
+    removed_root_keys = removed_root_keys or set()
+    for key, value in raw.items():
+        if key not in result and key not in removed_root_keys:
+            result[key] = copy.deepcopy(value)
+    return result
+
+
 def _deep_merge(base: dict, override: dict) -> dict:
     """Recursively merge *override* into *base*, preserving nested defaults.
 
@@ -2596,7 +2621,7 @@ def _strip_dotted_keys(cfg: dict, dotted_keys: set) -> Tuple[dict, set]:
     return cfg, stripped
 
 
-def _env_expand_match(m: re.Match) -> str:
+def _env_expand_match(m: re.Match, env=None) -> str:
     """Expand one ``${...}`` config reference.
 
     Two accepted shapes, matching what MCP server config already resolves
@@ -2614,13 +2639,14 @@ def _env_expand_match(m: re.Match) -> str:
     ref only ever needs the env shape.  Unknown prefixes warn once and stay
     verbatim so callers can detect them.
     """
+    source = os.environ if env is None else env
     raw = m.group(0)
     inner = m.group(1).strip()
     if inner.startswith("env:"):
         name = inner[len("env:"):].strip()
         if not name:
             return raw
-        val = os.environ.get(name)
+        val = source.get(name)
         if val is not None:
             return val
         logger.warning(
@@ -2641,7 +2667,7 @@ def _env_expand_match(m: re.Match) -> str:
         )
         return raw
     # Legacy ``${VAR}`` — bare name.
-    return os.environ.get(inner, raw)
+    return source.get(inner, raw)
 
 
 def _env_ref_var_name(ref: str) -> Optional[str]:
@@ -2656,24 +2682,27 @@ def _env_ref_var_name(ref: str) -> Optional[str]:
     return ref
 
 
-def _expand_env_vars(obj):
+def _expand_env_vars(obj, env=None):
     """Recursively expand ``${VAR}`` / ``${env:VAR}`` references in config
     values.
 
     Only string values are processed; dict keys, numbers, booleans, and
     None are left untouched.  Unresolved references (variable not in
-    ``os.environ``) are kept verbatim so callers can detect them.
+    ``os.environ``) are kept verbatim so callers can detect them. ``env`` may
+    supply a trusted isolated mapping for profile-scoped managed overlays.
     """
     if isinstance(obj, str):
-        return re.sub(r"\${([^}]+)}", _env_expand_match, obj)
+        return re.sub(
+            r"\${([^}]+)}", lambda match: _env_expand_match(match, env), obj
+        )
     if isinstance(obj, dict):
-        return {k: _expand_env_vars(v) for k, v in obj.items()}
+        return {k: _expand_env_vars(v, env) for k, v in obj.items()}
     if isinstance(obj, list):
-        return [_expand_env_vars(item) for item in obj]
+        return [_expand_env_vars(item, env) for item in obj]
     return obj
 
 
-def _env_ref_snapshot(obj, snapshot=None):
+def _env_ref_snapshot(obj, snapshot=None, env=None):
     """Map every ``${VAR}`` / ``${env:VAR}`` name referenced in config values
     to its current ``os.environ`` value (``None`` when unset).
 
@@ -2688,19 +2717,20 @@ def _env_ref_snapshot(obj, snapshot=None):
     with a non-env source prefix never read the environment, so they are
     excluded from the snapshot.
     """
+    source = os.environ if env is None else env
     if snapshot is None:
         snapshot = {}
     if isinstance(obj, str):
         for raw in re.findall(r"\${([^}]+)}", obj):
             name = _env_ref_var_name(raw)
             if name is not None:
-                snapshot[name] = os.environ.get(name)
+                snapshot[name] = source.get(name)
     elif isinstance(obj, dict):
         for value in obj.values():
-            _env_ref_snapshot(value, snapshot)
+            _env_ref_snapshot(value, snapshot, source)
     elif isinstance(obj, list):
         for item in obj:
-            _env_ref_snapshot(item, snapshot)
+            _env_ref_snapshot(item, snapshot, source)
     return snapshot
 
 
@@ -3549,7 +3579,16 @@ def _load_config_impl(*, want_deepcopy: bool) -> Dict[str, Any]:
             # pins unexpanded literals (e.g. auxiliary.<task>.api_key) for the
             # life of the process (#58514).
             env_snapshot = cached[5] if len(cached) > 5 else {}
-            if all(os.environ.get(k) == v for k, v in env_snapshot.items()):
+            managed_env_snapshot = cached[6] if len(cached) > 6 else {}
+            managed_env = dict(os.environ)
+            managed_env.update(managed_scope.load_managed_env())
+            if (
+                all(os.environ.get(k) == v for k, v in env_snapshot.items())
+                and all(
+                    managed_env.get(k) == v
+                    for k, v in managed_env_snapshot.items()
+                )
+            ):
                 return copy.deepcopy(cached[4]) if want_deepcopy else cached[4]
 
         config = copy.deepcopy(DEFAULT_CONFIG)
@@ -3604,7 +3643,7 @@ def _load_config_impl(*, want_deepcopy: bool) -> Dict[str, Any]:
                         _LOAD_CONFIG_CACHE[path_key] = (
                             cache_sig[0], cache_sig[1],
                             cache_sig[2], cache_sig[3],
-                            lkg_copy, _empty_env,
+                            lkg_copy, _empty_env, _empty_env,
                         )
                     return copy.deepcopy(lkg_copy) if want_deepcopy else lkg_copy
 
@@ -3612,7 +3651,8 @@ def _load_config_impl(*, want_deepcopy: bool) -> Dict[str, Any]:
         expanded = _expand_env_vars(normalized)
         # Managed scope wins at the leaf. Applied AFTER user expansion so a user
         # ${VAR} cannot shadow a managed literal: managed values are expanded only
-        # against the process environment, never against user-config-defined refs.
+        # against trusted env sources (profile-managed env first, then process
+        # env), never against user-config-defined refs.
         # This deliberately inverts the usual env-over-config precedence for the
         # keys the managed layer pins — see docs/design/managed-scope.md §4.1.
         managed_config = managed_scope.load_managed_config()
@@ -3628,7 +3668,7 @@ def _load_config_impl(*, want_deepcopy: bool) -> Dict[str, Any]:
             if isinstance(managed_normalized.get("model"), str):
                 managed_normalized = dict(managed_normalized)
                 managed_normalized["model"] = {"default": managed_normalized["model"]}
-            managed_expanded = _expand_env_vars(managed_normalized)
+            managed_expanded = managed_scope.expand_managed_config(managed_normalized)
             expanded = _deep_merge(expanded, managed_expanded)
         _LAST_EXPANDED_CONFIG_BY_PATH[path_key] = copy.deepcopy(expanded)
         if cache_sig is not None:
@@ -3637,14 +3677,23 @@ def _load_config_impl(*, want_deepcopy: bool) -> Dict[str, Any]:
             # cached value, and ``load_config_readonly()`` (deepcopy=False)
             # callers all see the same stable cached object. The cached tuple is
             # (user_mtime, user_size, managed_mtime, managed_size, value,
-            # env_ref_snapshot). The snapshot records the environment values
-            # this expansion was made against so later loads can detect env
-            # drift (late .env load, in-process rotation) — see cache hit above.
+            # user_env_snapshot, managed_env_snapshot). Separate snapshots
+            # detect drift without conflating refs of the same name.
             cached_copy = copy.deepcopy(expanded)
             env_snapshot = _env_ref_snapshot(normalized)
+            managed_env_snapshot: Dict[str, Optional[str]] = {}
             if managed_config:
-                _env_ref_snapshot(managed_config, env_snapshot)
-            _LOAD_CONFIG_CACHE[path_key] = (*cache_sig, cached_copy, env_snapshot)
+                managed_env = dict(os.environ)
+                managed_env.update(managed_scope.load_managed_env())
+                _env_ref_snapshot(
+                    managed_config, managed_env_snapshot, managed_env
+                )
+            _LOAD_CONFIG_CACHE[path_key] = (
+                *cache_sig,
+                cached_copy,
+                env_snapshot,
+                managed_env_snapshot,
+            )
             # On the readonly path return the same cached object subsequent
             # calls will see — keeps "two readonly calls return the same
             # object" invariant that callers may rely on for identity checks.
@@ -3741,6 +3790,8 @@ def save_config(
     strip_defaults: bool = True,
     preserve_keys: Optional[Set[Tuple[str, ...]]] = None,
     merge_existing: bool = False,
+    full_replace: bool = False,
+    removed_root_keys: Optional[Set[str]] = None,
 ):
     """Save configuration to ~/.hermes/config.yaml.\n
 
@@ -3750,32 +3801,24 @@ def save_config(
     contaminated with schema defaults on every save, which makes future
     default changes invisible to users.
 
-    When ``merge_existing`` is True, the on-disk raw config is deep-merged
-    under *config* before writing so partial callers (migration steps via
-    ``_persist_migration``) cannot drop unrelated sections the caller omitted.
-    Full-document replacement callers (dashboard raw YAML editor, callers that
-    already deep-merge) must leave this False so intentional deletions survive.
+    Ordinary saves preserve on-disk root keys omitted from *config*.
+    ``merge_existing=True`` additionally deep-merges nested mappings for
+    partial-document callers. ``full_replace=True`` permits omitted roots to
+    be deleted and is reserved for the dashboard raw YAML editor. Migrations
+    may name exact ``removed_root_keys`` for explicit root deletions.
     """
+    if full_replace and (merge_existing or removed_root_keys):
+        raise ValueError(
+            "full_replace cannot be combined with merge_existing or removed_root_keys"
+        )
+
     with _CONFIG_LOCK:
         if is_managed():
             managed_error("save configuration")
             return
-        # Managed scope: strip any leaf the managed layer pins, so a bulk write
-        # (wizard / programmatic save) never persists a user value that would
-        # silently lose to managed on the next load. Single-key `config set`
-        # hard-rejects (see set_config_value); this is the mechanical safety net
-        # for bulk writes so the unmanaged remainder still lands.
         from hermes_cli import managed_scope
 
         managed_keys = managed_scope.managed_config_keys()
-        if managed_keys:
-            config, _stripped = _strip_dotted_keys(copy.deepcopy(config), managed_keys)
-            if _stripped:
-                print(
-                    f"Note: {len(_stripped)} managed setting(s) were not saved "
-                    f"(managed by your administrator): {', '.join(sorted(_stripped))}",
-                    file=sys.stderr,
-                )
         from utils import atomic_yaml_write
 
         ensure_hermes_home()
@@ -3789,8 +3832,32 @@ def save_config(
         explicit_raw_paths: Optional[Set[Tuple[str, ...]]] = (
             _explicit_config_paths(_raw_for_paths) if _raw_for_paths else None
         )
-        if merge_existing and _raw_for_paths:
-            config = _merge_partial_save(_raw_for_paths, config)
+        if _raw_for_paths:
+            if merge_existing:
+                config = _merge_partial_save(_raw_for_paths, config)
+            elif not full_replace:
+                config = _preserve_missing_root_keys(
+                    _raw_for_paths,
+                    config,
+                    removed_root_keys,
+                )
+        # Managed scope: strip any leaf the managed layer pins, so a bulk write
+        # (wizard / programmatic save) never persists a user value that would
+        # silently lose to managed on the next load. Single-key `config set`
+        # hard-rejects (see set_config_value); this is the mechanical safety net
+        # for bulk writes so the unmanaged remainder still lands.
+        # This must run AFTER _merge_partial_save: the merge folds the on-disk
+        # document back in, so stripping the caller's partial dict beforehand
+        # leaves a stale pinned leaf on disk that would become active if the
+        # managed policy is later removed.
+        if managed_keys:
+            config, _stripped = _strip_dotted_keys(copy.deepcopy(config), managed_keys)
+            if _stripped:
+                print(
+                    f"Note: {len(_stripped)} managed setting(s) were not saved "
+                    f"(managed by your administrator): {', '.join(sorted(_stripped))}",
+                    file=sys.stderr,
+                )
         # ----------------------------------------------------------------
 
         current_normalized = _normalize_root_model_keys(_normalize_max_turns_config(config))

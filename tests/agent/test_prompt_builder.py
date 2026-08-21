@@ -5,6 +5,7 @@ import importlib
 import logging
 import os
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -552,6 +553,21 @@ class TestBuildContextFilesPrompt:
         assert "Never give up" not in result
         assert result == ""
 
+    def test_masked_session_cwd_never_falls_back_to_process_agents(self, monkeypatch, tmp_path):
+        import agent.runtime_cwd as rt
+        from agent.runtime_cwd import set_session_cwd
+
+        (tmp_path / "AGENTS.md").write_text(
+            "Process cwd must not become profile context.", encoding="utf-8"
+        )
+        monkeypatch.chdir(tmp_path)
+        token = set_session_cwd(None)
+        try:
+            result = build_context_files_prompt(cwd=None, skip_soul=True)
+        finally:
+            rt._SESSION_CWD.reset(token)
+        assert result == ""
+
 
 
 
@@ -859,6 +875,53 @@ class TestEnvironmentHints:
         assert "root" in line
 
 
+    def test_probe_remote_backend_cache_is_scoped_to_routed_profile(
+        self, monkeypatch, tmp_path
+    ):
+        """Profiles with the same backend/cwd still receive their own probe."""
+        import agent.prompt_builder as _pb
+        import tools.terminal_tool as _tt
+
+        monkeypatch.setattr(
+            _pb,
+            "_terminal_setting",
+            lambda name, default="": {"TERMINAL_CWD": "/workspace"}.get(name, default),
+        )
+        monkeypatch.setattr(_tt, "_get_env_config", lambda: {})
+
+        class _FakeEnv:
+            def __init__(self, home):
+                self.home = home
+
+            def execute(self, cmd, timeout=None):
+                return {
+                    "returncode": 0,
+                    "output": (
+                        "os=Linux\n"
+                        "kernel=6.8.0\n"
+                        f"home={self.home}\n"
+                        "cwd=/workspace\n"
+                        "user=root\n"
+                    ),
+                }
+
+        def _fake_create_environment(*, env_type, **kwargs):
+            return _FakeEnv(f"/remote/{Path(os.environ['HERMES_HOME']).name}")
+
+        monkeypatch.setattr(_tt, "_create_environment", _fake_create_environment)
+        _pb._clear_backend_probe_cache()
+
+        first_home = tmp_path / "profile-one"
+        second_home = tmp_path / "profile-two"
+        monkeypatch.setenv("HERMES_HOME", str(first_home))
+        first = _pb._probe_remote_backend("ssh")
+        monkeypatch.setenv("HERMES_HOME", str(second_home))
+        second = _pb._probe_remote_backend("ssh")
+
+        assert first is not None and "Home: /remote/profile-one" in first
+        assert second is not None and "Home: /remote/profile-two" in second
+
+
     def test_environment_hint_from_env_var_is_appended(self, monkeypatch):
         """HERMES_ENVIRONMENT_HINT lets an embedder describe the runtime env."""
         import agent.prompt_builder as _pb
@@ -1011,5 +1074,3 @@ class TestParallelToolCallGuidance:
 # =========================================================================
 # Budget warning history stripping
 # =========================================================================
-
-

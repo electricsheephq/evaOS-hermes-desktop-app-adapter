@@ -163,7 +163,17 @@ def _sidebar_singleflight_cache(func):
     def _key(args, kwargs):
         bound = signature.bind(*args, **kwargs)
         bound.apply_defaults()
-        return tuple(bound.arguments.items())
+        from hermes_cli.profile_scope import current_principal
+
+        principal = current_principal()
+        managed_scope = None
+        if principal is not None:
+            managed_scope = (
+                principal.allowed_profiles,
+                principal.primary_profile,
+                principal.admin,
+            )
+        return (managed_scope, *bound.arguments.items())
 
     def _lookup(key):
         now = time.monotonic()
@@ -216,6 +226,30 @@ def _sidebar_singleflight_cache(func):
     return wrapped
 
 
+def _scoped_session_targets(targets, profiles_mod):
+    """Filter aggregate session targets to the current managed principal."""
+    from hermes_cli.profile_scope import current_principal
+
+    principal = current_principal()
+    if principal is None:
+        if targets:
+            return targets
+        return [("default", profiles_mod.get_profile_dir("default"))]
+
+    allowed = set(principal.allowed_profiles)
+    scoped = [(name, home) for name, home in targets if name in allowed]
+    if scoped:
+        return scoped
+
+    fallback = []
+    for name in principal.allowed_profiles:
+        try:
+            fallback.append((name, profiles_mod.get_profile_dir(name)))
+        except (OSError, PermissionError, ValueError):
+            continue
+    return fallback
+
+
 @sessions_router.get("/api/profiles/sessions")
 def get_profiles_sessions(
     # ``le=500`` caps the per-request page size (idea from #39200) — this
@@ -266,8 +300,7 @@ def get_profiles_sessions(
         except Exception:
             _log.exception("GET /api/profiles/sessions: list_profiles failed")
             targets = []
-        if not targets:
-            targets.append(("default", profiles_mod.get_profile_dir("default")))
+        targets = _scoped_session_targets(targets, profiles_mod)
 
     min_message_count = max(0, min_messages)
     archived_only = archived == "only"
@@ -408,8 +441,7 @@ def get_profiles_sessions_sidebar(
     except Exception:
         _log.exception("GET /api/profiles/sessions/sidebar: list_profiles failed")
         targets = []
-    if not targets:
-        targets.append(("default", profiles_mod.get_profile_dir("default")))
+    targets = _scoped_session_targets(targets, profiles_mod)
 
     recents_scope = (recents_profile or "all").strip() or "all"
     recents_exclude_list = [s for s in (recents_exclude or "").split(",") if s.strip()]
@@ -779,10 +811,23 @@ async def list_profiles_endpoint():
     try:
         loop = asyncio.get_running_loop()
         profiles = await loop.run_in_executor(None, profiles_mod.list_profiles)
+        from hermes_cli.profile_scope import current_principal
+
+        principal = current_principal()
+        if principal is not None:
+            allowed = set(principal.allowed_profiles)
+            profiles = [profile for profile in profiles if profile.name in allowed]
         return {"profiles": [_profile_to_dict(p) for p in profiles]}
     except Exception:
         _log.exception("GET /api/profiles failed; falling back to profile directory scan")
-        return {"profiles": _fallback_profile_dicts(profiles_mod)}
+        fallback = _fallback_profile_dicts(profiles_mod)
+        from hermes_cli.profile_scope import current_principal
+
+        principal = current_principal()
+        if principal is not None:
+            allowed = set(principal.allowed_profiles)
+            fallback = [profile for profile in fallback if profile.get("name") in allowed]
+        return {"profiles": fallback}
 
 
 @router.post("/api/profiles")

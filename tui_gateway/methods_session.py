@@ -322,7 +322,10 @@ def _(rid, params: dict) -> dict:
     # ``profile`` (app-global remote mode): resume a session that lives in another
     # local profile's state.db. None/own profile → the launch profile (unchanged).
     profile = (params.get("profile") or "").strip() or None
-    profile_home = _profile_home(profile)
+    try:
+        profile_home = _profile_home(profile)
+    except PermissionError:
+        return _err(rid, 4003, "profile is not authorized")
     defer_history = is_truthy_value(params.get("defer_history", False))
     # Desktop hydrates persisted transcripts through the authenticated REST
     # route in parallel. Suppress the duplicate WebSocket transcript only when
@@ -366,6 +369,13 @@ def _(rid, params: dict) -> dict:
             else:
                 return _err(rid, 4007, "session not found")
 
+        from hermes_cli.profile_scope import require_session_profile
+
+        try:
+            require_session_profile(found.get("profile_name") if found else None)
+        except PermissionError:
+            return _err(rid, 4003, "session profile is not authorized")
+
         # Follow the compression-continuation chain to the live tip so a resume on
         # a rotated-out parent id binds to the descendant that actually holds the
         # post-compression turns. Auto-compression ends the session and forks a
@@ -385,6 +395,10 @@ def _(rid, params: dict) -> dict:
             if tip and tip != target:
                 target = tip
                 found = db.get_session(target) or found
+                try:
+                    require_session_profile(found.get("profile_name"))
+                except PermissionError:
+                    return _err(rid, 4003, "session profile is not authorized")
 
         # Every interactive resume path materializes the model history, even when
         # omit_messages suppresses the response copy. Count the complete lineage
@@ -421,13 +435,20 @@ def _(rid, params: dict) -> dict:
             profile_home
         )
 
-        def _reuse_live_payload(sid: str, session: dict) -> dict:
+        def _reuse_live_response(sid: str, session: dict) -> dict:
+            transport = current_transport() or _stdio_transport
+            if not _bind_session_transport(session, transport):
+                return _err(
+                    rid,
+                    4091,
+                    "session stream is owned by another active client",
+                )
             payload = _live_session_payload(
                 sid,
                 session,
                 cols=cols,
                 touch=True,
-                transport=current_transport() or _stdio_transport,
+                transport=None,
                 omit_messages=omit_messages,
             )
             payload["resumed"] = target
@@ -443,13 +464,13 @@ def _(rid, params: dict) -> dict:
             if session.get("agent") is None and _child_run_active(target):
                 payload["running"] = True
                 payload["status"] = "streaming"
-            return payload
+            return _ok(rid, payload)
 
         # Fast path: if the session is already live, reuse it under the lock.
         with _session_resume_lock:
             live = _find_live_session_by_key(target)
             if live is not None:
-                return _ok(rid, _reuse_live_payload(*live))
+                return _reuse_live_response(*live)
 
         # Lazy/watch resume: register the live session WITHOUT building an agent.
         # Used by the desktop's subagent windows — the child runs inside the
@@ -490,7 +511,7 @@ def _(rid, params: dict) -> dict:
                 lazy=True,
             )
             if (live := _claim_or_reuse_live(sid, target, record, lease)) is not None:
-                return _ok(rid, _reuse_live_payload(*live))
+                return _reuse_live_response(*live)
             # A delegated child mid-run emits no session events of its own — report
             # its liveness from the relay registry so the window shows a busy turn.
             child_running = _child_run_active(target)
@@ -561,7 +582,7 @@ def _(rid, params: dict) -> dict:
             record["resume_hydrating"] = True
             record["resume_message_count"] = int(found.get("message_count") or 0)
             if (live := _claim_or_reuse_live(sid, target, record, lease)) is not None:
-                return _ok(rid, _reuse_live_payload(*live))
+                return _reuse_live_response(*live)
 
             _schedule_resume_hydration(sid, target, db, close_db=owns_db)
             # The hydration worker now owns a profile-scoped handle and closes it
@@ -654,7 +675,7 @@ def _(rid, params: dict) -> dict:
                 resume_runtime_overrides=overrides or None,
             )
             if (live := _claim_or_reuse_live(sid, target, record, lease)) is not None:
-                return _ok(rid, _reuse_live_payload(*live))
+                return _reuse_live_response(*live)
 
             _schedule_agent_build(sid)
             _schedule_session_cap_enforcement()  # trim detached idle sessions over the cap
@@ -765,12 +786,19 @@ def _(rid, params: dict) -> dict:
                 if lease is not None:
                     lease.release()
                 other_sid, other_session = live
+                transport = current_transport() or _stdio_transport
+                if not _bind_session_transport(other_session, transport):
+                    return _err(
+                        rid,
+                        4091,
+                        "session stream is owned by another active client",
+                    )
                 payload = _live_session_payload(
                     other_sid,
                     other_session,
                     cols=cols,
                     touch=True,
-                    transport=current_transport() or _stdio_transport,
+                    transport=None,
                     omit_messages=omit_messages,
                 )
                 payload["resumed"] = target
@@ -1023,6 +1051,7 @@ def _(rid, params: dict) -> dict:
         _session_live_item(sid, session, current)
         for sid, session in snapshot
         if not session.get("_finalized")
+        and _managed_session_is_authorized(session)
     ]
     return _ok(rid, {"sessions": rows})
 
@@ -1039,6 +1068,9 @@ def _(rid, params: dict) -> dict:
     if err:
         return err
     assert session is not None
+    transport = current_transport() or _stdio_transport
+    if not _bind_session_transport(session, transport):
+        return _err(rid, 4091, "session stream is owned by another active client")
 
     return _ok(
         rid,
@@ -1046,7 +1078,7 @@ def _(rid, params: dict) -> dict:
             sid,
             session,
             touch=True,
-            transport=current_transport() or _stdio_transport,
+            transport=None,
             omit_messages=is_truthy_value(params.get("omit_messages", False)),
         ),
     )

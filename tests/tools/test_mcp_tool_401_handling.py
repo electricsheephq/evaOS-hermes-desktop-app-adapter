@@ -8,6 +8,7 @@ httpx.HTTPStatusError(401), the handler should:
      hallucinating manual refresh attempts.
 """
 import json
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -51,6 +52,9 @@ def test_call_tool_handler_returns_needs_reauth_on_unrecoverable_401(monkeypatch
     from tools import mcp_tool
     mcp_tool._servers["srv"] = server
     mcp_tool._server_error_counts.pop("srv", None)
+    mcp_tool._record_tool_trust_metadata(
+        "srv", {"trust": "full"}, [SimpleNamespace(name="tool1")]
+    )
 
     # Ensure the MCP loop exists (run_on_mcp_loop needs it)
     mcp_tool._ensure_mcp_loop()
@@ -73,6 +77,8 @@ def test_call_tool_handler_returns_needs_reauth_on_unrecoverable_401(monkeypatch
     finally:
         mcp_tool._servers.pop("srv", None)
         mcp_tool._server_error_counts.pop("srv", None)
+        mcp_tool._server_trust_levels.pop("srv", None)
+        mcp_tool._tool_read_only_hints.pop("srv", None)
 
 
 def test_call_tool_handler_non_auth_error_still_generic(monkeypatch, tmp_path):
@@ -93,6 +99,9 @@ def test_call_tool_handler_non_auth_error_still_generic(monkeypatch, tmp_path):
     from tools import mcp_tool
     mcp_tool._servers["srv"] = server
     mcp_tool._server_error_counts.pop("srv", None)
+    mcp_tool._record_tool_trust_metadata(
+        "srv", {"trust": "full"}, [SimpleNamespace(name="tool1")]
+    )
     mcp_tool._ensure_mcp_loop()
 
     try:
@@ -104,3 +113,5 @@ def test_call_tool_handler_non_auth_error_still_generic(monkeypatch, tmp_path):
     finally:
         mcp_tool._servers.pop("srv", None)
         mcp_tool._server_error_counts.pop("srv", None)
+        mcp_tool._server_trust_levels.pop("srv", None)
+        mcp_tool._tool_read_only_hints.pop("srv", None)

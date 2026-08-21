@@ -20,6 +20,7 @@ from typing import Any, Callable, NamedTuple, Optional
 
 from agent.secret_scope import (
     build_profile_secret_scope,
+    is_multiplex_active,
     reset_secret_scope,
     set_secret_scope,
 )
@@ -797,7 +798,7 @@ def _finalize_session(session: dict | None, end_reason: str = "tui_close") -> No
         except Exception:
             pass
 
-    if agent is not None and history and hasattr(agent, "commit_memory_session"):
+    if agent is not None and hasattr(agent, "commit_memory_session"):
         try:
             agent.commit_memory_session(history)
         except Exception:
@@ -1493,7 +1494,10 @@ def _response_profile_name(profile: str | None = None) -> str:
     Prefer the RPC's requested profile when it is a real non-launch profile;
     otherwise the process launch profile.
     """
-    name = (profile or "").strip()
+    from hermes_cli.profile_scope import current_principal, require_profile
+
+    principal = current_principal()
+    name = require_profile(profile) if principal is not None else (profile or "").strip()
     if name and _profile_home(name) is not None:
         return name
     return _current_profile_name()
@@ -1514,7 +1518,10 @@ def _db_unavailable_error(rid, *, code: int):
 # launch profile (unchanged for single-profile and per-profile-remote setups).
 def _profile_home(profile: str | None) -> Path | None:
     """Resolve a named profile's home on THIS host, or None for the launch profile."""
-    name = (profile or "").strip()
+    from hermes_cli.profile_scope import current_principal, require_profile
+
+    principal = current_principal()
+    name = require_profile(profile) if principal is not None else (profile or "").strip()
     if not name:
         return None
     try:
@@ -1672,14 +1679,33 @@ def _emit(event: str, sid: str, payload: dict | None = None):
 # is how such events reach WS clients at all. See _broadcast_global_event.
 _live_transports: set[Transport] = set()
 _live_transports_lock = threading.Lock()
+# Match the negotiated client heartbeat deadline. Once a silent transport has
+# missed 45 seconds of inbound activity, a replacement socket must be able to
+# activate immediately instead of waiting behind an owner the client already
+# declared dead.
+_TRANSPORT_OWNERSHIP_LIVE_S = 45.0
 
 
 def register_live_transport(transport: Transport | None) -> None:
-    """Track a connected client transport for global broadcasts. Idempotent."""
+    """Track a connected client transport for profile-scoped broadcasts."""
     if transport is None:
         return
     with _live_transports_lock:
         _live_transports.add(transport)
+
+
+def _transport_profile_home(transport: Transport) -> str:
+    """Return the normalized profile home owned by a live transport."""
+    configured = getattr(transport, "profile_home", None)
+    home = configured if isinstance(configured, str) and configured else _hermes_home
+    return str(Path(home).expanduser().resolve(strict=False))
+
+
+def _watcher_homes() -> set[str]:
+    """Snapshot the launch home plus every connected profile home."""
+    launch = str(Path(_hermes_home).expanduser().resolve(strict=False))
+    with _live_transports_lock:
+        return {launch, *(_transport_profile_home(item) for item in _live_transports)}
 
 
 def unregister_live_transport(transport: Transport | None) -> None:
@@ -1688,15 +1714,66 @@ def unregister_live_transport(transport: Transport | None) -> None:
         _live_transports.discard(transport)
 
 
+def _transport_is_recently_live(transport: Transport | None) -> bool:
+    """Whether a transport still owns a session stream.
+
+    WebSocket transports publish their last inbound activity. A transport that
+    is closed, unregistered, detached, or beyond the heartbeat recovery window
+    no longer blocks a reconnecting renderer from reclaiming the stream.
+    """
+    if transport is None or transport is _detached_ws_transport:
+        return False
+    if bool(getattr(transport, "closed", False)):
+        return False
+
+    last_inbound = getattr(transport, "last_inbound_at", None)
+    if isinstance(last_inbound, (int, float)):
+        with _live_transports_lock:
+            registered = transport in _live_transports
+        return registered and (time.monotonic() - float(last_inbound)) <= _TRANSPORT_OWNERSHIP_LIVE_S
+
+    # Stdio and test transports have no application heartbeat. Preserve their
+    # historical behavior; the conflict contract is for competing WS clients.
+    return False
+
+
+def _bind_session_transport(session: dict, candidate: Transport | None) -> bool:
+    """Atomically rebind a session unless another recently-live WS owns it."""
+    if candidate is None:
+        return True
+
+    # Partially-constructed sessions (and synthetic ones in tests) may not carry
+    # a history_lock yet. Fall back to a throwaway lock, matching the defensive
+    # reads elsewhere in this module, rather than raising KeyError.
+    with session.get("history_lock") or threading.Lock():
+        current = session.get("transport")
+        if current is candidate:
+            return True
+        if _transport_is_recently_live(current):
+            return False
+        session["transport"] = candidate
+        return True
+
+
 def _broadcast_global_event(event: str, payload: dict | None = None) -> None:
-    """Fan a session-less, surface-global event (``skin.changed``) to every
-    connected client. Emitters like the skin watcher run on background threads
-    where ``write_json``'s ladder bottoms out at stdio and WS peers never see
-    the frame. No registered transports (stdio TUI, tests) → plain ``_emit``,
-    which that path already tees where it needs to go.
+    """Fan a session-less event to clients in the current profile scope.
+
+    Without an active profile override this preserves the legacy process-wide
+    broadcast. Emitters like the watcher run on background threads where
+    ``write_json`` bottoms out at stdio, so the watcher installs each home
+    override before calling here.
     """
     with _live_transports_lock:
         targets = list(_live_transports)
+
+    override = get_hermes_home_override()
+    if isinstance(override, str) and override:
+        target_home = str(Path(override).expanduser().resolve(strict=False))
+        targets = [
+            transport
+            for transport in targets
+            if _transport_profile_home(transport) == target_home
+        ]
 
     if not targets:
         _emit(event, "", payload)
@@ -1782,6 +1859,7 @@ def _compute_host_turn_frame(
         "cols": int(session.get("cols", 80) or 80),
         "cwd": _session_cwd(session),
         "profile_home": session.get("profile_home") or "",
+        "multiplex_active": is_multiplex_active(),
         "model_override": session.get("model_override"),
         "reasoning_config_override": session.get("create_reasoning_override"),
         "service_tier_override": session.get("create_service_tier_override"),
@@ -1892,6 +1970,11 @@ def _submit_prompt_to_compute_host(
     except Exception as exc:
         return _err(rid, 5019, f"compute-host dispatch failed: {exc}")
     with session["history_lock"]:
+        # A prior in-process turn can leave its completed worker handle on the
+        # session.  The compute-host path has no local worker for this turn, so
+        # retaining that dead handle lets reconnect reconciliation mistake the
+        # active isolated turn for a finished local one.
+        session.pop("_run_thread", None)
         session["_compute_host_active"] = True
         if image_paths is None:
             session["attached_images"] = []
@@ -2506,7 +2589,11 @@ def _start_agent_build(sid: str, session: dict) -> None:
 
 def _sess_nowait(params, rid):
     s = _sessions.get(params.get("session_id") or "")
-    return (s, None) if s else (None, _err(rid, 4001, "session not found"))
+    return (
+        (s, None)
+        if s and _managed_session_is_authorized(s)
+        else (None, _err(rid, 4001, "session not found"))
+    )
 
 
 def _sess(params, rid):
@@ -3368,7 +3455,9 @@ def _save_cfg(cfg: dict):
 
     from utils import atomic_roundtrip_yaml_save
 
-    path = _hermes_home / "config.yaml"
+    override = get_hermes_home_override()
+    home = Path(override) if isinstance(override, str) and override else Path(_hermes_home)
+    path = home / "config.yaml"
     # Comment-, ordering-, and Unicode-preserving full-state write.
     # Replaces the previous `yaml.safe_dump(cfg, f)` (and later
     # `atomic_config_write`, which is not comment-preserving) which clobbered
@@ -3575,6 +3664,7 @@ def resolve_skin() -> dict:
 # per-tool reconcile fire ``skin.changed`` on any real move — a name switch OR a
 # live color edit to the active skin — and nothing else.
 _last_skin_sig: tuple[str, float | None] | None = None
+_last_skin_sigs: dict[str, tuple[str, float | None]] = {}
 
 
 def _skin_sig() -> tuple[str, float | None]:
@@ -3595,12 +3685,18 @@ def _note_skin_broadcast() -> None:
     check doesn't re-broadcast the skin /skin just applied."""
     global _last_skin_sig
     try:
-        _last_skin_sig = _skin_sig()
+        sig = _skin_sig()
+        override = get_hermes_home_override()
+        home = override if isinstance(override, str) and override else _hermes_home
+        key = str(Path(home).expanduser().resolve(strict=False))
+        _last_skin_sigs[key] = sig
+        if not (isinstance(override, str) and override):
+            _last_skin_sig = sig
     except Exception:
         pass
 
 
-def _broadcast_skin_if_changed() -> None:
+def _broadcast_skin_if_changed(*, target_home: str | None = None) -> None:
     """Emit ``skin.changed`` when the active skin moved — the agent switched it
     (``hermes config set display.skin``) OR edited the active skin's colors in
     place ("I don't like that coral" → tweak the YAML).
@@ -3614,9 +3710,16 @@ def _broadcast_skin_if_changed() -> None:
         sig = _skin_sig()
     except Exception:
         return
-    if sig == _last_skin_sig:
+    if target_home and target_home not in _last_skin_sigs:
+        _last_skin_sigs[target_home] = sig
         return
-    _last_skin_sig = sig
+    previous = _last_skin_sigs.get(target_home) if target_home else _last_skin_sig
+    if sig == previous:
+        return
+    if target_home:
+        _last_skin_sigs[target_home] = sig
+    else:
+        _last_skin_sig = sig
     try:
         _broadcast_global_event("skin.changed", resolve_skin())
     except Exception:
@@ -3759,36 +3862,41 @@ _CHANGE_WATCHES: dict[str, tuple[float, Any, Any]] = {
 # included — a floored change keeps its old signature and re-fires next tick).
 _CHANGE_BROADCAST_FLOOR_S = {"sessions.changed": 2.0, "platforms.changed": 5.0}
 
-_change_sigs: dict[str, Any] = {}
-_change_checked_at: dict[str, float] = {}
-_change_broadcast_at: dict[str, float] = {}
+_change_sigs: dict[Any, Any] = {}
+_change_checked_at: dict[Any, float] = {}
+_change_broadcast_at: dict[Any, float] = {}
 
 
-def _broadcast_watched_changes(now: float | None = None) -> None:
+def _broadcast_watched_changes(
+    now: float | None = None,
+    *,
+    target_home: str | None = None,
+) -> None:
     """One pass over ``_CHANGE_WATCHES``: recompute due signatures, broadcast
     the events whose signature moved. First sighting seeds silently so a
     gateway boot never fires a spurious refresh storm."""
     now = time.monotonic() if now is None else now
     for event, (interval, sig_fn, payload_fn) in _CHANGE_WATCHES.items():
-        if now - _change_checked_at.get(event, -interval) < interval:
+        state_key = (target_home, event) if target_home else event
+        if now - _change_checked_at.get(state_key, -interval) < interval:
             continue
-        _change_checked_at[event] = now
+        _change_checked_at[state_key] = now
         try:
             sig = sig_fn()
         except Exception:  # noqa: BLE001 - a broken probe must not kill the loop
             continue
-        if event not in _change_sigs:
-            _change_sigs[event] = sig
+        if state_key not in _change_sigs:
+            _change_sigs[state_key] = sig
             continue
-        if sig == _change_sigs[event]:
+        if sig == _change_sigs[state_key]:
             continue
         floor = _CHANGE_BROADCAST_FLOOR_S.get(event, 0.0)
-        if floor and now - _change_broadcast_at.get(event, -floor) < floor:
+        if floor and now - _change_broadcast_at.get(state_key, -floor) < floor:
             # Floored: leave the old signature in place so the change re-fires
             # once the window opens (the trailing edge of the burst).
             continue
-        _change_sigs[event] = sig
-        _change_broadcast_at[event] = now
+        _change_sigs[state_key] = sig
+        _change_broadcast_at[state_key] = now
         try:
             _broadcast_global_event(event, payload_fn())
         except Exception:  # noqa: BLE001
@@ -3814,8 +3922,13 @@ def _ensure_skin_watcher() -> None:
     def _loop() -> None:
         while True:
             time.sleep(0.5)
-            _broadcast_skin_if_changed()
-            _broadcast_watched_changes()
+            for home in _watcher_homes():
+                token = set_hermes_home_override(home)
+                try:
+                    _broadcast_skin_if_changed(target_home=home)
+                    _broadcast_watched_changes(target_home=home)
+                finally:
+                    reset_hermes_home_override(token)
 
     threading.Thread(target=_loop, name="hermes-change-watcher", daemon=True).start()
 
@@ -8159,8 +8272,17 @@ def _drain_queued_prompt(rid, sid: str, session: dict) -> bool:
         if not queued_prompts:
             session.pop("queued_prompts", None)
         session["running"] = True
-        if queued.get("transport") is not None:
-            session["transport"] = queued["transport"]
+        # A queued prompt carries the transport of the renderer that submitted
+        # it. Restore that stream when draining, but never steal one a *different*
+        # renderer is still actively driving (the same ownership contract enforced
+        # inline here because we already hold history_lock, which
+        # _bind_session_transport re-acquires).
+        queued_transport = queued.get("transport")
+        if queued_transport is not None and not (
+            queued_transport is not session.get("transport")
+            and _transport_is_recently_live(session.get("transport"))
+        ):
+            session["transport"] = queued_transport
     use_compute_host = _session_uses_compute_host(session)
     with session["history_lock"]:
         if int(session.get("_queued_prompt_generation", 0)) != queue_generation:
@@ -8613,9 +8735,39 @@ def _session_lookup_key(session: dict, *, fallback: str = "") -> str:
     )
 
 
+def _managed_session_is_authorized(session: dict) -> bool:
+    """Fail closed when a managed caller targets another profile's live chat."""
+    from hermes_cli.profile_scope import current_effective_profile, current_principal
+
+    principal = current_principal()
+    if principal is None:
+        return True
+    effective_profile = current_effective_profile()
+    if not effective_profile:
+        return False
+    raw_home = str(session.get("profile_home") or "").strip()
+    if not raw_home:
+        # Launch-profile sessions intentionally store no profile_home because
+        # they use the gateway's own home. Resolve that implicit ownership
+        # rather than rejecting the session the managed caller just created.
+        return _current_profile_name() == effective_profile
+    profile_name = Path(raw_home).name
+    if profile_name != effective_profile:
+        return False
+    try:
+        from hermes_cli import profiles as profiles_mod
+
+        expected = Path(profiles_mod.get_profile_dir(profile_name)).resolve()
+        return Path(raw_home).resolve() == expected
+    except (OSError, PermissionError, ValueError):
+        return False
+
+
 def _find_live_session_by_key(session_key: str) -> tuple[str, dict] | None:
     for sid, session in list(_sessions.items()):
         if session.get("_finalized"):
+            continue
+        if not _managed_session_is_authorized(session):
             continue
         if _session_lookup_key(session, fallback=sid) == session_key:
             return sid, session
@@ -8722,6 +8874,35 @@ def _live_visible_history(session: dict, db, in_memory_fallback: list[dict]) -> 
     return in_memory_fallback
 
 
+def _reconcile_finished_run_thread(session: dict) -> bool:
+    """Clear a stale busy projection after its prompt worker has exited.
+
+    A dropped transport must not leave ``running`` and ``inflight_turn`` pinned
+    forever after the worker is already dead.  Reconnect callers use the live
+    payload as their authority, so reconcile that impossible state before
+    returning it.  A missing thread is left untouched because other session
+    paths can briefly set ``running`` before their worker is registered.
+    """
+    if not session.get("running"):
+        return False
+
+    run_thread = session.get("_run_thread")
+    if run_thread is None:
+        return False
+
+    try:
+        alive = run_thread.is_alive()
+    except Exception:
+        return False
+
+    if alive:
+        return False
+
+    session["running"] = False
+    _clear_inflight_turn(session)
+    return True
+
+
 def _live_session_payload(
     sid: str,
     session: dict,
@@ -8731,11 +8912,12 @@ def _live_session_payload(
     transport: Transport | None = None,
     omit_messages: bool = False,
 ) -> dict:
+    if transport is not None:
+        _bind_session_transport(session, transport)
     with session["history_lock"]:
+        _reconcile_finished_run_thread(session)
         if cols is not None:
             session["cols"] = cols
-        if transport is not None:
-            session["transport"] = transport
         if touch:
             session["last_active"] = time.time()
         in_memory_history = list(session.get("display_history_prefix") or []) + list(
@@ -9648,6 +9830,7 @@ _KANBAN_NOTIFY_KINDS = (
 )
 _KANBAN_SILENT_KINDS = frozenset({"archived", "unblocked"})
 _KANBAN_POLL_SECONDS = 5.0
+_KANBAN_DELIVERY_OWNER = uuid.uuid4().hex
 _LOOP_POLL_SECONDS = 5.0
 
 
@@ -9791,7 +9974,7 @@ def _format_kanban_event_text(sub: dict, task, ev, board_slug: str) -> Optional[
     return None
 
 
-def _collect_kanban_notifications(session: dict) -> list:
+def _collect_kanban_notifications(session: dict, *, include_identity: bool = False) -> list:
     """Claim unseen terminal kanban events for this TUI session's subscriptions.
 
     ``kanban_create`` auto-subscribes TUI/desktop sessions with
@@ -9865,6 +10048,8 @@ def _collect_kanban_notifications(session: dict) -> list:
                     continue
                 if sub.get("chat_id") != session_key:
                     continue
+                claim_kwargs = {"persist_delivery": include_identity,
+                                "delivery_owner": _KANBAN_DELIVERY_OWNER}
                 _old, _new, events = _kb.claim_unseen_events_for_sub(
                     conn,
                     task_id=sub["task_id"],
@@ -9872,19 +10057,50 @@ def _collect_kanban_notifications(session: dict) -> list:
                     chat_id=sub["chat_id"],
                     thread_id=sub.get("thread_id") or "",
                     kinds=_KANBAN_NOTIFY_KINDS,
+                    **claim_kwargs,
                 )
                 if not events:
                     continue
                 task = _kb.get_task(conn, sub["task_id"])
+                event_ids = [int(event.id) for event in events]
                 for ev in events:
                     text = _format_kanban_event_text(sub, task, ev, slug)
                     if text:
-                        texts.append(text)
+                        if include_identity:
+                            identity = tuple(
+                                str(value or "")
+                                for value in (
+                                    slug,
+                                    sub.get("task_id"),
+                                    sub.get("platform"),
+                                    sub.get("chat_id"),
+                                    sub.get("thread_id"),
+                                    getattr(ev, "id", ""),
+                                )
+                            )
+                            # Never derive identity from rendered/customer text.
+                            # Keep the complete claimed range beside each
+                            # visible item so silent events settle with it.
+                            texts.append({
+                                "text": text,
+                                "identity": identity,
+                                "claimed_event_ids": event_ids,
+                            })
+                        else:
+                            texts.append(text)
+                if include_identity and texts:
+                    # One durable claim per turn keeps settlement all-or-nothing.
+                    return texts
+                if include_identity:
+                    _kb.complete_notify_delivery(
+                        conn, task_id=sub["task_id"], platform=sub["platform"],
+                        chat_id=sub["chat_id"], thread_id=sub.get("thread_id") or "",
+                        event_ids=event_ids, delivery_owner=_KANBAN_DELIVERY_OWNER)
                 # Unsubscribe only on archive. ``done`` is reversible in
                 # review/controller flows, so retaining the subscription lets
                 # a later reopen notify the same originating TUI/Desktop
                 # session. The claimed cursor prevents historical replay.
-                if task and getattr(task, "status", "") == "archived":
+                if not include_identity and task and getattr(task, "status", "") == "archived":
                     try:
                         _kb.remove_notify_sub(
                             conn,
@@ -9898,6 +10114,54 @@ def _collect_kanban_notifications(session: dict) -> list:
         finally:
             conn.close()
     return texts
+
+
+def _kanban_dispatch_batch_id(items: list[dict]) -> str:
+    """Derive an opaque, stable ID from subscription/event identities only."""
+    identities = [tuple(item.get("identity") or ()) for item in items]
+    material = json.dumps(identities, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(b"hermes.tui.kanban.dispatch.v1\0" + material).hexdigest()
+
+
+def _kanban_batch_event_ids(items: list[dict]) -> list[int]:
+    """Return every claimed event ID represented by a visible batch.
+
+    Silent events are deliberately absent from the rendered batch items, but
+    remain part of the durable claim. ``claimed_event_ids`` carries that exact
+    claim range; the identity fallback keeps older/in-memory batches
+    settleable while they drain.
+    """
+    event_ids: list[int] = []
+    seen: set[int] = set()
+    for item in items:
+        claimed = item.get("claimed_event_ids")
+        if claimed is None:
+            identity = tuple(item.get("identity") or ())
+            claimed = identity[5:6]
+        for event_id in claimed:
+            event_id = int(event_id)
+            if event_id not in seen:
+                seen.add(event_id)
+                event_ids.append(event_id)
+    return event_ids
+
+
+def _restore_async_kanban_batch(sid: str, session: dict, batch: dict) -> None:
+    """Restore a batch rejected after its turn thread already started."""
+    attempts = int(batch.get("attempts") or 0)
+    with session["history_lock"]:
+        if attempts < 3:
+            pending = list(session.get("_kanban_pending") or [])
+            if not any(item.get("batch_id") == batch.get("batch_id") for item in pending):
+                session["_kanban_pending"] = [batch, *pending]
+    if attempts >= 3:
+        key = f"kanban-dispatch:{batch['batch_id']}"
+        text = "\n".join(str(item["text"]) for item in batch["items"])
+        _emit("notification.show", sid, {
+            "text": f"{text}\n\nKanban notification delivery failed after 3 attempts; please retry manually.",
+            "level": "warn", "kind": "sticky", "ttl_ms": None,
+            "key": key, "id": key,
+        })
 
 
 def _notification_poller_loop(
@@ -9918,9 +10182,14 @@ def _notification_poller_loop(
     same way (status.update + agent turn) — the delivery path
     tools/kanban_tools.py documents for platform="tui" rows (issue #59890).
     """
+    from hermes_cli import kanban_db as _kb
     from tools.process_registry import process_registry, format_process_notification
 
     _emitted = set()  # dedup re-queued events so same completion isn't emitted 50 times while session is busy
+    # Events dequeued here but not actually dispatched. Handed back to the
+    # shared queue when this poller exits, so a rejected dispatch (below) never
+    # loses the notification. Also used by the shutdown drain.
+    deferred: list = []
     _last_kanban_poll = 0.0
     _last_loop_poll = 0.0
     while not stop_event.is_set() and not session.get("_finalized"):
@@ -9942,40 +10211,109 @@ def _notification_poller_loop(
         if _now - _last_kanban_poll >= _KANBAN_POLL_SECONDS:
             _last_kanban_poll = _now
             try:
-                _kanban_texts = _collect_kanban_notifications(session)
+                _kanban_items = _collect_kanban_notifications(
+                    session, include_identity=True
+                )
             except Exception as _kb_exc:
                 print(
                     f"[tui_gateway] kanban notification poll failed: "
                     f"{type(_kb_exc).__name__}: {_kb_exc}",
                     file=sys.stderr,
                 )
-                _kanban_texts = []
-            if _kanban_texts:
-                for _kb_text in _kanban_texts:
-                    _emit("status.update", sid, {"kind": "process", "text": _kb_text})
-                # Events are cursor-claimed (never re-queued), so buffer them
-                # until the session is idle instead of dropping the agent turn.
-                session.setdefault("_kanban_pending", []).extend(_kanban_texts)
+                _kanban_items = []
+            if _kanban_items:
+                for _kb_item in _kanban_items:
+                    _emit("status.update", sid, {"kind": "process", "text": _kb_item["text"]})
+                # Events are cursor-claimed (never re-queued), so buffer a
+                # stable identity-bearing batch until the session is idle.
+                _batch_id = _kanban_dispatch_batch_id(_kanban_items)
+                session.setdefault("_kanban_pending", []).append(
+                    {"batch_id": _batch_id, "items": list(_kanban_items),
+                     "attempts": 0}
+                )
             _pending = session.get("_kanban_pending") or []
             if _pending:
-                _batch: list = []
+                _batch: dict | None = None
                 with session["history_lock"]:
                     if not session.get("running"):
                         session["running"] = True
-                        _batch = list(_pending)
-                        session["_kanban_pending"] = []
+                        _batch = _pending.pop(0)
                 if _batch:
-                    rid = f"__notif__{int(time.time() * 1000)}"
+                    _batch_id = str(_batch["batch_id"])
+                    _batch_items = _batch["items"]
+                    _batch_text = "\n".join(str(item["text"]) for item in _batch_items)
+                    _attempt = int(_batch.get("attempts") or 0) + 1
+                    _batch["attempts"] = _attempt
+                    # ``claim_unseen_events_for_sub`` advanced the subscription
+                    # cursor when these events were collected, so the buffer is
+                    # the only remaining copy. _run_prompt_submit returns False
+                    # without starting a turn when the session is closing or a
+                    # queued-prompt generation lost the race — dropping the
+                    # batch there loses the notification permanently. Put it
+                    # back (ahead of anything collected since, preserving
+                    # order) so the next poll retries it.
+                    _restore_batch = False
+                    def _settle_recorded_claim() -> bool:
+                        identity = tuple(_batch_items[0]["identity"])
+                        board, task_id, platform, chat_id, thread_id = identity[:5]
+                        event_ids = _kanban_batch_event_ids(_batch_items)
+                        try:
+                            with contextlib.closing(_kb.connect(board=board)) as conn:
+                                return _kb.complete_notify_delivery(
+                                    conn, task_id=task_id, platform=platform,
+                                    chat_id=chat_id, thread_id=thread_id,
+                                    event_ids=event_ids,
+                                    delivery_owner=_KANBAN_DELIVERY_OWNER,
+                                )
+                        except Exception:
+                            return False
                     try:
                         _emit("message.start", sid)
-                        _run_prompt_submit(rid, sid, session, "\n".join(_batch))
+                        _restore_batch = (
+                            _run_prompt_submit(
+                                _batch_id,
+                                sid,
+                                session,
+                                _batch_text,
+                                on_turn_recorded=_settle_recorded_claim,
+                                on_turn_rejected=lambda batch=_batch: _restore_async_kanban_batch(
+                                    sid, session, batch
+                                ),
+                            )
+                            is False
+                        )
                     except Exception as exc:
                         print(
                             f"[tui_gateway] kanban notification dispatch failed: "
                             f"{type(exc).__name__}: {exc}",
                             file=sys.stderr,
                         )
+                        _restore_batch = True
+                    if _restore_batch and _attempt >= 3:
+                        _terminal_key = f"kanban-dispatch:{_batch_id}"
+                        _emit(
+                            "notification.show",
+                            sid,
+                            {
+                                "text": (
+                                    f"{_batch_text}\n\n"
+                                    "Kanban notification delivery failed after "
+                                    "3 attempts; please retry manually."
+                                ),
+                                "level": "warn",
+                                "kind": "sticky",
+                                "ttl_ms": None,
+                                "key": _terminal_key,
+                                "id": _terminal_key,
+                            },
+                        )
                         with session["history_lock"]:
+                            session["running"] = False
+                    elif _restore_batch:
+                        with session["history_lock"]:
+                            session["_kanban_pending"] = [_batch] + list(
+                                session.get("_kanban_pending") or []
+                            )
                             session["running"] = False
         try:
             evt = process_registry.completion_queue.get(timeout=0.5)
@@ -10055,7 +10393,7 @@ def _notification_poller_loop(
         try:
             _emit("message.start", sid)
             if evt.get("type") == "async_delegation":
-                _run_prompt_submit(
+                _dispatch_started = _run_prompt_submit(
                     rid,
                     sid,
                     session,
@@ -10064,7 +10402,16 @@ def _notification_poller_loop(
                     display_metadata=_async_delegation_display_metadata(evt),
                 )
             else:
-                _run_prompt_submit(rid, sid, session, text)
+                _dispatch_started = _run_prompt_submit(rid, sid, session, text)
+            if _dispatch_started is False:
+                # No turn started (session closing or re-registered), so the
+                # event was never delivered. Acknowledging it here would
+                # consume the only copy — release the claim and hand it back.
+                release_event_delivery(evt, _claim)
+                deferred.append(evt)
+                with session["history_lock"]:
+                    session["running"] = False
+                break
             complete_event_delivery(evt, _claim)
         except Exception as exc:
             release_event_delivery(evt, _claim)
@@ -10080,7 +10427,6 @@ def _notification_poller_loop(
     # before exiting so nothing is lost on shutdown). Events owned by other
     # live sessions are set aside and re-queued so their poller still sees them.
     # Orphaned events (owner gone) are dropped — same guard as the main loop.
-    deferred: list = []
     while not process_registry.completion_queue.empty():
         try:
             evt = process_registry.completion_queue.get_nowait()
@@ -10133,7 +10479,7 @@ def _notification_poller_loop(
         try:
             _emit("message.start", sid)
             if evt.get("type") == "async_delegation":
-                _run_prompt_submit(
+                _dispatch_started = _run_prompt_submit(
                     rid,
                     sid,
                     session,
@@ -10142,7 +10488,16 @@ def _notification_poller_loop(
                     display_metadata=_async_delegation_display_metadata(evt),
                 )
             else:
-                _run_prompt_submit(rid, sid, session, text)
+                _dispatch_started = _run_prompt_submit(rid, sid, session, text)
+            if _dispatch_started is False:
+                # Same rule as the live loop: an unstarted turn means the
+                # event is still undelivered, so defer it rather than
+                # acknowledge it away on the way out.
+                release_event_delivery(evt, _claim)
+                deferred.append(evt)
+                with session["history_lock"]:
+                    session["running"] = False
+                continue
             complete_event_delivery(evt, _claim)
         except Exception as exc:
             release_event_delivery(evt, _claim)
@@ -10259,13 +10614,40 @@ def _wire_desktop_ui() -> None:
 _notification_pollers: list = []
 
 
+def _run_notification_poller_in_session_home(
+    stop_event: threading.Event, sid: str, session: dict
+) -> None:
+    """Run the poller bound to the profile that owns the session's durable state.
+
+    The poller claims and acknowledges delegation deliveries through
+    tools.async_delegation, whose _db_path() resolves get_hermes_home() — and
+    the HERMES_HOME override is a ContextVar, which a bare thread does not
+    inherit. Without this the poller marks events delivered in the LAUNCH
+    profile's state.db while the rows it is claiming live in the session's,
+    so a global-remote session re-delivers completions forever.
+
+    Anchored on _session_home(session) rather than on a snapshot of the
+    spawning thread's context (the propagate_context_to_thread idiom the
+    async-delegation worker uses for the same class of bug) because the spawn
+    sites do not all carry the session's override: compute_host resets it in
+    the finally that precedes its _init_session call, so a snapshot taken
+    there would capture the launch profile and reproduce the bug. The session
+    dict is authoritative on every path; read it here.
+    """
+    home_token = set_hermes_home_override(_session_home(session))
+    try:
+        _notification_poller_loop(stop_event, sid, session)
+    finally:
+        reset_hermes_home_override(home_token)
+
+
 def _start_notification_poller(sid: str, session: dict) -> threading.Event:
     """Start the background notification poller for a TUI session."""
     _wire_agent_terminal_output()
     _wire_desktop_ui()
     stop = threading.Event()
     t = threading.Thread(
-        target=_notification_poller_loop,
+        target=_run_notification_poller_in_session_home,
         args=(stop, sid, session),
         daemon=True,
         # Stable, greppable name for debuggers and test teardowns.
@@ -10480,6 +10862,8 @@ def _run_prompt_submit(
     display_metadata: dict | None = None,
     image_paths: list[str] | None = None,
     queued_prompt_generation: int | None = None,
+    on_turn_recorded: Callable[[], bool] | None = None,
+    on_turn_rejected: Callable[[], None] | None = None,
 ) -> bool:
     with session["history_lock"]:
         if session.get("_closing"):
@@ -10561,8 +10945,19 @@ def _run_prompt_submit(
         marker_key = str(session.get("session_key") or "")
         marker_attempt = int(session.pop("_auto_continue_attempt", 0) or 0)
         marker_text = session.pop("_auto_continue_prompt", None) or text
+        durable_ready = on_turn_recorded is None
         if isinstance(marker_text, str) and marker_text.strip():
-            record_turn_start(marker_home, marker_key, marker_text, attempts=marker_attempt)
+            durable_ready = record_turn_start(marker_home, marker_key, marker_text, attempts=marker_attempt) and (on_turn_recorded is None or on_turn_recorded())
+        if not durable_ready:
+            if on_turn_rejected is not None:
+                on_turn_rejected()
+            _emit_terminal_turn_error(
+                sid, session, RuntimeError("durable notification turn could not be recorded")
+            )
+            with session["history_lock"]:
+                session["running"] = False
+                session["last_active"] = time.time()
+            return
         try:
             from tools.approval import (
                 reset_current_session_key,

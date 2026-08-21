@@ -252,6 +252,41 @@ Behavior:
 
 See also: [admin/user slash command split](../../reference/slash-commands.md#permissions-and-adminuser-split).
 
+## Sender allowlists for DMs and channels
+
+You can optionally narrow who may reach the bot in DMs or in a particular
+channel. Use Mattermost user IDs, not usernames:
+
+```yaml
+platforms:
+  mattermost:
+    extra:
+      # Direct messages only
+      allow_from:
+        - "user_id_for_dm_access"
+      # Channel messages only
+      groups:
+        "channel_id_for_ops":
+          allow_from:
+            - "user_id_for_ops_access"
+        "*":
+          allow_from:
+            - "user_id_allowed_in_other_channels"
+```
+
+- A channel's exact ID is checked first, case-insensitively, then the `"*"`
+  entry is used when present.
+- `"*"` inside an `allow_from` list permits any sender in that scope.
+- An empty or unset sender allowlist preserves the existing behavior; it does
+  not introduce a default denial.
+- DM and channel sender allowlists are independent. Restricting DMs does not
+  automatically restrict channels, and vice versa.
+- Sender checks run before attachment download and message dispatch.
+
+These settings add a narrower intake filter. Keep `MATTERMOST_ALLOWED_USERS`
+configured as the platform-wide authorization boundary; a channel sender
+allowlist does not replace it.
+
 ## Troubleshooting
 
 ### Bot is not responding to messages

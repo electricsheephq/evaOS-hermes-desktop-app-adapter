@@ -114,6 +114,11 @@ _GLOBAL_ENV_EXACT = frozenset({
     # profile-scoped.
     "API_SERVER_ENABLED", "API_SERVER_HOST", "API_SERVER_PORT",
     "API_SERVER_CORS_ORIGINS",
+    # Managed evaOS desktop broker deployment settings. The secret remains
+    # inside the root-controlled file; only its path is process-global.
+    "EVAOS_DESKTOP_RUNTIME_SESSION_URL",
+    "PIPEDREAM_AGENT_BROKER_SECRET_FILE",
+    "CREDENTIALS_DIRECTORY",
 })
 _GLOBAL_ENV_PREFIXES = (
     "HERMES_KANBAN_",
@@ -286,6 +291,21 @@ def build_profile_secret_scope(hermes_home: Path) -> Dict[str, str]:
         external_secrets = {}
 
     for key, value in external_secrets.items():
+        if _is_global_env(key):
+            continue
+        secrets[key] = value
+
+    # In a multiplexed gateway, the profile-managed .env is another private
+    # credential source. It must override the user's value for this profile,
+    # while remaining out of process-global os.environ and other profiles'
+    # scopes. Global deployment settings are still resolved from os.environ.
+    try:
+        from hermes_cli import managed_scope
+
+        managed_secrets = managed_scope.load_managed_env()
+    except Exception:
+        managed_secrets = {}
+    for key, value in managed_secrets.items():
         if _is_global_env(key):
             continue
         secrets[key] = value

@@ -531,6 +531,10 @@ class ComputeHost:
     def _ensure_server_session(self, server: Any, frame: dict[str, Any]) -> dict:
         sid = str(frame.get("sid") or "")
         key = str(frame.get("session_key") or sid)
+        if frame.get("multiplex_active"):
+            from agent.secret_scope import set_multiplex_active
+
+            set_multiplex_active(True)
         session = server._sessions.get(sid)
         if session is not None:
             session["transport"] = self._transport
@@ -604,6 +608,11 @@ class ComputeHost:
                     cwd=str(frame.get("cwd") or "") or None,
                     session_db=session_db,
                     source=frame.get("source"),
+                    # _init_session starts the notification poller, which binds
+                    # its HERMES_HOME from the session's profile_home. Set it
+                    # here rather than only on the assignment below, which lands
+                    # after that thread is already running.
+                    profile_home=profile_home or None,
                 )
             finally:
                 reset_transport(token)

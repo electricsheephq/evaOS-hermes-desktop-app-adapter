@@ -59,6 +59,26 @@ fi
 PYTHON_VERSION="3.11"
 NODE_VERSION="26"
 
+# Keep this in lockstep with [options].exclude-newer in uv.lock. UV_NO_CONFIG
+# strips pyproject.toml's [tool.uv] settings, so pass the lock cutoff explicitly
+# to every uv package-resolution command below.
+UV_EXCLUDE_NEWER="2026-08-04T07:06:16.774262776Z"
+# UV_NO_CONFIG also hides the package-specific exceptions mirrored in uv.lock.
+UV_EXCLUDE_NEWER_PACKAGE_ARGS=(
+    --exclude-newer-package setuptools=false
+    --exclude-newer-package h2=false
+    --exclude-newer-package vercel=false
+    --exclude-newer-package pillow=false
+    --exclude-newer-package unpaddedbase64=false
+    --exclude-newer-package defusedxml=false
+    --exclude-newer-package aiohttp=false
+    --exclude-newer-package cryptography=false
+    --exclude-newer-package mcp=false
+    --exclude-newer-package python-olm=false
+    --exclude-newer-package nemo-relay=false
+    --exclude-newer-package huggingface-hub=false
+)
+
 # FHS-style root install layout (set by resolve_install_layout when applicable):
 #   code at /usr/local/lib/hermes-agent, command at /usr/local/bin/hermes,
 #   data still at /root/.hermes (HERMES_HOME).  Matches Claude Code / Codex CLI
@@ -552,6 +572,11 @@ detect_os() {
 # Dependency checks
 # ============================================================================
 
+_uv_supports_exclude_newer_package() {
+    local uv_bin="$1"
+    "$uv_bin" pip install --help 2>/dev/null | grep -Fq -- "--exclude-newer-package"
+}
+
 install_uv() {
     if [ "$DISTRO" = "termux" ]; then
         log_info "Termux detected — using Python's stdlib venv + pip instead of uv"
@@ -566,10 +591,13 @@ install_uv() {
     local _managed_uv="$HERMES_HOME/bin/uv"
 
     if [ -x "$_managed_uv" ]; then
-        UV_CMD="$_managed_uv"
-        UV_VERSION=$($UV_CMD --version 2>/dev/null)
-        log_success "Managed uv found ($UV_VERSION)"
-        return 0
+        if _uv_supports_exclude_newer_package "$_managed_uv"; then
+            UV_CMD="$_managed_uv"
+            UV_VERSION=$($UV_CMD --version 2>/dev/null)
+            log_success "Managed uv found ($UV_VERSION)"
+            return 0
+        fi
+        log_warn "Managed uv lacks --exclude-newer-package; refreshing it..."
     fi
 
     log_info "Installing managed uv into $HERMES_HOME/bin ..."
@@ -593,12 +621,16 @@ install_uv() {
     # directly into $HERMES_HOME/bin instead of ~/.local/bin.
     if UV_UNMANAGED_INSTALL="$HERMES_HOME/bin" sh "$_uv_installer" >>"$_uv_install_log" 2>&1; then
         rm -f "$_uv_installer"
-        if [ -x "$_managed_uv" ]; then
-            UV_CMD="$_managed_uv"
-        else
+        if [ ! -x "$_managed_uv" ]; then
             log_error "uv installer reported success but binary not found at $_managed_uv"
             log_info "Installer output:"
             sed 's/^/    /' "$_uv_install_log" >&2
+            rm -f "$_uv_install_log"
+            exit 1
+        fi
+        UV_CMD="$_managed_uv"
+        if ! _uv_supports_exclude_newer_package "$UV_CMD"; then
+            log_error "uv installer produced a binary without --exclude-newer-package support"
             rm -f "$_uv_install_log"
             exit 1
         fi
@@ -1613,7 +1645,7 @@ install_deps() {
         #                  This respects the curation in pyproject.toml.
         # uv's own progress UI handles TTY detection and downgrades
         # gracefully when stdout/stderr aren't terminals.
-        if UV_PROJECT_ENVIRONMENT="$INSTALL_DIR/venv" $UV_CMD sync --extra all --locked; then
+        if UV_PROJECT_ENVIRONMENT="$INSTALL_DIR/venv" $UV_CMD sync --extra all --locked --exclude-newer "$UV_EXCLUDE_NEWER" "${UV_EXCLUDE_NEWER_PACKAGE_ARGS[@]}"; then
             log_success "Main package installed (hash-verified via uv.lock)"
             log_success "All dependencies installed"
             return 0
@@ -1694,7 +1726,7 @@ PY
     install_tier() {
         local name="$1"; local spec="$2"
         log_info "Trying tier: $name ..."
-        if $UV_CMD pip install -e "$spec" 2>"$ALL_INSTALL_LOG"; then
+        if $UV_CMD pip install --exclude-newer "$UV_EXCLUDE_NEWER" "${UV_EXCLUDE_NEWER_PACKAGE_ARGS[@]}" -e "$spec" 2>"$ALL_INSTALL_LOG"; then
             log_success "Main package installed ($name)"
             _installed=true
             _tier_name="$name"
@@ -3104,7 +3136,7 @@ install_desktop_voice_deps() {
         return 0
     fi
     log_info "Installing voice + wake-word dependencies (onnxruntime, faster-whisper — 1-3min)..."
-    if (cd "$INSTALL_DIR" && $UV_CMD pip install -e ".[wake,voice]") ; then
+    if (cd "$INSTALL_DIR" && $UV_CMD pip install --exclude-newer "$UV_EXCLUDE_NEWER" "${UV_EXCLUDE_NEWER_PACKAGE_ARGS[@]}" -e ".[wake,voice]") ; then
         log_success "Voice + wake-word dependencies installed"
     else
         log_warn "Voice/wake dependency install failed — they will lazy-install at first use"
@@ -3530,7 +3562,12 @@ main() {
     echo "git" > "$INSTALL_DIR/.install_method"
 }
 
-if [ "$MANIFEST_MODE" = true ]; then
+if [ -n "${HERMES_INSTALL_TEST_ENTRYPOINT:-}" ]; then
+    case "$HERMES_INSTALL_TEST_ENTRYPOINT" in
+        install_uv) install_uv ;;
+        *) log_error "Unknown installer test entrypoint"; exit 2 ;;
+    esac
+elif [ "$MANIFEST_MODE" = true ]; then
     emit_manifest
 elif [ -n "$STAGE_NAME" ]; then
     run_stage_protocol "$STAGE_NAME"

@@ -238,7 +238,7 @@ def cmd_fallback_add(args) -> None:
 
     chain.append(new_entry)
     _write_chain(final_cfg, chain)
-    save_config(final_cfg)
+    save_config(final_cfg, removed_root_keys={"fallback_model"})
 
     print()
     print(f"  Added fallback: {_format_entry(new_entry)}")
@@ -256,7 +256,7 @@ def _restore_model_cfg(model_before: Any) -> None:
         cfg.pop("model", None)
     else:
         cfg["model"] = copy.deepcopy(model_before)
-    save_config(cfg)
+    save_config(cfg, removed_root_keys={"model"} if model_before is None else None)
 
 
 def cmd_fallback_remove(args) -> None:  # noqa: ARG001
@@ -288,7 +288,7 @@ def cmd_fallback_remove(args) -> None:  # noqa: ARG001
 
     removed = chain.pop(idx)
     _write_chain(config, chain)
-    save_config(config)
+    save_config(config, removed_root_keys={"fallback_model"})
 
     print()
     print(f"  Removed fallback: {_format_entry(removed)}")
@@ -328,7 +328,7 @@ def cmd_fallback_clear(args) -> None:  # noqa: ARG001
         return
 
     _write_chain(config, [])
-    save_config(config)
+    save_config(config, removed_root_keys={"fallback_model"})
     print()
     print("  Fallback chain cleared.")
     print()
