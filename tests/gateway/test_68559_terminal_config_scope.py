@@ -83,6 +83,68 @@ def test_routed_profile_uses_its_terminal_backend(tmp_path, monkeypatch):
     assert routed_config["docker_image"] == "routed-image"
 
 
+def test_routed_profile_managed_terminal_config_wins(tmp_path, monkeypatch):
+    """Managed-only terminal policy applies with managed precedence."""
+    from gateway.run import _profile_runtime_scope
+    from tools import terminal_tool
+
+    gateway_home, routed_home = _gateway_and_routed_homes(
+        tmp_path,
+        {"backend": "local"},
+        {"backend": "local", "docker_image": "user-image"},
+    )
+    managed_root = tmp_path / "managed"
+    routed_managed = managed_root / routed_home.name
+    routed_managed.mkdir(parents=True)
+    (routed_managed / "config.yaml").write_text(
+        json.dumps(
+            {
+                "terminal": {
+                    "backend": "docker",
+                    "docker_image": "managed-image",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("EVAOS_HERMES_MANAGED_PROFILE_ROOT", str(managed_root))
+    monkeypatch.delenv("HERMES_MANAGED_DIR", raising=False)
+    _seed_gateway_terminal_config(monkeypatch, gateway_home)
+    monkeypatch.setenv("TERMINAL_ENV", "local")
+
+    with _profile_runtime_scope(routed_home):
+        routed_config = terminal_tool._get_env_config()
+
+    assert routed_config["env_type"] == "docker"
+    assert routed_config["docker_image"] == "managed-image"
+
+
+def test_routed_profile_managed_only_terminal_config_applies(tmp_path, monkeypatch):
+    """A managed-only terminal section is not lost at the raw-config check."""
+    from gateway.run import _profile_runtime_scope
+    from tools import terminal_tool
+
+    gateway_home, routed_home = _gateway_and_routed_homes(
+        tmp_path, {"backend": "local"}
+    )
+    managed_root = tmp_path / "managed"
+    routed_managed = managed_root / routed_home.name
+    routed_managed.mkdir(parents=True)
+    (routed_managed / "config.yaml").write_text(
+        json.dumps({"terminal": {"backend": "docker"}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("EVAOS_HERMES_MANAGED_PROFILE_ROOT", str(managed_root))
+    monkeypatch.delenv("HERMES_MANAGED_DIR", raising=False)
+    _seed_gateway_terminal_config(monkeypatch, gateway_home)
+    monkeypatch.setenv("TERMINAL_ENV", "local")
+
+    with _profile_runtime_scope(routed_home):
+        routed_config = terminal_tool._get_env_config()
+
+    assert routed_config["env_type"] == "docker"
+
+
 def test_gateway_terminal_config_is_restored_after_scope(tmp_path, monkeypatch):
     from gateway.run import _profile_runtime_scope
     from tools import terminal_tool

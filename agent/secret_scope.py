@@ -295,4 +295,19 @@ def build_profile_secret_scope(hermes_home: Path) -> Dict[str, str]:
             continue
         secrets[key] = value
 
+    # In a multiplexed gateway, the profile-managed .env is another private
+    # credential source. It must override the user's value for this profile,
+    # while remaining out of process-global os.environ and other profiles'
+    # scopes. Global deployment settings are still resolved from os.environ.
+    try:
+        from hermes_cli import managed_scope
+
+        managed_secrets = managed_scope.load_managed_env()
+    except Exception:
+        managed_secrets = {}
+    for key, value in managed_secrets.items():
+        if _is_global_env(key):
+            continue
+        secrets[key] = value
+
     return secrets

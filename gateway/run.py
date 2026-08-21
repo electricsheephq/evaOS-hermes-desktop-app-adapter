@@ -2075,9 +2075,14 @@ def _multiplex_profile_homes(config: object) -> list[tuple[str, "Path"]]:
 def _load_profile_terminal_config() -> Dict[str, str]:
     """Resolve the active profile's terminal config into terminal env vars."""
     try:
+        from hermes_cli import managed_scope
         from hermes_cli.config import apply_terminal_config_to_env, read_raw_config
 
         raw_config = read_raw_config()
+        # A routed profile may receive its terminal policy only from the
+        # profile-managed config. Merge that policy before checking for a
+        # terminal section so managed precedence survives this scoped bridge.
+        raw_config = managed_scope.apply_managed_overlay(raw_config)
         if not isinstance(raw_config.get("terminal"), dict):
             return {}
         return apply_terminal_config_to_env(
