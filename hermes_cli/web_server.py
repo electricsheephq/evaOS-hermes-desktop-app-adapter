@@ -12231,6 +12231,9 @@ def _open_session_db_for_profile(profile: Optional[str], *, read_only: bool):
     if profile:
         _name, home = _cron_profile_home(profile)
         db_path = Path(home) / "state.db"
+    elif (managed_profile := _managed_profile_or_current(profile)):
+        _name, home = _cron_profile_home(managed_profile)
+        db_path = Path(home) / "state.db"
     else:
         db_path = Path(_default_db_path())
     return _open_session_db_at_path(db_path, read_only=read_only)

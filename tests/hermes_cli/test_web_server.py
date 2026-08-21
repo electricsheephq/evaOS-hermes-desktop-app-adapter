@@ -33,6 +33,14 @@ def _managed_headers(*, admin: bool = False) -> dict[str, str]:
     }
 
 
+def _managed_profile_db(profile: str) -> Path:
+    from hermes_cli.profiles import get_profile_dir
+
+    profile_home = get_profile_dir(profile)
+    profile_home.mkdir(parents=True, exist_ok=True)
+    return profile_home / "state.db"
+
+
 def test_managed_scope_middleware_execution_order():
     from hermes_cli.web_server import app
 
@@ -102,6 +110,7 @@ async def test_managed_projects_tree_is_not_treated_as_profile_route(monkeypatch
 def test_managed_omitted_profile_uses_effective_profile_for_dashboard_helpers(
     monkeypatch, tmp_path
 ):
+    import hermes_state
     from hermes_cli import profiles as profiles_mod
     from hermes_cli import web_server
     from hermes_cli.profile_scope import ManagedProfilePrincipal, managed_profile_context
@@ -110,6 +119,8 @@ def test_managed_omitted_profile_uses_effective_profile_for_dashboard_helpers(
     homes = {name: tmp_path / name for name in ("jane", "louis")}
     for home in homes.values():
         home.mkdir()
+    unmanaged_db = tmp_path / "unmanaged" / "state.db"
+    monkeypatch.setattr(hermes_state, "_default_db_path", lambda: unmanaged_db)
     monkeypatch.setattr(profiles_mod, "get_profile_dir", lambda name: homes[name])
     monkeypatch.setattr(profiles_mod, "profile_exists", lambda name: name in homes)
     monkeypatch.setattr(profiles_mod, "get_active_profile_name", lambda: "default")
@@ -134,6 +145,7 @@ def test_managed_omitted_profile_uses_effective_profile_for_dashboard_helpers(
         with web_server._profile_scope(None):
             assert get_hermes_home() == homes["jane"]
         web_server._open_session_db_for_profile(None, read_only=True)
+        web_server._open_session_db_for_profile("louis", read_only=True)
         assert web_server._cron_default_profile() == "jane"
         assert web_server._cron_profile_home(None) == ("jane", homes["jane"])
 
@@ -141,7 +153,12 @@ def test_managed_omitted_profile_uses_effective_profile_for_dashboard_helpers(
         with web_server._config_profile_scope("louis"):
             assert get_hermes_home() == homes["louis"]
 
-    assert observed_db_paths == [(homes["jane"] / "state.db", True)]
+    web_server._open_session_db_for_profile(None, read_only=True)
+    assert observed_db_paths == [
+        (homes["jane"] / "state.db", True),
+        (homes["louis"] / "state.db", True),
+        (unmanaged_db, True),
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -442,10 +459,9 @@ class TestWebServerEndpoints:
         suffix,
         request_kwargs,
     ):
-        from hermes_constants import get_hermes_home
         from hermes_state import SessionDB
 
-        db = SessionDB(db_path=get_hermes_home() / "state.db")
+        db = SessionDB(db_path=_managed_profile_db("jane"))
         try:
             db.create_session(
                 "conflicting-session",
@@ -466,10 +482,9 @@ class TestWebServerEndpoints:
         assert response.json()["detail"] == "Session profile is not authorized"
 
     def test_managed_session_detail_allows_effective_profile(self):
-        from hermes_constants import get_hermes_home
         from hermes_state import SessionDB
 
-        db = SessionDB(db_path=get_hermes_home() / "state.db")
+        db = SessionDB(db_path=_managed_profile_db("jane"))
         try:
             db.create_session(
                 "owned-session",
@@ -488,10 +503,9 @@ class TestWebServerEndpoints:
         assert response.json()["id"] == "owned-session"
 
     def test_managed_session_detail_allows_null_metadata_in_selected_db(self):
-        from hermes_constants import get_hermes_home
         from hermes_state import SessionDB
 
-        db = SessionDB(db_path=get_hermes_home() / "state.db")
+        db = SessionDB(db_path=_managed_profile_db("jane"))
         try:
             db.create_session("legacy-session", source="cli")
         finally:
