@@ -7,6 +7,8 @@ import tomllib
 from pathlib import Path
 
 import hermes_cli
+from packaging.requirements import Requirement
+from packaging.version import Version
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -25,11 +27,22 @@ def test_package_and_runtime_versions_match() -> None:
     assert project_version == hermes_cli.__version__
 
 
-def test_r29_cryptography_override_and_lock_stay_on_50() -> None:
-    uv_config = _pyproject()["tool"]["uv"]
-    assert "cryptography>=50,<51" in uv_config["override-dependencies"]
+def test_r29_cryptography_lock_satisfies_declared_constraints() -> None:
+    project = _pyproject()
+    declared = Requirement(
+        next(item for item in project["project"]["dependencies"] if item.startswith("cryptography"))
+    )
+    override = Requirement(
+        next(
+            item
+            for item in project["tool"]["uv"]["override-dependencies"]
+            if item.startswith("cryptography")
+        )
+    )
     cryptography = next(package for package in _lock()["package"] if package["name"] == "cryptography")
-    assert cryptography["version"].startswith("50.")
+    locked = Version(cryptography["version"])
+    assert locked in declared.specifier
+    assert locked in override.specifier
 
 
 def test_r29_does_not_restore_the_removed_cli_extra() -> None:

@@ -76,6 +76,14 @@ class TestSessionCwdOverride:
         finally:
             rt._SESSION_CWD.reset(token)
 
+    def test_invalid_session_cwd_is_explicitly_masked(self, tmp_path):
+        token = set_session_cwd(str(tmp_path / "missing-workspace"))
+        try:
+            assert resolve_context_cwd() is None
+            assert context_cwd_is_masked() is True
+        finally:
+            rt._SESSION_CWD.reset(token)
+
 
     def test_clear_session_cwd_restores_terminal_cwd(self, monkeypatch, tmp_path):
         other = tmp_path / "other"

@@ -988,6 +988,8 @@ def _is_local_backend() -> bool:
 
 _auto_local_for_private_urls_resolved = False
 _cached_auto_local_for_private_urls: bool = True
+_cached_auto_local_for_private_urls_by_scope: Dict[str, bool] = {}
+_auto_local_for_private_urls_cache_lock = threading.RLock()
 
 
 def _get_browser_engine() -> str:
@@ -1366,29 +1368,43 @@ def _auto_local_for_private_urls() -> bool:
     """Return whether a cloud-configured install should auto-spawn a local
     Chromium for LAN/localhost URLs.
 
-    Reads ``browser.auto_local_for_private_urls`` once (default ``True``) and
-    caches it for the process lifetime.  When enabled, ``browser_navigate``
+    Reads ``browser.auto_local_for_private_urls`` once per routed Hermes home
+    (default ``True``).  When enabled, ``browser_navigate``
     routes URLs whose host resolves to a private/loopback/LAN address to a
     local headless Chromium sidecar even when a cloud provider (Browserbase
     / Browser-Use / Firecrawl) is configured globally.  Public URLs continue
     to use the cloud provider in the same conversation.
     """
     global _auto_local_for_private_urls_resolved, _cached_auto_local_for_private_urls
-    if _auto_local_for_private_urls_resolved:
-        return _cached_auto_local_for_private_urls
-
-    _auto_local_for_private_urls_resolved = True
-    try:
-        from hermes_cli.config import read_raw_config
-        cfg = read_raw_config()
-        browser_cfg = cfg.get("browser", {})
-        if isinstance(browser_cfg, dict) and "auto_local_for_private_urls" in browser_cfg:
-            _cached_auto_local_for_private_urls = bool(
-                browser_cfg.get("auto_local_for_private_urls")
+    scope = hermes_home_key()
+    with _auto_local_for_private_urls_cache_lock:
+        if not _auto_local_for_private_urls_resolved:
+            _cached_auto_local_for_private_urls_by_scope.clear()
+        if scope in _cached_auto_local_for_private_urls_by_scope:
+            _cached_auto_local_for_private_urls = (
+                _cached_auto_local_for_private_urls_by_scope[scope]
             )
-    except Exception as e:
-        logger.debug("Could not read auto_local_for_private_urls from config: %s", e)
-    return _cached_auto_local_for_private_urls
+            _auto_local_for_private_urls_resolved = True
+            return _cached_auto_local_for_private_urls
+
+        resolved = True
+        try:
+            from hermes_cli.config import read_raw_config
+
+            cfg = read_raw_config()
+            browser_cfg = cfg.get("browser", {})
+            if (
+                isinstance(browser_cfg, dict)
+                and "auto_local_for_private_urls" in browser_cfg
+            ):
+                resolved = bool(browser_cfg.get("auto_local_for_private_urls"))
+        except Exception as e:
+            logger.debug("Could not read auto_local_for_private_urls from config: %s", e)
+
+        _cached_auto_local_for_private_urls = resolved
+        _cached_auto_local_for_private_urls_by_scope[scope] = resolved
+        _auto_local_for_private_urls_resolved = True
+        return resolved
 
 
 def _url_is_private(url: str) -> bool:

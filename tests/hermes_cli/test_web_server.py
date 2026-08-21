@@ -77,6 +77,29 @@ def test_web_startup_initializes_managed_profile_scope(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_elevenlabs_voices_does_not_fall_back_to_process_secret(monkeypatch):
+    from agent.secret_scope import UnscopedSecretError
+    from hermes_cli import web_server
+
+    monkeypatch.setattr(web_server, "load_env", lambda: {})
+    monkeypatch.setattr(
+        "agent.secret_scope.get_secret",
+        lambda _name: (_ for _ in ()).throw(UnscopedSecretError("unscoped")),
+    )
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "foreign-profile-key")
+    monkeypatch.setattr(
+        web_server.urllib.request,
+        "urlopen",
+        lambda *_args, **_kwargs: pytest.fail("process secret reached the network"),
+    )
+
+    assert await web_server.get_elevenlabs_voices() == {
+        "available": False,
+        "voices": [],
+    }
+
+
+@pytest.mark.asyncio
 async def test_managed_projects_tree_is_not_treated_as_profile_route(monkeypatch, tmp_path):
     from starlette.requests import Request
 

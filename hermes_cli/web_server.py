@@ -5257,7 +5257,11 @@ async def get_elevenlabs_voices(profile: Optional[str] = None):
             try:
                 api_key = (get_secret("ELEVENLABS_API_KEY") or "").strip()
             except UnscopedSecretError:
-                api_key = (os.environ.get("ELEVENLABS_API_KEY") or "").strip()
+                # A multiplex process can carry a different profile's launch
+                # secret in os.environ.  The scoped resolver's refusal is
+                # authoritative: report this integration unavailable rather
+                # than crossing the profile boundary.
+                api_key = ""
         except Exception:
             api_key = (os.environ.get("ELEVENLABS_API_KEY") or "").strip()
     if not api_key:

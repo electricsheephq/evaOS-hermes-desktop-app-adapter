@@ -69,7 +69,11 @@ def context_cwd_is_masked() -> bool:
     mask and the ordinary unset state used by local CLI fallback.
     """
     pinned, override = _session_cwd_override()
-    return pinned and not override
+    if not pinned:
+        return False
+    if not override:
+        return True
+    return not Path(override).expanduser().is_dir()
 
 
 def resolve_agent_cwd() -> Path:
