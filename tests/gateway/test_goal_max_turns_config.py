@@ -1,3 +1,5 @@
+import asyncio
+
 import pytest
 
 from gateway.config import GatewayConfig, Platform, PlatformConfig
@@ -30,6 +32,10 @@ async def test_gateway_goal_uses_goals_max_turns_from_full_config(tmp_path, monk
     (home / "config.yaml").write_text("goals:\n  max_turns: 7\n", encoding="utf-8")
     monkeypatch.setenv("HERMES_HOME", str(home))
     goals._DB_CACHE.clear()
+    # This test covers config propagation, not the event-loop bootstrap
+    # timeout. Prime SessionDB off-loop so runner load cannot turn the
+    # intentional 250 ms fail-open path into a false negative.
+    assert await asyncio.to_thread(goals._get_session_db) is not None
 
     runner = object.__new__(GatewayRunner)
     runner.config = GatewayConfig(
