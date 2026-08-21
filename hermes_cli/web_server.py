@@ -896,6 +896,24 @@ def _managed_websocket_profile(
         return require_profile(requested_profile)
 
 
+def _managed_profile_or_current(profile: Optional[str]) -> Optional[str]:
+    """Use the request's managed profile when a route omits ``profile``.
+
+    Managed middleware stores the selected profile in a ContextVar, while a
+    few dashboard helpers historically treated an omitted argument as the
+    launch/default profile.  Explicit names (including ``current``) remain
+    untouched so their existing validation and routing rules still apply.
+    """
+    if (profile or "").strip():
+        return profile
+    try:
+        from hermes_cli.profile_scope import current_effective_profile
+
+        return current_effective_profile() or profile
+    except Exception:
+        return profile
+
+
 @app.middleware("http")
 async def evaos_managed_profile_scope_middleware(request: Request, call_next):
     """Bind VM-proxy-authenticated evaOS profile authority to this request."""
@@ -12213,6 +12231,9 @@ def _open_session_db_for_profile(profile: Optional[str], *, read_only: bool):
     if profile:
         _name, home = _cron_profile_home(profile)
         db_path = Path(home) / "state.db"
+    elif (managed_profile := _managed_profile_or_current(profile)):
+        _name, home = _cron_profile_home(managed_profile)
+        db_path = Path(home) / "state.db"
     else:
         db_path = Path(_default_db_path())
     return _open_session_db_at_path(db_path, read_only=read_only)
@@ -12607,6 +12628,14 @@ def _cron_default_profile() -> str:
     it keeps the legacy ``default`` fallback.
     """
     try:
+        from hermes_cli.profile_scope import current_effective_profile
+
+        managed = current_effective_profile()
+        if managed:
+            return managed
+    except Exception:
+        pass
+    try:
         from hermes_cli.profiles import get_active_profile_name
 
         name = get_active_profile_name()
@@ -12619,6 +12648,7 @@ def _cron_profile_home(profile: Optional[str]) -> Tuple[str, Path]:
     """Resolve a profile query value to (profile_name, HERMES_HOME)."""
     from hermes_cli import profiles as profiles_mod
 
+    profile = _managed_profile_or_current(profile)
     raw = (profile or _cron_default_profile()).strip() or "default"
     try:
         canon = profiles_mod.normalize_profile_name(raw)
@@ -14907,6 +14937,7 @@ def _profile_scope(profile: Optional[str]):
     imported the modules before a HERMES_HOME override, or under test
     isolation).
     """
+    profile = _managed_profile_or_current(profile)
     requested = (profile or "").strip()
 
     from hermes_constants import (
@@ -14960,6 +14991,7 @@ def _config_profile_scope(profile: Optional[str]):
 
     None/""/"current" means the dashboard's own profile — no override.
     """
+    profile = _managed_profile_or_current(profile)
     requested = (profile or "").strip()
     if not requested or requested.lower() == "current":
         yield None

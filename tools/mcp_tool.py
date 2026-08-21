@@ -153,6 +153,34 @@ _OSV_MALWARE_CHECK_TIMEOUT_S = 12.0
 
 _mcp_stderr_log_fh: Optional[Any] = None
 _mcp_stderr_log_lock = threading.Lock()
+_MCP_STDERR_HANDLE_KEY = "handle"
+
+
+def _close_mcp_stderr_handle(fh: Any) -> None:
+    """Close one MCP stderr handle without ever closing the process stderr."""
+    if fh is None or fh is sys.stderr:
+        return
+    try:
+        fh.close()
+    except Exception:
+        logger.debug("Failed to close MCP stderr log handle", exc_info=True)
+
+
+def _close_mcp_stderr_log_for_current_scope() -> None:
+    """Close and forget only the active profile's stdio stderr handle."""
+    with _mcp_stderr_log_lock:
+        fh = _mcp_stderr_log_fh.pop(_MCP_STDERR_HANDLE_KEY, None)
+    _close_mcp_stderr_handle(fh)
+
+
+def _close_all_mcp_stderr_logs() -> None:
+    """Close every profile's stdio stderr handle during process teardown."""
+    with _mcp_stderr_log_lock:
+        scoped_maps = list(getattr(_mcp_stderr_log_fh, "_by_scope", {}).values())
+        handles = [mapping.pop(_MCP_STDERR_HANDLE_KEY, None) for mapping in scoped_maps]
+        _mcp_stderr_log_fh.clear_all()
+    for fh in handles:
+        _close_mcp_stderr_handle(fh)
 
 
 def _get_mcp_stderr_log() -> Any:
@@ -163,10 +191,10 @@ def _get_mcp_stderr_log() -> Any:
     machinery wires the child's stderr directly to that fd.  Falls back to
     ``/dev/null`` if opening the log file fails.
     """
-    global _mcp_stderr_log_fh
     with _mcp_stderr_log_lock:
-        if _mcp_stderr_log_fh is not None:
-            return _mcp_stderr_log_fh
+        fh = _mcp_stderr_log_fh.get(_MCP_STDERR_HANDLE_KEY)
+        if fh is not None:
+            return fh
         try:
             from hermes_constants import get_hermes_home
             log_dir = get_hermes_home() / "logs"
@@ -178,16 +206,17 @@ def _get_mcp_stderr_log() -> Any:
             fh = open(log_path, "a", encoding="utf-8", errors="replace", buffering=1)
             # Sanity-check: confirm a real fd is available before we commit.
             fh.fileno()
-            _mcp_stderr_log_fh = fh
+            _mcp_stderr_log_fh[_MCP_STDERR_HANDLE_KEY] = fh
         except Exception as exc:  # pragma: no cover — best-effort fallback
             logger.debug("Failed to open MCP stderr log, using devnull: %s", exc)
             try:
-                _mcp_stderr_log_fh = open(os.devnull, "w", encoding="utf-8")
+                fh = open(os.devnull, "w", encoding="utf-8")
             except Exception:
                 # Last resort: the real stderr.  Not ideal for TUI users but
                 # it matches pre-fix behavior.
-                _mcp_stderr_log_fh = sys.stderr
-        return _mcp_stderr_log_fh
+                fh = sys.stderr
+            _mcp_stderr_log_fh[_MCP_STDERR_HANDLE_KEY] = fh
+        return fh
 
 
 def _write_stderr_log_header(server_name: str) -> None:
@@ -4514,6 +4543,11 @@ class _ScopedSet(MutableSet):
 # Module-level state
 # ---------------------------------------------------------------------------
 
+# Keep the stderr handle in the same per-profile scoped container as the MCP
+# server registry.  The fixed key lets the container select the active home
+# while preserving the existing single-handle lookup semantics.
+_mcp_stderr_log_fh = _ScopedDict()
+
 # Still keyed by server name, but each profile gets its own mapping -- see
 # the scoping note above.
 _servers: Dict[str, MCPServerTask] = _ScopedDict()
@@ -8265,6 +8299,7 @@ def shutdown_mcp_servers():
         with _lock:
             _server_connect_retry_after.clear_all()
             _server_connect_failures.clear_all()
+        _close_all_mcp_stderr_logs()
         _stop_mcp_loop()
         return
 
@@ -8309,6 +8344,7 @@ def shutdown_mcp_servers():
         _server_connect_retry_after.clear_all()
         _server_connect_failures.clear_all()
 
+    _close_all_mcp_stderr_logs()
     _stop_mcp_loop()
 
 
@@ -8385,6 +8421,7 @@ def shutdown_mcp_servers_for_current_scope():
     with _lock:
         for state in scoped_states:
             state.clear()
+    _close_mcp_stderr_log_for_current_scope()
 
 
 def _kill_orphaned_mcp_children(
