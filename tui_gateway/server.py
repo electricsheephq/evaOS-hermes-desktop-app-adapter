@@ -8697,7 +8697,10 @@ def _managed_session_is_authorized(session: dict) -> bool:
         return False
     raw_home = str(session.get("profile_home") or "").strip()
     if not raw_home:
-        return False
+        # Launch-profile sessions intentionally store no profile_home because
+        # they use the gateway's own home. Resolve that implicit ownership
+        # rather than rejecting the session the managed caller just created.
+        return _current_profile_name() == effective_profile
     profile_name = Path(raw_home).name
     if profile_name != effective_profile:
         return False

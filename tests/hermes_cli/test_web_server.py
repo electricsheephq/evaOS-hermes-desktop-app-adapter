@@ -442,6 +442,24 @@ class TestWebServerEndpoints:
         assert response.status_code == 200
         assert response.json()["id"] == "owned-session"
 
+    def test_managed_session_detail_allows_null_metadata_in_selected_db(self):
+        from hermes_constants import get_hermes_home
+        from hermes_state import SessionDB
+
+        db = SessionDB(db_path=get_hermes_home() / "state.db")
+        try:
+            db.create_session("legacy-session", source="cli")
+        finally:
+            db.close()
+
+        response = self.client.get(
+            "/api/sessions/legacy-session",
+            headers=_managed_headers(admin=True),
+        )
+
+        assert response.status_code == 200
+        assert response.json()["id"] == "legacy-session"
+
     @pytest.mark.parametrize("enumeration_mode", ["happy", "fallback"])
     def test_managed_profile_session_endpoints_filter_targets_and_cache(
         self,

@@ -15349,10 +15349,16 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 else:
                     logger.warning("✗ %s failed to connect (profile: %s)", platform.value, profile_name)
                     _record_failure(platform.value, "failed to connect")
+                    self._schedule_secondary_profile_reconnect(
+                        profile_name, platform, adapter
+                    )
                     await self._safe_adapter_disconnect(adapter, platform)
             except Exception as e:
                 logger.error("✗ %s error (profile: %s): %s", platform.value, profile_name, e)
                 _record_failure(platform.value, f"connect raised {e}")
+                self._schedule_secondary_profile_reconnect(
+                    profile_name, platform, adapter
+                )
                 await self._safe_adapter_disconnect(adapter, platform)
         return connected
 
@@ -15494,7 +15500,9 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         self, profile_name: str, platform: Platform, adapter: BasePlatformAdapter
     ) -> None:
         """Schedule one runner-owned reconnect without sharing primary secrets."""
-        if not self._running or not adapter.fatal_error_retryable:
+        if not getattr(self, "_running", False) or not getattr(
+            adapter, "fatal_error_retryable", True
+        ):
             return
         pending = self._profile_failed_platforms
         if not isinstance(pending, dict):

@@ -11002,6 +11002,11 @@ def _new_oauth_session(
     """Create + register a new OAuth session, return (session_id, session_dict)."""
     sid = secrets.token_urlsafe(16)
     profile_name = _oauth_profile_name(profile)
+    if profile_name is None:
+        from hermes_cli.profile_scope import current_effective_profile, current_principal
+
+        if current_principal() is not None:
+            profile_name = current_effective_profile()
     sess = {
         "session_id": sid,
         "provider": provider_id,

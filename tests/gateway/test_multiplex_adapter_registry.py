@@ -207,6 +207,54 @@ def _install_secondary_reconnect_context(monkeypatch, runner, adapter, scoped_ho
 
 
 class TestSecondaryProfileFatalRecovery:
+    @pytest.mark.parametrize(
+        ("retryable", "expected_schedule_count"),
+        [(True, 1), (False, 0)],
+    )
+    @pytest.mark.asyncio
+    async def test_retryable_initial_secondary_failure_schedules_reconnect(
+        self, monkeypatch, retryable, expected_schedule_count
+    ):
+        from gateway.config import GatewayConfig, Platform, PlatformConfig
+
+        runner = _secondary_recovery_runner()
+        runner._profile_startup_failures = {}
+        runner._snapshot_profile_busy_modes = lambda *_args: None
+        failed = _SecondaryRecoveryAdapter(retryable=retryable)
+        failed.config = PlatformConfig(enabled=True, token="profile-token")
+        profile_cfg = GatewayConfig(multiplex_profiles=True)
+        profile_cfg.platforms = {Platform.DISCORD: failed.config}
+        scheduled = []
+
+        monkeypatch.setattr("gateway.config.load_gateway_config", lambda: profile_cfg)
+        monkeypatch.setattr("hermes_cli.plugins.discover_plugins", lambda: None)
+        monkeypatch.setattr(runner, "_create_adapter", lambda _p, _c: failed)
+        monkeypatch.setattr(
+            runner,
+            "_connect_initial_adapter_with_timeout",
+            lambda *_args, **_kwargs: asyncio.sleep(0, result=False),
+        )
+        if retryable:
+            monkeypatch.setattr(
+                runner,
+                "_schedule_secondary_profile_reconnect",
+                lambda profile, platform, adapter: scheduled.append(
+                    (profile, platform, adapter)
+                ),
+            )
+
+        connected = await runner._start_one_profile_adapters(
+            "reviewer", Path("/profiles/reviewer"), {}
+        )
+
+        assert connected == 0
+        assert failed.disconnected is True
+        assert len(scheduled) == expected_schedule_count
+        if expected_schedule_count:
+            assert scheduled == [("reviewer", Platform.DISCORD, failed)]
+        else:
+            assert runner._profile_failed_platforms == {}
+
     @pytest.mark.asyncio
     async def test_retryable_secondary_fatal_reconnects_with_its_profile_scope(
         self, monkeypatch
@@ -637,5 +685,3 @@ class TestFeishuPortBindingConditional:
 
         connected = await runner._start_one_profile_adapters("reviewer", "/tmp/x", {})
         assert connected == 0  # no error, just nothing connected
-
-

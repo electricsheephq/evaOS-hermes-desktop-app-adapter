@@ -55,6 +55,30 @@ def _fake_nous_device_data():
     }
 
 
+def test_managed_oauth_session_captures_effective_profile(tmp_path, monkeypatch):
+    from hermes_cli import profiles
+    from hermes_cli import web_server as ws
+    from hermes_cli.profile_scope import managed_profile_context, principal_from_headers
+
+    profiles_root = tmp_path / "profiles"
+    (profiles_root / "jane").mkdir(parents=True)
+    monkeypatch.setattr(profiles, "_get_profiles_root", lambda: profiles_root)
+    principal = principal_from_headers(
+        {
+            "x-evaos-allowed-profiles": "jane",
+            "x-evaos-primary-profile": "jane",
+            "x-evaos-principal-user": "user-1",
+        }
+    )
+
+    with managed_profile_context(principal):
+        sid, session = ws._new_oauth_session("openai-codex", "device_code")
+    try:
+        assert session["profile"] == "jane"
+    finally:
+        ws._oauth_sessions.pop(sid, None)
+
+
 def _invoke_scope_refusal():
     request = httpx.Request("POST", "https://portal.nousresearch.com/oauth/device/code")
     response = httpx.Response(
@@ -1080,4 +1104,3 @@ def test_status_falls_through_to_generic_dispatcher_for_catalog_only_provider():
     assert out["token_preview"] and "sk-future-secret-token-xyz" not in out["token_preview"]
     assert out["expires_at"] == "2026-12-01T00:00:00Z"
     assert out["has_refresh_token"] is True
-

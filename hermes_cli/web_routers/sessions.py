@@ -53,6 +53,12 @@ _strip_session_list_rows = late("_strip_session_list_rows")
 def _require_session_record_profile(session: dict) -> None:
     from hermes_cli.profile_scope import require_session_profile
 
+    # The route has already opened the authorized profile's state.db. Older,
+    # CLI-created, and default-profile rows may not carry profile metadata;
+    # in that case the selected database is the ownership boundary. An
+    # explicit value must still match the request's effective profile.
+    if session.get("profile_name") is None:
+        return
     try:
         require_session_profile(session.get("profile_name"))
     except PermissionError:

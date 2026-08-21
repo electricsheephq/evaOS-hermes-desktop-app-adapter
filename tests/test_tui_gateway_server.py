@@ -14879,6 +14879,29 @@ def test_managed_session_registry_hides_and_refuses_other_profile(monkeypatch, t
     assert denied["error"]["code"] == 4001
 
 
+def test_managed_launch_profile_session_without_profile_home_is_authorized(
+    monkeypatch, tmp_path
+):
+    from hermes_cli import profiles
+    from hermes_cli.profile_scope import managed_profile_context, principal_from_headers
+
+    default_home = tmp_path / ".hermes"
+    default_home.mkdir()
+    monkeypatch.setattr(profiles, "_get_default_hermes_home", lambda: default_home)
+    monkeypatch.setattr(profiles, "_get_profiles_root", lambda: default_home / "profiles")
+    monkeypatch.setattr(server, "_current_profile_name", lambda: "default")
+    principal = principal_from_headers(
+        {
+            "x-evaos-allowed-profiles": "default",
+            "x-evaos-primary-profile": "default",
+            "x-evaos-principal-user": "user-1",
+        }
+    )
+
+    with managed_profile_context(principal):
+        assert server._managed_session_is_authorized({"profile_home": None}) is True
+
+
 @pytest.mark.parametrize("recorded_profile", [None, "louis"])
 def test_managed_session_resume_refuses_unassigned_or_conflicting_profile(
     monkeypatch,
