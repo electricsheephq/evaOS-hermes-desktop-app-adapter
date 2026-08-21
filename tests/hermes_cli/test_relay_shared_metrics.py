@@ -1394,6 +1394,27 @@ def test_concurrent_package_builders_commit_one_delta(tmp_path):
     assert store.counter_snapshot()[0]["packaged_value"] == 1
 
 
+def test_package_export_waits_for_a_concurrent_database_writer(tmp_path):
+    database_path = tmp_path / "metrics.sqlite3"
+    outbox_directory = tmp_path / "outbox"
+    store = SharedMetricsStore(database_path, outbox_directory)
+    store.record_model_call(_dimensions(), _resource())
+
+    with sqlite3.connect(database_path) as blocker:
+        blocker.execute("BEGIN EXCLUSIVE")
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(store.create_and_export_package)
+            time.sleep(0.35)
+            try:
+                assert not future.done()
+            finally:
+                blocker.commit()
+            [package_path] = future.result(timeout=5)
+
+    assert package_path.is_file()
+    assert store.counter_snapshot()[0]["packaged_value"] == 1
+
+
 def test_concurrent_due_exports_create_one_daily_package(tmp_path):
     database_path = tmp_path / "metrics.sqlite3"
     outbox_directory = tmp_path / "outbox"
