@@ -188,8 +188,15 @@ class TestRefreshSkillGroup:
         adapter._build_slash_event = lambda _interaction, _text: SimpleNamespace(
             source=source
         )
+        executor_calls = []
+
+        async def run_in_executor(func, *args):
+            executor_calls.append((func, args))
+            return func(*args)
+
         adapter.gateway_runner = SimpleNamespace(
-            _resolve_profile_home_for_source=lambda _source: profile_home
+            _resolve_profile_home_for_source=lambda _source: profile_home,
+            _run_in_executor_with_context=run_in_executor,
         )
 
         _reset_skill_commands_cache_for_tests()
@@ -201,6 +208,8 @@ class TestRefreshSkillGroup:
 
         assert [entry[0] for entry in entries] == ["eve-only"]
         assert set(lookup) == {"eve-only"}
+        assert len(executor_calls) == 1
+        assert executor_calls[0][1] == ("eve",)
         assert adapter._skill_lookup == {
             "default": ("Default skill", "/default")
         }

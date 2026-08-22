@@ -518,6 +518,23 @@ def _fake_message(channel, *, content="Hello", author_id=42, display_name="Jezza
 # ------------------------------------------------------------------
 
 
+def test_register_skill_command_for_shared_routes_when_default_is_empty(adapter):
+    """A routed profile can lazily seed /skill even when root has no skills."""
+    adapter.gateway_runner = SimpleNamespace(
+        config=SimpleNamespace(
+            multiplex_profiles=True,
+            profile_routes={"discord:channel:123": "eve"},
+        )
+    )
+    with patch(
+        "hermes_cli.commands.discord_skill_commands_by_category",
+        return_value=({}, [], 0),
+    ):
+        adapter._register_slash_commands()
+
+    assert "skill" in adapter._client.tree.commands
+
+
 def test_register_skill_command_callback_dispatches_by_name(adapter):
     """The /skill callback should look up the skill by ``name`` and
     dispatch via ``_run_simple_slash`` with the real command key.

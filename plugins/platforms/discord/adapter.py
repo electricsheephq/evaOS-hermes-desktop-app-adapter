@@ -6233,7 +6233,14 @@ class DiscordAdapter(BasePlatformAdapter):
             self._skill_group_reserved_names: set[str] = set(existing_names)
             self._refresh_skill_catalog_state()
 
-            if not self._skill_entries:
+            runner = getattr(self, "gateway_runner", None)
+            gateway_config = getattr(runner, "config", None)
+            serves_routed_profiles = bool(
+                getattr(gateway_config, "multiplex_profiles", False)
+                and getattr(gateway_config, "profile_routes", None)
+                and not str(getattr(self, "_evaos_profile_name", "") or "").strip()
+            )
+            if not self._skill_entries and not serves_routed_profiles:
                 return
 
             async def _autocomplete_name(
@@ -6437,7 +6444,10 @@ class DiscordAdapter(BasePlatformAdapter):
                 platform=platform,
                 profile=profile,
             ):
-                self.refresh_skill_group(profile=profile)
+                await runner._run_in_executor_with_context(
+                    self.refresh_skill_group,
+                    profile,
+                )
         except Exception as exc:
             logger.warning(
                 "[%s] Failed to seed routed /skill catalog: %s",
