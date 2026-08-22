@@ -368,7 +368,7 @@ def _resolve_profile_db(profile: str):
 def _canonical_profile_name(value: Any) -> Optional[str]:
     """Return the stable profile namespace used for session ownership checks."""
     name = str(value or "").strip().casefold()
-    if name in ("", "default", "main"):
+    if name in ("", "default"):
         return "default"
     return name
 
@@ -386,6 +386,11 @@ def _session_profile(meta: Dict[str, Any]) -> Optional[str]:
     session_key = str(meta.get("session_key") or "")
     parts = session_key.split(":")
     if len(parts) >= 2 and parts[0] == "agent" and parts[1]:
+        # ``agent:main`` is the legacy namespace for the built-in default;
+        # an explicit profile_name above keeps a real named ``main`` profile
+        # distinct from it.
+        if parts[1].casefold() == "main":
+            return "default"
         return _canonical_profile_name(parts[1])
     return None
 
