@@ -482,10 +482,46 @@ class TestSessionLink:
 
 
 # =========================================================================
-# Cross-profile read — `profile` swaps in another profile's DB (read-only)
+# Routed-profile session isolation on the shared multiplex DB
 # =========================================================================
 
 class TestCrossProfileRead:
+    def _seed_shared_profiles(self, db):
+        db.create_session(
+            "default_current",
+            source="cli",
+            session_key="agent:main:synthetic-default-current",
+        )
+        db.create_session(
+            "default_session",
+            source="cli",
+            session_key="agent:main:synthetic-default",
+        )
+        default_anchor = db.append_message(
+            "default_session",
+            role="user",
+            content="shared-profile-boundary default-only marker",
+        )
+        db.create_session(
+            "jarvis_current",
+            source="cli",
+            session_key="agent:jarvis:synthetic-jarvis-current",
+            profile_name="jarvis",
+        )
+        db.create_session(
+            "jarvis_session",
+            source="cli",
+            session_key="agent:jarvis:synthetic-jarvis",
+            profile_name="jarvis",
+        )
+        jarvis_anchor = db.append_message(
+            "jarvis_session",
+            role="user",
+            content="shared-profile-boundary jarvis-only marker",
+        )
+        db._conn.commit()
+        return default_anchor, jarvis_anchor
+
     def _patch_profiles(self, monkeypatch, home, exists=True):
         from hermes_cli import profiles as profiles_mod
         monkeypatch.setattr(profiles_mod, "normalize_profile_name", lambda n: n)
@@ -493,51 +529,180 @@ class TestCrossProfileRead:
         monkeypatch.setattr(profiles_mod, "profile_exists", lambda n: exists)
         monkeypatch.setattr(profiles_mod, "get_profile_dir", lambda n: home)
 
-    def test_bare_id_locates_across_profiles(self, db, tmp_path, monkeypatch):
-        # The real-world failure: model dropped the owning profile and passed a
-        # bare id. The tool must scan profiles and find it anyway.
-        other_home = tmp_path / "asdf_home"
-        other_home.mkdir()
-        other = SessionDB(other_home / "state.db")
-        other.create_session("s_far", source="cli")
-        other.append_message("s_far", role="user", content="hi")
-        other._conn.commit()
+    def test_default_profile_owns_search_read_and_scroll(self, db):
+        default_anchor, _ = self._seed_shared_profiles(db)
 
-        from collections import namedtuple
-        from hermes_cli import profiles as profiles_mod
-        Info = namedtuple("Info", "name path")
-        monkeypatch.setattr(profiles_mod, "get_profile_dir", lambda n: tmp_path / "default_home")
-        monkeypatch.setattr(profiles_mod, "list_profiles", lambda: [Info("asdf", other_home)])
+        discovery = json.loads(
+            session_search(
+                query="shared-profile-boundary",
+                db=db,
+                current_session_id="default_current",
+                limit=5,
+            )
+        )
+        assert discovery["success"] is True
+        assert [r["session_id"] for r in discovery["results"]] == ["default_session"]
 
-        # `db` (current profile) lacks s_far; no profile passed → scan finds it.
-        result = json.loads(session_search(session_id="s_far", db=db))
-        assert result["success"] is True
-        assert result["mode"] == "read"
-        assert result["profile"] == "asdf"
+        browse = json.loads(
+            session_search(db=db, current_session_id="default_current", limit=5)
+        )
+        assert browse["success"] is True
+        assert [r["session_id"] for r in browse["results"]] == ["default_session"]
 
+        read = json.loads(
+            session_search(
+                session_id="default_session",
+                db=db,
+                current_session_id="default_current",
+            )
+        )
+        assert read["success"] is True
+        assert read["session_id"] == "default_session"
+        assert "jarvis-only" not in json.dumps(read)
 
-    def test_combined_value_autosplits(self, db, tmp_path, monkeypatch):
-        # Agent passed the raw "@session:<profile>/<id>" value as session_id with
-        # no separate profile — the tool should recover both.
-        other_home = tmp_path / "other_home"
-        other_home.mkdir()
-        other = SessionDB(other_home / "state.db")
-        other.create_session("s_other", source="cli")
-        other.append_message("s_other", role="user", content="hi")
-        other._conn.commit()
+        scroll = json.loads(
+            session_search(
+                session_id="default_session",
+                around_message_id=default_anchor,
+                db=db,
+                current_session_id="default_current",
+            )
+        )
+        assert scroll["success"] is True
+        assert scroll["session_id"] == "default_session"
 
-        self._patch_profiles(monkeypatch, other_home)
+    def test_jarvis_profile_owns_search_read_and_scroll(self, db):
+        _, jarvis_anchor = self._seed_shared_profiles(db)
 
-        # Every permutation the model might send must resolve to (asdf, s_other).
+        discovery = json.loads(
+            session_search(
+                query="shared-profile-boundary",
+                db=db,
+                current_session_id="jarvis_current",
+                limit=5,
+            )
+        )
+        assert discovery["success"] is True
+        assert [r["session_id"] for r in discovery["results"]] == ["jarvis_session"]
+
+        browse = json.loads(
+            session_search(db=db, current_session_id="jarvis_current", limit=5)
+        )
+        assert browse["success"] is True
+        assert [r["session_id"] for r in browse["results"]] == ["jarvis_session"]
+
+        read = json.loads(
+            session_search(
+                session_id="jarvis_session",
+                db=db,
+                current_session_id="jarvis_current",
+            )
+        )
+        assert read["success"] is True
+        assert read["session_id"] == "jarvis_session"
+        assert "default-only" not in json.dumps(read)
+
+        scroll = json.loads(
+            session_search(
+                session_id="jarvis_session",
+                around_message_id=jarvis_anchor,
+                db=db,
+                current_session_id="jarvis_current",
+            )
+        )
+        assert scroll["success"] is True
+        assert scroll["session_id"] == "jarvis_session"
+
+    @pytest.mark.parametrize(
+        ("current_session_id", "sibling_id", "profile"),
+        [
+            ("default_current", "jarvis_session", "jarvis"),
+            ("jarvis_current", "default_session", "default"),
+        ],
+    )
+    def test_agent_cannot_read_or_scroll_sibling_profile(
+        self, db, current_session_id, sibling_id, profile
+    ):
+        default_anchor, jarvis_anchor = self._seed_shared_profiles(db)
+        anchors = {"default_session": default_anchor, "jarvis_session": jarvis_anchor}
+
+        read = json.loads(
+            session_search(
+                session_id=sibling_id,
+                db=db,
+                current_session_id=current_session_id,
+            )
+        )
+        assert read["success"] is False
+        assert "only marker" not in json.dumps(read)
+
+        scroll = json.loads(
+            session_search(
+                session_id=sibling_id,
+                around_message_id=anchors[sibling_id],
+                db=db,
+                current_session_id=current_session_id,
+            )
+        )
+        assert scroll["success"] is False
+
         for kwargs in (
-            {"session_id": "asdf/s_other"},                    # full value, no profile
-            {"session_id": "asdf/s_other", "profile": "asdf"},  # full value AND profile
-            {"session_id": "s_other", "profile": "asdf"},       # bare id + profile
+            {"session_id": sibling_id, "profile": profile},
+            {"session_id": f"{profile}/{sibling_id}"},
+            {"session_id": f"{profile}/{sibling_id}", "profile": profile},
         ):
-            result = json.loads(session_search(db=db, **kwargs))
-            assert result["success"] is True, kwargs
-            assert result["mode"] == "read"
-            assert result["session_id"] == "s_other"
+            explicit = json.loads(
+                session_search(
+                    db=db,
+                    current_session_id=current_session_id,
+                    **kwargs,
+                )
+            )
+            assert explicit["success"] is False, kwargs
+            assert "cross-profile" in explicit["error"], kwargs
+
+    def test_bare_id_does_not_scan_sibling_databases(self, db, monkeypatch):
+        self._seed_shared_profiles(db)
+        from tools import session_search_tool
+
+        def unexpected_scan(_session_id):
+            raise AssertionError("agent-facing lookup must not scan profile databases")
+
+        monkeypatch.setattr(session_search_tool, "_locate_session_db", unexpected_scan)
+        result = json.loads(
+            session_search(
+                session_id="jarvis_session",
+                db=db,
+                current_session_id="default_current",
+            )
+        )
+        assert result["success"] is False
+
+    def test_trusted_boundary_preserves_explicit_cross_profile_read(
+        self, db, tmp_path, monkeypatch
+    ):
+        self._seed_shared_profiles(db)
+        self._patch_profiles(monkeypatch, tmp_path)
+        from tools.session_search_tool import session_search_trusted
+        from hermes_cli import profiles as profiles_mod
+
+        # The trusted boundary can still target an explicitly authorized DB;
+        # the model-facing session_search schema has no profile parameter.
+        monkeypatch.setattr(
+            profiles_mod,
+            "get_profile_dir",
+            lambda _name: db.db_path.parent,
+        )
+        result = json.loads(
+            session_search_trusted(
+                session_id="jarvis_session",
+                profile="jarvis",
+                db=db,
+                current_session_id="default_session",
+            )
+        )
+        assert result["success"] is True
+        assert result["session_id"] == "jarvis_session"
 
 
 # =========================================================================
