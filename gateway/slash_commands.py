@@ -5105,16 +5105,15 @@ class GatewaySlashCommandsMixin:
         is written to the session transcript out-of-band, so message
         alternation is preserved.
         """
-        loop = asyncio.get_running_loop()
         try:
             from agent.skill_commands import reload_skills
 
-            result = await loop.run_in_executor(None, reload_skills)
+            result = await self._run_in_executor_with_context(reload_skills)
             added = result.get("added", [])      # [{"name", "description"}, ...]
             removed = result.get("removed", [])  # [{"name", "description"}, ...]
             total = result.get("total", 0)
 
-            # Let each connected adapter refresh any platform-side state
+            # Let only the routed adapter refresh platform-side state
             # that cached the skill list at startup. Today that's the
             # Discord /skill autocomplete (registered once per connect);
             # without this call, new skills stay invisible in the
@@ -5122,10 +5121,11 @@ class GatewaySlashCommandsMixin:
             # adapters that don't override refresh_skill_group (Telegram's
             # BotCommand menu, Slack subcommand map, etc.) are silently
             # skipped — the in-process reload above is enough for them.
-            for adapter in list(self.adapters.values()):
-                refresh = getattr(adapter, "refresh_skill_group", None)
-                if not callable(refresh):
-                    continue
+            adapter = self._adapter_for_source(event.source)
+            if adapter is None:
+                raise RuntimeError("routed adapter unavailable for skills refresh")
+            refresh = getattr(adapter, "refresh_skill_group", None)
+            if callable(refresh):
                 try:
                     maybe = refresh()
                     if inspect.isawaitable(maybe):

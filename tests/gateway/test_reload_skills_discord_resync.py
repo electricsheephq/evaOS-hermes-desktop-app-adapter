@@ -13,8 +13,8 @@ entry was clicked.
 The fix promotes those two variables to instance attributes
 (``_skill_entries`` / ``_skill_lookup``) and exposes a
 ``refresh_skill_group()`` method that rescans and mutates them in
-place. The gateway ``_handle_reload_skills_command`` iterates its
-connected adapters and calls the method on any that expose it.
+place. The gateway ``_handle_reload_skills_command`` resolves the adapter
+that received the command and refreshes only that adapter.
 
 No ``tree.sync()`` is required because Discord fetches autocomplete
 options dynamically on every keystroke — we only need to rebind the
@@ -23,6 +23,8 @@ data the live callbacks already read from.
 from __future__ import annotations
 
 from unittest.mock import MagicMock
+
+import pytest
 
 
 def _make_adapter():
@@ -134,60 +136,95 @@ class TestRegisterSkillGroupUsesInstanceState:
 class TestHandleReloadSkillsCallsRefreshSkillGroup:
     """Gateway-side integration: /reload-skills must call refresh on adapters."""
 
-    def test_orchestrator_calls_refresh_skill_group_on_every_adapter(self):
-        """Sync + async refresh_skill_group implementations both get awaited/called.
+    @pytest.mark.asyncio
+    async def test_refreshes_only_routed_secondary_adapter_with_context(self, tmp_path):
+        """The worker keeps profile context and refreshes only its adapter."""
+        from unittest.mock import patch
 
-        The orchestrator iterates ``self.adapters`` and calls
-        ``refresh_skill_group`` if it exists. Adapters that don't
-        implement it (today: everything except Discord) are silently
-        skipped without raising.
-        """
-        import asyncio
-        from unittest.mock import patch, MagicMock
-
-        # Import without constructing a real runner — test the method
-        # directly against an ``object.__new__`` instance.
         from gateway.run import GatewayRunner
+        from gateway.platforms.base import Platform
+        from gateway.session import SessionSource
+        from hermes_constants import (
+            get_hermes_home,
+            reset_hermes_home_override,
+            set_hermes_home_override,
+        )
+
         runner = object.__new__(GatewayRunner)
+        default_adapter = MagicMock(name="default-discord")
+        eve_adapter = MagicMock(name="eve-discord")
+        eve_adapter.refresh_skill_group.return_value = (3, 0)
+        runner.adapters = {Platform.DISCORD: default_adapter}
+        runner._profile_adapters = {"eve": {Platform.DISCORD: eve_adapter}}
+        runner._active_profile_name = lambda: "default"
+        runner._session_key_for_source = lambda src: None
+        runner._pending_skills_reload_notes = {}
 
-        sync_refresh = MagicMock(return_value=(5, 0))
-        async_called = {"flag": False}
+        source = SessionSource(
+            platform=Platform.DISCORD,
+            user_id="owner",
+            chat_id="eve-channel",
+            chat_type="group",
+            profile="eve",
+        )
+        event = MagicMock(source=source)
+        observed = {}
 
-        class AsyncAdapter:
-            name = "async-platform"
-            async def refresh_skill_group(self):
-                async_called["flag"] = True
-                return (3, 0)
-
-        class SyncAdapter:
-            name = "sync-platform"
-            refresh_skill_group = sync_refresh
-
-        class NoOpAdapter:
-            name = "other"
-            # No refresh_skill_group — must not crash.
-
-        runner.adapters = {
-            "discord": AsyncAdapter(),
-            "slack": SyncAdapter(),
-            "telegram": NoOpAdapter(),
-        }
-
-        # Mock reload_skills itself so no disk scan runs.
         fake_result = {"added": [], "removed": [], "total": 7}
-        with patch(
-            "agent.skill_commands.reload_skills", return_value=fake_result
-        ):
-            event = MagicMock()
-            event.source = MagicMock()
-            # _session_key_for_source may be called — make it safe.
-            runner._session_key_for_source = lambda src: None
-            runner._pending_skills_reload_notes = {}
+        def fake_reload():
+            observed["home"] = str(get_hermes_home())
+            return fake_result
 
-            result = asyncio.get_event_loop().run_until_complete(
-                runner._handle_reload_skills_command(event)
-            )
+        profile_home = tmp_path / "profiles" / "eve"
+        home_token = set_hermes_home_override(profile_home)
+        with patch(
+            "agent.skill_commands.reload_skills", side_effect=fake_reload
+        ):
+            try:
+                result = await runner._handle_reload_skills_command(event)
+            finally:
+                reset_hermes_home_override(home_token)
+                runner._executor.shutdown(wait=True)
 
         assert "Skills Reloaded" in result
-        assert sync_refresh.called, "sync adapter refresh must be invoked"
-        assert async_called["flag"], "async adapter refresh must be awaited"
+        assert observed["home"] == str(profile_home)
+        eve_adapter.refresh_skill_group.assert_called_once_with()
+        default_adapter.refresh_skill_group.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_missing_secondary_adapter_fails_without_primary_refresh(self):
+        """A stamped secondary route never falls back to the primary adapter."""
+        from unittest.mock import patch
+
+        from gateway.run import GatewayRunner
+        from gateway.platforms.base import Platform
+        from gateway.session import SessionSource
+
+        runner = object.__new__(GatewayRunner)
+        default_adapter = MagicMock(name="default-discord")
+        runner.adapters = {Platform.DISCORD: default_adapter}
+        runner._profile_adapters = {}
+        runner._active_profile_name = lambda: "default"
+        runner._session_key_for_source = lambda src: None
+        runner._pending_skills_reload_notes = {}
+        event = MagicMock(
+            source=SessionSource(
+                platform=Platform.DISCORD,
+                user_id="owner",
+                chat_id="missing-channel",
+                chat_type="group",
+                profile="missing-secondary",
+            )
+        )
+
+        with patch(
+            "agent.skill_commands.reload_skills",
+            return_value={"added": [], "removed": [], "total": 1},
+        ):
+            try:
+                result = await runner._handle_reload_skills_command(event)
+            finally:
+                runner._executor.shutdown(wait=True)
+
+        assert "routed adapter unavailable" in result
+        default_adapter.refresh_skill_group.assert_not_called()

@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import re
+import threading
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -20,6 +21,12 @@ from agent.skill_preprocessing import (
 
 logger = logging.getLogger(__name__)
 
+_SkillScope = tuple[str, Optional[str]]
+_skill_commands_by_scope: Dict[_SkillScope, Dict[str, Dict[str, Any]]] = {}
+_skill_commands_lock = threading.RLock()
+
+# Compatibility snapshots for older test patchers and debuggers. Runtime reads
+# use ``_skill_commands_by_scope`` exclusively; these are never authoritative.
 _skill_commands: Dict[str, Dict[str, Any]] = {}
 _skill_commands_platform: Optional[str] = None
 _skill_commands_home: Optional[str] = None
@@ -213,7 +220,7 @@ def _load_skill_payload(skill_identifier: str, task_id: str | None = None) -> tu
         return None
 
     try:
-        from tools.skills_tool import SKILLS_DIR, skill_view
+        from tools.skills_tool import _skills_dir, skill_view
         from agent.skill_utils import normalize_skill_lookup_name
 
         normalized = normalize_skill_lookup_name(raw_identifier)
@@ -232,14 +239,14 @@ def _load_skill_payload(skill_identifier: str, task_id: str | None = None) -> tu
     skill_dir = None
     # Prefer the absolute skill_dir returned by skill_view() — this is
     # correct for both local and external skills.  Fall back to the old
-    # SKILLS_DIR-relative reconstruction only when skill_dir is absent
+    # local-skills-relative reconstruction only when skill_dir is absent
     # (e.g. legacy skill_view responses).
     abs_skill_dir = loaded_skill.get("skill_dir")
     if abs_skill_dir:
         skill_dir = Path(abs_skill_dir)
     elif skill_path:
         try:
-            skill_dir = SKILLS_DIR / Path(skill_path).parent
+            skill_dir = _skills_dir() / Path(skill_path).parent
         except Exception:
             skill_dir = None
 
@@ -294,7 +301,7 @@ def _build_skill_message(
     session_id: str | None = None,
 ) -> str:
     """Format a loaded skill into a user/system message payload."""
-    from tools.skills_tool import SKILLS_DIR
+    from tools.skills_tool import _skills_dir
 
     content = str(loaded_skill.get("content") or "")
 
@@ -363,7 +370,7 @@ def _build_skill_message(
 
     if supporting and skill_dir:
         try:
-            skill_view_target = str(skill_dir.relative_to(SKILLS_DIR))
+            skill_view_target = str(skill_dir.relative_to(_skills_dir()))
         except ValueError:
             # Skill is from an external dir — use the skill name instead
             skill_view_target = skill_dir.name
@@ -388,6 +395,21 @@ def _build_skill_message(
     return "\n".join(parts)
 
 
+def _skill_commands_scope() -> _SkillScope:
+    """Return the immutable cache scope for the current routed request."""
+    return (_resolve_skill_commands_home(), _resolve_skill_commands_platform())
+
+
+def _reset_skill_commands_cache_for_tests() -> None:
+    """Clear every private catalog scope. Tests only; not a runtime API."""
+    global _skill_commands, _skill_commands_platform, _skill_commands_home
+    with _skill_commands_lock:
+        _skill_commands_by_scope.clear()
+        _skill_commands = {}
+        _skill_commands_platform = None
+        _skill_commands_home = None
+
+
 def scan_skill_commands() -> Dict[str, Dict[str, Any]]:
     """Scan ~/.hermes/skills/ and return a mapping of /command -> skill info.
 
@@ -395,11 +417,10 @@ def scan_skill_commands() -> Dict[str, Dict[str, Any]]:
         Dict mapping "/skill-name" to {name, description, skill_md_path, skill_dir}.
     """
     global _skill_commands, _skill_commands_platform, _skill_commands_home
-    _skill_commands_platform = _resolve_skill_commands_platform()
-    _skill_commands_home = _resolve_skill_commands_home()
-    _skill_commands = {}
+    scope = _skill_commands_scope()
+    commands: Dict[str, Dict[str, Any]] = {}
     try:
-        from tools.skills_tool import SKILLS_DIR, _parse_frontmatter, skill_matches_platform, skill_matches_environment, _get_disabled_skill_names
+        from tools.skills_tool import _skills_dir, _parse_frontmatter, skill_matches_platform, skill_matches_environment, _get_disabled_skill_names
         from agent.skill_utils import get_external_skills_dirs, iter_skill_index_files
         from hermes_cli.commands import resolve_command
         disabled = _get_disabled_skill_names()
@@ -407,8 +428,9 @@ def scan_skill_commands() -> Dict[str, Dict[str, Any]]:
 
         # Scan local dir first, then external dirs
         dirs_to_scan = []
-        if SKILLS_DIR.exists():
-            dirs_to_scan.append(SKILLS_DIR)
+        local_skills_dir = _skills_dir()
+        if local_skills_dir.exists():
+            dirs_to_scan.append(local_skills_dir)
         dirs_to_scan.extend(get_external_skills_dirs())
 
         for scan_dir in dirs_to_scan:
@@ -465,14 +487,14 @@ def scan_skill_commands() -> Dict[str, Dict[str, Any]]:
                     # slug (e.g. "git_helper" vs "git-helper"). First-wins
                     # preserves local-before-external precedence.
                     cmd_key = f"/{cmd_name}"
-                    if cmd_key in _skill_commands:
+                    if cmd_key in commands:
                         logger.warning(
                             "Skill %r maps to slash command %s already claimed "
                             "by %r; keeping the first and skipping this one.",
-                            name, cmd_key, _skill_commands[cmd_key]["name"],
+                            name, cmd_key, commands[cmd_key]["name"],
                         )
                         continue
-                    _skill_commands[cmd_key] = {
+                    commands[cmd_key] = {
                         "name": name,
                         "description": description or f"Invoke the {name} skill",
                         "skill_md_path": str(skill_md),
@@ -482,7 +504,13 @@ def scan_skill_commands() -> Dict[str, Dict[str, Any]]:
                     continue
     except Exception:
         pass
-    return _skill_commands
+    # Publish the fully-built catalog atomically. Concurrent scans for other
+    # profiles/platforms never share a mutable construction dictionary.
+    with _skill_commands_lock:
+        _skill_commands_by_scope[scope] = commands
+        _skill_commands_home, _skill_commands_platform = scope
+        _skill_commands = commands
+        return commands
 
 
 def get_skill_commands() -> Dict[str, Dict[str, Any]]:
@@ -494,21 +522,20 @@ def get_skill_commands() -> Dict[str, Dict[str, Any]]:
     active profile's Hermes home changes (e.g. Desktop switching profiles
     mid-session) so each profile sees its own ``skills.external_dirs`` (#88023).
     """
-    if (
-        not _skill_commands
-        or _skill_commands_platform != _resolve_skill_commands_platform()
-        or _skill_commands_home != _resolve_skill_commands_home()
-    ):
-        scan_skill_commands()
-    return _skill_commands
+    scope = _skill_commands_scope()
+    with _skill_commands_lock:
+        commands = _skill_commands_by_scope.get(scope)
+    if commands is None:
+        commands = scan_skill_commands()
+    return commands
 
 
 def reload_skills() -> Dict[str, Any]:
     """Re-scan the skills directory and return a diff of what changed.
 
     Rescans ``~/.hermes/skills/`` and any ``skills.external_dirs`` so the
-    slash-command map (``agent.skill_commands._skill_commands``) reflects
-    skills added or removed on disk.
+    routed profile/platform slash-command catalog reflects skills added or
+    removed on disk.
 
     This does NOT invalidate the skills system-prompt cache. Skills are
     called by name via ``/skill-name``, ``skills_list``, or ``skill_view``
@@ -542,11 +569,13 @@ def reload_skills() -> Dict[str, Any]:
             out[bare] = (info or {}).get("description") or ""
         return out
 
-    before = _snapshot(_skill_commands)
-
-    # Rescan the skills dir. ``scan_skill_commands`` resets
-    # ``_skill_commands = {}`` internally and repopulates it.
-    new_commands = scan_skill_commands()
+    scope = _skill_commands_scope()
+    # Serialize the before/after pair so two reloads cannot compute their
+    # diffs from different generations. The lock is re-entrant because
+    # ``scan_skill_commands`` publishes under the same lock.
+    with _skill_commands_lock:
+        before = _snapshot(_skill_commands_by_scope.get(scope, {}))
+        new_commands = scan_skill_commands()
 
     after = _snapshot(new_commands)
 
