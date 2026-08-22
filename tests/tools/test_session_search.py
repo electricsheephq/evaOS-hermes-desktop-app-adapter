@@ -704,6 +704,104 @@ class TestCrossProfileRead:
         assert result["success"] is True
         assert result["session_id"] == "jarvis_session"
 
+    def _seed_default_and_main_profiles(self, db):
+        db.create_session(
+            "default_main_current",
+            source="cli",
+            session_key="agent:main:synthetic-default-current",
+        )
+        db.create_session(
+            "default_main_session",
+            source="cli",
+            session_key="agent:main:synthetic-default",
+        )
+        default_anchor = db.append_message(
+            "default_main_session",
+            role="user",
+            content="default-main-boundary default-only marker",
+        )
+        db.create_session(
+            "named_main_current",
+            source="cli",
+            session_key="agent:main:synthetic-named-main-current",
+            profile_name="main",
+        )
+        db.create_session(
+            "named_main_session",
+            source="cli",
+            session_key="agent:main:synthetic-named-main",
+            profile_name="main",
+        )
+        main_anchor = db.append_message(
+            "named_main_session",
+            role="user",
+            content="default-main-boundary named-main-only marker",
+        )
+        db._conn.commit()
+        return default_anchor, main_anchor
+
+    @pytest.mark.parametrize(
+        ("current_session_id", "own_session_id", "sibling_session_id", "sibling_profile"),
+        [
+            (
+                "default_main_current",
+                "default_main_session",
+                "named_main_session",
+                "main",
+            ),
+            (
+                "named_main_current",
+                "named_main_session",
+                "default_main_session",
+                "default",
+            ),
+        ],
+    )
+    def test_default_and_named_main_profiles_are_distinct(
+        self,
+        db,
+        current_session_id,
+        own_session_id,
+        sibling_session_id,
+        sibling_profile,
+    ):
+        default_anchor, main_anchor = self._seed_default_and_main_profiles(db)
+        anchors = {
+            "default_main_session": default_anchor,
+            "named_main_session": main_anchor,
+        }
+
+        discovery = json.loads(
+            session_search(
+                query="default-main-boundary",
+                db=db,
+                current_session_id=current_session_id,
+                limit=5,
+            )
+        )
+        assert discovery["success"] is True
+        assert [r["session_id"] for r in discovery["results"]] == [own_session_id]
+
+        browse = json.loads(
+            session_search(db=db, current_session_id=current_session_id, limit=5)
+        )
+        assert browse["success"] is True
+        assert [r["session_id"] for r in browse["results"]] == [own_session_id]
+
+        for kwargs in (
+            {"session_id": sibling_session_id},
+            {
+                "session_id": sibling_session_id,
+                "around_message_id": anchors[sibling_session_id],
+            },
+            {"session_id": sibling_session_id, "profile": sibling_profile},
+        ):
+            result = json.loads(
+                session_search(db=db, current_session_id=current_session_id, **kwargs)
+            )
+            assert result["success"] is False, kwargs
+            assert "only marker" not in json.dumps(result)
+
 
 # =========================================================================
 # Cron demotion in discover ranking (#19434)
