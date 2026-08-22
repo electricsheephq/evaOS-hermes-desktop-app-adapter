@@ -22,6 +22,7 @@ data the live callbacks already read from.
 """
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -112,6 +113,53 @@ class TestRefreshSkillGroup:
         assert (count, hidden) == (1, 0)
         assert adapter._skill_lookup == {
             "profile-local": ("Routed profile skill.", "/profile-local")
+        }
+
+    def test_shared_adapter_keeps_routed_profile_catalogs_distinct(
+        self, monkeypatch
+    ) -> None:
+        """Refreshing one routed profile never replaces its sibling's picker."""
+        adapter = _make_adapter()
+        adapter._skill_entries = [("default", "Default skill", "/default")]
+        adapter._skill_lookup = {"default": ("Default skill", "/default")}
+        adapter._skill_group_hidden_count = 0
+        adapter._skill_group_reserved_names = set()
+        adapter._skill_catalogs_by_profile = {}
+        active_profile = "eve"
+
+        def fake_collector(*, reserved_names):
+            name = f"{active_profile}-only"
+            return ({"profile": [(name, name, f"/{name}")]}, [], 0)
+
+        monkeypatch.setattr(
+            "hermes_cli.commands.discord_skill_commands_by_category",
+            fake_collector,
+        )
+        adapter.refresh_skill_group(profile="eve")
+        active_profile = "grace"
+        adapter.refresh_skill_group(profile="grace")
+
+        eve_interaction = object()
+        grace_interaction = object()
+
+        def fake_event(interaction, _text):
+            profile = "eve" if interaction is eve_interaction else "grace"
+            return SimpleNamespace(source=SimpleNamespace(profile=profile))
+
+        adapter._build_slash_event = fake_event
+        eve_entries, eve_lookup = adapter._skill_catalog_for_interaction(
+            eve_interaction
+        )
+        grace_entries, grace_lookup = adapter._skill_catalog_for_interaction(
+            grace_interaction
+        )
+
+        assert [entry[0] for entry in eve_entries] == ["eve-only"]
+        assert set(eve_lookup) == {"eve-only"}
+        assert [entry[0] for entry in grace_entries] == ["grace-only"]
+        assert set(grace_lookup) == {"grace-only"}
+        assert adapter._skill_lookup == {
+            "default": ("Default skill", "/default")
         }
 
 
@@ -215,7 +263,8 @@ class TestHandleReloadSkillsCallsRefreshSkillGroup:
         profile_home = tmp_path / "profiles" / "eve"
         runner._resolve_profile_home_for_source = lambda src: profile_home
 
-        def refresh_profile_catalog():
+        def refresh_profile_catalog(*, profile):
+            observed["refresh_profile"] = profile
             observed["refresh_home"] = str(get_hermes_home())
             observed["refresh_platform"] = get_session_env(
                 "HERMES_SESSION_PLATFORM"
@@ -263,8 +312,9 @@ class TestHandleReloadSkillsCallsRefreshSkillGroup:
         assert observed["catalog"] == {"/telegram-only"}
         assert observed["refresh_home"] == str(profile_home)
         assert observed["refresh_platform"] == "discord"
+        assert observed["refresh_profile"] == "eve"
         assert observed["restored_platform"] == "outer"
-        eve_adapter.refresh_skill_group.assert_called_once_with()
+        eve_adapter.refresh_skill_group.assert_called_once_with(profile="eve")
         default_adapter.refresh_skill_group.assert_not_called()
 
     @pytest.mark.asyncio

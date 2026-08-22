@@ -6222,6 +6222,14 @@ class DiscordAdapter(BasePlatformAdapter):
             # collector and mutates these two attributes in place.
             self._skill_entries: list[tuple[str, str, str]] = []
             self._skill_lookup: dict[str, tuple[str, str]] = {}
+            self._skill_catalogs_by_profile: dict[
+                str,
+                tuple[
+                    list[tuple[str, str, str]],
+                    dict[str, tuple[str, str]],
+                    int,
+                ],
+            ] = {}
             self._skill_group_reserved_names: set[str] = set(existing_names)
             self._refresh_skill_catalog_state()
 
@@ -6246,8 +6254,8 @@ class DiscordAdapter(BasePlatformAdapter):
                 ephemeral rejection would produce a barrage of error
                 popups during typing.
 
-                Reads ``self._skill_entries`` so a ``/reload-skills`` run
-                since process start shows up on the very next keystroke.
+                Resolves the routed profile's catalog so a shared Discord
+                credential never exposes a sibling profile's skills.
                 """
                 try:
                     allowed, _reason = self._evaluate_slash_authorization(interaction)
@@ -6257,9 +6265,10 @@ class DiscordAdapter(BasePlatformAdapter):
                     return []
                 if not allowed:
                     return []
+                entries, _lookup = self._skill_catalog_for_interaction(interaction)
                 q = (current or "").strip().lower()
                 choices: list = []
-                for name, desc, _key in self._skill_entries:
+                for name, desc, _key in entries:
                     if not q or q in name.lower() or (desc and q in desc.lower()):
                         if desc:
                             label = f"{name} — {desc}"
@@ -6289,7 +6298,8 @@ class DiscordAdapter(BasePlatformAdapter):
                 # via "Unknown skill: <name>" responses).
                 if not await self._check_slash_authorization(interaction, "/skill"):
                     return
-                entry = self._skill_lookup.get(name)
+                _entries, lookup = self._skill_catalog_for_interaction(interaction)
+                entry = lookup.get(name)
                 if not entry:
                     await interaction.response.send_message(
                         f"Unknown skill: `{name}`. Start typing for "
@@ -6321,7 +6331,7 @@ class DiscordAdapter(BasePlatformAdapter):
         except Exception as exc:
             logger.warning("[%s] Failed to register /skill command: %s", self.name, exc)
 
-    def _refresh_skill_catalog_state(self) -> None:
+    def _refresh_skill_catalog_state(self, profile: str = "") -> tuple[int, int]:
         """Re-scan disk for skills and repopulate ``self._skill_entries``.
 
         Called once from :meth:`_register_skill_group` at startup and
@@ -6343,11 +6353,51 @@ class DiscordAdapter(BasePlatformAdapter):
         # list is predictable across restarts.
         entries.sort(key=lambda t: t[0])
 
-        self._skill_entries = entries
-        self._skill_lookup = {n: (d, k) for n, d, k in entries}
-        self._skill_group_hidden_count = hidden
+        lookup = {n: (d, k) for n, d, k in entries}
+        profile_name = (profile or "").strip()
+        if profile_name:
+            catalogs = getattr(self, "_skill_catalogs_by_profile", None)
+            if not isinstance(catalogs, dict):
+                catalogs = {}
+                self._skill_catalogs_by_profile = catalogs
+            catalogs[profile_name] = (entries, lookup, hidden)
 
-    def refresh_skill_group(self) -> tuple[int, int]:
+        # The legacy/default view remains authoritative for a single-profile
+        # adapter. A dedicated multiplex adapter is likewise safe to update
+        # because it is bound to exactly one profile at construction time.
+        bound_profile = str(getattr(self, "_evaos_profile_name", "") or "").strip()
+        if not profile_name or profile_name == bound_profile:
+            self._skill_entries = entries
+            self._skill_lookup = lookup
+            self._skill_group_hidden_count = hidden
+        return (len(entries), hidden)
+
+    def _skill_catalog_for_interaction(
+        self, interaction: "discord.Interaction",
+    ) -> tuple[list[tuple[str, str, str]], dict[str, tuple[str, str]]]:
+        """Return only the catalog authorized by this interaction's route."""
+        try:
+            source = self._build_slash_event(interaction, "/skill").source
+            profile = str(getattr(source, "profile", "") or "").strip()
+        except Exception:
+            return ([], {})
+
+        if profile:
+            catalogs = getattr(self, "_skill_catalogs_by_profile", {})
+            catalog = catalogs.get(profile) if isinstance(catalogs, dict) else None
+            if catalog is not None:
+                return (catalog[0], catalog[1])
+            bound_profile = str(
+                getattr(self, "_evaos_profile_name", "") or ""
+            ).strip()
+            if profile != bound_profile:
+                return ([], {})
+        return (
+            getattr(self, "_skill_entries", []),
+            getattr(self, "_skill_lookup", {}),
+        )
+
+    def refresh_skill_group(self, profile: str = "") -> tuple[int, int]:
         """Rescan skills and update the live ``/skill`` autocomplete state.
 
         Invoked by :meth:`gateway.run.GatewayOrchestrator._handle_reload_skills_command`
@@ -6364,7 +6414,7 @@ class DiscordAdapter(BasePlatformAdapter):
         Returns ``(new_count, hidden_count)``.
         """
         try:
-            self._refresh_skill_catalog_state()
+            count, hidden = self._refresh_skill_catalog_state(profile=profile)
         except Exception as exc:
             logger.warning(
                 "[%s] Failed to refresh /skill autocomplete after reload: %s",
@@ -6374,10 +6424,10 @@ class DiscordAdapter(BasePlatformAdapter):
         logger.info(
             "[%s] Refreshed /skill autocomplete: %d skill(s) available (%d filtered)",
             self.name,
-            len(self._skill_entries),
-            self._skill_group_hidden_count,
+            count,
+            hidden,
         )
-        return (len(self._skill_entries), self._skill_group_hidden_count)
+        return (count, hidden)
 
     def _build_slash_event(self, interaction: discord.Interaction, text: str) -> MessageEvent:
         """Build a MessageEvent from a Discord slash command interaction."""
@@ -6412,6 +6462,8 @@ class DiscordAdapter(BasePlatformAdapter):
             thread_id=thread_id,
             chat_topic=chat_topic,
         )
+        if not source.profile:
+            source.profile = getattr(self, "_evaos_profile_name", None)
 
         msg_type = MessageType.COMMAND if text.startswith("/") else MessageType.TEXT
         channel_id = str(interaction.channel_id)

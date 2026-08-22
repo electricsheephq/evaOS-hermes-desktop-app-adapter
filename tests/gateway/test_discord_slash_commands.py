@@ -545,6 +545,9 @@ def test_register_skill_command_callback_dispatches_by_name(adapter):
         dispatched.append(text)
 
     adapter._run_simple_slash = fake_run
+    adapter._build_slash_event = lambda _interaction, _text: SimpleNamespace(
+        source=SimpleNamespace(profile=None)
+    )
 
     import asyncio
 
@@ -600,5 +603,4 @@ def test_register_skill_command_payload_fits_discord_8kb_limit(adapter):
         f"Flat /skill command payload is ~{len(payload)} bytes — the whole "
         f"point of this design is that it stays small regardless of skill count"
     )
-
 

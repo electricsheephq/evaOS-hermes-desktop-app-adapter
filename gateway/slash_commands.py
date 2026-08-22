@@ -5591,7 +5591,7 @@ class GatewaySlashCommandsMixin:
                 refresh = getattr(adapter, "refresh_skill_group", None)
                 if callable(refresh):
                     try:
-                        maybe = refresh()
+                        maybe = refresh(profile=profile)
                         if inspect.isawaitable(maybe):
                             await maybe
                     except Exception as exc:
