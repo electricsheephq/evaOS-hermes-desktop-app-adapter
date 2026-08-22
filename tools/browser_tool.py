@@ -2159,6 +2159,24 @@ def _create_cdp_session(task_id: str, cdp_url: str) -> Dict[str, str]:
     }
 
 
+def _take_live_view_url(session_info: Dict[str, Any]) -> Optional[str]:
+    """Return a session's Live View URL once for model-visible delivery.
+
+    The provider keeps CDP credentials internal.  Only Browserbase's official
+    user-facing HTTPS Live View URL reaches the tool result, and only once per
+    concrete cloud session.  The lock prevents concurrent first navigations
+    from publishing the same link twice.
+    """
+    with _cleanup_lock:
+        if session_info.get("_live_view_announced"):
+            return None
+        live_view_url = session_info.get("live_view_url")
+        if not isinstance(live_view_url, str) or not live_view_url:
+            return None
+        session_info["_live_view_announced"] = True
+        return live_view_url
+
+
 def _get_session_info(task_id: Optional[str] = None) -> Dict[str, Any]:
     """
     Get or create session info for the given session key.
@@ -3108,6 +3126,9 @@ def browser_navigate(url: str, task_id: Optional[str] = None) -> str:
             "url": final_url,
             "title": title
         }
+        browser_live_view_url = _take_live_view_url(session_info)
+        if browser_live_view_url is not None:
+            response["browser_live_view_url"] = browser_live_view_url
         # Remember only a successful, non-blocked navigation as the task owner.
         # Failed opens and blocked redirects must not retarget follow-up clicks
         # or snapshots to a newly-created but irrelevant session.
@@ -3162,10 +3183,14 @@ def browser_navigate(url: str, task_id: Optional[str] = None) -> str:
 
         return json.dumps(response, ensure_ascii=False)
     else:
-        return json.dumps({
+        response = {
             "success": False,
             "error": result.get("error", "Navigation failed")
-        }, ensure_ascii=False)
+        }
+        browser_live_view_url = _take_live_view_url(session_info)
+        if browser_live_view_url is not None:
+            response["browser_live_view_url"] = browser_live_view_url
+        return json.dumps(response, ensure_ascii=False)
 
 
 def browser_snapshot(
