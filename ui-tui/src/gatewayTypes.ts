@@ -622,6 +622,11 @@ export type GatewayEvent =
     }
   | { payload?: { key?: string }; session_id?: string; type: 'notification.clear' }
   | {
+      payload?: { text?: string; url?: string }
+      session_id?: string
+      type: 'private_capability.show'
+    }
+  | {
       payload: { user_code?: string; verification_url: string }
       session_id?: string
       type: 'billing.step_up.verification'

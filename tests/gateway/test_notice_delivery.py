@@ -1,9 +1,9 @@
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
 
 from gateway.config import GatewayConfig, Platform, PlatformConfig
-from gateway.platforms.base import SendResult
+from gateway.platforms.base import BasePlatformAdapter, SendResult
 from gateway.run import GatewayRunner
 from gateway.session import SessionSource
 
@@ -18,6 +18,28 @@ def _make_source() -> SessionSource:
     )
 
 
+class _PrivateAdapter:
+    async def send_private_notice(self, *args, **kwargs):
+        raise AssertionError("instance test double should replace this method")
+
+    def __init__(self):
+        self.send = AsyncMock(
+            return_value=SendResult(success=True, message_id="public-1")
+        )
+        self.send_private_notice = AsyncMock(
+            return_value=SendResult(success=True, message_id="private-1")
+        )
+
+
+class _InheritedFallbackAdapter:
+    send_private_notice = BasePlatformAdapter.send_private_notice
+
+    def __init__(self):
+        self.send = AsyncMock(
+            return_value=SendResult(success=True, message_id="public-1")
+        )
+
+
 def _make_runner(extra=None):
     runner = object.__new__(GatewayRunner)
     runner.config = GatewayConfig(
@@ -25,9 +47,7 @@ def _make_runner(extra=None):
             Platform.SLACK: PlatformConfig(enabled=True, token="***", extra=extra or {})
         }
     )
-    adapter = MagicMock()
-    adapter.send = AsyncMock(return_value=SendResult(success=True, message_id="public-1"))
-    adapter.send_private_notice = AsyncMock(return_value=SendResult(success=True, message_id="private-1"))
+    adapter = _PrivateAdapter()
     runner.adapters = {Platform.SLACK: adapter}
     return runner, adapter
 
@@ -81,3 +101,39 @@ async def test_private_only_notice_without_user_is_dropped():
 
     adapter.send_private_notice.assert_not_awaited()
     adapter.send.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_private_only_group_notice_drops_inherited_public_fallback():
+    runner, _adapter = _make_runner(extra={"notice_delivery": "public"})
+    adapter = _InheritedFallbackAdapter()
+    runner.adapters = {Platform.SLACK: adapter}
+
+    await runner._deliver_platform_notice(
+        _make_source(),
+        "private capability",
+        private_only=True,
+    )
+
+    adapter.send.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_private_only_dm_can_use_normal_send_without_public_fallback():
+    runner, _adapter = _make_runner(extra={"notice_delivery": "public"})
+    adapter = _InheritedFallbackAdapter()
+    runner.adapters = {Platform.SLACK: adapter}
+    source = _make_source()
+    source.chat_type = "dm"
+
+    await runner._deliver_platform_notice(
+        source,
+        "private capability",
+        private_only=True,
+    )
+
+    adapter.send.assert_awaited_once_with(
+        "C123",
+        "private capability",
+        metadata={"thread_id": "111.222"},
+    )

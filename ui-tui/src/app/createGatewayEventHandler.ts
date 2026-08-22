@@ -850,6 +850,22 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
         turnController.clearNotice(ev.payload?.key)
 
         return
+      case 'private_capability.show': {
+        const text = ev.payload?.text
+        const url = ev.payload?.url
+
+        if (!text || !url || !url.startsWith('https://')) {
+          return
+        }
+
+        // Capability links must remain complete and actionable. Unlike ordinary
+        // notices, this writes a full copyable local TUI line and may open the
+        // validated HTTPS target; it never enters model or durable history.
+        sys(text)
+        void openExternalUrl(url)
+
+        return
+      }
       case 'billing.step_up.verification': {
         // The billing step-up device flow runs in the headless gateway, so it
         // can't open a browser or print the URL where the user sees it. Surface

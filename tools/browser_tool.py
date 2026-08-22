@@ -2204,6 +2204,7 @@ def _wrap_private_user_handoff(
                     "Browser Live View: "
                     f"{handoff_url} — open it to watch or take over this session."
                 ),
+                "url": handoff_url,
                 "key": "browser.live_view",
             }
         ],

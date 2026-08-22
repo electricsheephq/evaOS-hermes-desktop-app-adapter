@@ -5757,16 +5757,24 @@ def _agent_cbs(sid: str) -> dict:
         # notification.show WS event; a recovery clear becomes notification.clear.
         # Snake_case payload to match the existing gateway-event convention.
         "notice_callback": lambda n: _emit(
-            "notification.show",
+            (
+                "private_capability.show"
+                if getattr(n, "delivery", "driver_default") == "private_only"
+                else "notification.show"
+            ),
             sid,
-            {
-                "text": n.text,
-                "level": n.level,
-                "kind": n.kind,
-                "ttl_ms": n.ttl_ms,
-                "key": n.key,
-                "id": n.id,
-            },
+            (
+                {"text": n.text, "url": getattr(n, "url", None)}
+                if getattr(n, "delivery", "driver_default") == "private_only"
+                else {
+                    "text": n.text,
+                    "level": n.level,
+                    "kind": n.kind,
+                    "ttl_ms": n.ttl_ms,
+                    "key": n.key,
+                    "id": n.id,
+                }
+            ),
         ),
         "notice_clear_callback": lambda key: _emit(
             "notification.clear", sid, {"key": key}

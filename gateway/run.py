@@ -14030,13 +14030,34 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             if not user_id:
                 logger.warning("Skipping private-only platform notice without a user id")
                 return
-            try:
-                await adapter.send_private_notice(
-                    source.chat_id,
-                    user_id,
-                    content,
-                    metadata=metadata,
+            chat_type = str(getattr(source, "chat_type", "") or "").lower()
+            private_impl = getattr(type(adapter), "send_private_notice", None)
+            has_private_override = (
+                private_impl is not None
+                and private_impl is not BasePlatformAdapter.send_private_notice
+            )
+            if not has_private_override and chat_type != "dm":
+                logger.warning(
+                    "Skipping private-only platform notice: adapter has no private delivery"
                 )
+                return
+            try:
+                if has_private_override:
+                    await adapter.send_private_notice(
+                        source.chat_id,
+                        user_id,
+                        content,
+                        metadata=metadata,
+                    )
+                else:
+                    # A routed DM is already private. Call send() directly so
+                    # the inherited base fallback can never be mistaken for a
+                    # group/channel-private implementation.
+                    await adapter.send(
+                        source.chat_id,
+                        content,
+                        metadata=metadata,
+                    )
             except Exception:
                 logger.debug(
                     "[%s] private-only platform notice delivery failed",

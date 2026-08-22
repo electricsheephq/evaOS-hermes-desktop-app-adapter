@@ -79,6 +79,7 @@ def _emit_and_strip_private_tool_notices(agent, tool_name: str, result: Any) -> 
             continue
         text = item.get("text")
         key = item.get("key")
+        url = item.get("url")
         if not isinstance(text, str):
             continue
         text = text.strip()
@@ -86,6 +87,8 @@ def _emit_and_strip_private_tool_notices(agent, tool_name: str, result: Any) -> 
             continue
         if key is not None and not isinstance(key, str):
             key = None
+        if not isinstance(url, str) or not url.startswith("https://"):
+            url = None
         try:
             agent._emit_notice(
                 AgentNotice(
@@ -95,6 +98,7 @@ def _emit_and_strip_private_tool_notices(agent, tool_name: str, result: Any) -> 
                     key=key,
                     id=key,
                     delivery="private_only",
+                    url=url,
                 )
             )
         except Exception:

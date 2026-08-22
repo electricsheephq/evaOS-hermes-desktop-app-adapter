@@ -10,6 +10,11 @@ import pytest
 from plugins.browser.browserbase import provider as browserbase_provider
 
 
+_LIVE_VENDOR_TESTS = os.environ.get("HERMES_LIVE_TESTS") == "1"
+_LIVE_BROWSERBASE_API_KEY = os.environ.get("BROWSERBASE_API_KEY", "")
+_LIVE_BROWSERBASE_PROJECT_ID = os.environ.get("BROWSERBASE_PROJECT_ID", "")
+
+
 class _Response:
     def __init__(
         self,
@@ -176,13 +181,27 @@ def test_malformed_https_live_view_url_is_ignored(monkeypatch):
     assert "user_handoff" not in session
 
 
-def test_real_browserbase_live_view_contract_when_credentials_are_opted_in():
+@pytest.mark.skipif(
+    not (
+        _LIVE_VENDOR_TESTS
+        and _LIVE_BROWSERBASE_API_KEY
+        and _LIVE_BROWSERBASE_PROJECT_ID
+    ),
+    reason="Browserbase live canary is not explicitly configured",
+)
+def test_real_browserbase_live_view_contract_when_credentials_are_opted_in(
+    monkeypatch,
+):
     """Protected vendor canary; ordinary CI skips without explicit secrets."""
-    if not (
-        os.getenv("BROWSERBASE_API_KEY")
-        and os.getenv("BROWSERBASE_PROJECT_ID")
-    ):
-        pytest.skip("Browserbase live canary credentials are not configured")
+    live_secrets = {
+        "BROWSERBASE_API_KEY": _LIVE_BROWSERBASE_API_KEY,
+        "BROWSERBASE_PROJECT_ID": _LIVE_BROWSERBASE_PROJECT_ID,
+    }
+    monkeypatch.setattr(
+        browserbase_provider,
+        "get_secret",
+        lambda key: live_secrets.get(key),
+    )
 
     provider = browserbase_provider.BrowserbaseBrowserProvider()
     session = None
