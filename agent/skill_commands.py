@@ -565,7 +565,10 @@ def get_skill_commands() -> Dict[str, Dict[str, Any]]:
     scope = _skill_commands_scope()
     with _skill_commands_lock:
         commands = _skill_commands_by_scope.get(scope)
-    if commands is None:
+    # Preserve the historical empty-as-cache-miss behavior. An empty catalog
+    # can be legitimate, but rescanning it is cheap and lets a newly installed
+    # skill appear without leaving a transient failed scan cached forever.
+    if not commands:
         commands = scan_skill_commands()
     return commands
 

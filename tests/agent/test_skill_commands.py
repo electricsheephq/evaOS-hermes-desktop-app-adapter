@@ -350,6 +350,27 @@ class TestScanSkillCommands:
         ]
         assert set(catalog_b) == {"/b-local", "/b-new"}
 
+    def test_empty_catalog_rescans_after_skill_is_installed(self, tmp_path):
+        """An empty scope must not hide a skill installed after its first scan."""
+        from agent.skill_commands import get_skill_commands
+
+        with patch("tools.skills_tool._skills_dir", return_value=tmp_path):
+            assert get_skill_commands() == {}
+            _make_skill(tmp_path, "installed-later")
+            assert "/installed-later" in get_skill_commands()
+
+    def test_failed_empty_scan_retries_on_next_lookup(self, tmp_path):
+        """A transient failed scan must not become a permanent empty cache hit."""
+        from agent.skill_commands import get_skill_commands
+
+        _make_skill(tmp_path, "available-after-retry")
+        with patch(
+            "tools.skills_tool._skills_dir",
+            side_effect=[RuntimeError("transient scan failure"), tmp_path],
+        ):
+            assert get_skill_commands() == {}
+            assert "/available-after-retry" in get_skill_commands()
+
     def test_routed_profile_local_skill_can_be_invoked(self, tmp_path):
         """Discovery and skill_view normalize against the same routed root."""
         from agent.skill_commands import (
