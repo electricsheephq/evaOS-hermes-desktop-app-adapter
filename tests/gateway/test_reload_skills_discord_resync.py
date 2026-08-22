@@ -85,6 +85,35 @@ class TestRefreshSkillGroup:
         assert "old-skill" not in adapter._skill_lookup
         assert adapter._skill_lookup["new-skill"] == ("Fresh skill", "/new-skill")
 
+    def test_refresh_includes_routed_profile_local_skill(self, tmp_path) -> None:
+        """Discord categorization follows the active profile's local root."""
+        from agent.skill_commands import _reset_skill_commands_cache_for_tests
+        from gateway.session_context import clear_session_vars, set_session_vars
+        from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+
+        profile = tmp_path / "profile"
+        skill_dir = profile / "skills" / "profile-local"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
+            "---\nname: profile-local\ndescription: Routed profile skill.\n---\nbody\n"
+        )
+        adapter = _make_adapter()
+        adapter._skill_group_reserved_names = set()
+        _reset_skill_commands_cache_for_tests()
+        home_token = set_hermes_home_override(profile)
+        session_tokens = set_session_vars(platform="discord", profile="eve")
+        try:
+            count, hidden = adapter.refresh_skill_group()
+        finally:
+            clear_session_vars(session_tokens)
+            reset_hermes_home_override(home_token)
+            _reset_skill_commands_cache_for_tests()
+
+        assert (count, hidden) == (1, 0)
+        assert adapter._skill_lookup == {
+            "profile-local": ("Routed profile skill.", "/profile-local")
+        }
+
 
 class TestRegisterSkillGroupUsesInstanceState:
     """The closure-based ``entries`` / ``skill_lookup`` must be gone.
@@ -144,6 +173,11 @@ class TestHandleReloadSkillsCallsRefreshSkillGroup:
         from gateway.run import GatewayRunner
         from gateway.platforms.base import Platform
         from gateway.session import SessionSource
+        from gateway.session_context import (
+            clear_session_vars,
+            get_session_env,
+            set_session_vars,
+        )
         from hermes_constants import (
             get_hermes_home,
             reset_hermes_home_override,
@@ -172,22 +206,52 @@ class TestHandleReloadSkillsCallsRefreshSkillGroup:
 
         fake_result = {"added": [], "removed": [], "total": 7}
         def fake_reload():
+            from agent.skill_commands import get_skill_commands
             observed["home"] = str(get_hermes_home())
+            observed["platform"] = get_session_env("HERMES_SESSION_PLATFORM")
+            observed["catalog"] = set(get_skill_commands())
             return fake_result
 
         profile_home = tmp_path / "profiles" / "eve"
+        for name in ("discord-only", "telegram-only"):
+            skill_dir = profile_home / "skills" / name
+            skill_dir.mkdir(parents=True)
+            (skill_dir / "SKILL.md").write_text(
+                f"---\nname: {name}\ndescription: {name}.\n---\nbody\n"
+            )
+        from agent.skill_commands import _reset_skill_commands_cache_for_tests
+        from tools import skills_tool
+
+        def disabled_for_route():
+            return {f"{get_session_env('HERMES_SESSION_PLATFORM')}-only"}
+
+        _reset_skill_commands_cache_for_tests()
         home_token = set_hermes_home_override(profile_home)
-        with patch(
-            "agent.skill_commands.reload_skills", side_effect=fake_reload
+        outer_tokens = set_session_vars(platform="outer", profile="outer")
+        with (
+            patch("agent.skill_commands.reload_skills", side_effect=fake_reload),
+            patch.object(
+                skills_tool,
+                "_get_disabled_skill_names",
+                side_effect=disabled_for_route,
+            ),
         ):
             try:
                 result = await runner._handle_reload_skills_command(event)
+                observed["restored_platform"] = get_session_env(
+                    "HERMES_SESSION_PLATFORM"
+                )
             finally:
+                clear_session_vars(outer_tokens)
                 reset_hermes_home_override(home_token)
+                _reset_skill_commands_cache_for_tests()
                 runner._executor.shutdown(wait=True)
 
         assert "Skills Reloaded" in result
         assert observed["home"] == str(profile_home)
+        assert observed["platform"] == "discord"
+        assert observed["catalog"] == {"/telegram-only"}
+        assert observed["restored_platform"] == "outer"
         eve_adapter.refresh_skill_group.assert_called_once_with()
         default_adapter.refresh_skill_group.assert_not_called()
 

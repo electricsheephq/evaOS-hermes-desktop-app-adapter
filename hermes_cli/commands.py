@@ -1161,10 +1161,10 @@ def discord_skill_commands_by_category(
     try:
         from agent.skill_commands import get_skill_commands
         from agent.skill_utils import get_external_skills_dirs, get_project_skills_dirs
-        from tools.skills_tool import SKILLS_DIR
+        from tools.skills_tool import _skills_dir as _active_skills_dir
 
-        _skills_dir = SKILLS_DIR.resolve()
-        _hub_dir = (SKILLS_DIR / ".hub").resolve()
+        _skills_dir = _active_skills_dir().resolve()
+        _hub_dir = (_skills_dir / ".hub").resolve()
         # Build list of (resolved_root, is_local) tuples. Each external dir
         # becomes its own scan root for category derivation — a skill at
         # ``<external>/mlops/foo/SKILL.md`` is still categorized as "mlops".
