@@ -312,6 +312,25 @@ def clear_session_vars(tokens: list) -> None:
         pass
 
 
+@contextmanager
+def session_route_scope(platform: str = "", profile: str = "") -> Iterator[None]:
+    """Temporarily bind the routed platform/profile before session creation.
+
+    Early slash commands run before the full session context exists. Bind only
+    the two route fields they can safely know, and restore the exact prior
+    ContextVar values afterward so nested tests/callers are not disturbed.
+    """
+    global _session_context_engaged
+    _session_context_engaged = True
+    platform_token = _SESSION_PLATFORM.set(platform)
+    profile_token = _SESSION_PROFILE.set(profile)
+    try:
+        yield
+    finally:
+        _SESSION_PROFILE.reset(profile_token)
+        _SESSION_PLATFORM.reset(platform_token)
+
+
 def reset_session_vars() -> None:
     """Reset every session context variable to ``_UNSET`` for THIS context.
 

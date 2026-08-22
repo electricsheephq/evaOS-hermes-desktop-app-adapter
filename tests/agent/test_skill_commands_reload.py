@@ -55,8 +55,8 @@ def hermes_home(monkeypatch):
 
     monkeypatch.setattr(_st, "HERMES_HOME", home, raising=False)
     monkeypatch.setattr(_st, "SKILLS_DIR", home / "skills", raising=False)
-    # Reset the in-process slash-command cache so each test starts from zero.
-    monkeypatch.setattr(_sc, "_skill_commands", {}, raising=False)
+    # Reset every profile/platform slash-command cache scope.
+    _sc._reset_skill_commands_cache_for_tests()
 
     yield home
 

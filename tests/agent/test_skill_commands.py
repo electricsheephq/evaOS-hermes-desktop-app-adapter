@@ -1,6 +1,7 @@
 """Tests for agent/skill_commands.py — skill slash command scanning and platform filtering."""
 
 import os
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest.mock import patch
 
@@ -13,6 +14,15 @@ from agent.skill_commands import (
     resolve_skill_command_key,
     scan_skill_commands,
 )
+
+
+@pytest.fixture(autouse=True)
+def _isolated_skill_command_cache():
+    from agent.skill_commands import _reset_skill_commands_cache_for_tests
+
+    _reset_skill_commands_cache_for_tests()
+    yield
+    _reset_skill_commands_cache_for_tests()
 
 
 def _make_skill(
@@ -199,6 +209,187 @@ class TestScanSkillCommands:
             assert "/shared" in discord_commands
             assert "/telegram-only" in discord_commands
             assert "/discord-only" not in discord_commands
+
+    def test_get_skill_commands_rescans_when_profile_home_changes(self, tmp_path):
+        """Switching profiles must rescan even when the platform is unchanged
+        (#88023): a Desktop session that switches profiles mid-session keeps
+        the same platform scope, so only ``HERMES_HOME`` moves. Each profile
+        declares its own ``skills.external_dirs``, and the previous profile's
+        skill list must not leak into the new one.
+        """
+        import agent.skill_commands as sc_mod
+        from agent.skill_commands import get_skill_commands
+        from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+
+        empty_local_dir = tmp_path / "no-local-skills"
+        empty_local_dir.mkdir()
+
+        profile_a = tmp_path / "profile_a"
+        profile_b = tmp_path / "profile_b"
+        external_a = tmp_path / "external_a"
+        external_b = tmp_path / "external_b"
+        profile_a.mkdir()
+        profile_b.mkdir()
+        _make_skill(external_a, "a-only")
+        _make_skill(external_b, "b-only")
+        (profile_a / "config.yaml").write_text(
+            f"skills:\n  external_dirs:\n    - {external_a}\n"
+        )
+        (profile_b / "config.yaml").write_text(
+            f"skills:\n  external_dirs:\n    - {external_b}\n"
+        )
+
+        with (
+            patch("tools.skills_tool.SKILLS_DIR", empty_local_dir),
+            patch.object(sc_mod, "_skill_commands", {}),
+            patch.object(sc_mod, "_skill_commands_platform", None),
+            patch.object(sc_mod, "_skill_commands_home", None),
+        ):
+            token = set_hermes_home_override(profile_a)
+            try:
+                profile_a_commands = dict(get_skill_commands())
+            finally:
+                reset_hermes_home_override(token)
+
+            assert "/a-only" in profile_a_commands
+            assert "/b-only" not in profile_a_commands
+
+            # Switching profiles without touching the cache directly must
+            # rescan — not keep serving profile_a's stale view.
+            token = set_hermes_home_override(profile_b)
+            try:
+                profile_b_commands = dict(get_skill_commands())
+            finally:
+                reset_hermes_home_override(token)
+
+            assert "/b-only" in profile_b_commands
+            assert "/a-only" not in profile_b_commands
+
+    def test_profile_catalog_cache_round_trip_a_b_a(self, tmp_path):
+        """A same-platform A -> B -> A route never reuses a sibling catalog."""
+        from agent.skill_commands import get_skill_commands
+        from gateway.session_context import clear_session_vars, set_session_vars
+        from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+
+        profile_a = tmp_path / "profile-a"
+        profile_b = tmp_path / "profile-b"
+        _make_skill(profile_a / "skills", "a-local")
+        _make_skill(profile_b / "skills", "b-local")
+
+        def catalog(home):
+            home_token = set_hermes_home_override(home)
+            session_tokens = set_session_vars(platform="discord")
+            try:
+                return dict(get_skill_commands())
+            finally:
+                clear_session_vars(session_tokens)
+                reset_hermes_home_override(home_token)
+
+        first_a = catalog(profile_a)
+        only_b = catalog(profile_b)
+        second_a = catalog(profile_a)
+
+        assert set(first_a) == {"/a-local"}
+        assert set(only_b) == {"/b-local"}
+        assert second_a == first_a
+
+    def test_concurrent_profile_reloads_and_removal_stay_isolated(self, tmp_path):
+        """Concurrent reloads publish and diff only their routed scope."""
+        from threading import Barrier
+
+        from agent.skill_commands import get_skill_commands, reload_skills
+        from gateway.session_context import clear_session_vars, set_session_vars
+        from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+
+        profile_a = tmp_path / "profile-a"
+        profile_b = tmp_path / "profile-b"
+        skill_a = _make_skill(profile_a / "skills", "a-local")
+        _make_skill(profile_b / "skills", "b-local")
+
+        def in_scope(home, operation):
+            home_token = set_hermes_home_override(home)
+            session_tokens = set_session_vars(platform="discord")
+            try:
+                return operation()
+            finally:
+                clear_session_vars(session_tokens)
+                reset_hermes_home_override(home_token)
+
+        in_scope(profile_a, get_skill_commands)
+        in_scope(profile_b, get_skill_commands)
+        _make_skill(profile_a / "skills", "a-new")
+        _make_skill(profile_b / "skills", "b-new")
+
+        start = Barrier(2)
+
+        def concurrent_reload(home):
+            start.wait(timeout=5)
+            return in_scope(home, reload_skills)
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            future_a = pool.submit(concurrent_reload, profile_a)
+            future_b = pool.submit(concurrent_reload, profile_b)
+            result_a = future_a.result(timeout=10)
+            result_b = future_b.result(timeout=10)
+
+        assert result_a["added"] == [
+            {"name": "a-new", "description": "Description for a-new."}
+        ]
+        assert result_b["added"] == [
+            {"name": "b-new", "description": "Description for b-new."}
+        ]
+
+        # Removing A must not change B's already-published catalog.
+        import shutil
+
+        shutil.rmtree(skill_a)
+        removed_a = in_scope(profile_a, reload_skills)
+        catalog_b = in_scope(profile_b, get_skill_commands)
+        assert removed_a["removed"] == [
+            {"name": "a-local", "description": "Description for a-local."}
+        ]
+        assert set(catalog_b) == {"/b-local", "/b-new"}
+
+    def test_empty_catalog_rescans_after_skill_is_installed(self, tmp_path):
+        """An empty scope must not hide a skill installed after its first scan."""
+        from agent.skill_commands import get_skill_commands
+
+        with patch("tools.skills_tool._skills_dir", return_value=tmp_path):
+            assert get_skill_commands() == {}
+            _make_skill(tmp_path, "installed-later")
+            assert "/installed-later" in get_skill_commands()
+
+    def test_failed_empty_scan_retries_on_next_lookup(self, tmp_path):
+        """A transient failed scan must not become a permanent empty cache hit."""
+        from agent.skill_commands import get_skill_commands
+
+        _make_skill(tmp_path, "available-after-retry")
+        with patch(
+            "tools.skills_tool._skills_dir",
+            side_effect=[RuntimeError("transient scan failure"), tmp_path],
+        ):
+            assert get_skill_commands() == {}
+            assert "/available-after-retry" in get_skill_commands()
+
+    def test_routed_profile_local_skill_can_be_invoked(self, tmp_path):
+        """Discovery and skill_view normalize against the same routed root."""
+        from agent.skill_commands import (
+            build_skill_invocation_message,
+            get_skill_commands,
+        )
+        from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+
+        profile = tmp_path / "profile"
+        _make_skill(profile / "skills", "profile-local", body="Profile-only body.")
+        home_token = set_hermes_home_override(profile)
+        try:
+            assert "/profile-local" in get_skill_commands()
+            message = build_skill_invocation_message("/profile-local")
+        finally:
+            reset_hermes_home_override(home_token)
+
+        assert message is not None
+        assert "Profile-only body." in message
 
     def test_get_skill_commands_rescans_when_leaving_platform_scope(self, tmp_path, monkeypatch):
         """Returning to no-platform-scope (CLI / cron / RL) after a gateway
@@ -633,6 +824,3 @@ class TestStackedSkillCommands:
         assert loaded == ["skill-a"]
         assert missing == ["gone"]
         assert "Skills missing (skipped): gone" in msg
-
-
-
