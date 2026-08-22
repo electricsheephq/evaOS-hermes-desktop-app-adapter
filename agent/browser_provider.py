@@ -29,6 +29,9 @@ Session metadata contract (preserved from the legacy ``CloudBrowserProvider``)::
         "expires_at": str,          # optional provider-authoritative ISO timestamp
         "features": dict,           # feature flags that were enabled
         "external_call_id": str,    # optional, managed-gateway billing key
+        "user_handoff": {           # optional, private out-of-band handoff
+            "url": str,             # HTTPS user-facing session URL
+        },
     }
 
 ``bb_session_id`` is a legacy key name kept verbatim for backward compat with
@@ -99,11 +102,20 @@ class BrowserProvider(abc.ABC):
                 "cdp_url": str,         # CDP websocket URL
                 "expires_at": str,      # optional provider-authoritative ISO timestamp
                 "features": dict,       # feature flags that were enabled
+                "user_handoff": {       # optional private user handoff
+                    "url": str,         # HTTPS user-facing session URL
+                },
             }
 
         ``bb_session_id`` is a legacy key name kept for backward compat with
         the rest of :mod:`tools.browser_tool` — it holds the provider's
         session ID regardless of which provider is in use.
+
+        ``user_handoff`` is optional. When present, ``url`` is a short-lived
+        user-facing HTTPS capability. The browser wrapper delivers it through
+        Hermes's private notice rail and removes it before model input,
+        logging, or transcript persistence. Providers must never place CDP
+        endpoints or credentials in this field.
 
         May raise ``ValueError`` (missing credentials) or ``RuntimeError``
         (network / API failure); the dispatcher surfaces these to the user.

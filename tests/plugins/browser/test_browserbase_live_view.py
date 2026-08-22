@@ -72,7 +72,9 @@ def test_create_session_returns_official_fullscreen_live_view(monkeypatch):
 
     session = provider.create_session("checkout")
 
-    assert session["live_view_url"] == "https://live.browserbase.test/session"
+    assert session["user_handoff"] == {
+        "url": "https://live.browserbase.test/session"
+    }
     assert session["cdp_url"] == "wss://connect.browserbase.test/session"
     assert calls[1][0:2] == (
         "GET",
@@ -109,7 +111,7 @@ def test_live_view_failure_does_not_destroy_created_browser_session(monkeypatch)
 
     assert session["bb_session_id"] == "session_test"
     assert session["cdp_url"] == "wss://connect.browserbase.test/session"
-    assert "live_view_url" not in session
+    assert "user_handoff" not in session
     assert "provider response" not in repr(session)
 
 
@@ -138,4 +140,34 @@ def test_non_https_live_view_url_is_ignored(monkeypatch):
 
     session = provider.create_session("checkout")
 
-    assert "live_view_url" not in session
+    assert "user_handoff" not in session
+
+
+def test_malformed_https_live_view_url_is_ignored(monkeypatch):
+    provider = _configure_provider(monkeypatch)
+
+    monkeypatch.setattr(
+        browserbase_provider.requests,
+        "post",
+        lambda *args, **kwargs: _Response(
+            status_code=201,
+            payload={
+                "id": "session_test",
+                "connectUrl": "wss://connect.browserbase.test/session",
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        browserbase_provider.requests,
+        "get",
+        lambda *args, **kwargs: _Response(
+            status_code=200,
+            payload={"debuggerFullscreenUrl": "https://[::1"},
+        ),
+    )
+
+    session = provider.create_session("checkout")
+
+    assert session["bb_session_id"] == "session_test"
+    assert session["cdp_url"] == "wss://connect.browserbase.test/session"
+    assert "user_handoff" not in session

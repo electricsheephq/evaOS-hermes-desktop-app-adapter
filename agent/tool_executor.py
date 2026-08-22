@@ -52,6 +52,59 @@ from tools.budget_config import BudgetConfig, DEFAULT_BUDGET, budget_for_context
 
 logger = logging.getLogger(__name__)
 
+_PRIVATE_NOTICE_TOOL_NAMES = frozenset({"browser_navigate"})
+
+
+def _emit_and_strip_private_tool_notices(agent, tool_name: str, result: Any) -> Any:
+    """Emit trusted internal notices, returning notice-free tool content.
+
+    Only explicitly allowlisted in-process tools may attach this process-local
+    sidecar to a string result. The string itself never contains the notice,
+    so hooks and middleware see only canonical tool content. The sidecar is
+    removed before logging, model input, progress callbacks, and persistence.
+    """
+    if tool_name not in _PRIVATE_NOTICE_TOOL_NAMES or not isinstance(result, str):
+        return result
+    raw_notices = getattr(result, "_hermes_private_notices", None)
+    if raw_notices is None:
+        return result
+    sanitized_result = str(result)
+    if not isinstance(raw_notices, (list, tuple)):
+        return sanitized_result
+
+    from agent.credits_tracker import AgentNotice
+
+    for item in raw_notices:
+        if not isinstance(item, dict):
+            continue
+        text = item.get("text")
+        key = item.get("key")
+        if not isinstance(text, str):
+            continue
+        text = text.strip()
+        if not text or len(text) > 4096 or "\x00" in text:
+            continue
+        if key is not None and not isinstance(key, str):
+            key = None
+        try:
+            agent._emit_notice(
+                AgentNotice(
+                    text=text,
+                    level="info",
+                    kind="ttl",
+                    key=key,
+                    id=key,
+                    delivery="private_only",
+                )
+            )
+        except Exception:
+            logger.debug(
+                "Private tool notice delivery failed for %s",
+                tool_name,
+                exc_info=True,
+            )
+    return sanitized_result
+
 
 def _ensure_file_checkpoint(
     agent,
@@ -1207,6 +1260,10 @@ def execute_tool_calls_concurrent(agent, assistant_message, messages: list, effe
             if blocked:
                 effect_disposition = "none"
 
+            function_result = _emit_and_strip_private_tool_notices(
+                agent, function_name, function_result
+            )
+
             if not blocked:
                 function_result = agent._append_guardrail_observation(
                     function_name,
@@ -1872,6 +1929,10 @@ def execute_tool_calls_sequential(agent, assistant_message, messages: list, effe
                 function_result = f"Error executing tool '{function_name}': {tool_error}"
                 logger.error("handle_function_call raised for %s: %s", function_name, tool_error, exc_info=True)
             tool_duration = time.time() - tool_start_time
+
+        function_result = _emit_and_strip_private_tool_notices(
+            agent, function_name, function_result
+        )
 
         if isinstance(function_result, str):
             result_preview = function_result if agent.verbose_logging else (

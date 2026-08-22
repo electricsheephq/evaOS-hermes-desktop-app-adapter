@@ -4835,7 +4835,14 @@ class TurnRunner:
             if not line:
                 return
             safe_schedule_threadsafe(
-                self._runner._deliver_platform_notice(ctx.source, line),
+                self._runner._deliver_platform_notice(
+                    ctx.source,
+                    line,
+                    private_only=(
+                        getattr(notice, "delivery", "driver_default")
+                        == "private_only"
+                    ),
+                ),
                 ctx._loop_for_step,
                 logger=logger,
                 log_message="notice_callback delivery scheduling error",
@@ -13989,7 +13996,13 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
 
 
 
-    async def _deliver_platform_notice(self, source, content: str) -> None:
+    async def _deliver_platform_notice(
+        self,
+        source,
+        content: str,
+        *,
+        private_only: bool = False,
+    ) -> None:
         """Deliver a setup/operational notice using platform-specific privacy rules."""
         adapter = self._adapter_for_source(source)
         if not adapter:
@@ -14012,6 +14025,26 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             notice_delivery = config.get_notice_delivery(source.platform)
 
         metadata = self._thread_metadata_for_source(source)
+        if private_only:
+            user_id = getattr(source, "user_id", None)
+            if not user_id:
+                logger.warning("Skipping private-only platform notice without a user id")
+                return
+            try:
+                await adapter.send_private_notice(
+                    source.chat_id,
+                    user_id,
+                    content,
+                    metadata=metadata,
+                )
+            except Exception:
+                logger.debug(
+                    "[%s] private-only platform notice delivery failed",
+                    getattr(source, "platform", "?"),
+                    exc_info=True,
+                )
+            return
+
         if notice_delivery == "private" and getattr(source, "user_id", None):
             try:
                 result = await adapter.send_private_notice(

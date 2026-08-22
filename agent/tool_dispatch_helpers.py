@@ -30,7 +30,7 @@ import logging
 import os
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 
 from agent.tool_result_classification import (
     FILE_MUTATING_TOOL_NAMES as _FILE_MUTATING_TOOLS,
@@ -38,6 +38,15 @@ from agent.tool_result_classification import (
 from tools.threat_patterns import scan_for_threats
 
 logger = logging.getLogger(__name__)
+
+
+class ToolResultWithPrivateNotices(str):
+    """Canonical string result with process-local, non-transcript notices."""
+
+    def __new__(cls, content: str, notices: Sequence[Dict[str, Any]]):
+        value = str.__new__(cls, content)
+        value._hermes_private_notices = tuple(dict(item) for item in notices)
+        return value
 
 # Tools that must never run concurrently (interactive / user-facing).
 # When any of these appear in a batch, we fall back to sequential execution.
@@ -729,4 +738,5 @@ __all__ = [
     "_extract_error_preview",
     "_trajectory_normalize_msg",
     "make_tool_result_message",
+    "ToolResultWithPrivateNotices",
 ]

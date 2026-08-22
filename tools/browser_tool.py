@@ -64,6 +64,7 @@ import time
 from datetime import datetime, timezone
 from typing import Dict, Any, Optional, List, Tuple, Union
 from pathlib import Path
+from urllib.parse import urlsplit
 from agent.redact import redact_cdp_url
 from hermes_constants import (
     agent_browser_runnable,
@@ -2159,22 +2160,54 @@ def _create_cdp_session(task_id: str, cdp_url: str) -> Dict[str, str]:
     }
 
 
-def _take_live_view_url(session_info: Dict[str, Any]) -> Optional[str]:
-    """Return a session's Live View URL once for model-visible delivery.
-
-    The provider keeps CDP credentials internal.  Only Browserbase's official
-    user-facing HTTPS Live View URL reaches the tool result, and only once per
-    concrete cloud session.  The lock prevents concurrent first navigations
-    from publishing the same link twice.
-    """
+def _take_user_handoff_url(session_info: Dict[str, Any]) -> Optional[str]:
+    """Return a provider's private user-handoff URL once per cloud session."""
     with _cleanup_lock:
-        if session_info.get("_live_view_announced"):
+        if session_info.get("_user_handoff_announced"):
             return None
-        live_view_url = session_info.get("live_view_url")
-        if not isinstance(live_view_url, str) or not live_view_url:
+        handoff = session_info.get("user_handoff")
+        if not isinstance(handoff, dict):
             return None
-        session_info["_live_view_announced"] = True
-        return live_view_url
+        url = handoff.get("url")
+        if not isinstance(url, str) or not url.strip():
+            return None
+        candidate = url.strip()
+        try:
+            parsed = urlsplit(candidate)
+        except ValueError:
+            return None
+        if (
+            parsed.scheme != "https"
+            or not parsed.netloc
+            or parsed.username is not None
+            or parsed.password is not None
+        ):
+            return None
+        session_info["_user_handoff_announced"] = True
+        return candidate
+
+
+def _wrap_private_user_handoff(
+    result_json: str, session_info: Dict[str, Any]
+) -> str:
+    """Carry one private handoff beside, never inside, the tool result."""
+    handoff_url = _take_user_handoff_url(session_info)
+    if handoff_url is None:
+        return result_json
+    from agent.tool_dispatch_helpers import ToolResultWithPrivateNotices
+
+    return ToolResultWithPrivateNotices(
+        result_json,
+        [
+            {
+                "text": (
+                    "Browser Live View: "
+                    f"{handoff_url} — open it to watch or take over this session."
+                ),
+                "key": "browser.live_view",
+            }
+        ],
+    )
 
 
 def _get_session_info(task_id: Optional[str] = None) -> Dict[str, Any]:
@@ -3126,9 +3159,6 @@ def browser_navigate(url: str, task_id: Optional[str] = None) -> str:
             "url": final_url,
             "title": title
         }
-        browser_live_view_url = _take_live_view_url(session_info)
-        if browser_live_view_url is not None:
-            response["browser_live_view_url"] = browser_live_view_url
         # Remember only a successful, non-blocked navigation as the task owner.
         # Failed opens and blocked redirects must not retarget follow-up clicks
         # or snapshots to a newly-created but irrelevant session.
@@ -3181,16 +3211,17 @@ def browser_navigate(url: str, task_id: Optional[str] = None) -> str:
         except Exception as e:
             logger.debug("Auto-snapshot after navigate failed: %s", e)
 
-        return json.dumps(response, ensure_ascii=False)
+        return _wrap_private_user_handoff(
+            json.dumps(response, ensure_ascii=False), session_info
+        )
     else:
         response = {
             "success": False,
             "error": result.get("error", "Navigation failed")
         }
-        browser_live_view_url = _take_live_view_url(session_info)
-        if browser_live_view_url is not None:
-            response["browser_live_view_url"] = browser_live_view_url
-        return json.dumps(response, ensure_ascii=False)
+        return _wrap_private_user_handoff(
+            json.dumps(response, ensure_ascii=False), session_info
+        )
 
 
 def browser_snapshot(

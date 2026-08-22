@@ -1375,11 +1375,13 @@ def handle_function_call(
                 except Exception:
                     pass
         duration_ms = int((time.monotonic() - _dispatch_start) * 1000)
+        _private_notices = getattr(result, "_hermes_private_notices", None)
+        _hook_visible_result = str(result) if _private_notices is not None else result
 
         _emit_post_tool_call_hook(
             function_name=function_name,
             function_args=function_args,
-            result=result,
+            result=_hook_visible_result,
             task_id=task_id,
             session_id=session_id,
             tool_call_id=tool_call_id,
@@ -1400,12 +1402,14 @@ def handle_function_call(
         try:
             from hermes_cli.lifecycle import has_hook, invoke_hook
             if has_hook("transform_tool_result"):
-                status, error_type, error_message = _tool_result_observer_fields(result)
+                status, error_type, error_message = _tool_result_observer_fields(
+                    _hook_visible_result
+                )
                 hook_results = invoke_hook(
                     "transform_tool_result",
                     tool_name=function_name,
                     args=function_args,
-                    result=result,
+                    result=_hook_visible_result,
                     task_id=task_id or "",
                     session_id=session_id or "",
                     tool_call_id=tool_call_id or "",
@@ -1418,7 +1422,16 @@ def handle_function_call(
                 )
                 for hook_result in hook_results:
                     if isinstance(hook_result, str):
-                        result = hook_result
+                        if _private_notices is None:
+                            result = hook_result
+                        else:
+                            from agent.tool_dispatch_helpers import (
+                                ToolResultWithPrivateNotices,
+                            )
+
+                            result = ToolResultWithPrivateNotices(
+                                hook_result, _private_notices
+                            )
                         break
         except Exception as _hook_err:
             logger.debug("transform_tool_result hook error: %s", _hook_err)

@@ -10,6 +10,7 @@ from pathlib import Path
 
 import hermes_cli.plugins as plugins_mod
 import model_tools
+from agent.tool_dispatch_helpers import ToolResultWithPrivateNotices
 
 
 _UNSET = object()
@@ -130,6 +131,37 @@ def test_transform_tool_result_runs_after_post_tool_call(monkeypatch):
         ("post_tool_call", '{"raw": "value"}'),
         ("transform_tool_result", '{"raw": "value"}'),
     ]
+
+
+def test_private_notice_sidecar_is_hidden_from_hooks_and_preserved(monkeypatch):
+    observed = []
+    result = ToolResultWithPrivateNotices(
+        '{"ok": true}',
+        [{"text": "private capability", "key": "browser.live_view"}],
+    )
+
+    def _hook(hook_name, **kwargs):
+        if hook_name in {"post_tool_call", "transform_tool_result"}:
+            observed.append((hook_name, kwargs["result"]))
+        if hook_name == "transform_tool_result":
+            return ['{"ok": true, "rewritten": true}']
+        return []
+
+    out = _run_handle_function_call(
+        monkeypatch,
+        dispatch_result=result,
+        invoke_hook=_hook,
+    )
+
+    assert observed == [
+        ("post_tool_call", '{"ok": true}'),
+        ("transform_tool_result", '{"ok": true}'),
+    ]
+    assert all(type(value) is str for _, value in observed)
+    assert str(out) == '{"ok": true, "rewritten": true}'
+    assert getattr(out, "_hermes_private_notices") == (
+        {"text": "private capability", "key": "browser.live_view"},
+    )
 
 
 def test_transform_tool_result_integration_with_real_plugin(monkeypatch, tmp_path):

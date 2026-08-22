@@ -104,7 +104,10 @@ class BrowserbaseBrowserProvider(BrowserProvider):
         if not isinstance(value, str) or not value.strip():
             return None
         candidate = value.strip()
-        parsed = urlsplit(candidate)
+        try:
+            parsed = urlsplit(candidate)
+        except ValueError:
+            return None
         if (
             parsed.scheme != "https"
             or not parsed.netloc
@@ -294,7 +297,7 @@ class BrowserbaseBrowserProvider(BrowserProvider):
             session_id=str(session_data["id"]),
         )
         if live_view_url is not None:
-            session_result["live_view_url"] = live_view_url
+            session_result["user_handoff"] = {"url": live_view_url}
         return session_result
 
     def close_session(self, session_id: str) -> bool:

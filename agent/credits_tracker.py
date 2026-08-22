@@ -204,7 +204,9 @@ class AgentNotice:
     status-bar override, the CLI as a console line, etc. v1 credits notices are all
     ``kind="sticky"``; ``kind``/``ttl_ms`` are kept fully expressive so a future
     config/slash-command can switch them to TTL without touching the policy (a
-    single default seam — see L4).
+    single default seam — see L4). ``delivery="private_only"`` is reserved for
+    short-lived capabilities that a messaging gateway must never fall back to
+    posting in a public room.
     """
 
     text: str
@@ -213,6 +215,7 @@ class AgentNotice:
     ttl_ms: Optional[int] = None   # honored only when kind == "ttl"
     key: Optional[str] = None      # dedupe / fired-once-latch / clear key
     id: Optional[str] = None
+    delivery: str = "driver_default"  # driver_default | private_only
 
 
 # ── is_free_tier_model (local-data-only free-model check) ────────────────────
