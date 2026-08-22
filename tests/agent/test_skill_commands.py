@@ -350,6 +350,26 @@ class TestScanSkillCommands:
         ]
         assert set(catalog_b) == {"/b-local", "/b-new"}
 
+    def test_routed_profile_local_skill_can_be_invoked(self, tmp_path):
+        """Discovery and skill_view normalize against the same routed root."""
+        from agent.skill_commands import (
+            build_skill_invocation_message,
+            get_skill_commands,
+        )
+        from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+
+        profile = tmp_path / "profile"
+        _make_skill(profile / "skills", "profile-local", body="Profile-only body.")
+        home_token = set_hermes_home_override(profile)
+        try:
+            assert "/profile-local" in get_skill_commands()
+            message = build_skill_invocation_message("/profile-local")
+        finally:
+            reset_hermes_home_override(home_token)
+
+        assert message is not None
+        assert "Profile-only body." in message
+
     def test_get_skill_commands_rescans_when_leaving_platform_scope(self, tmp_path, monkeypatch):
         """Returning to no-platform-scope (CLI / cron / RL) after a gateway
         session must rescan so the unfiltered view is repopulated (#14536).
@@ -783,5 +803,4 @@ class TestStackedSkillCommands:
         assert loaded == ["skill-a"]
         assert missing == ["gone"]
         assert "Skills missing (skipped): gone" in msg
-
 

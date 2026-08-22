@@ -5107,34 +5107,40 @@ class GatewaySlashCommandsMixin:
         """
         try:
             from agent.skill_commands import reload_skills
+            from gateway.session_context import session_route_scope
 
-            result = await self._run_in_executor_with_context(reload_skills)
+            source = event.source
+            platform = source.platform.value if source.platform else ""
+            profile = getattr(source, "profile", "") or ""
+            with session_route_scope(platform=platform, profile=profile):
+                result = await self._run_in_executor_with_context(reload_skills)
+
+                # Let only the routed adapter refresh platform-side state
+                # that cached the skill list at startup. Today that's the
+                # Discord /skill autocomplete (registered once per connect);
+                # without this call, new skills stay invisible in the
+                # dropdown and deleted skills error out when clicked. Other
+                # adapters that don't override refresh_skill_group (Telegram's
+                # BotCommand menu, Slack subcommand map, etc.) are silently
+                # skipped — the in-process reload above is enough for them.
+                adapter = self._adapter_for_source(source)
+                if adapter is None:
+                    raise RuntimeError("routed adapter unavailable for skills refresh")
+                refresh = getattr(adapter, "refresh_skill_group", None)
+                if callable(refresh):
+                    try:
+                        maybe = refresh()
+                        if inspect.isawaitable(maybe):
+                            await maybe
+                    except Exception as exc:
+                        logger.warning(
+                            "Adapter %s refresh_skill_group raised: %s",
+                            getattr(adapter, "name", adapter), exc,
+                        )
+
             added = result.get("added", [])      # [{"name", "description"}, ...]
             removed = result.get("removed", [])  # [{"name", "description"}, ...]
             total = result.get("total", 0)
-
-            # Let only the routed adapter refresh platform-side state
-            # that cached the skill list at startup. Today that's the
-            # Discord /skill autocomplete (registered once per connect);
-            # without this call, new skills stay invisible in the
-            # dropdown and deleted skills error out when clicked. Other
-            # adapters that don't override refresh_skill_group (Telegram's
-            # BotCommand menu, Slack subcommand map, etc.) are silently
-            # skipped — the in-process reload above is enough for them.
-            adapter = self._adapter_for_source(event.source)
-            if adapter is None:
-                raise RuntimeError("routed adapter unavailable for skills refresh")
-            refresh = getattr(adapter, "refresh_skill_group", None)
-            if callable(refresh):
-                try:
-                    maybe = refresh()
-                    if inspect.isawaitable(maybe):
-                        await maybe
-                except Exception as exc:
-                    logger.warning(
-                        "Adapter %s refresh_skill_group raised: %s",
-                        getattr(adapter, "name", adapter), exc,
-                    )
 
             lines = [t("gateway.reload_skills.header")]
             if not added and not removed:
