@@ -6380,6 +6380,8 @@ class DiscordAdapter(BasePlatformAdapter):
         """Return only the catalog authorized by this interaction's route."""
         try:
             source = self._build_slash_event(interaction, "/skill").source
+            if getattr(source, "profile_route_rejected", False) is True:
+                return ([], {})
             profile = str(getattr(source, "profile", "") or "").strip()
         except Exception:
             return ([], {})

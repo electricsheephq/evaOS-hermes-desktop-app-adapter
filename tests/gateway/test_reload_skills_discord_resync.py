@@ -205,6 +205,23 @@ class TestRefreshSkillGroup:
             "default": ("Default skill", "/default")
         }
 
+    def test_rejected_route_never_falls_back_to_default_catalog(self) -> None:
+        """An explicit unserved route cannot inspect the shared picker."""
+        adapter = _make_adapter()
+        adapter._skill_entries = [("default", "Default skill", "/default")]
+        adapter._skill_lookup = {"default": ("Default skill", "/default")}
+        adapter._build_slash_event = lambda _interaction, _text: SimpleNamespace(
+            source=SimpleNamespace(
+                profile=None,
+                profile_route_rejected=True,
+            )
+        )
+
+        entries, lookup = adapter._skill_catalog_for_interaction(object())
+
+        assert entries == []
+        assert lookup == {}
+
 
 class TestRegisterSkillGroupUsesInstanceState:
     """The closure-based ``entries`` / ``skill_lookup`` must be gone.
