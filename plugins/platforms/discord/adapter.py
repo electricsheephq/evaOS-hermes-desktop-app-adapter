@@ -6265,6 +6265,7 @@ class DiscordAdapter(BasePlatformAdapter):
                     return []
                 if not allowed:
                     return []
+                await self._ensure_skill_catalog_for_interaction(interaction)
                 entries, _lookup = self._skill_catalog_for_interaction(interaction)
                 q = (current or "").strip().lower()
                 choices: list = []
@@ -6298,6 +6299,7 @@ class DiscordAdapter(BasePlatformAdapter):
                 # via "Unknown skill: <name>" responses).
                 if not await self._check_slash_authorization(interaction, "/skill"):
                     return
+                await self._ensure_skill_catalog_for_interaction(interaction)
                 _entries, lookup = self._skill_catalog_for_interaction(interaction)
                 entry = lookup.get(name)
                 if not entry:
@@ -6397,6 +6399,50 @@ class DiscordAdapter(BasePlatformAdapter):
             getattr(self, "_skill_lookup", {}),
         )
 
+    async def _ensure_skill_catalog_for_interaction(
+        self, interaction: "discord.Interaction",
+    ) -> None:
+        """Lazily seed a shared adapter's routed profile catalog.
+
+        Dedicated adapters populate their legacy catalog at startup. A shared
+        multiplex adapter cannot do that safely until an interaction identifies
+        the routed profile, so its first picker use loads that profile under the
+        same runtime and session scopes as a routed ``/reload-skills`` command.
+        """
+        try:
+            source = self._build_slash_event(interaction, "/skill").source
+            profile = str(getattr(source, "profile", "") or "").strip()
+            if not profile:
+                return
+            catalogs = getattr(self, "_skill_catalogs_by_profile", {})
+            if isinstance(catalogs, dict) and profile in catalogs:
+                return
+            bound_profile = str(
+                getattr(self, "_evaos_profile_name", "") or ""
+            ).strip()
+            if profile == bound_profile:
+                return
+
+            runner = getattr(self, "gateway_runner", None)
+            if runner is None:
+                return
+            profile_home = runner._resolve_profile_home_for_source(source)
+            from gateway.run import _profile_runtime_scope
+            from gateway.session_context import session_route_scope
+
+            platform = source.platform.value if source.platform else ""
+            with _profile_runtime_scope(profile_home), session_route_scope(
+                platform=platform,
+                profile=profile,
+            ):
+                self.refresh_skill_group(profile=profile)
+        except Exception as exc:
+            logger.warning(
+                "[%s] Failed to seed routed /skill catalog: %s",
+                self.name,
+                exc,
+            )
+
     def refresh_skill_group(self, profile: str = "") -> tuple[int, int]:
         """Rescan skills and update the live ``/skill`` autocomplete state.
 
@@ -6452,6 +6498,12 @@ class DiscordAdapter(BasePlatformAdapter):
         # Get channel topic (if available).
         # For forum threads, inherit the parent forum's topic.
         chat_topic = self._get_effective_topic(interaction.channel, is_thread=is_thread)
+        guild_id = getattr(interaction, "guild_id", None)
+        if guild_id is None:
+            guild_id = getattr(getattr(interaction.channel, "guild", None), "id", None)
+        parent_id = getattr(interaction.channel, "parent_id", None)
+        if parent_id is None:
+            parent_id = getattr(getattr(interaction.channel, "parent", None), "id", None)
 
         source = self.build_source(
             chat_id=str(interaction.channel_id),
@@ -6461,13 +6513,15 @@ class DiscordAdapter(BasePlatformAdapter):
             user_name=interaction.user.display_name,
             thread_id=thread_id,
             chat_topic=chat_topic,
+            guild_id=str(guild_id) if guild_id is not None else None,
+            parent_chat_id=str(parent_id) if parent_id is not None else None,
         )
         if not source.profile:
             source.profile = getattr(self, "_evaos_profile_name", None)
 
         msg_type = MessageType.COMMAND if text.startswith("/") else MessageType.TEXT
         channel_id = str(interaction.channel_id)
-        parent_id = str(getattr(getattr(interaction, "channel", None), "parent_id", "") or "")
+        parent_id = str(parent_id or "")
         return MessageEvent(
             text=text,
             message_type=msg_type,

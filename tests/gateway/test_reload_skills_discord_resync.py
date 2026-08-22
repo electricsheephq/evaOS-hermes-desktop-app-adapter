@@ -162,6 +162,49 @@ class TestRefreshSkillGroup:
             "default": ("Default skill", "/default")
         }
 
+    @pytest.mark.asyncio
+    async def test_shared_adapter_lazily_seeds_routed_profile_catalog(
+        self, tmp_path
+    ) -> None:
+        """The first picker use after restart loads only its routed profile."""
+        from agent.skill_commands import _reset_skill_commands_cache_for_tests
+        from gateway.platforms.base import Platform
+
+        profile_home = tmp_path / "profiles" / "eve"
+        skill_dir = profile_home / "skills" / "eve-only"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
+            "---\nname: eve-only\ndescription: Eve-only skill.\n---\nbody\n"
+        )
+
+        adapter = _make_adapter()
+        adapter._skill_entries = [("default", "Default skill", "/default")]
+        adapter._skill_lookup = {"default": ("Default skill", "/default")}
+        adapter._skill_group_hidden_count = 0
+        adapter._skill_group_reserved_names = set()
+        adapter._skill_catalogs_by_profile = {}
+        adapter._evaos_profile_name = ""
+        source = SimpleNamespace(profile="eve", platform=Platform.DISCORD)
+        adapter._build_slash_event = lambda _interaction, _text: SimpleNamespace(
+            source=source
+        )
+        adapter.gateway_runner = SimpleNamespace(
+            _resolve_profile_home_for_source=lambda _source: profile_home
+        )
+
+        _reset_skill_commands_cache_for_tests()
+        try:
+            await adapter._ensure_skill_catalog_for_interaction(object())
+            entries, lookup = adapter._skill_catalog_for_interaction(object())
+        finally:
+            _reset_skill_commands_cache_for_tests()
+
+        assert [entry[0] for entry in entries] == ["eve-only"]
+        assert set(lookup) == {"eve-only"}
+        assert adapter._skill_lookup == {
+            "default": ("Default skill", "/default")
+        }
+
 
 class TestRegisterSkillGroupUsesInstanceState:
     """The closure-based ``entries`` / ``skill_lookup`` must be gone.
