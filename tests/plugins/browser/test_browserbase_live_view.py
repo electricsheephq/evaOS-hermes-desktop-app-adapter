@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any
+
+import pytest
 
 from plugins.browser.browserbase import provider as browserbase_provider
 
@@ -171,3 +174,23 @@ def test_malformed_https_live_view_url_is_ignored(monkeypatch):
     assert session["bb_session_id"] == "session_test"
     assert session["cdp_url"] == "wss://connect.browserbase.test/session"
     assert "user_handoff" not in session
+
+
+def test_real_browserbase_live_view_contract_when_credentials_are_opted_in():
+    """Protected vendor canary; ordinary CI skips without explicit secrets."""
+    if not (
+        os.getenv("BROWSERBASE_API_KEY")
+        and os.getenv("BROWSERBASE_PROJECT_ID")
+    ):
+        pytest.skip("Browserbase live canary credentials are not configured")
+
+    provider = browserbase_provider.BrowserbaseBrowserProvider()
+    session = None
+    try:
+        session = provider.create_session("live_view_contract_canary")
+        handoff = session.get("user_handoff")
+        assert isinstance(handoff, dict)
+        assert provider._valid_live_view_url(handoff.get("url")) == handoff["url"]
+    finally:
+        if isinstance(session, dict) and session.get("bb_session_id"):
+            provider.close_session(str(session["bb_session_id"]))
