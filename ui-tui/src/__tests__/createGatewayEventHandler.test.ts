@@ -150,6 +150,26 @@ describe('createGatewayEventHandler', () => {
     expect(openExternalUrlMock).toHaveBeenCalledWith('https://openrouter.ai/settings/credits')
   })
 
+  it('renders a private capability as a full local line and opens its URL', () => {
+    const ctx = buildCtx([])
+    const onEvent = createGatewayEventHandler(ctx)
+    openExternalUrlMock.mockClear()
+
+    onEvent({
+      payload: {
+        text: 'Browser Live View: https://live.example/session',
+        url: 'https://live.example/session'
+      },
+      type: 'private_capability.show'
+    } as any)
+
+    expect(ctx.system.sys).toHaveBeenCalledWith(
+      'Browser Live View: https://live.example/session'
+    )
+    expect(openExternalUrlMock).toHaveBeenCalledWith('https://live.example/session')
+    expect(getUiState().notice).toBeNull()
+  })
+
   it('archives completed todos into transcript flow at end of turn', () => {
     const appended: Msg[] = []
     const todos = [{ content: 'Serve tiny latte', id: 'serve', status: 'completed' }]

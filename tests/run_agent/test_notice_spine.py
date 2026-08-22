@@ -124,6 +124,28 @@ class TestAgentCbsNoticeBinding:
         _event_type, _sid, payload = captured[0]
         assert set(payload.keys()) == {"text", "level", "kind", "ttl_ms", "key", "id"}
 
+    def test_private_capability_uses_dedicated_full_text_event(self):
+        from tui_gateway import server
+
+        with patch("tui_gateway.server._emit") as mock_emit:
+            cbs = server._agent_cbs("sid123")
+            cbs["notice_callback"](
+                AgentNotice(
+                    text="Browser Live View: https://live.example/session",
+                    delivery="private_only",
+                    url="https://live.example/session",
+                )
+            )
+
+        mock_emit.assert_called_once_with(
+            "private_capability.show",
+            "sid123",
+            {
+                "text": "Browser Live View: https://live.example/session",
+                "url": "https://live.example/session",
+            },
+        )
+
 
 
     def test_notice_clear_callback_event_type_is_notification_clear(self):

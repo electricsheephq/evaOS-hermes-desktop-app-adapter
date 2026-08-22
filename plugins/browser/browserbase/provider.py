@@ -35,6 +35,7 @@ import logging
 import os
 import uuid
 from typing import Any, Dict, Optional
+from urllib.parse import urlsplit
 
 import requests
 
@@ -91,6 +92,83 @@ class BrowserbaseBrowserProvider(BrowserProvider):
     # ------------------------------------------------------------------
     # Session lifecycle
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _valid_live_view_url(value: object) -> Optional[str]:
+        """Return an HTTPS Browserbase Live View URL, or ``None``.
+
+        The URL is an ephemeral user-facing capability returned by
+        Browserbase's authenticated debug endpoint.  Never log it here: the
+        browser tool surfaces it once to the routed agent instead.
+        """
+        if not isinstance(value, str) or not value.strip():
+            return None
+        candidate = value.strip()
+        try:
+            parsed = urlsplit(candidate)
+        except ValueError:
+            return None
+        if (
+            parsed.scheme != "https"
+            or not parsed.netloc
+            or parsed.username is not None
+            or parsed.password is not None
+        ):
+            return None
+        return candidate
+
+    def _get_live_view_url(
+        self,
+        *,
+        config: Dict[str, Any],
+        session_id: str,
+    ) -> Optional[str]:
+        """Fetch Browserbase's official interactive Live View URL.
+
+        Live View is additive.  A temporary debug-endpoint failure must not
+        discard a successfully-created browser session.
+        """
+        try:
+            response = requests.get(
+                f"{config['base_url']}/v1/sessions/{session_id}/debug",
+                headers={"X-BB-API-Key": config["api_key"]},
+                timeout=10,
+            )
+        except requests.RequestException as exc:
+            logger.warning(
+                "Browserbase Live View unavailable after session creation (%s)",
+                type(exc).__name__,
+            )
+            return None
+
+        if not response.ok:
+            logger.warning(
+                "Browserbase Live View unavailable after session creation (HTTP %s)",
+                response.status_code,
+            )
+            return None
+
+        try:
+            payload = response.json()
+        except (TypeError, ValueError):
+            logger.warning(
+                "Browserbase Live View unavailable after session creation "
+                "(invalid response)"
+            )
+            return None
+
+        if not isinstance(payload, dict):
+            return None
+
+        live_view_url = self._valid_live_view_url(
+            payload.get("debuggerFullscreenUrl") or payload.get("debuggerUrl")
+        )
+        if live_view_url is None:
+            logger.warning(
+                "Browserbase Live View unavailable after session creation "
+                "(missing safe URL)"
+            )
+        return live_view_url
 
     def create_session(self, task_id: str) -> Dict[str, object]:
         config = self._get_config()
@@ -208,12 +286,19 @@ class BrowserbaseBrowserProvider(BrowserProvider):
             "Created Browserbase session %s with features: %s", session_name, feature_str
         )
 
-        return {
+        session_result: Dict[str, object] = {
             "session_name": session_name,
             "bb_session_id": session_data["id"],
             "cdp_url": session_data["connectUrl"],
             "features": features_enabled,
         }
+        live_view_url = self._get_live_view_url(
+            config=config,
+            session_id=str(session_data["id"]),
+        )
+        if live_view_url is not None:
+            session_result["user_handoff"] = {"url": live_view_url}
+        return session_result
 
     def close_session(self, session_id: str) -> bool:
         try:

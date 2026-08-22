@@ -23,6 +23,7 @@ makes the corresponding assertion fail.
 """
 
 import copy
+import json
 from types import SimpleNamespace
 from pathlib import Path
 import tempfile
@@ -31,6 +32,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from agent.tool_dispatch_helpers import make_tool_result_message
+from agent.tool_dispatch_helpers import ToolResultWithPrivateNotices
 from agent.agent_runtime_helpers import sanitize_api_messages
 from agent.tool_executor import execute_tool_calls_segmented
 from hermes_state import SessionDB
@@ -297,6 +299,65 @@ def test_execute_tool_calls_sequential_flushes_each_tool_result_before_next_disp
         ("dispatch", "c2"),
         ("flush", "tool", "c2"),
     ]
+
+
+@pytest.mark.parametrize("executor_mode", ["sequential", "concurrent"])
+def test_browser_private_notice_is_emitted_but_never_persisted(
+    tmp_path, executor_mode
+):
+    agent = _make_agent()
+    agent.valid_tool_names.add("browser_navigate")
+    received = []
+    agent.notice_callback = received.append
+    db_path = tmp_path / "state.db"
+    session_id = f"browser-private-notice-{executor_mode}"
+    db = _attach_real_session_db(agent, db_path, session_id)
+    live_url = "https://live.browserbase.test/session"
+    tool_call = _mock_tool_call(name="browser_navigate", call_id="browser-1")
+    assistant_message = SimpleNamespace(content="", tool_calls=[tool_call])
+    messages: list = []
+    raw_result = ToolResultWithPrivateNotices(
+        json.dumps({"success": True, "url": "https://example.com/"}),
+        [
+                {
+                    "text": f"Browser Live View: {live_url}",
+                    "key": "browser.live_view",
+                }
+        ],
+    )
+    dispatch_patch = (
+        patch("run_agent.handle_function_call", return_value=raw_result)
+        if executor_mode == "sequential"
+        else patch.object(agent, "_invoke_tool", return_value=raw_result)
+    )
+
+    try:
+        with (
+            dispatch_patch,
+            patch(
+                "agent.tool_executor.maybe_persist_tool_result",
+                side_effect=lambda **kwargs: kwargs["content"],
+            ),
+        ):
+            if executor_mode == "sequential":
+                agent._execute_tool_calls_sequential(
+                    assistant_message, messages, "task-1"
+                )
+            else:
+                agent._execute_tool_calls_concurrent(
+                    assistant_message, messages, "task-1"
+                )
+
+        assert len(received) == 1
+        assert received[0].text == f"Browser Live View: {live_url}"
+        assert received[0].delivery == "private_only"
+        assert live_url not in messages[-1]["content"]
+        assert "_hermes_private_notices" not in messages[-1]["content"]
+        durable = _durable_messages(db_path, session_id)
+        assert live_url not in repr(durable)
+        assert "_hermes_private_notices" not in repr(durable)
+    finally:
+        db.close()
 
 
 def test_sequential_keyboard_interrupt_emits_results_for_all_calls():
