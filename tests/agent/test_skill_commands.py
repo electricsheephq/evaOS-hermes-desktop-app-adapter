@@ -293,6 +293,81 @@ class TestScanSkillCommands:
         assert set(only_b) == {"/b-local"}
         assert second_a == first_a
 
+    def test_project_skill_catalog_cache_is_scoped_by_project_dirs(self, tmp_path):
+        """One profile/platform may not reuse a different project's skills."""
+        from agent.skill_commands import get_skill_commands
+
+        local_skills = tmp_path / "local"
+        local_skills.mkdir()
+        project_a = tmp_path / "project-a-skills"
+        project_b = tmp_path / "project-b-skills"
+        _make_skill(project_a, "project-a-only")
+        _make_skill(project_b, "project-b-only")
+        current_project_dirs = [project_a]
+
+        with (
+            patch("tools.skills_tool._skills_dir", return_value=local_skills),
+            patch(
+                "agent.skill_utils.get_project_skills_dirs",
+                side_effect=lambda: list(current_project_dirs),
+            ),
+        ):
+            catalog_a = dict(get_skill_commands())
+            current_project_dirs[:] = [project_b]
+            catalog_b = dict(get_skill_commands())
+
+        assert set(catalog_a) == {"/project-a-only"}
+        assert set(catalog_b) == {"/project-b-only"}
+
+    def test_older_scan_cannot_overwrite_newer_reload(self, tmp_path):
+        """A late ordinary scan cannot republish a pre-reload catalog."""
+        from threading import Event, Lock
+
+        import agent.skill_utils as skill_utils
+        from agent.skill_commands import get_skill_commands, reload_skills
+
+        _make_skill(tmp_path, "old-skill")
+        first_scan_started = Event()
+        release_first_scan = Event()
+        call_lock = Lock()
+        call_count = 0
+        real_iter = skill_utils.iter_skill_index_files
+
+        def controlled_iter(root, index_name):
+            nonlocal call_count
+            paths = list(real_iter(root, index_name))
+            with call_lock:
+                call_count += 1
+                this_call = call_count
+            if this_call == 1:
+                first_scan_started.set()
+                assert release_first_scan.wait(timeout=5)
+            return iter(paths)
+
+        with (
+            patch("tools.skills_tool._skills_dir", return_value=tmp_path),
+            patch("agent.skill_utils.get_project_skills_dirs", return_value=[]),
+            patch(
+                "agent.skill_utils.iter_skill_index_files",
+                side_effect=controlled_iter,
+            ),
+            ThreadPoolExecutor(max_workers=1) as pool,
+        ):
+            old_scan = pool.submit(get_skill_commands)
+            assert first_scan_started.wait(timeout=5)
+            _make_skill(tmp_path, "new-skill")
+            reloaded = reload_skills()
+            release_first_scan.set()
+            late_result = old_scan.result(timeout=5)
+            current_result = get_skill_commands()
+
+        assert reloaded["added"] == [
+            {"name": "new-skill", "description": "Description for new-skill."},
+            {"name": "old-skill", "description": "Description for old-skill."},
+        ]
+        assert set(late_result) == {"/old-skill", "/new-skill"}
+        assert set(current_result) == {"/old-skill", "/new-skill"}
+
     def test_concurrent_profile_reloads_and_removal_stay_isolated(self, tmp_path):
         """Concurrent reloads publish and diff only their routed scope."""
         from threading import Barrier

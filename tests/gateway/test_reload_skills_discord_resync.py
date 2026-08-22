@@ -185,9 +185,9 @@ class TestHandleReloadSkillsCallsRefreshSkillGroup:
         )
 
         runner = object.__new__(GatewayRunner)
+        runner.config = MagicMock(multiplex_profiles=True)
         default_adapter = MagicMock(name="default-discord")
         eve_adapter = MagicMock(name="eve-discord")
-        eve_adapter.refresh_skill_group.return_value = (3, 0)
         runner.adapters = {Platform.DISCORD: default_adapter}
         runner._profile_adapters = {"eve": {Platform.DISCORD: eve_adapter}}
         runner._active_profile_name = lambda: "default"
@@ -213,6 +213,16 @@ class TestHandleReloadSkillsCallsRefreshSkillGroup:
             return fake_result
 
         profile_home = tmp_path / "profiles" / "eve"
+        runner._resolve_profile_home_for_source = lambda src: profile_home
+
+        def refresh_profile_catalog():
+            observed["refresh_home"] = str(get_hermes_home())
+            observed["refresh_platform"] = get_session_env(
+                "HERMES_SESSION_PLATFORM"
+            )
+            return (3, 0)
+
+        eve_adapter.refresh_skill_group.side_effect = refresh_profile_catalog
         for name in ("discord-only", "telegram-only"):
             skill_dir = profile_home / "skills" / name
             skill_dir.mkdir(parents=True)
@@ -251,6 +261,8 @@ class TestHandleReloadSkillsCallsRefreshSkillGroup:
         assert observed["home"] == str(profile_home)
         assert observed["platform"] == "discord"
         assert observed["catalog"] == {"/telegram-only"}
+        assert observed["refresh_home"] == str(profile_home)
+        assert observed["refresh_platform"] == "discord"
         assert observed["restored_platform"] == "outer"
         eve_adapter.refresh_skill_group.assert_called_once_with()
         default_adapter.refresh_skill_group.assert_not_called()

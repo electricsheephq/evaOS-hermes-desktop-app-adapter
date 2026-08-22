@@ -22,8 +22,9 @@ from agent.skill_preprocessing import (
 
 logger = logging.getLogger(__name__)
 
-_SkillScope = tuple[str, Optional[str]]
+_SkillScope = tuple[str, Optional[str], tuple[str, ...]]
 _skill_commands_by_scope: Dict[_SkillScope, Dict[str, Dict[str, Any]]] = {}
+_skill_commands_generation_by_scope: Dict[_SkillScope, int] = {}
 _skill_commands_lock = threading.RLock()
 
 # Compatibility snapshots for older test patchers and debuggers. Runtime reads
@@ -425,7 +426,14 @@ def _build_skill_message(
 
 def _skill_commands_scope() -> _SkillScope:
     """Return the immutable cache scope for the current routed request."""
-    return (_resolve_skill_commands_home(), _resolve_skill_commands_platform())
+    from agent.skill_utils import get_project_skills_dirs
+
+    project_dirs = tuple(str(path) for path in get_project_skills_dirs())
+    return (
+        _resolve_skill_commands_home(),
+        _resolve_skill_commands_platform(),
+        project_dirs,
+    )
 
 
 def _reset_skill_commands_cache_for_tests() -> None:
@@ -433,6 +441,7 @@ def _reset_skill_commands_cache_for_tests() -> None:
     global _skill_commands, _skill_commands_platform, _skill_commands_home
     with _skill_commands_lock:
         _skill_commands_by_scope.clear()
+        _skill_commands_generation_by_scope.clear()
         _skill_commands = {}
         _skill_commands_platform = None
         _skill_commands_home = None
@@ -446,12 +455,13 @@ def scan_skill_commands() -> Dict[str, Dict[str, Any]]:
     """
     global _skill_commands, _skill_commands_platform, _skill_commands_home
     scope = _skill_commands_scope()
+    with _skill_commands_lock:
+        scan_generation = _skill_commands_generation_by_scope.get(scope, 0)
     commands: Dict[str, Dict[str, Any]] = {}
     try:
         from tools.skills_tool import _skills_dir, _parse_frontmatter, skill_matches_platform, skill_matches_environment, _get_disabled_skill_names
         from agent.skill_utils import (
             get_external_skills_dirs,
-            get_project_skills_dirs,
             iter_project_skill_files,
             iter_skill_index_files,
         )
@@ -461,7 +471,7 @@ def scan_skill_commands() -> Dict[str, Dict[str, Any]]:
 
         # Scan project dirs first (highest precedence), then local, then external.
         # Project dirs iterate through the quarantine chokepoint.
-        project_dirs = list(get_project_skills_dirs())
+        project_dirs = [Path(path) for path in scope[2]]
         dirs_to_scan = list(project_dirs)
         local_skills_dir = _skills_dir()
         if local_skills_dir.exists():
@@ -545,10 +555,21 @@ def scan_skill_commands() -> Dict[str, Dict[str, Any]]:
     except Exception:
         pass
     # Publish the fully-built catalog atomically. Concurrent scans for other
-    # profiles/platforms never share a mutable construction dictionary.
+    # profiles/platforms never share a mutable construction dictionary. A
+    # scan that started before a newer reload must not overwrite that newer
+    # catalog when it finishes late.
     with _skill_commands_lock:
+        current_generation = _skill_commands_generation_by_scope.get(scope, 0)
+        if current_generation != scan_generation:
+            current = _skill_commands_by_scope.get(scope, {})
+            _skill_commands_home = scope[0]
+            _skill_commands_platform = scope[1]
+            _skill_commands = current
+            return current
         _skill_commands_by_scope[scope] = commands
-        _skill_commands_home, _skill_commands_platform = scope
+        _skill_commands_generation_by_scope[scope] = scan_generation + 1
+        _skill_commands_home = scope[0]
+        _skill_commands_platform = scope[1]
         _skill_commands = commands
         return commands
 

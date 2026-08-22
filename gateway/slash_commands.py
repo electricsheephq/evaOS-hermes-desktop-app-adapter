@@ -25,6 +25,7 @@ import re
 import shlex
 import sys
 import time
+from contextlib import nullcontext
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional, Union
@@ -5563,12 +5564,17 @@ class GatewaySlashCommandsMixin:
         """
         try:
             from agent.skill_commands import reload_skills
+            from gateway.run import _profile_runtime_scope
             from gateway.session_context import session_route_scope
 
             source = event.source
             platform = source.platform.value if source.platform else ""
             profile = getattr(source, "profile", "") or ""
-            with session_route_scope(platform=platform, profile=profile):
+            runtime_scope = nullcontext()
+            if getattr(getattr(self, "config", None), "multiplex_profiles", False):
+                profile_home = self._resolve_profile_home_for_source(source)
+                runtime_scope = _profile_runtime_scope(profile_home)
+            with runtime_scope, session_route_scope(platform=platform, profile=profile):
                 result = await self._run_in_executor_with_context(reload_skills)
 
                 # Let only the routed adapter refresh platform-side state
