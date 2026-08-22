@@ -13,8 +13,8 @@ entry was clicked.
 The fix promotes those two variables to instance attributes
 (``_skill_entries`` / ``_skill_lookup``) and exposes a
 ``refresh_skill_group()`` method that rescans and mutates them in
-place. The gateway ``_handle_reload_skills_command`` iterates its
-connected adapters and calls the method on any that expose it.
+place. The gateway ``_handle_reload_skills_command`` resolves the adapter
+that received the command and refreshes only that adapter.
 
 No ``tree.sync()`` is required because Discord fetches autocomplete
 options dynamically on every keystroke — we only need to rebind the
@@ -22,7 +22,10 @@ data the live callbacks already read from.
 """
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import MagicMock
+
+import pytest
 
 
 def _make_adapter():
@@ -83,6 +86,151 @@ class TestRefreshSkillGroup:
         assert "old-skill" not in adapter._skill_lookup
         assert adapter._skill_lookup["new-skill"] == ("Fresh skill", "/new-skill")
 
+    def test_refresh_includes_routed_profile_local_skill(self, tmp_path) -> None:
+        """Discord categorization follows the active profile's local root."""
+        from agent.skill_commands import _reset_skill_commands_cache_for_tests
+        from gateway.session_context import clear_session_vars, set_session_vars
+        from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+
+        profile = tmp_path / "profile"
+        skill_dir = profile / "skills" / "profile-local"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
+            "---\nname: profile-local\ndescription: Routed profile skill.\n---\nbody\n"
+        )
+        adapter = _make_adapter()
+        adapter._skill_group_reserved_names = set()
+        _reset_skill_commands_cache_for_tests()
+        home_token = set_hermes_home_override(profile)
+        session_tokens = set_session_vars(platform="discord", profile="eve")
+        try:
+            count, hidden = adapter.refresh_skill_group()
+        finally:
+            clear_session_vars(session_tokens)
+            reset_hermes_home_override(home_token)
+            _reset_skill_commands_cache_for_tests()
+
+        assert (count, hidden) == (1, 0)
+        assert adapter._skill_lookup == {
+            "profile-local": ("Routed profile skill.", "/profile-local")
+        }
+
+    def test_shared_adapter_keeps_routed_profile_catalogs_distinct(
+        self, monkeypatch
+    ) -> None:
+        """Refreshing one routed profile never replaces its sibling's picker."""
+        adapter = _make_adapter()
+        adapter._skill_entries = [("default", "Default skill", "/default")]
+        adapter._skill_lookup = {"default": ("Default skill", "/default")}
+        adapter._skill_group_hidden_count = 0
+        adapter._skill_group_reserved_names = set()
+        adapter._skill_catalogs_by_profile = {}
+        active_profile = "eve"
+
+        def fake_collector(*, reserved_names):
+            name = f"{active_profile}-only"
+            return ({"profile": [(name, name, f"/{name}")]}, [], 0)
+
+        monkeypatch.setattr(
+            "hermes_cli.commands.discord_skill_commands_by_category",
+            fake_collector,
+        )
+        adapter.refresh_skill_group(profile="eve")
+        active_profile = "grace"
+        adapter.refresh_skill_group(profile="grace")
+
+        eve_interaction = object()
+        grace_interaction = object()
+
+        def fake_event(interaction, _text):
+            profile = "eve" if interaction is eve_interaction else "grace"
+            return SimpleNamespace(source=SimpleNamespace(profile=profile))
+
+        adapter._build_slash_event = fake_event
+        eve_entries, eve_lookup = adapter._skill_catalog_for_interaction(
+            eve_interaction
+        )
+        grace_entries, grace_lookup = adapter._skill_catalog_for_interaction(
+            grace_interaction
+        )
+
+        assert [entry[0] for entry in eve_entries] == ["eve-only"]
+        assert set(eve_lookup) == {"eve-only"}
+        assert [entry[0] for entry in grace_entries] == ["grace-only"]
+        assert set(grace_lookup) == {"grace-only"}
+        assert adapter._skill_lookup == {
+            "default": ("Default skill", "/default")
+        }
+
+    @pytest.mark.asyncio
+    async def test_shared_adapter_lazily_seeds_routed_profile_catalog(
+        self, tmp_path
+    ) -> None:
+        """The first picker use after restart loads only its routed profile."""
+        from agent.skill_commands import _reset_skill_commands_cache_for_tests
+        from gateway.platforms.base import Platform
+
+        profile_home = tmp_path / "profiles" / "eve"
+        skill_dir = profile_home / "skills" / "eve-only"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
+            "---\nname: eve-only\ndescription: Eve-only skill.\n---\nbody\n"
+        )
+
+        adapter = _make_adapter()
+        adapter._skill_entries = [("default", "Default skill", "/default")]
+        adapter._skill_lookup = {"default": ("Default skill", "/default")}
+        adapter._skill_group_hidden_count = 0
+        adapter._skill_group_reserved_names = set()
+        adapter._skill_catalogs_by_profile = {}
+        adapter._evaos_profile_name = ""
+        source = SimpleNamespace(profile="eve", platform=Platform.DISCORD)
+        adapter._build_slash_event = lambda _interaction, _text: SimpleNamespace(
+            source=source
+        )
+        executor_calls = []
+
+        async def run_in_executor(func, *args):
+            executor_calls.append((func, args))
+            return func(*args)
+
+        adapter.gateway_runner = SimpleNamespace(
+            _resolve_profile_home_for_source=lambda _source: profile_home,
+            _run_in_executor_with_context=run_in_executor,
+        )
+
+        _reset_skill_commands_cache_for_tests()
+        try:
+            await adapter._ensure_skill_catalog_for_interaction(object())
+            entries, lookup = adapter._skill_catalog_for_interaction(object())
+        finally:
+            _reset_skill_commands_cache_for_tests()
+
+        assert [entry[0] for entry in entries] == ["eve-only"]
+        assert set(lookup) == {"eve-only"}
+        assert len(executor_calls) == 1
+        assert executor_calls[0][1] == ("eve",)
+        assert adapter._skill_lookup == {
+            "default": ("Default skill", "/default")
+        }
+
+    def test_rejected_route_never_falls_back_to_default_catalog(self) -> None:
+        """An explicit unserved route cannot inspect the shared picker."""
+        adapter = _make_adapter()
+        adapter._skill_entries = [("default", "Default skill", "/default")]
+        adapter._skill_lookup = {"default": ("Default skill", "/default")}
+        adapter._build_slash_event = lambda _interaction, _text: SimpleNamespace(
+            source=SimpleNamespace(
+                profile=None,
+                profile_route_rejected=True,
+            )
+        )
+
+        entries, lookup = adapter._skill_catalog_for_interaction(object())
+
+        assert entries == []
+        assert lookup == {}
+
 
 class TestRegisterSkillGroupUsesInstanceState:
     """The closure-based ``entries`` / ``skill_lookup`` must be gone.
@@ -134,60 +282,144 @@ class TestRegisterSkillGroupUsesInstanceState:
 class TestHandleReloadSkillsCallsRefreshSkillGroup:
     """Gateway-side integration: /reload-skills must call refresh on adapters."""
 
-    def test_orchestrator_calls_refresh_skill_group_on_every_adapter(self):
-        """Sync + async refresh_skill_group implementations both get awaited/called.
+    @pytest.mark.asyncio
+    async def test_refreshes_only_routed_secondary_adapter_with_context(self, tmp_path):
+        """The worker keeps profile context and refreshes only its adapter."""
+        from unittest.mock import patch
 
-        The orchestrator iterates ``self.adapters`` and calls
-        ``refresh_skill_group`` if it exists. Adapters that don't
-        implement it (today: everything except Discord) are silently
-        skipped without raising.
-        """
-        import asyncio
-        from unittest.mock import patch, MagicMock
-
-        # Import without constructing a real runner — test the method
-        # directly against an ``object.__new__`` instance.
         from gateway.run import GatewayRunner
+        from gateway.platforms.base import Platform
+        from gateway.session import SessionSource
+        from gateway.session_context import (
+            clear_session_vars,
+            get_session_env,
+            set_session_vars,
+        )
+        from hermes_constants import (
+            get_hermes_home,
+            reset_hermes_home_override,
+            set_hermes_home_override,
+        )
+
         runner = object.__new__(GatewayRunner)
+        runner.config = MagicMock(multiplex_profiles=True)
+        default_adapter = MagicMock(name="default-discord")
+        eve_adapter = MagicMock(name="eve-discord")
+        runner.adapters = {Platform.DISCORD: default_adapter}
+        runner._profile_adapters = {"eve": {Platform.DISCORD: eve_adapter}}
+        runner._active_profile_name = lambda: "default"
+        runner._session_key_for_source = lambda src: None
+        runner._pending_skills_reload_notes = {}
 
-        sync_refresh = MagicMock(return_value=(5, 0))
-        async_called = {"flag": False}
+        source = SessionSource(
+            platform=Platform.DISCORD,
+            user_id="owner",
+            chat_id="eve-channel",
+            chat_type="group",
+            profile="eve",
+        )
+        event = MagicMock(source=source)
+        observed = {}
 
-        class AsyncAdapter:
-            name = "async-platform"
-            async def refresh_skill_group(self):
-                async_called["flag"] = True
-                return (3, 0)
-
-        class SyncAdapter:
-            name = "sync-platform"
-            refresh_skill_group = sync_refresh
-
-        class NoOpAdapter:
-            name = "other"
-            # No refresh_skill_group — must not crash.
-
-        runner.adapters = {
-            "discord": AsyncAdapter(),
-            "slack": SyncAdapter(),
-            "telegram": NoOpAdapter(),
-        }
-
-        # Mock reload_skills itself so no disk scan runs.
         fake_result = {"added": [], "removed": [], "total": 7}
-        with patch(
-            "agent.skill_commands.reload_skills", return_value=fake_result
-        ):
-            event = MagicMock()
-            event.source = MagicMock()
-            # _session_key_for_source may be called — make it safe.
-            runner._session_key_for_source = lambda src: None
-            runner._pending_skills_reload_notes = {}
+        def fake_reload():
+            from agent.skill_commands import get_skill_commands
+            observed["home"] = str(get_hermes_home())
+            observed["platform"] = get_session_env("HERMES_SESSION_PLATFORM")
+            observed["catalog"] = set(get_skill_commands())
+            return fake_result
 
-            result = asyncio.get_event_loop().run_until_complete(
-                runner._handle_reload_skills_command(event)
+        profile_home = tmp_path / "profiles" / "eve"
+        runner._resolve_profile_home_for_source = lambda src: profile_home
+
+        def refresh_profile_catalog(*, profile):
+            observed["refresh_profile"] = profile
+            observed["refresh_home"] = str(get_hermes_home())
+            observed["refresh_platform"] = get_session_env(
+                "HERMES_SESSION_PLATFORM"
             )
+            return (3, 0)
+
+        eve_adapter.refresh_skill_group.side_effect = refresh_profile_catalog
+        for name in ("discord-only", "telegram-only"):
+            skill_dir = profile_home / "skills" / name
+            skill_dir.mkdir(parents=True)
+            (skill_dir / "SKILL.md").write_text(
+                f"---\nname: {name}\ndescription: {name}.\n---\nbody\n"
+            )
+        from agent.skill_commands import _reset_skill_commands_cache_for_tests
+        from tools import skills_tool
+
+        def disabled_for_route():
+            return {f"{get_session_env('HERMES_SESSION_PLATFORM')}-only"}
+
+        _reset_skill_commands_cache_for_tests()
+        home_token = set_hermes_home_override(profile_home)
+        outer_tokens = set_session_vars(platform="outer", profile="outer")
+        with (
+            patch("agent.skill_commands.reload_skills", side_effect=fake_reload),
+            patch.object(
+                skills_tool,
+                "_get_disabled_skill_names",
+                side_effect=disabled_for_route,
+            ),
+        ):
+            try:
+                result = await runner._handle_reload_skills_command(event)
+                observed["restored_platform"] = get_session_env(
+                    "HERMES_SESSION_PLATFORM"
+                )
+            finally:
+                clear_session_vars(outer_tokens)
+                reset_hermes_home_override(home_token)
+                _reset_skill_commands_cache_for_tests()
+                runner._executor.shutdown(wait=True)
 
         assert "Skills Reloaded" in result
-        assert sync_refresh.called, "sync adapter refresh must be invoked"
-        assert async_called["flag"], "async adapter refresh must be awaited"
+        assert observed["home"] == str(profile_home)
+        assert observed["platform"] == "discord"
+        assert observed["catalog"] == {"/telegram-only"}
+        assert observed["refresh_home"] == str(profile_home)
+        assert observed["refresh_platform"] == "discord"
+        assert observed["refresh_profile"] == "eve"
+        assert observed["restored_platform"] == "outer"
+        eve_adapter.refresh_skill_group.assert_called_once_with(profile="eve")
+        default_adapter.refresh_skill_group.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_missing_secondary_adapter_fails_without_primary_refresh(self):
+        """A stamped secondary route never falls back to the primary adapter."""
+        from unittest.mock import patch
+
+        from gateway.run import GatewayRunner
+        from gateway.platforms.base import Platform
+        from gateway.session import SessionSource
+
+        runner = object.__new__(GatewayRunner)
+        default_adapter = MagicMock(name="default-discord")
+        runner.adapters = {Platform.DISCORD: default_adapter}
+        runner._profile_adapters = {}
+        runner._active_profile_name = lambda: "default"
+        runner._session_key_for_source = lambda src: None
+        runner._pending_skills_reload_notes = {}
+        event = MagicMock(
+            source=SessionSource(
+                platform=Platform.DISCORD,
+                user_id="owner",
+                chat_id="missing-channel",
+                chat_type="group",
+                profile="missing-secondary",
+            )
+        )
+
+        with patch(
+            "agent.skill_commands.reload_skills",
+            return_value={"added": [], "removed": [], "total": 1},
+        ):
+            try:
+                result = await runner._handle_reload_skills_command(event)
+            finally:
+                runner._executor.shutdown(wait=True)
+
+        assert "routed adapter unavailable" in result
+        default_adapter.refresh_skill_group.assert_not_called()
