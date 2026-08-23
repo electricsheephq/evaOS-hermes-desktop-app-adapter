@@ -394,6 +394,27 @@ class TestMattermostMentionBehavior:
             assert self.adapter.handle_message.called
 
     @pytest.mark.asyncio
+    async def test_free_response_channel_strips_peer_bot_mention(self):
+        """Peer mentions cannot fan out through a free-response channel."""
+        self.adapter._api_get = AsyncMock(return_value=[
+            {"username": "agent-one", "is_bot": True},
+        ])
+
+        with patch.dict(
+            os.environ,
+            {"MATTERMOST_FREE_RESPONSE_CHANNELS": "chan_456"},
+        ):
+            await self.adapter._handle_ws_event(
+                self._make_event("@agent-one please help", channel_id="chan_456")
+            )
+
+        message = self.adapter.handle_message.call_args[0][0]
+        assert message.text == "please help"
+        self.adapter._api_get.assert_awaited_once_with(
+            "users?in_channel=chan_456&page=0&per_page=200"
+        )
+
+    @pytest.mark.asyncio
     async def test_multi_bot_fanout_strips_peer_bots_but_preserves_humans(self):
         self.adapter._api_get = AsyncMock(return_value=[
             {"username": "hermes-bot", "is_bot": True},
@@ -805,5 +826,4 @@ async def test_mattermost_top_level_channel_post_is_thread_root():
     assert msg_event.source.thread_id == "top_post_123"
     assert msg_event.source.message_id == "top_post_123"
     assert msg_event.message_id == "top_post_123"
-
 

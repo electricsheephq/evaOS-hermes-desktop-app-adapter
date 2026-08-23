@@ -997,15 +997,19 @@ class MattermostAdapter(BasePlatformAdapter):
                 )
                 return
 
-            # Strip @mention from the message text so the agent sees clean input.
+            # Strip this bot's @mention from the message text so the agent sees
+            # clean input. Peer-bot mentions must be filtered for every accepted
+            # channel message, including free-response channels where this bot
+            # was not explicitly mentioned; otherwise one peer mention can fan
+            # the same message out across multiple agents.
             if has_mention:
                 for pattern in mention_patterns:
                     message_text = re.sub(
                         re.escape(pattern), "", message_text, flags=re.IGNORECASE
                     ).strip()
-                message_text = await self._strip_peer_bot_mentions(
-                    channel_id, message_text
-                )
+            message_text = await self._strip_peer_bot_mentions(
+                channel_id, message_text
+            )
 
         # Thread support: if the post is in a thread, use root_id. In
         # thread mode, top-level channel posts are valid roots for progress.
