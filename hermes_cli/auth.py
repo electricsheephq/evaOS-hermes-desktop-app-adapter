@@ -1144,6 +1144,23 @@ def _global_auth_file_path() -> Optional[Path]:
 
     See issue #18594 follow-up (credential_pool shadowing).
     """
+    shared_override = os.getenv("HERMES_SHARED_AUTH_FILE", "").strip()
+    if shared_override:
+        shared_path = Path(shared_override).expanduser()
+        if not shared_path.is_absolute():
+            raise RuntimeError("HERMES_SHARED_AUTH_FILE must be an absolute path")
+        try:
+            shared_stat = shared_path.lstat()
+        except OSError as exc:
+            raise RuntimeError(
+                "configured shared auth file is unavailable"
+            ) from exc
+        if shared_path.is_symlink() or not stat.S_ISREG(shared_stat.st_mode):
+            raise RuntimeError(
+                "configured shared auth file must be a regular no-follow file"
+            )
+        return shared_path
+
     try:
         from hermes_constants import get_default_hermes_root
         global_root = get_default_hermes_root()
@@ -1183,9 +1200,15 @@ def _load_global_auth_store() -> Dict[str, Any]:
     copies only).
     """
     global _global_auth_store_cache
+    shared_managed = bool(os.getenv("HERMES_SHARED_AUTH_FILE", "").strip())
     global_path = _global_auth_file_path()
-    if global_path is None or not global_path.exists():
+    if global_path is None:
         _global_auth_store_cache = None
+        return {}
+    if not global_path.exists():
+        _global_auth_store_cache = None
+        if shared_managed:
+            raise RuntimeError("configured shared auth file is unavailable")
         return {}
     try:
         resolved_path = str(global_path.resolve(strict=False))
@@ -1208,8 +1231,10 @@ def _load_global_auth_store() -> Dict[str, Any]:
             except Exception:
                 pass
     try:
-        store = _load_auth_store(global_path)
+        store = _load_auth_store(global_path, fail_closed=shared_managed)
     except Exception:
+        if shared_managed:
+            raise
         # A malformed global store must not break profile reads. The
         # profile's own auth store is still authoritative.
         _global_auth_store_cache = None
@@ -1345,9 +1370,15 @@ def _auth_store_lock(
         yield
 
 
-def _load_auth_store(auth_file: Optional[Path] = None) -> Dict[str, Any]:
+def _load_auth_store(
+    auth_file: Optional[Path] = None,
+    *,
+    fail_closed: bool = False,
+) -> Dict[str, Any]:
     auth_file = auth_file or _auth_file_path()
     if not auth_file.exists():
+        if fail_closed:
+            raise RuntimeError(f"managed auth store is unavailable: {auth_file}")
         return {"version": AUTH_STORE_VERSION, "providers": {}}
 
     try:
@@ -1378,6 +1409,8 @@ def _load_auth_store(auth_file: Optional[Path] = None) -> Dict[str, Any]:
                 "auth: could not preserve a copy of the corrupt store at %s",
                 corrupt_path, exc_info=True,
             )
+        if fail_closed:
+            raise RuntimeError(f"managed auth store is corrupt: {auth_file}") from exc
         if preserved:
             logger.warning(
                 "auth: failed to parse %s (%s), starting with empty store. "
@@ -1411,6 +1444,8 @@ def _load_auth_store(auth_file: Optional[Path] = None) -> Dict[str, Any]:
         return {"version": AUTH_STORE_VERSION, "providers": providers,
                 "active_provider": "nous" if providers else None}
 
+    if fail_closed:
+        raise RuntimeError(f"managed auth store has an invalid shape: {auth_file}")
     return {"version": AUTH_STORE_VERSION, "providers": {}}
 
 
@@ -1667,6 +1702,56 @@ def is_runtime_provider_routable(provider_id: str) -> bool:
     return True
 
 
+def read_credential_pool_with_source(
+    provider_id: Optional[str] = None,
+) -> tuple[Any, Path]:
+    """Return credential-pool data plus its persistence authority.
+
+    The source path is meaningful for a single provider.  A configured
+    ``HERMES_SHARED_AUTH_FILE`` becomes the writeback authority only when the
+    active profile has no local rows for that provider.  Without the managed
+    override, legacy global fallback remains read-only and persistence keeps
+    the historical active-profile target.
+    """
+    active_path = _auth_file_path()
+    managed_shared = bool(os.getenv("HERMES_SHARED_AUTH_FILE", "").strip())
+    auth_store = _load_auth_store()
+    pool = auth_store.get("credential_pool")
+    if not isinstance(pool, dict):
+        pool = {}
+
+    global_path = _global_auth_file_path()
+    global_pool: Dict[str, Any] = {}
+    global_store = _load_global_auth_store()
+    maybe_global_pool = global_store.get("credential_pool") if global_store else None
+    if isinstance(maybe_global_pool, dict):
+        global_pool = maybe_global_pool
+
+    if provider_id is None:
+        merged = dict(pool)
+        for gp_key, gp_entries in global_pool.items():
+            if not isinstance(gp_entries, list) or not gp_entries:
+                continue
+            existing = merged.get(gp_key)
+            if isinstance(existing, list) and existing:
+                continue
+            merged[gp_key] = list(gp_entries)
+        return merged, active_path
+
+    provider_entries = pool.get(provider_id)
+    if isinstance(provider_entries, list) and provider_entries:
+        return list(provider_entries), active_path
+    global_entries = global_pool.get(provider_id)
+    if isinstance(global_entries, list):
+        source_path = (
+            global_path
+            if managed_shared and global_path is not None
+            else active_path
+        )
+        return list(global_entries), source_path
+    return [], active_path
+
+
 def read_credential_pool(provider_id: Optional[str] = None) -> Dict[str, Any]:
     """Return the persisted credential pool, or one provider slice.
 
@@ -1680,38 +1765,11 @@ def read_credential_pool(provider_id: Optional[str] = None) -> Dict[str, Any]:
     ``hermes auth add <provider>`` inside the profile, profile entries
     fully shadow global for that provider on the next read.
 
-    Writes always go to the profile (``write_credential_pool`` is unchanged).
-    See issue #18594 follow-up.
+    Writes preserve the historical profile target unless managed shared-auth
+    provenance explicitly names the shared source. See issue #18594 follow-up.
     """
-    auth_store = _load_auth_store()
-    pool = auth_store.get("credential_pool")
-    if not isinstance(pool, dict):
-        pool = {}
-
-    global_pool: Dict[str, Any] = {}
-    global_store = _load_global_auth_store()
-    maybe_global_pool = global_store.get("credential_pool") if global_store else None
-    if isinstance(maybe_global_pool, dict):
-        global_pool = maybe_global_pool
-
-    if provider_id is None:
-        merged = dict(pool)
-        for gp_key, gp_entries in global_pool.items():
-            if not isinstance(gp_entries, list) or not gp_entries:
-                continue
-            # Per-provider shadowing: profile wins whenever it has ANY entries.
-            existing = merged.get(gp_key)
-            if isinstance(existing, list) and existing:
-                continue
-            merged[gp_key] = list(gp_entries)
-        return merged
-
-    provider_entries = pool.get(provider_id)
-    if isinstance(provider_entries, list) and provider_entries:
-        return list(provider_entries)
-    # Profile has no entries for this provider — fall back to global.
-    global_entries = global_pool.get(provider_id)
-    return list(global_entries) if isinstance(global_entries, list) else []
+    data, _source_path = read_credential_pool_with_source(provider_id)
+    return data
 
 
 _POOL_STATUS_FIELDS = (
@@ -1786,6 +1844,7 @@ def write_credential_pool(
     entries: List[Dict[str, Any]],
     *,
     removed_ids: Optional[Iterable[str]] = None,
+    target_path: Optional[Path] = None,
 ) -> Path:
     """Persist one provider's credential pool under auth.json.
 
@@ -1806,8 +1865,20 @@ def write_credential_pool(
     merge does not resurrect them from the on-disk copy.
     """
     removed = {rid for rid in (removed_ids or ()) if rid}
-    with _auth_store_lock():
-        auth_store = _load_auth_store()
+    active_path = _auth_file_path()
+    persistence_path = target_path or active_path
+    shared_path = _global_auth_file_path()
+    managed_shared = bool(os.getenv("HERMES_SHARED_AUTH_FILE", "").strip())
+    strict_shared = bool(
+        managed_shared
+        and shared_path is not None
+        and _same_path(persistence_path, shared_path)
+    )
+    with _auth_store_lock(target_path=persistence_path):
+        auth_store = _load_auth_store(
+            persistence_path,
+            fail_closed=strict_shared,
+        )
         pool = auth_store.get("credential_pool")
         if not isinstance(pool, dict):
             pool = {}
@@ -1845,7 +1916,7 @@ def write_credential_pool(
                 continue
             merged.append(sanitize_borrowed_credential_payload(disk_entry, provider_id))
         pool[provider_id] = merged
-        return _save_auth_store(auth_store)
+        return _save_auth_store(auth_store, target_path=persistence_path)
 
 
 def suppress_credential_source(provider_id: str, source: str) -> None:

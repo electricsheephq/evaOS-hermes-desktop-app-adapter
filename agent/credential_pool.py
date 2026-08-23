@@ -39,6 +39,7 @@ from hermes_cli.auth import (
     _save_provider_state,
     _store_provider_state,
     read_credential_pool,
+    read_credential_pool_with_source,
     write_credential_pool,
 )
 
@@ -711,8 +712,15 @@ def _write_through_provider_state_to_global_root(
 
 
 class CredentialPool:
-    def __init__(self, provider: str, entries: List[PooledCredential]):
+    def __init__(
+        self,
+        provider: str,
+        entries: List[PooledCredential],
+        *,
+        auth_source_path: Optional[Path] = None,
+    ):
         self.provider = provider
+        self._auth_source_path = auth_source_path
         self._entries = sorted(entries, key=lambda entry: entry.priority)
         self._current_id: Optional[str] = None
         self._strategy = get_pool_strategy(provider)
@@ -845,6 +853,7 @@ class CredentialPool:
                 self.provider,
                 [entry.to_dict() for entry in self._entries],
                 removed_ids=removed_ids,
+                target_path=self._auth_source_path,
             )
 
     def _is_terminal_auth_failure(
@@ -2429,6 +2438,7 @@ class CredentialPool:
                 self.provider,
                 [entry.to_dict() for entry in self._entries],
                 removed_ids=[removed.id],
+                target_path=self._auth_source_path,
             )
             if self._current_id == removed.id:
                 self._current_id = None
@@ -3194,7 +3204,7 @@ def _seed_custom_pool(pool_key: str, entries: List[PooledCredential]) -> Tuple[b
 
 def load_pool(provider: str) -> CredentialPool:
     provider = (provider or "").strip().lower()
-    raw_entries = read_credential_pool(provider)
+    raw_entries, auth_source_path = read_credential_pool_with_source(provider)
     disk_ids = {
         entry.get("id")
         for entry in raw_entries
@@ -3254,5 +3264,10 @@ def load_pool(provider: str) -> CredentialPool:
             provider,
             [entry.to_dict() for entry in sorted(entries, key=lambda item: item.priority)],
             removed_ids=disk_ids - new_ids,
+            target_path=auth_source_path,
         )
-    return CredentialPool(provider, entries)
+    return CredentialPool(
+        provider,
+        entries,
+        auth_source_path=auth_source_path,
+    )
