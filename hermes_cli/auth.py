@@ -1231,7 +1231,14 @@ def _load_global_auth_store() -> Dict[str, Any]:
             except Exception:
                 pass
     try:
-        store = _load_auth_store(global_path, fail_closed=shared_managed)
+        # Preserve the upstream call shape for the legacy fallback. Besides
+        # keeping test and plugin wrappers compatible, this makes the managed
+        # fail-closed contract explicit instead of passing a false policy flag
+        # through every ordinary root-store read.
+        if shared_managed:
+            store = _load_auth_store(global_path, fail_closed=True)
+        else:
+            store = _load_auth_store(global_path)
     except Exception:
         if shared_managed:
             raise
