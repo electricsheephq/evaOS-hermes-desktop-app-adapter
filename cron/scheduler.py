@@ -6472,7 +6472,16 @@ def _teardown_cron_agent(
     """
     def _cleanup_agent() -> None:
         try:
-            if agent is not None:
+            if agent is not None and hasattr(agent, "shutdown_memory_provider"):
+                session_messages = getattr(agent, "_session_messages", None)
+                if isinstance(session_messages, list):
+                    agent.shutdown_memory_provider(session_messages)
+                else:
+                    agent.shutdown_memory_provider()
+        except (Exception, KeyboardInterrupt) as e:
+            logger.debug("Job '%s': failed to finalize agent session: %s", job_id, e)
+        try:
+            if agent is not None and hasattr(agent, "close"):
                 agent.close()
         except (Exception, KeyboardInterrupt) as e:
             logger.debug("Job '%s': failed to close agent resources: %s", job_id, e)

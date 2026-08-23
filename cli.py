@@ -1281,6 +1281,15 @@ def _run_cleanup(*, notify_session_finalize: bool = True):
                     _active_agent_ref.shutdown_memory_provider()
         except Exception as e:
             logger.warning("CLI cleanup memory shutdown failed: %s", e, exc_info=True)
+        # The session-end hook above flushes logical state; close() releases
+        # context-engine SQLite handles and the agent's remaining resources.
+        # Keep these best-effort steps separate so one failure cannot skip the
+        # other, and preserve on_session_end -> shutdown ordering.
+        try:
+            if _active_agent_ref and hasattr(_active_agent_ref, "close"):
+                _active_agent_ref.close()
+        except Exception as e:
+            logger.warning("CLI cleanup agent close failed: %s", e, exc_info=True)
     finally:
         _cleanup_in_progress = False
 

@@ -1509,6 +1509,7 @@ CREATE TABLE IF NOT EXISTS kanban_notify_subs (
     notifier_profile TEXT,
     delivery_mode TEXT NOT NULL DEFAULT 'notify',
     delivery_metadata TEXT,
+    pending_event_ids TEXT,
     created_at    INTEGER NOT NULL,
     last_event_id INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (task_id, platform, chat_id, thread_id)
@@ -2763,6 +2764,10 @@ def _migrate_add_optional_columns(conn: sqlite3.Connection) -> None:
             _add_column_if_missing(
                 conn, "kanban_notify_subs", "delivery_metadata", "delivery_metadata TEXT"
             )
+        if "pending_event_ids" not in notify_cols:
+            _add_column_if_missing(
+                conn, "kanban_notify_subs", "pending_event_ids", "pending_event_ids TEXT"
+            )
 
     # One-shot backfill: any task that is 'running' before runs existed
     # had its claim_lock / claim_expires / worker_pid on the task row.
@@ -2888,7 +2893,7 @@ _REBUILD_SPECS = {
         " thread_id TEXT NOT NULL DEFAULT '', user_id TEXT, user_id_alt TEXT,"
         " chat_type TEXT,"
         " notifier_profile TEXT, delivery_mode TEXT NOT NULL DEFAULT 'notify',"
-        " delivery_metadata TEXT, created_at INTEGER NOT NULL,"
+        " delivery_metadata TEXT, pending_event_ids TEXT, created_at INTEGER NOT NULL,"
         " last_event_id INTEGER NOT NULL DEFAULT 0,"
         " PRIMARY KEY (task_id, platform, chat_id, thread_id))",
         ("CREATE INDEX idx_notify_task ON kanban_notify_subs(task_id)",),
@@ -11771,6 +11776,9 @@ def claim_unseen_events_for_sub(
     chat_id: str,
     thread_id: Optional[str] = None,
     kinds: Optional[Iterable[str]] = None,
+    persist_delivery: bool = False,
+    delivery_owner: Optional[str] = None,
+    delivery_now: Optional[int] = None,
 ) -> tuple[int, int, list[Event]]:
     """Atomically claim unseen notification events for one subscription.
 
@@ -11786,15 +11794,36 @@ def claim_unseen_events_for_sub(
     ``new_cursor`` on success or call :func:`rewind_notify_cursor` if delivery
     failed before any terminal unsubscribe removed the row.
     """
+    owner = str(delivery_owner or "")
+    if persist_delivery and not owner:
+        raise ValueError("delivery_owner is required for durable notification claims")
+    now = int(time.time()) if delivery_now is None else int(delivery_now)
     with write_txn(conn):
         row = conn.execute(
-            "SELECT last_event_id FROM kanban_notify_subs "
+            "SELECT last_event_id, pending_event_ids FROM kanban_notify_subs "
             "WHERE task_id = ? AND platform = ? AND chat_id = ? AND thread_id = ?",
             (task_id, platform, chat_id, thread_id or ""),
         ).fetchone()
         if row is None:
             return 0, 0, []
         old_cursor = int(row["last_event_id"])
+        if persist_delivery and row["pending_event_ids"]:
+            pending = _decode_pending_delivery(row["pending_event_ids"])
+            # A live claim belongs to its current owner until the lease
+            # expires; even that owner must not refresh it on every poll.
+            # Once expired, the same process is allowed to reclaim its own
+            # events just like a replacement process.
+            if pending[2] + NOTIFY_DELIVERY_LEASE_SECONDS > now:
+                return old_cursor, old_cursor, []
+            events = _events_by_ids(conn, task_id, event_ids=pending[0])
+            encoded = _encode_pending_delivery(pending[0], owner, now)
+            cur = conn.execute(
+                "UPDATE kanban_notify_subs SET pending_event_ids = ? WHERE "
+                "task_id = ? AND platform = ? AND chat_id = ? AND thread_id = ? "
+                "AND pending_event_ids = ?",
+                (encoded, task_id, platform, chat_id, thread_id or "", row["pending_event_ids"]),
+            )
+            return (old_cursor, old_cursor, events) if cur.rowcount == 1 else (old_cursor, old_cursor, [])
         new_cursor, events = unseen_events_for_sub(
             conn,
             task_id=task_id,
@@ -11805,13 +11834,78 @@ def claim_unseen_events_for_sub(
         )
         if not events:
             return old_cursor, old_cursor, []
+        pending = _encode_pending_delivery([event.id for event in events], owner, now) if persist_delivery else None
         conn.execute(
-            "UPDATE kanban_notify_subs SET last_event_id = ? "
+            "UPDATE kanban_notify_subs SET last_event_id = ?, pending_event_ids = COALESCE(?, pending_event_ids) "
             "WHERE task_id = ? AND platform = ? AND chat_id = ? AND thread_id = ? "
             "AND last_event_id = ?",
-            (int(new_cursor), task_id, platform, chat_id, thread_id or "", int(old_cursor)),
+            (int(new_cursor), pending, task_id, platform, chat_id, thread_id or "", int(old_cursor)),
         )
         return old_cursor, new_cursor, events
+
+
+NOTIFY_DELIVERY_LEASE_SECONDS = 30
+
+
+def _decode_pending_delivery(raw: Any) -> tuple[list[int], str, int]:
+    try:
+        value = json.loads(str(raw))
+        return [int(event_id) for event_id in value["event_ids"]], str(value["owner"]), int(value["claimed_at"])
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+        return [], "", 0
+
+
+def _encode_pending_delivery(event_ids: Iterable[int], owner: str, claimed_at: int) -> str:
+    return json.dumps(
+        {"event_ids": [int(event_id) for event_id in event_ids], "owner": owner,
+         "claimed_at": int(claimed_at)}, sort_keys=True, separators=(",", ":")
+    )
+
+
+def _events_by_ids(conn: sqlite3.Connection, task_id: str, event_ids: Iterable[int]) -> list[Event]:
+    ids = [int(event_id) for event_id in event_ids]
+    if not ids:
+        return []
+    rows = conn.execute(
+        "SELECT * FROM task_events WHERE task_id = ? AND id IN ("
+        + ",".join("?" for _ in ids) + ") ORDER BY id", [task_id, *ids]
+    ).fetchall()
+    return [Event(
+        id=row["id"], task_id=row["task_id"], kind=row["kind"],
+        payload=json.loads(row["payload"]) if row["payload"] else None,
+        created_at=row["created_at"],
+        run_id=int(row["run_id"]) if row["run_id"] is not None else None,
+    ) for row in rows]
+
+
+def complete_notify_delivery(
+    conn: sqlite3.Connection, *, task_id: str, platform: str, chat_id: str,
+    thread_id: Optional[str] = None, event_ids: Iterable[int],
+    delivery_owner: Optional[str] = None,
+) -> bool:
+    """Settle an exact durable notification claim owned by this process."""
+    ids = [int(event_id) for event_id in event_ids]
+    with write_txn(conn):
+        row = conn.execute(
+            "SELECT pending_event_ids FROM kanban_notify_subs WHERE task_id = ? "
+            "AND platform = ? AND chat_id = ? AND thread_id = ?",
+            (task_id, platform, chat_id, thread_id or ""),
+        ).fetchone()
+        if row is None or not row["pending_event_ids"]:
+            return False
+        try:
+            pending = json.loads(row["pending_event_ids"])
+        except (TypeError, json.JSONDecodeError):
+            return False
+        if pending.get("event_ids") != ids or pending.get("owner") != str(delivery_owner or ""):
+            return False
+        archived = any(event.kind == "archived" for event in _events_by_ids(conn, task_id, ids))
+        sql = "DELETE FROM kanban_notify_subs" if archived else "UPDATE kanban_notify_subs SET pending_event_ids = NULL"
+        cur = conn.execute(
+            sql + " WHERE task_id = ? AND platform = ? AND chat_id = ? AND thread_id = ? AND pending_event_ids = ?",
+            (task_id, platform, chat_id, thread_id or "", row["pending_event_ids"]),
+        )
+    return cur.rowcount == 1
 
 
 def advance_notify_cursor(
@@ -11873,10 +11967,16 @@ def gc_events(
     history."""
     cutoff = int(time.time()) - int(older_than_seconds)
     with write_txn(conn):
+        protected = sorted({
+            event_id
+            for row in conn.execute("SELECT pending_event_ids FROM kanban_notify_subs WHERE pending_event_ids IS NOT NULL")
+            for event_id in _decode_pending_delivery(row["pending_event_ids"])[0]
+        })
+        suffix = " AND id NOT IN (" + ",".join("?" for _ in protected) + ")" if protected else ""
         cur = conn.execute(
             "DELETE FROM task_events WHERE created_at < ? AND task_id IN "
-            "(SELECT id FROM tasks WHERE status IN ('done', 'archived'))",
-            (cutoff,),
+            "(SELECT id FROM tasks WHERE status IN ('done', 'archived'))" + suffix,
+            [cutoff, *protected],
         )
     return int(cur.rowcount or 0)
 
