@@ -271,14 +271,22 @@ def test_context_engine_shutdown_is_read_permit_neutral(tmp_path):
     from hermes_state import SessionDB, _READ_POOL_MAX
 
     db = SessionDB(db_path=tmp_path / "permit-context.db")
-    held = [db._checkout_read_conn() for _ in range(_READ_POOL_MAX)]
-    assert all(conn is not None for conn in held)
+    closed = []
+
+    class _ReadConn:
+        def close(self):
+            closed.append(self)
+
+    held = [_ReadConn() for _ in range(_READ_POOL_MAX)]
     for conn in held:
+        assert db._read_permits.acquire(blocking=False)
         db._read_pool.put_nowait(conn)
+    assert not db._read_permits.acquire(blocking=False)
 
     engine = types.SimpleNamespace(shutdown=db.close)
     _bare_agent(context_compressor=engine).close()
 
+    assert closed == list(reversed(held))
     for _ in range(_READ_POOL_MAX):
         assert db._read_permits.acquire(blocking=False)
     assert not db._read_permits.acquire(blocking=False)
