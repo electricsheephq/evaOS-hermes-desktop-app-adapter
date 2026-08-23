@@ -2088,6 +2088,11 @@ def _db_unavailable_error(rid, *, code: int):
 def _profile_home(profile: str | None) -> Path | None:
     """Resolve a named profile's home on THIS host, or None for the launch profile."""
     name = (profile or "").strip()
+    from hermes_cli.managed_profile_scope import require_managed_profile
+
+    managed_name = require_managed_profile(name)
+    if managed_name:
+        name = managed_name
     if not name:
         return None
     try:

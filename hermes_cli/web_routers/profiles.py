@@ -76,6 +76,7 @@ _fallback_profile_dicts = late("_fallback_profile_dicts")
 _hub_action_name = late("_hub_action_name")
 _open_session_db_at_path = late("_open_session_db_at_path")
 _profile_setup_command = late("_profile_setup_command")
+_managed_profile_or_http = late("_managed_profile_or_http")
 _profile_to_dict = late("_profile_to_dict")
 _resolve_profile_dir = late("_resolve_profile_dir")
 _spawn_hermes_action = late("_spawn_hermes_action")
@@ -255,6 +256,8 @@ def get_profiles_sessions(
 
     from hermes_cli import profiles as profiles_mod
 
+    profile = _managed_profile_or_http(profile, selectors_for_current=("all",))
+
     targets: List[Tuple[str, Path]] = []
     if profile and profile != "all":
         name, home = _cron_profile_home(profile)
@@ -402,6 +405,12 @@ def get_profiles_sessions_sidebar(
     """
     from hermes_cli import profiles as profiles_mod
 
+    managed_name = _managed_profile_or_http(None)
+    recents_profile = _managed_profile_or_http(
+        recents_profile,
+        selectors_for_current=("all",),
+    )
+
     try:
         # Session aggregation only needs name/path; the lightweight enumerator
         # avoids YAML/meta/gateway/skill probes for all profiles per refresh.
@@ -409,7 +418,7 @@ def get_profiles_sessions_sidebar(
     except Exception:
         _log.exception("GET /api/profiles/sessions/sidebar: list_profiles failed")
         targets = []
-    if not targets:
+    if not targets and not managed_name:
         targets.append(("default", profiles_mod.get_profile_dir("default")))
 
     recents_scope = (recents_profile or "all").strip() or "all"
@@ -642,15 +651,17 @@ def get_profiles_projects_tree(preview_limit: int = 3, session_limit: int = 2000
     from hermes_cli import profiles as profiles_mod
     from hermes_constants import reset_hermes_home_override, set_hermes_home_override
     from tui_gateway import server as gateway_server
+    managed_name = _managed_profile_or_http(None)
 
     try:
         targets: List[Tuple[str, Path]] = [
             (info.name, info.path) for info in profiles_mod.list_profiles()
+            if not managed_name or info.name == managed_name
         ]
     except Exception:
         _log.exception("GET /api/profiles/projects/tree: list_profiles failed")
         targets = []
-    if not targets:
+    if not targets and not managed_name:
         targets.append(("default", profiles_mod.get_profile_dir("default")))
 
     merged: Dict[str, Dict[str, Any]] = {}
@@ -732,17 +743,22 @@ def post_profiles_sessions_pull_requests(body: SessionPrScanBody):
     second PR.
     """
     from hermes_cli import profiles as profiles_mod
+    managed_name = _managed_profile_or_http(None)
 
     wanted = list(dict.fromkeys(s for s in (body.ids or []) if s))[:2000]
     if not wanted:
         return {"pull_requests": {}, "scanned": []}
 
     try:
-        targets = [(info.name, info.path) for info in profiles_mod.list_profiles()]
+        targets = [
+            (info.name, info.path)
+            for info in profiles_mod.list_profiles()
+            if not managed_name or info.name == managed_name
+        ]
     except Exception:
         _log.exception("POST /api/profiles/sessions/pull-requests: list_profiles failed")
         targets = []
-    if not targets:
+    if not targets and not managed_name:
         targets.append(("default", profiles_mod.get_profile_dir("default")))
 
     found: Dict[str, Dict[str, Any]] = {}
@@ -777,16 +793,35 @@ def post_profiles_sessions_pull_requests(body: SessionPrScanBody):
 @router.get("/api/profiles")
 async def list_profiles_endpoint():
     from hermes_cli import profiles as profiles_mod
+    managed_name = _managed_profile_or_http(None)
     try:
         profiles = await run_in_threadpool(profiles_mod.list_profiles)
-        return {"profiles": [_profile_to_dict(p) for p in profiles]}
+        allowed = {managed_name} if managed_name else {
+            getattr(p, "name", "") for p in profiles
+        }
+        return {
+            "profiles": [
+                _profile_to_dict(p)
+                for p in profiles
+                if getattr(p, "name", "") in allowed
+            ]
+        }
     except Exception:
         _log.exception("GET /api/profiles failed; falling back to profile directory scan")
-        return {"profiles": _fallback_profile_dicts(profiles_mod)}
+        rows = _fallback_profile_dicts(profiles_mod)
+        allowed = {managed_name} if managed_name else {
+            row.get("name", "") for row in rows
+        }
+        return {"profiles": [row for row in rows if row.get("name", "") in allowed]}
 
 
 @router.post("/api/profiles")
 async def create_profile_endpoint(body: ProfileCreate):
+    if _managed_profile_or_http(None):
+        raise HTTPException(
+            status_code=403,
+            detail="profile lifecycle is managed by evaOS",
+        )
     from hermes_cli import profiles as profiles_mod
     explicit_source = (body.clone_from or "").strip()
     if explicit_source:
@@ -908,6 +943,9 @@ async def get_active_profile_endpoint():
     the running dashboard/gateway is scoped to (derived from HERMES_HOME).
     """
     from hermes_cli import profiles as profiles_mod
+    managed_name = _managed_profile_or_http(None)
+    if managed_name:
+        return {"active": managed_name, "current": managed_name}
     try:
         active = profiles_mod.get_active_profile() or "default"
     except Exception:
@@ -927,6 +965,11 @@ async def set_active_profile_endpoint(body: ProfileActiveUpdate):
     it changes which profile subsequent CLI commands and gateways use.
     """
     from hermes_cli import profiles as profiles_mod
+    if _managed_profile_or_http(None):
+        raise HTTPException(
+            status_code=403,
+            detail="profile lifecycle is managed by evaOS",
+        )
     try:
         profiles_mod.set_active_profile(body.name)
     except FileNotFoundError as e:
@@ -1000,6 +1043,11 @@ async def open_profile_terminal_endpoint(name: str):
 
 @router.patch("/api/profiles/{name}")
 async def rename_profile_endpoint(name: str, body: ProfileRename):
+    if _managed_profile_or_http(None):
+        raise HTTPException(
+            status_code=403,
+            detail="profile lifecycle is managed by evaOS",
+        )
     from hermes_cli import profiles as profiles_mod
     try:
         path = profiles_mod.rename_profile(name, body.new_name)
@@ -1037,6 +1085,11 @@ async def delete_profile_endpoint(name: str):
     its own dialog before this request, so we always pass ``yes=True`` to
     skip the CLI's interactive prompt."""
     from hermes_cli import profiles as profiles_mod
+    if _managed_profile_or_http(None):
+        raise HTTPException(
+            status_code=403,
+            detail="profile lifecycle is managed by evaOS",
+        )
     try:
         path = profiles_mod.delete_profile(name, yes=True)
     except FileNotFoundError as e:
@@ -1171,6 +1224,8 @@ async def describe_profile_auto_endpoint(name: str, body: ProfileDescribeAuto):
 async def export_profile_endpoint(name: str, body: ProfileExport):
     from hermes_cli import profiles as profiles_mod
 
+    _resolve_profile_dir(name)
+
     output = (body.output or "").strip()
     if not output:
         from hermes_constants import get_hermes_home
@@ -1200,6 +1255,11 @@ async def export_profile_endpoint(name: str, body: ProfileExport):
 
 @router.post("/api/profiles/import")
 async def import_profile_endpoint(body: ProfileImport):
+    if _managed_profile_or_http(None):
+        raise HTTPException(
+            status_code=403,
+            detail="profile lifecycle is managed by evaOS",
+        )
     from hermes_cli import profiles as profiles_mod
 
     archive = (body.archive or "").strip()

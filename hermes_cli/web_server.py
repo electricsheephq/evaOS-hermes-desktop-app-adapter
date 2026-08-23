@@ -12987,11 +12987,32 @@ def _cron_default_profile() -> str:
     return "default" if name in ("default", "custom") else name
 
 
+def _managed_profile_or_http(
+    profile: Optional[str], *, selectors_for_current: Tuple[str, ...] = ()
+) -> str:
+    """Resolve a dashboard selector against the managed process profile."""
+    from hermes_cli.managed_profile_scope import (
+        ManagedProfileScopeError,
+        require_managed_profile,
+    )
+
+    try:
+        return require_managed_profile(
+            profile,
+            selectors_for_current=selectors_for_current,
+        )
+    except ManagedProfileScopeError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
 def _cron_profile_home(profile: Optional[str]) -> Tuple[str, Path]:
     """Resolve a profile query value to (profile_name, HERMES_HOME)."""
     from hermes_cli import profiles as profiles_mod
 
-    raw = (profile or _cron_default_profile()).strip() or "default"
+    raw = _managed_profile_or_http(profile or _cron_default_profile())
+    raw = raw.strip() or "default"
     try:
         canon = profiles_mod.normalize_profile_name(raw)
         profiles_mod.validate_profile_name(canon)
@@ -15081,6 +15102,7 @@ def _fallback_profile_dicts(profiles_mod) -> List[Dict[str, Any]]:
 def _resolve_profile_dir(name: str) -> Path:
     """Validate ``name`` and resolve to its directory or raise an HTTPException."""
     from hermes_cli import profiles as profiles_mod
+    name = _managed_profile_or_http(name)
     try:
         profiles_mod.validate_profile_name(name)
     except ValueError as e:
@@ -15285,7 +15307,7 @@ def _profile_scope(profile: Optional[str]):
     imported the modules before a HERMES_HOME override, or under test
     isolation).
     """
-    requested = (profile or "").strip()
+    requested = _managed_profile_or_http(profile)
 
     from hermes_constants import (
         get_hermes_home,
@@ -15338,7 +15360,7 @@ def _config_profile_scope(profile: Optional[str]):
 
     None/""/"current" means the dashboard's own profile — no override.
     """
-    requested = (profile or "").strip()
+    requested = _managed_profile_or_http(profile)
     if not requested or requested.lower() == "current":
         yield None
         return
