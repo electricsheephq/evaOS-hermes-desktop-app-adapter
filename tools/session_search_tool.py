@@ -1202,7 +1202,7 @@ def _session_search_impl(
     )
 
 
-def session_search(
+def _run_session_search(
     query: str = "",
     role_filter: str = None,
     limit: int = 3,
@@ -1219,7 +1219,7 @@ def session_search(
     # Discovery result shaping (appended to preserve positional compatibility)
     detail: str = "adaptive",
     *,
-    _trusted_cross_profile: bool = False,
+    trusted_cross_profile: bool,
 ) -> str:
     """Run session search and close databases opened by this invocation."""
     owned_dbs: List[Any] = []
@@ -1249,7 +1249,7 @@ def session_search(
             profile=profile,
             detail=detail,
             _owned_dbs=owned_dbs,
-            _trusted_cross_profile=_trusted_cross_profile,
+            _trusted_cross_profile=trusted_cross_profile,
         )
     finally:
         for owned_db in reversed(owned_dbs):
@@ -1259,15 +1259,69 @@ def session_search(
                 logging.debug("Failed to close session_search SessionDB", exc_info=True)
 
 
-def session_search_trusted(*args, **kwargs) -> str:
+def session_search(
+    query: str = "",
+    role_filter: str = None,
+    limit: int = 3,
+    db=None,
+    current_session_id: str = None,
+    session_id: str = None,
+    around_message_id: int = None,
+    window: int = 5,
+    sort: str = None,
+    profile: str = None,
+    detail: str = "adaptive",
+) -> str:
+    """Run profile-local agent-facing session search."""
+    return _run_session_search(
+        query=query,
+        role_filter=role_filter,
+        limit=limit,
+        db=db,
+        current_session_id=current_session_id,
+        session_id=session_id,
+        around_message_id=around_message_id,
+        window=window,
+        sort=sort,
+        profile=profile,
+        detail=detail,
+        trusted_cross_profile=False,
+    )
+
+
+def session_search_trusted(
+    query: str = "",
+    role_filter: str = None,
+    limit: int = 3,
+    db=None,
+    current_session_id: str = None,
+    session_id: str = None,
+    around_message_id: int = None,
+    window: int = 5,
+    sort: str = None,
+    profile: str = None,
+    detail: str = "adaptive",
+) -> str:
     """Explicit non-agent boundary for authorized cross-profile reads.
 
     The model-facing registry never calls this wrapper. Administrative or
     desktop code that has already established its own authorization may opt in
     explicitly, keeping that authority separate from the agent tool contract.
     """
-    kwargs["_trusted_cross_profile"] = True
-    return session_search(*args, **kwargs)
+    return _run_session_search(
+        query=query,
+        role_filter=role_filter,
+        limit=limit,
+        db=db,
+        current_session_id=current_session_id,
+        session_id=session_id,
+        around_message_id=around_message_id,
+        window=window,
+        sort=sort,
+        profile=profile,
+        detail=detail,
+        trusted_cross_profile=True,
+    )
 
 
 def check_session_search_requirements() -> bool:

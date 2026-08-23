@@ -23,6 +23,7 @@ from tools.session_search_tool import (
     _resolve_to_parent,
     _session_link,
     session_search,
+    session_search_trusted,
 )
 
 
@@ -152,7 +153,7 @@ class TestBrowseShape:
             lambda _profile: profile_db,
         )
 
-        result = json.loads(session_search(db=shared_db, profile="work"))
+        result = json.loads(session_search_trusted(db=shared_db, profile="work"))
 
         assert result["success"] is True
         assert profile_db.closed == 1
@@ -1406,4 +1407,3 @@ class TestNewResetLineageBrowse:
         result = json.loads(session_search(db=db, current_session_id="s_other"))
         sids = [r["session_id"] for r in result["results"]]
         assert "s_legacy_child" in sids
-
