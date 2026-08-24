@@ -22,6 +22,7 @@ import json
 import os
 import stat
 import sys
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -102,6 +103,39 @@ def test_managed_shared_save_preserves_gid_and_group_mode(tmp_path, monkeypatch)
     assert stat.S_IMODE(lock.stat().st_mode) == 0o660
     assert lock.stat().st_gid == shared_gid
     assert stat.S_IMODE(local.stat().st_mode) == 0o600
+
+
+def test_managed_shared_save_replaces_raced_symlink_without_following(
+    tmp_path, monkeypatch
+):
+    from hermes_cli import auth as auth_mod
+
+    shared = tmp_path / "shared-auth" / "auth.json"
+    shared.parent.mkdir()
+    shared.write_text(json.dumps({"version": 1, "providers": {}}))
+    outside = tmp_path / "outside.json"
+    outside.write_text("unchanged")
+    monkeypatch.setenv("HERMES_SHARED_AUTH_FILE", str(shared))
+    real_replace = os.replace
+    raced = False
+
+    def race_then_replace(source, target):
+        nonlocal raced
+        if Path(target) == shared and not raced:
+            raced = True
+            shared.unlink()
+            shared.symlink_to(outside)
+        return real_replace(source, target)
+
+    monkeypatch.setattr(auth_mod.os, "replace", race_then_replace)
+    auth_mod._save_auth_store(
+        {"version": auth_mod.AUTH_STORE_VERSION, "providers": {}},
+        target_path=shared,
+    )
+
+    assert raced
+    assert shared.is_file() and not shared.is_symlink()
+    assert outside.read_text() == "unchanged"
 
 
 # ---------------------------------------------------------------------------
