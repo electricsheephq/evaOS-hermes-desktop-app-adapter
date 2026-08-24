@@ -108,6 +108,7 @@ except Exception:
 
 AUTH_STORE_VERSION = 1
 AUTH_LOCK_TIMEOUT_SECONDS = 15.0
+_MANAGED_SHARED_AUTH_MODE = stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IWGRP
 
 # Nous Portal defaults
 DEFAULT_NOUS_PORTAL_URL = "https://portal.nousresearch.com"
@@ -1208,6 +1209,161 @@ def _same_path(left: Path, right: Path) -> bool:
         return left == right
 
 
+def _managed_shared_auth_gid(auth_path: Path) -> Optional[int]:
+    shared_override = os.getenv("HERMES_SHARED_AUTH_FILE", "").strip()
+    if not shared_override:
+        return None
+    shared_path = Path(shared_override).expanduser()
+    if not shared_path.is_absolute() or not _same_path(auth_path, shared_path):
+        return None
+    try:
+        shared_stat = shared_path.lstat()
+    except OSError as exc:
+        raise RuntimeError("configured shared auth file is unavailable") from exc
+    if shared_path.is_symlink() or not stat.S_ISREG(shared_stat.st_mode):
+        raise RuntimeError("configured shared auth file must be a regular no-follow file")
+    return shared_stat.st_gid
+
+
+def _apply_managed_auth_fd_metadata(fd: int, gid: int) -> None:
+    try:
+        os.fchmod(fd, _MANAGED_SHARED_AUTH_MODE)
+        if hasattr(os, "fchown"):
+            os.fchown(fd, -1, gid)
+    except OSError as exc:
+        raise RuntimeError("could not preserve managed shared auth file group") from exc
+
+
+def _open_managed_auth_read_fd(auth_file: Path, gid: int) -> int:
+    fd = os.open(str(auth_file), os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    try:
+        auth_stat = os.fstat(fd)
+        if not stat.S_ISREG(auth_stat.st_mode) or auth_stat.st_gid != gid:
+            raise RuntimeError("managed auth store has unsafe metadata")
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
+
+
+def _read_managed_auth_store(auth_file: Path, gid: int) -> Dict[str, Any]:
+    fd = _open_managed_auth_read_fd(auth_file, gid)
+    try:
+        with os.fdopen(fd, "r", encoding="utf-8-sig") as handle:
+            fd = -1
+            return json.load(handle)
+    finally:
+        if fd >= 0:
+            os.close(fd)
+
+
+def _apply_managed_auth_path_metadata(path: Path, gid: int) -> None:
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        fd = os.open(str(path), flags)
+    except OSError as exc:
+        raise RuntimeError("could not secure managed shared auth file") from exc
+    try:
+        _apply_managed_auth_fd_metadata(fd, gid)
+    finally:
+        os.close(fd)
+
+
+def _prepare_managed_lock_file(lock_path: Path, gid: int) -> int:
+    flags = os.O_RDWR | getattr(os, "O_NOFOLLOW", 0)
+    tmp_path = lock_path.with_name(
+        f"{lock_path.name}.tmp.{os.getpid()}.{uuid.uuid4().hex}"
+    )
+    tmp_fd = -1
+    try:
+        tmp_fd = os.open(
+            str(tmp_path),
+            flags | os.O_CREAT | os.O_EXCL,
+            _MANAGED_SHARED_AUTH_MODE,
+        )
+        _apply_managed_auth_fd_metadata(tmp_fd, gid)
+        try:
+            # Publish only the fully initialized inode.  Hard-link creation is
+            # atomic and refuses to replace a lock won by a concurrent peer.
+            os.link(tmp_path, lock_path, follow_symlinks=False)
+        except FileExistsError:
+            pass
+    finally:
+        if tmp_fd >= 0:
+            os.close(tmp_fd)
+        try:
+            tmp_path.unlink()
+        except FileNotFoundError:
+            pass
+
+    fd = os.open(str(lock_path), flags)
+    try:
+        lock_stat = os.fstat(fd)
+        if (
+            not stat.S_ISREG(lock_stat.st_mode)
+            or lock_stat.st_gid != gid
+            or stat.S_IMODE(lock_stat.st_mode) != _MANAGED_SHARED_AUTH_MODE
+        ):
+            raise RuntimeError("existing managed shared auth lock has unsafe metadata")
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
+
+
+def _copy_managed_auth_artifact(auth_file: Path, corrupt_path: Path, gid: int) -> None:
+    try:
+        corrupt_stat = corrupt_path.lstat()
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        raise RuntimeError("could not inspect managed auth corruption copy") from exc
+    else:
+        if corrupt_path.is_symlink() or not stat.S_ISREG(corrupt_stat.st_mode):
+            raise RuntimeError("managed auth corruption copy must be a regular no-follow file")
+    tmp_path = corrupt_path.with_name(f"{corrupt_path.name}.tmp.{os.getpid()}.{uuid.uuid4().hex}")
+    fd = -1
+    source_fd = -1
+    try:
+        try:
+            source_fd = os.open(
+                str(auth_file),
+                os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+            )
+        except OSError as exc:
+            raise RuntimeError("managed auth corruption source is unsafe") from exc
+        source_stat = os.fstat(source_fd)
+        if not stat.S_ISREG(source_stat.st_mode) or source_stat.st_gid != gid:
+            raise RuntimeError("managed auth corruption source is unsafe")
+        fd = os.open(
+            str(tmp_path),
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+            _MANAGED_SHARED_AUTH_MODE,
+        )
+        _apply_managed_auth_fd_metadata(fd, gid)
+        with os.fdopen(source_fd, "rb") as source, os.fdopen(fd, "wb") as target:
+            source_fd = -1
+            fd = -1
+            shutil.copyfileobj(source, target)
+            target.flush()
+            os.fsync(target.fileno())
+        # Managed shared auth never follows a destination symlink.  The temp
+        # file is adjacent, so a cross-device fallback is neither needed nor
+        # safe for this authority boundary.
+        os.replace(tmp_path, corrupt_path)
+        _apply_managed_auth_path_metadata(corrupt_path, gid)
+    finally:
+        if source_fd >= 0:
+            os.close(source_fd)
+        if fd >= 0:
+            os.close(fd)
+        try:
+            if tmp_path.exists():
+                tmp_path.unlink()
+        except OSError:
+            pass
+
+
 def _auth_lock_holder_for(target_path: Path) -> threading.local:
     """Return a reentrancy tracker keyed to one canonical auth-store path."""
     try:
@@ -1224,6 +1380,8 @@ def _file_lock(
     holder: threading.local,
     timeout_seconds: float,
     timeout_message: str,
+    *,
+    artifact_gid: Optional[int] = None,
 ):
     """Cross-process advisory flock helper.
 
@@ -1243,8 +1401,13 @@ def _file_lock(
         return
 
     lock_path.parent.mkdir(parents=True, exist_ok=True)
+    managed_lock_fd = -1
+    if artifact_gid is not None:
+        managed_lock_fd = _prepare_managed_lock_file(lock_path, artifact_gid)
 
     if fcntl is None and msvcrt is None:
+        if managed_lock_fd >= 0:
+            os.close(managed_lock_fd)
         holder.depth = 1
         try:
             yield
@@ -1252,42 +1415,57 @@ def _file_lock(
             holder.depth = 0
         return
 
-    # On Windows, msvcrt.locking needs the file to have content and the
-    # file pointer at position 0. Ensure the lock file has at least 1 byte.
-    if msvcrt and (not lock_path.exists() or lock_path.stat().st_size == 0):
-        lock_path.write_text(" ", encoding="utf-8")
+    if managed_lock_fd >= 0:
+        lock_file = os.fdopen(
+            managed_lock_fd, "r+" if msvcrt else "a+", encoding="utf-8"
+        )
+        managed_lock_fd = -1
+    else:
+        # On Windows, msvcrt.locking needs the file to have content and the
+        # file pointer at position 0. Ensure the lock file has at least 1 byte.
+        if msvcrt and (not lock_path.exists() or lock_path.stat().st_size == 0):
+            lock_path.write_text(" ", encoding="utf-8")
+        lock_file = lock_path.open("r+" if msvcrt else "a+", encoding="utf-8")
 
-    with lock_path.open("r+" if msvcrt else "a+", encoding="utf-8") as lock_file:
-        deadline = time.monotonic() + max(1.0, timeout_seconds)
-        while True:
+    try:
+        with lock_file:
+            if msvcrt and lock_file.tell() == 0:
+                lock_file.write(" ")
+                lock_file.flush()
+                lock_file.seek(0)
+            deadline = time.monotonic() + max(1.0, timeout_seconds)
+            while True:
+                try:
+                    if fcntl:
+                        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    else:
+                        lock_file.seek(0)
+                        msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
+                    break
+                except (BlockingIOError, OSError, PermissionError):
+                    if time.monotonic() >= deadline:
+                        raise TimeoutError(timeout_message)
+                    time.sleep(0.05)
+
+            holder.depth = 1
             try:
+                yield
+            finally:
+                holder.depth = 0
                 if fcntl:
-                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                else:
-                    lock_file.seek(0)
-                    msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
-                break
-            except (BlockingIOError, OSError, PermissionError):
-                if time.monotonic() >= deadline:
-                    raise TimeoutError(timeout_message)
-                time.sleep(0.05)
-
-        holder.depth = 1
-        try:
-            yield
-        finally:
-            holder.depth = 0
-            if fcntl:
-                try:
-                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
-                except (OSError, IOError):
-                    pass
-            elif msvcrt:
-                try:
-                    lock_file.seek(0)
-                    msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
-                except (OSError, IOError):
-                    pass
+                    try:
+                        fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+                    except (OSError, IOError):
+                        pass
+                elif msvcrt:
+                    try:
+                        lock_file.seek(0)
+                        msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+                    except (OSError, IOError):
+                        pass
+    finally:
+        if managed_lock_fd >= 0:
+            os.close(managed_lock_fd)
 
 
 @contextmanager
@@ -1310,11 +1488,13 @@ def _auth_store_lock(
     """
     auth_path = target_path if target_path is not None else _auth_file_path()
     lock_path = auth_path.with_suffix(".lock") if target_path is not None else _auth_lock_path()
+    managed_gid = _managed_shared_auth_gid(auth_path)
     with _file_lock(
         lock_path,
         _auth_lock_holder_for(auth_path),
         timeout_seconds,
         "Timed out waiting for auth store lock",
+        artifact_gid=managed_gid,
     ):
         yield
 
@@ -1325,13 +1505,18 @@ def _load_auth_store(
     fail_closed: bool = False,
 ) -> Dict[str, Any]:
     auth_file = auth_file or _auth_file_path()
+    managed_gid = _managed_shared_auth_gid(auth_file)
+    fail_closed = fail_closed or managed_gid is not None
     if not auth_file.exists():
         if fail_closed:
             raise RuntimeError(f"managed auth store is unavailable: {auth_file}")
         return {"version": AUTH_STORE_VERSION, "providers": {}}
 
     try:
-        raw = json.loads(auth_file.read_text(encoding="utf-8-sig"))
+        if managed_gid is None:
+            raw = json.loads(auth_file.read_text(encoding="utf-8-sig"))
+        else:
+            raw = _read_managed_auth_store(auth_file, managed_gid)
     except OSError:
         # The file exists (checked above) but could not be READ: EMFILE under
         # fd exhaustion, EACCES, EIO, a stalled network mount. None of those
@@ -1350,8 +1535,10 @@ def _load_auth_store(
         corrupt_path = auth_file.with_suffix(".json.corrupt")
         preserved = False
         try:
-            import shutil
-            shutil.copy2(auth_file, corrupt_path)
+            if managed_gid is None:
+                shutil.copy2(auth_file, corrupt_path)
+            else:
+                _copy_managed_auth_artifact(auth_file, corrupt_path, managed_gid)
             preserved = True
         except Exception:
             logger.debug(
@@ -1405,30 +1592,44 @@ def _save_auth_store(auth_store: Dict[str, Any], target_path: Optional[Path] = N
     # OAuth grants (#43589) — reusing this function's atomic O_EXCL + 0o600
     # write so the root auth.json gets the same TOCTOU-safe treatment.
     auth_file = target_path if target_path is not None else _auth_file_path()
+    managed_gid = _managed_shared_auth_gid(auth_file)
+    if managed_gid is not None and not auth_file.exists():
+        raise RuntimeError(f"managed auth store is unavailable: {auth_file}")
     auth_file.parent.mkdir(parents=True, exist_ok=True)
-    # Tighten parent dir to 0o700 so siblings can't traverse to creds.
-    # No-op on Windows (POSIX mode bits not enforced); ignore failures.
-    # secure_parent_dir refuses to chmod / or top-level dirs (#25821).
-    secure_parent_dir(auth_file)
+    if managed_gid is None:
+        # Legacy auth stores remain owner-only.
+        secure_parent_dir(auth_file)
     auth_store["version"] = AUTH_STORE_VERSION
     auth_store["updated_at"] = datetime.now(timezone.utc).isoformat()
     payload = json.dumps(auth_store, indent=2) + "\n"
     tmp_path = auth_file.with_name(f"{auth_file.name}.tmp.{os.getpid()}.{uuid.uuid4().hex}")
+    fd = -1
     try:
-        # Create with 0o600 atomically via os.open(O_EXCL) + fdopen to close
-        # the TOCTOU window where default umask (often 0o644) briefly exposed
-        # OAuth tokens to other local users between open() and chmod().
-        # Mirrors agent/google_oauth.py (#19673) and tools/mcp_oauth.py (#21148).
+        # Explicit mode closes the create/chmod exposure window.
         fd = os.open(
             str(tmp_path),
             os.O_WRONLY | os.O_CREAT | os.O_EXCL,
-            stat.S_IRUSR | stat.S_IWUSR,
+            _MANAGED_SHARED_AUTH_MODE
+            if managed_gid is not None
+            else stat.S_IRUSR | stat.S_IWUSR,
         )
+        if managed_gid is not None:
+            _apply_managed_auth_fd_metadata(fd, managed_gid)
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            fd = -1
             handle.write(payload)
             handle.flush()
             os.fsync(handle.fileno())
-        atomic_replace(tmp_path, auth_file)
+        if managed_gid is None:
+            replaced = atomic_replace(tmp_path, auth_file)
+        else:
+            # The managed file is always replaced in its own directory.  Use
+            # os.replace directly so a raced destination symlink is replaced,
+            # never resolved and followed by the generic compatibility helper.
+            os.replace(tmp_path, auth_file)
+            replaced = str(auth_file)
+        if managed_gid is not None:
+            _apply_managed_auth_path_metadata(Path(replaced), managed_gid)
         try:
             dir_fd = os.open(str(auth_file.parent), os.O_RDONLY)
         except OSError:
@@ -1439,16 +1640,19 @@ def _save_auth_store(auth_store: Dict[str, Any], target_path: Optional[Path] = N
             finally:
                 os.close(dir_fd)
     finally:
+        if fd >= 0:
+            os.close(fd)
         try:
             if tmp_path.exists():
                 tmp_path.unlink()
         except OSError:
             pass
-    # Restrict file permissions to owner only
-    try:
-        auth_file.chmod(stat.S_IRUSR | stat.S_IWUSR)
-    except OSError:
-        pass
+    if managed_gid is None:
+        # Restrict file permissions to owner only.
+        try:
+            auth_file.chmod(stat.S_IRUSR | stat.S_IWUSR)
+        except OSError:
+            pass
     return auth_file
 
 
