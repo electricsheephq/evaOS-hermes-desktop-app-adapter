@@ -1305,10 +1305,30 @@ def _apply_managed_auth_path_metadata(path: Path, gid: int) -> None:
 
 
 def _prepare_managed_lock_file(lock_path: Path, gid: int) -> None:
-    flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
-    fd = os.open(str(lock_path), flags, _MANAGED_SHARED_AUTH_MODE)
+    flags = os.O_RDWR | getattr(os, "O_NOFOLLOW", 0)
+    created = False
     try:
-        _apply_managed_auth_fd_metadata(fd, gid)
+        fd = os.open(
+            str(lock_path),
+            flags | os.O_CREAT | os.O_EXCL,
+            _MANAGED_SHARED_AUTH_MODE,
+        )
+        created = True
+    except FileExistsError:
+        fd = os.open(str(lock_path), flags)
+    try:
+        if created:
+            _apply_managed_auth_fd_metadata(fd, gid)
+        else:
+            lock_stat = os.fstat(fd)
+            if (
+                not stat.S_ISREG(lock_stat.st_mode)
+                or lock_stat.st_gid != gid
+                or stat.S_IMODE(lock_stat.st_mode) != _MANAGED_SHARED_AUTH_MODE
+            ):
+                raise RuntimeError(
+                    "existing managed shared auth lock has unsafe metadata"
+                )
     finally:
         os.close(fd)
 

@@ -105,6 +105,46 @@ def test_managed_shared_save_preserves_gid_and_group_mode(tmp_path, monkeypatch)
     assert stat.S_IMODE(local.stat().st_mode) == 0o600
 
 
+def test_managed_shared_lock_does_not_rewrite_peer_owned_metadata(
+    tmp_path, monkeypatch
+):
+    """A sibling group member validates, but does not chmod/chown, an existing lock."""
+    from hermes_cli import auth as auth_mod
+
+    shared = tmp_path / "shared-auth" / "auth.json"
+    shared.parent.mkdir()
+    shared.write_text(json.dumps({"version": 1, "providers": {}}))
+    lock = shared.with_suffix(".lock")
+    lock.write_text("")
+    os.chmod(lock, 0o660)
+    monkeypatch.setenv("HERMES_SHARED_AUTH_FILE", str(shared))
+
+    def reject_metadata_rewrite(fd, gid):
+        raise AssertionError("existing peer-owned lock metadata must not be rewritten")
+
+    monkeypatch.setattr(
+        auth_mod, "_apply_managed_auth_fd_metadata", reject_metadata_rewrite
+    )
+    with auth_mod._auth_store_lock(target_path=shared):
+        pass
+
+
+def test_managed_shared_lock_rejects_unsafe_existing_metadata(tmp_path, monkeypatch):
+    from hermes_cli import auth as auth_mod
+
+    shared = tmp_path / "shared-auth" / "auth.json"
+    shared.parent.mkdir()
+    shared.write_text(json.dumps({"version": 1, "providers": {}}))
+    lock = shared.with_suffix(".lock")
+    lock.write_text("")
+    os.chmod(lock, 0o640)
+    monkeypatch.setenv("HERMES_SHARED_AUTH_FILE", str(shared))
+
+    with pytest.raises(RuntimeError, match="unsafe metadata"):
+        with auth_mod._auth_store_lock(target_path=shared):
+            pass
+
+
 def test_managed_shared_save_replaces_raced_symlink_without_following(
     tmp_path, monkeypatch
 ):
