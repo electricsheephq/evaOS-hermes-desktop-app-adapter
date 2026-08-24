@@ -69,6 +69,41 @@ def test_save_auth_store_writes_0o600_with_0o700_parent(tmp_path, monkeypatch):
     assert data["providers"]["openai-codex"]["tokens"]["access_token"] == "secret-x"
 
 
+def test_managed_shared_save_preserves_gid_and_group_mode(tmp_path, monkeypatch):
+    """Managed replacement and lock artifacts stay group-readable/writable."""
+    from hermes_cli import auth as auth_mod
+
+    root = tmp_path / ".hermes"
+    shared = root / "shared-auth" / "auth.json"
+    shared.parent.mkdir(mode=0o770, parents=True)
+    shared.write_text(json.dumps({"version": 1, "providers": {}}))
+    os.chmod(shared, 0o640)
+    shared_gid = shared.stat().st_gid
+    profile_home = root / "profiles" / "worker"
+    monkeypatch.setenv("HERMES_HOME", str(profile_home))
+    monkeypatch.setenv("HERMES_SHARED_AUTH_FILE", str(shared))
+    old_umask = os.umask(0o022)
+    try:
+        with auth_mod._auth_store_lock(target_path=shared):
+            pass
+        auth_mod._save_auth_store(
+            {"version": auth_mod.AUTH_STORE_VERSION, "providers": {}},
+            target_path=shared,
+        )
+        local = auth_mod._save_auth_store(
+            {"version": auth_mod.AUTH_STORE_VERSION, "providers": {}}
+        )
+    finally:
+        os.umask(old_umask)
+
+    assert stat.S_IMODE(shared.stat().st_mode) == 0o660
+    assert shared.stat().st_gid == shared_gid
+    lock = shared.with_suffix(".lock")
+    assert stat.S_IMODE(lock.stat().st_mode) == 0o660
+    assert lock.stat().st_gid == shared_gid
+    assert stat.S_IMODE(local.stat().st_mode) == 0o600
+
+
 # ---------------------------------------------------------------------------
 # _save_qwen_cli_tokens  (Qwen CLI OAuth tokens)
 # ---------------------------------------------------------------------------
