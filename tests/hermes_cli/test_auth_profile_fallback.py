@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import multiprocessing
 import os
+import stat
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -305,6 +306,10 @@ def test_managed_shared_pool_preserves_concurrent_process_updates(
     persisted = json.loads(shared.read_text())["credential_pool"]["openrouter"]
     assert {entry["id"] for entry in persisted} == {"shared-a", "shared-b"}
     assert {entry.get("last_status") for entry in persisted} == {"exhausted"}
+    if os.name != "nt":
+        assert stat.S_IMODE(shared.stat().st_mode) == 0o660
+        assert stat.S_IMODE(shared.with_suffix(".lock").stat().st_mode) == 0o660
+        assert shared.stat().st_gid == shared.with_suffix(".lock").stat().st_gid
 
 
 def test_managed_shared_auth_corruption_fails_closed(profile_env, monkeypatch):
@@ -318,7 +323,11 @@ def test_managed_shared_auth_corruption_fails_closed(profile_env, monkeypatch):
 
     with pytest.raises(RuntimeError, match="managed auth store is corrupt"):
         read_credential_pool("openrouter")
-    assert shared.with_suffix(".json.corrupt").is_file()
+    corrupt = shared.with_suffix(".json.corrupt")
+    assert corrupt.is_file()
+    if os.name != "nt":
+        assert stat.S_IMODE(corrupt.stat().st_mode) == 0o660
+        assert corrupt.stat().st_gid == shared.stat().st_gid
 
 
 def test_managed_shared_auth_missing_file_fails_closed(profile_env, monkeypatch):
