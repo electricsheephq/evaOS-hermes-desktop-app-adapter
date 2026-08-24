@@ -1292,6 +1292,29 @@ def _apply_managed_auth_fd_metadata(fd: int, gid: int) -> None:
         raise RuntimeError("could not preserve managed shared auth file group") from exc
 
 
+def _open_managed_auth_read_fd(auth_file: Path, gid: int) -> int:
+    fd = os.open(str(auth_file), os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    try:
+        auth_stat = os.fstat(fd)
+        if not stat.S_ISREG(auth_stat.st_mode) or auth_stat.st_gid != gid:
+            raise RuntimeError("managed auth store has unsafe metadata")
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
+
+
+def _read_managed_auth_store(auth_file: Path, gid: int) -> Dict[str, Any]:
+    fd = _open_managed_auth_read_fd(auth_file, gid)
+    try:
+        with os.fdopen(fd, "r", encoding="utf-8-sig") as handle:
+            fd = -1
+            return json.load(handle)
+    finally:
+        if fd >= 0:
+            os.close(fd)
+
+
 def _apply_managed_auth_path_metadata(path: Path, gid: int) -> None:
     flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
     try:
@@ -1304,7 +1327,7 @@ def _apply_managed_auth_path_metadata(path: Path, gid: int) -> None:
         os.close(fd)
 
 
-def _prepare_managed_lock_file(lock_path: Path, gid: int) -> None:
+def _prepare_managed_lock_file(lock_path: Path, gid: int) -> int:
     flags = os.O_RDWR | getattr(os, "O_NOFOLLOW", 0)
     tmp_path = lock_path.with_name(
         f"{lock_path.name}.tmp.{os.getpid()}.{uuid.uuid4().hex}"
@@ -1340,8 +1363,10 @@ def _prepare_managed_lock_file(lock_path: Path, gid: int) -> None:
             or stat.S_IMODE(lock_stat.st_mode) != _MANAGED_SHARED_AUTH_MODE
         ):
             raise RuntimeError("existing managed shared auth lock has unsafe metadata")
-    finally:
+    except BaseException:
         os.close(fd)
+        raise
+    return fd
 
 
 def _copy_managed_auth_artifact(auth_file: Path, corrupt_path: Path, gid: int) -> None:
@@ -1434,10 +1459,13 @@ def _file_lock(
         return
 
     lock_path.parent.mkdir(parents=True, exist_ok=True)
+    managed_lock_fd = -1
     if artifact_gid is not None:
-        _prepare_managed_lock_file(lock_path, artifact_gid)
+        managed_lock_fd = _prepare_managed_lock_file(lock_path, artifact_gid)
 
     if fcntl is None and msvcrt is None:
+        if managed_lock_fd >= 0:
+            os.close(managed_lock_fd)
         holder.depth = 1
         try:
             yield
@@ -1445,42 +1473,57 @@ def _file_lock(
             holder.depth = 0
         return
 
-    # On Windows, msvcrt.locking needs the file to have content and the
-    # file pointer at position 0. Ensure the lock file has at least 1 byte.
-    if msvcrt and (not lock_path.exists() or lock_path.stat().st_size == 0):
-        lock_path.write_text(" ", encoding="utf-8")
+    if managed_lock_fd >= 0:
+        lock_file = os.fdopen(
+            managed_lock_fd, "r+" if msvcrt else "a+", encoding="utf-8"
+        )
+        managed_lock_fd = -1
+    else:
+        # On Windows, msvcrt.locking needs the file to have content and the
+        # file pointer at position 0. Ensure the lock file has at least 1 byte.
+        if msvcrt and (not lock_path.exists() or lock_path.stat().st_size == 0):
+            lock_path.write_text(" ", encoding="utf-8")
+        lock_file = lock_path.open("r+" if msvcrt else "a+", encoding="utf-8")
 
-    with lock_path.open("r+" if msvcrt else "a+", encoding="utf-8") as lock_file:
-        deadline = time.monotonic() + max(1.0, timeout_seconds)
-        while True:
+    try:
+        with lock_file:
+            if msvcrt and lock_file.tell() == 0:
+                lock_file.write(" ")
+                lock_file.flush()
+                lock_file.seek(0)
+            deadline = time.monotonic() + max(1.0, timeout_seconds)
+            while True:
+                try:
+                    if fcntl:
+                        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    else:
+                        lock_file.seek(0)
+                        msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
+                    break
+                except (BlockingIOError, OSError, PermissionError):
+                    if time.monotonic() >= deadline:
+                        raise TimeoutError(timeout_message)
+                    time.sleep(0.05)
+
+            holder.depth = 1
             try:
+                yield
+            finally:
+                holder.depth = 0
                 if fcntl:
-                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                else:
-                    lock_file.seek(0)
-                    msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
-                break
-            except (BlockingIOError, OSError, PermissionError):
-                if time.monotonic() >= deadline:
-                    raise TimeoutError(timeout_message)
-                time.sleep(0.05)
-
-        holder.depth = 1
-        try:
-            yield
-        finally:
-            holder.depth = 0
-            if fcntl:
-                try:
-                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
-                except (OSError, IOError):
-                    pass
-            elif msvcrt:
-                try:
-                    lock_file.seek(0)
-                    msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
-                except (OSError, IOError):
-                    pass
+                    try:
+                        fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+                    except (OSError, IOError):
+                        pass
+                elif msvcrt:
+                    try:
+                        lock_file.seek(0)
+                        msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+                    except (OSError, IOError):
+                        pass
+    finally:
+        if managed_lock_fd >= 0:
+            os.close(managed_lock_fd)
 
 
 @contextmanager
@@ -1528,7 +1571,10 @@ def _load_auth_store(
         return {"version": AUTH_STORE_VERSION, "providers": {}}
 
     try:
-        raw = json.loads(auth_file.read_text(encoding="utf-8-sig"))
+        if managed_gid is None:
+            raw = json.loads(auth_file.read_text(encoding="utf-8-sig"))
+        else:
+            raw = _read_managed_auth_store(auth_file, managed_gid)
     except OSError:
         # The file exists (checked above) but could not be READ: EMFILE under
         # fd exhaustion, EACCES, EIO, a stalled network mount. None of those
