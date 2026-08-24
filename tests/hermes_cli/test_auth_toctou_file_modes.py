@@ -119,11 +119,15 @@ def test_managed_shared_lock_does_not_rewrite_peer_owned_metadata(
     os.chmod(lock, 0o660)
     monkeypatch.setenv("HERMES_SHARED_AUTH_FILE", str(shared))
 
-    def reject_metadata_rewrite(fd, gid):
-        raise AssertionError("existing peer-owned lock metadata must not be rewritten")
+    real_apply = auth_mod._apply_managed_auth_fd_metadata
+
+    def reject_existing_metadata_rewrite(fd, gid):
+        if os.fstat(fd).st_ino == lock.stat().st_ino:
+            raise AssertionError("existing peer-owned lock metadata must not be rewritten")
+        real_apply(fd, gid)
 
     monkeypatch.setattr(
-        auth_mod, "_apply_managed_auth_fd_metadata", reject_metadata_rewrite
+        auth_mod, "_apply_managed_auth_fd_metadata", reject_existing_metadata_rewrite
     )
     with auth_mod._auth_store_lock(target_path=shared):
         pass
@@ -143,6 +147,30 @@ def test_managed_shared_lock_rejects_unsafe_existing_metadata(tmp_path, monkeypa
     with pytest.raises(RuntimeError, match="unsafe metadata"):
         with auth_mod._auth_store_lock(target_path=shared):
             pass
+
+
+def test_managed_shared_lock_is_initialized_before_publish(tmp_path, monkeypatch):
+    from hermes_cli import auth as auth_mod
+
+    shared = tmp_path / "shared-auth" / "auth.json"
+    shared.parent.mkdir()
+    shared.write_text(json.dumps({"version": 1, "providers": {}}))
+    lock = shared.with_suffix(".lock")
+    monkeypatch.setenv("HERMES_SHARED_AUTH_FILE", str(shared))
+    real_apply = auth_mod._apply_managed_auth_fd_metadata
+
+    def assert_unpublished_then_apply(fd, gid):
+        assert not lock.exists()
+        real_apply(fd, gid)
+
+    monkeypatch.setattr(
+        auth_mod, "_apply_managed_auth_fd_metadata", assert_unpublished_then_apply
+    )
+    with auth_mod._auth_store_lock(target_path=shared):
+        pass
+
+    assert lock.is_file() and not lock.is_symlink()
+    assert stat.S_IMODE(lock.stat().st_mode) == 0o660
 
 
 def test_managed_shared_save_replaces_raced_symlink_without_following(
