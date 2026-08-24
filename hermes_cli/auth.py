@@ -1345,14 +1345,26 @@ def _copy_managed_auth_artifact(auth_file: Path, corrupt_path: Path, gid: int) -
             raise RuntimeError("managed auth corruption copy must be a regular no-follow file")
     tmp_path = corrupt_path.with_name(f"{corrupt_path.name}.tmp.{os.getpid()}.{uuid.uuid4().hex}")
     fd = -1
+    source_fd = -1
     try:
+        try:
+            source_fd = os.open(
+                str(auth_file),
+                os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+            )
+        except OSError as exc:
+            raise RuntimeError("managed auth corruption source is unsafe") from exc
+        source_stat = os.fstat(source_fd)
+        if not stat.S_ISREG(source_stat.st_mode) or source_stat.st_gid != gid:
+            raise RuntimeError("managed auth corruption source is unsafe")
         fd = os.open(
             str(tmp_path),
             os.O_WRONLY | os.O_CREAT | os.O_EXCL,
             _MANAGED_SHARED_AUTH_MODE,
         )
         _apply_managed_auth_fd_metadata(fd, gid)
-        with auth_file.open("rb") as source, os.fdopen(fd, "wb") as target:
+        with os.fdopen(source_fd, "rb") as source, os.fdopen(fd, "wb") as target:
+            source_fd = -1
             fd = -1
             shutil.copyfileobj(source, target)
             target.flush()
@@ -1363,6 +1375,8 @@ def _copy_managed_auth_artifact(auth_file: Path, corrupt_path: Path, gid: int) -
         os.replace(tmp_path, corrupt_path)
         _apply_managed_auth_path_metadata(corrupt_path, gid)
     finally:
+        if source_fd >= 0:
+            os.close(source_fd)
         if fd >= 0:
             os.close(fd)
         try:

@@ -178,6 +178,22 @@ def test_managed_shared_save_replaces_raced_symlink_without_following(
     assert outside.read_text() == "unchanged"
 
 
+def test_managed_corrupt_copy_does_not_follow_source_symlink(tmp_path):
+    from hermes_cli import auth as auth_mod
+
+    shared = tmp_path / "shared-auth" / "auth.json"
+    shared.parent.mkdir()
+    outside = tmp_path / "private.env"
+    outside.write_text("PRIVATE_VALUE=do-not-copy")
+    shared.symlink_to(outside)
+    corrupt = shared.with_suffix(".json.corrupt")
+
+    with pytest.raises(RuntimeError, match="corruption source is unsafe"):
+        auth_mod._copy_managed_auth_artifact(shared, corrupt, outside.stat().st_gid)
+
+    assert not corrupt.exists()
+
+
 # ---------------------------------------------------------------------------
 # _save_qwen_cli_tokens  (Qwen CLI OAuth tokens)
 # ---------------------------------------------------------------------------
