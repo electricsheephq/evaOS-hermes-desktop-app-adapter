@@ -1337,8 +1337,11 @@ def _copy_managed_auth_artifact(auth_file: Path, corrupt_path: Path, gid: int) -
             shutil.copyfileobj(source, target)
             target.flush()
             os.fsync(target.fileno())
-        replaced = atomic_replace(tmp_path, corrupt_path)
-        _apply_managed_auth_path_metadata(Path(replaced), gid)
+        # Managed shared auth never follows a destination symlink.  The temp
+        # file is adjacent, so a cross-device fallback is neither needed nor
+        # safe for this authority boundary.
+        os.replace(tmp_path, corrupt_path)
+        _apply_managed_auth_path_metadata(corrupt_path, gid)
     finally:
         if fd >= 0:
             os.close(fd)
@@ -1584,7 +1587,14 @@ def _save_auth_store(auth_store: Dict[str, Any], target_path: Optional[Path] = N
             handle.write(payload)
             handle.flush()
             os.fsync(handle.fileno())
-        replaced = atomic_replace(tmp_path, auth_file)
+        if managed_gid is None:
+            replaced = atomic_replace(tmp_path, auth_file)
+        else:
+            # The managed file is always replaced in its own directory.  Use
+            # os.replace directly so a raced destination symlink is replaced,
+            # never resolved and followed by the generic compatibility helper.
+            os.replace(tmp_path, auth_file)
+            replaced = str(auth_file)
         if managed_gid is not None:
             _apply_managed_auth_path_metadata(Path(replaced), managed_gid)
         try:
