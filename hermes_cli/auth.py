@@ -1306,29 +1306,40 @@ def _apply_managed_auth_path_metadata(path: Path, gid: int) -> None:
 
 def _prepare_managed_lock_file(lock_path: Path, gid: int) -> None:
     flags = os.O_RDWR | getattr(os, "O_NOFOLLOW", 0)
-    created = False
+    tmp_path = lock_path.with_name(
+        f"{lock_path.name}.tmp.{os.getpid()}.{uuid.uuid4().hex}"
+    )
+    tmp_fd = -1
     try:
-        fd = os.open(
-            str(lock_path),
+        tmp_fd = os.open(
+            str(tmp_path),
             flags | os.O_CREAT | os.O_EXCL,
             _MANAGED_SHARED_AUTH_MODE,
         )
-        created = True
-    except FileExistsError:
-        fd = os.open(str(lock_path), flags)
+        _apply_managed_auth_fd_metadata(tmp_fd, gid)
+        try:
+            # Publish only the fully initialized inode.  Hard-link creation is
+            # atomic and refuses to replace a lock won by a concurrent peer.
+            os.link(tmp_path, lock_path, follow_symlinks=False)
+        except FileExistsError:
+            pass
+    finally:
+        if tmp_fd >= 0:
+            os.close(tmp_fd)
+        try:
+            tmp_path.unlink()
+        except FileNotFoundError:
+            pass
+
+    fd = os.open(str(lock_path), flags)
     try:
-        if created:
-            _apply_managed_auth_fd_metadata(fd, gid)
-        else:
-            lock_stat = os.fstat(fd)
-            if (
-                not stat.S_ISREG(lock_stat.st_mode)
-                or lock_stat.st_gid != gid
-                or stat.S_IMODE(lock_stat.st_mode) != _MANAGED_SHARED_AUTH_MODE
-            ):
-                raise RuntimeError(
-                    "existing managed shared auth lock has unsafe metadata"
-                )
+        lock_stat = os.fstat(fd)
+        if (
+            not stat.S_ISREG(lock_stat.st_mode)
+            or lock_stat.st_gid != gid
+            or stat.S_IMODE(lock_stat.st_mode) != _MANAGED_SHARED_AUTH_MODE
+        ):
+            raise RuntimeError("existing managed shared auth lock has unsafe metadata")
     finally:
         os.close(fd)
 
