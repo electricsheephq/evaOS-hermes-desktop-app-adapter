@@ -26,7 +26,6 @@ fire. Integration UX problems get skills/runbooks/aliases before product code.
 
 Instructions for AI coding assistants and developers working on the hermes-agent codebase.
 
-**Never give up on the right solution.**
 
 ## What Hermes Is
 
