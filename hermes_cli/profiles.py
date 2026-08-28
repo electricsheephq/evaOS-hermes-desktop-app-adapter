@@ -979,6 +979,45 @@ def set_profile_display_name(profile_name: str, display_name: str) -> str:
 # CRUD operations
 # ---------------------------------------------------------------------------
 
+def get_profile_info(name: str) -> ProfileInfo:
+    """Return one profile's metadata without enumerating sibling homes."""
+    canon = normalize_profile_name(name)
+    validate_profile_name(canon)
+    profile_dir = get_profile_dir(canon)
+    if not profile_dir.is_dir():
+        raise FileNotFoundError(f"Profile '{canon}' does not exist.")
+
+    model, provider = _read_config_model(profile_dir)
+    dist_name, dist_version, dist_source = _read_distribution_meta(profile_dir)
+    meta = read_profile_meta(profile_dir)
+    alias_name = None if canon == "default" else find_alias_for_profile(canon)
+    alias_path = None
+    if alias_name:
+        alias_path = _get_wrapper_dir() / (
+            f"{alias_name}.bat" if sys.platform == "win32" else alias_name
+        )
+        if not alias_path.exists():
+            alias_path = None
+
+    return ProfileInfo(
+        name=canon,
+        path=profile_dir,
+        is_default=canon == "default",
+        gateway_running=_check_gateway_running(profile_dir),
+        model=model,
+        provider=provider,
+        has_env=(profile_dir / ".env").exists(),
+        skill_count=_count_skills(profile_dir),
+        alias_path=alias_path,
+        alias_name=alias_name,
+        distribution_name=dist_name,
+        distribution_version=dist_version,
+        distribution_source=dist_source,
+        description=meta.get("description", ""),
+        description_auto=meta.get("description_auto", False),
+        display_name=meta.get("display_name", ""),
+    )
+
 def list_profiles() -> List[ProfileInfo]:
     """Return info for all profiles, including the default."""
     profiles = []

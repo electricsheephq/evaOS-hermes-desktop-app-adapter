@@ -411,17 +411,20 @@ def get_profiles_sessions_sidebar(
         selectors_for_current=("all",),
     )
 
-    try:
-        # Session aggregation only needs name/path; the lightweight enumerator
-        # avoids YAML/meta/gateway/skill probes for all profiles per refresh.
-        targets: List[Tuple[str, Path]] = profiles_mod.profiles_to_serve(multiplex=True)
-    except Exception:
-        _log.exception("GET /api/profiles/sessions/sidebar: list_profiles failed")
-        targets = []
-    if not targets and not managed_name:
-        targets.append(("default", profiles_mod.get_profile_dir("default")))
     if managed_name:
-        targets = [target for target in targets if target[0] == managed_name]
+        targets: List[Tuple[str, Path]] = [
+            (managed_name, profiles_mod.get_profile_dir(managed_name))
+        ]
+    else:
+        try:
+            # Session aggregation only needs name/path; the lightweight
+            # enumerator avoids YAML/meta/gateway/skill probes per refresh.
+            targets = profiles_mod.profiles_to_serve(multiplex=True)
+        except Exception:
+            _log.exception("GET /api/profiles/sessions/sidebar: list_profiles failed")
+            targets = []
+        if not targets:
+            targets.append(("default", profiles_mod.get_profile_dir("default")))
 
     recents_scope = (recents_profile or "all").strip() or "all"
     recents_exclude_list = [s for s in (recents_exclude or "").split(",") if s.strip()]
@@ -655,16 +658,18 @@ def get_profiles_projects_tree(preview_limit: int = 3, session_limit: int = 2000
     from tui_gateway import server as gateway_server
     managed_name = _managed_profile_or_http(None)
 
-    try:
+    if managed_name:
         targets: List[Tuple[str, Path]] = [
-            (info.name, info.path) for info in profiles_mod.list_profiles()
-            if not managed_name or info.name == managed_name
+            (managed_name, profiles_mod.get_profile_dir(managed_name))
         ]
-    except Exception:
-        _log.exception("GET /api/profiles/projects/tree: list_profiles failed")
-        targets = []
-    if not targets and not managed_name:
-        targets.append(("default", profiles_mod.get_profile_dir("default")))
+    else:
+        try:
+            targets = [(info.name, info.path) for info in profiles_mod.list_profiles()]
+        except Exception:
+            _log.exception("GET /api/profiles/projects/tree: list_profiles failed")
+            targets = []
+        if not targets:
+            targets.append(("default", profiles_mod.get_profile_dir("default")))
 
     merged: Dict[str, Dict[str, Any]] = {}
     scoped_session_ids: List[str] = []
@@ -751,17 +756,16 @@ def post_profiles_sessions_pull_requests(body: SessionPrScanBody):
     if not wanted:
         return {"pull_requests": {}, "scanned": []}
 
-    try:
-        targets = [
-            (info.name, info.path)
-            for info in profiles_mod.list_profiles()
-            if not managed_name or info.name == managed_name
-        ]
-    except Exception:
-        _log.exception("POST /api/profiles/sessions/pull-requests: list_profiles failed")
-        targets = []
-    if not targets and not managed_name:
-        targets.append(("default", profiles_mod.get_profile_dir("default")))
+    if managed_name:
+        targets = [(managed_name, profiles_mod.get_profile_dir(managed_name))]
+    else:
+        try:
+            targets = [(info.name, info.path) for info in profiles_mod.list_profiles()]
+        except Exception:
+            _log.exception("POST /api/profiles/sessions/pull-requests: list_profiles failed")
+            targets = []
+        if not targets:
+            targets.append(("default", profiles_mod.get_profile_dir("default")))
 
     found: Dict[str, Dict[str, Any]] = {}
     for name, home in targets:
@@ -796,25 +800,25 @@ def post_profiles_sessions_pull_requests(body: SessionPrScanBody):
 async def list_profiles_endpoint():
     from hermes_cli import profiles as profiles_mod
     managed_name = _managed_profile_or_http(None)
+    if managed_name:
+        try:
+            profile = await run_in_threadpool(
+                profiles_mod.get_profile_info,
+                managed_name,
+            )
+            return {"profiles": [_profile_to_dict(profile)]}
+        except Exception:
+            _log.exception("GET /api/profiles failed for managed profile")
+            return {"profiles": []}
     try:
         profiles = await run_in_threadpool(profiles_mod.list_profiles)
-        allowed = {managed_name} if managed_name else {
-            getattr(p, "name", "") for p in profiles
-        }
         return {
-            "profiles": [
-                _profile_to_dict(p)
-                for p in profiles
-                if getattr(p, "name", "") in allowed
-            ]
+            "profiles": [_profile_to_dict(p) for p in profiles]
         }
     except Exception:
         _log.exception("GET /api/profiles failed; falling back to profile directory scan")
         rows = _fallback_profile_dicts(profiles_mod)
-        allowed = {managed_name} if managed_name else {
-            row.get("name", "") for row in rows
-        }
-        return {"profiles": [row for row in rows if row.get("name", "") in allowed]}
+        return {"profiles": rows}
 
 
 @router.post("/api/profiles")

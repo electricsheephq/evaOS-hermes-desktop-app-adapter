@@ -96,10 +96,15 @@ def test_managed_dashboard_exposes_only_its_profile(
     managed_profile_env, tmp_path, monkeypatch
 ):
     from fastapi.testclient import TestClient
-    from hermes_cli import web_server
+    from hermes_cli import profiles, web_server
 
     sibling = tmp_path / ".hermes" / "profiles" / "sibling"
     sibling.mkdir()
+    monkeypatch.setattr(
+        profiles,
+        "list_profiles",
+        lambda: (_ for _ in ()).throw(AssertionError("sibling scan")),
+    )
     client = TestClient(web_server.app)
     client.headers[web_server._SESSION_HEADER_NAME] = web_server._SESSION_TOKEN
 
@@ -143,10 +148,7 @@ def test_managed_sidebar_reads_only_the_process_profile(
     monkeypatch.setattr(
         profiles,
         "profiles_to_serve",
-        lambda *, multiplex: [
-            ("main", managed_profile_env),
-            ("sibling", sibling),
-        ],
+        lambda *, multiplex: (_ for _ in ()).throw(AssertionError("sibling scan")),
     )
     client = TestClient(web_server.app)
     client.headers[web_server._SESSION_HEADER_NAME] = web_server._SESSION_TOKEN
@@ -160,4 +162,33 @@ def test_managed_sidebar_reads_only_the_process_profile(
     payload = response.json()
     assert {row["id"] for row in payload["recents"]["sessions"]} == {
         "main-session"
+    }
+
+
+def test_managed_project_and_pull_request_routes_do_not_scan_siblings(
+    managed_profile_env, monkeypatch
+):
+    from fastapi.testclient import TestClient
+    from hermes_cli import profiles, web_server
+
+    monkeypatch.setattr(
+        profiles,
+        "list_profiles",
+        lambda: (_ for _ in ()).throw(AssertionError("sibling scan")),
+    )
+    client = TestClient(web_server.app)
+    client.headers[web_server._SESSION_HEADER_NAME] = web_server._SESSION_TOKEN
+
+    projects = client.get("/api/profiles/projects/tree")
+    assert projects.status_code == 200
+    assert projects.json()["projects"] == []
+
+    pull_requests = client.post(
+        "/api/profiles/sessions/pull-requests",
+        json={"ids": ["synthetic-session"]},
+    )
+    assert pull_requests.status_code == 200
+    assert pull_requests.json() == {
+        "pull_requests": {},
+        "scanned": ["synthetic-session"],
     }

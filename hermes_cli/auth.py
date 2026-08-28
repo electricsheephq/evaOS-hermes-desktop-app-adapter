@@ -1280,7 +1280,39 @@ def _managed_shared_auth_gid(auth_path: Path) -> Optional[int]:
         raise RuntimeError("configured shared auth file is unavailable") from exc
     if shared_path.is_symlink() or not stat.S_ISREG(shared_stat.st_mode):
         raise RuntimeError("configured shared auth file must be a regular no-follow file")
+    if not _managed_shared_auth_metadata_is_safe(shared_stat):
+        raise RuntimeError("configured shared auth file has unsafe metadata")
     return shared_stat.st_gid
+
+
+def _managed_shared_auth_owner_is_authorized(owner_uid: int, gid: int) -> bool:
+    """Return whether *owner_uid* is authorized to replace the shared store.
+
+    Provisioning keeps the shared-auth group membership equal to the active
+    managed profile users.  Atomic replacement therefore legitimately changes
+    the file owner from root to the profile process that completed the write.
+    Trust only root or a user whose primary/supplementary membership matches
+    the file's managed group; unrelated service users fail closed.
+    """
+    if owner_uid == 0:
+        return True
+    try:
+        import grp
+        import pwd
+
+        owner = pwd.getpwuid(owner_uid)
+        group = grp.getgrgid(gid)
+    except (ImportError, KeyError, OSError):
+        return False
+    return owner.pw_gid == gid or owner.pw_name in group.gr_mem
+
+
+def _managed_shared_auth_metadata_is_safe(auth_stat: os.stat_result) -> bool:
+    return (
+        stat.S_ISREG(auth_stat.st_mode)
+        and stat.S_IMODE(auth_stat.st_mode) == _MANAGED_SHARED_AUTH_MODE
+        and _managed_shared_auth_owner_is_authorized(auth_stat.st_uid, auth_stat.st_gid)
+    )
 
 
 def _apply_managed_auth_fd_metadata(fd: int, gid: int) -> None:
@@ -1297,9 +1329,8 @@ def _open_managed_auth_read_fd(auth_file: Path, gid: int) -> int:
     try:
         auth_stat = os.fstat(fd)
         if (
-            not stat.S_ISREG(auth_stat.st_mode)
+            not _managed_shared_auth_metadata_is_safe(auth_stat)
             or auth_stat.st_gid != gid
-            or stat.S_IMODE(auth_stat.st_mode) & 0o007
         ):
             raise RuntimeError("managed auth store has unsafe metadata")
     except BaseException:
@@ -1365,6 +1396,7 @@ def _prepare_managed_lock_file(lock_path: Path, gid: int) -> int:
             not stat.S_ISREG(lock_stat.st_mode)
             or lock_stat.st_gid != gid
             or stat.S_IMODE(lock_stat.st_mode) != _MANAGED_SHARED_AUTH_MODE
+            or not _managed_shared_auth_owner_is_authorized(lock_stat.st_uid, gid)
         ):
             raise RuntimeError("existing managed shared auth lock has unsafe metadata")
     except BaseException:

@@ -34,6 +34,13 @@ pytestmark = pytest.mark.skipif(
 )
 
 
+def _write_managed_shared(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload))
+    os.chmod(path, 0o660)
+    os.chown(path, -1, os.getgid())
+
+
 # ---------------------------------------------------------------------------
 # _save_auth_store  (~/.hermes/auth.json — every native OAuth provider)
 # ---------------------------------------------------------------------------
@@ -76,9 +83,7 @@ def test_managed_shared_save_preserves_gid_and_group_mode(tmp_path, monkeypatch)
 
     root = tmp_path / ".hermes"
     shared = root / "shared-auth" / "auth.json"
-    shared.parent.mkdir(mode=0o770, parents=True)
-    shared.write_text(json.dumps({"version": 1, "providers": {}}))
-    os.chmod(shared, 0o640)
+    _write_managed_shared(shared, {"version": 1, "providers": {}})
     shared_gid = shared.stat().st_gid
     profile_home = root / "profiles" / "worker"
     monkeypatch.setenv("HERMES_HOME", str(profile_home))
@@ -112,11 +117,11 @@ def test_managed_shared_lock_does_not_rewrite_peer_owned_metadata(
     from hermes_cli import auth as auth_mod
 
     shared = tmp_path / "shared-auth" / "auth.json"
-    shared.parent.mkdir()
-    shared.write_text(json.dumps({"version": 1, "providers": {}}))
+    _write_managed_shared(shared, {"version": 1, "providers": {}})
     lock = shared.with_suffix(".lock")
     lock.write_text("")
     os.chmod(lock, 0o660)
+    os.chown(lock, -1, os.getgid())
     monkeypatch.setenv("HERMES_SHARED_AUTH_FILE", str(shared))
 
     real_apply = auth_mod._apply_managed_auth_fd_metadata
@@ -137,8 +142,7 @@ def test_managed_shared_lock_rejects_unsafe_existing_metadata(tmp_path, monkeypa
     from hermes_cli import auth as auth_mod
 
     shared = tmp_path / "shared-auth" / "auth.json"
-    shared.parent.mkdir()
-    shared.write_text(json.dumps({"version": 1, "providers": {}}))
+    _write_managed_shared(shared, {"version": 1, "providers": {}})
     lock = shared.with_suffix(".lock")
     lock.write_text("")
     os.chmod(lock, 0o640)
@@ -153,8 +157,7 @@ def test_managed_shared_lock_is_initialized_before_publish(tmp_path, monkeypatch
     from hermes_cli import auth as auth_mod
 
     shared = tmp_path / "shared-auth" / "auth.json"
-    shared.parent.mkdir()
-    shared.write_text(json.dumps({"version": 1, "providers": {}}))
+    _write_managed_shared(shared, {"version": 1, "providers": {}})
     lock = shared.with_suffix(".lock")
     monkeypatch.setenv("HERMES_SHARED_AUTH_FILE", str(shared))
     real_apply = auth_mod._apply_managed_auth_fd_metadata
@@ -179,8 +182,7 @@ def test_managed_shared_save_replaces_raced_symlink_without_following(
     from hermes_cli import auth as auth_mod
 
     shared = tmp_path / "shared-auth" / "auth.json"
-    shared.parent.mkdir()
-    shared.write_text(json.dumps({"version": 1, "providers": {}}))
+    _write_managed_shared(shared, {"version": 1, "providers": {}})
     outside = tmp_path / "outside.json"
     outside.write_text("unchanged")
     monkeypatch.setenv("HERMES_SHARED_AUTH_FILE", str(shared))
@@ -226,9 +228,7 @@ def test_managed_auth_read_uses_validated_descriptor_after_path_swap(tmp_path, m
     from hermes_cli import auth as auth_mod
 
     shared = tmp_path / "shared-auth" / "auth.json"
-    shared.parent.mkdir()
-    shared.write_text(json.dumps({"version": 1, "providers": {"nous": {}}}))
-    os.chmod(shared, 0o660)
+    _write_managed_shared(shared, {"version": 1, "providers": {"nous": {}}})
     outside = tmp_path / "outside.json"
     outside.write_text(json.dumps({"version": 1, "providers": {"outside": {}}}))
     monkeypatch.setenv("HERMES_SHARED_AUTH_FILE", str(shared))
@@ -260,8 +260,7 @@ def test_managed_lock_flocks_validated_descriptor_after_path_swap(tmp_path, monk
     if auth_mod.fcntl is None:
         pytest.skip("fcntl is required for descriptor flock validation")
     shared = tmp_path / "shared-auth" / "auth.json"
-    shared.parent.mkdir()
-    shared.write_text(json.dumps({"version": 1, "providers": {}}))
+    _write_managed_shared(shared, {"version": 1, "providers": {}})
     lock = shared.with_suffix(".lock")
     outside = tmp_path / "outside.lock"
     outside.write_text("outside")

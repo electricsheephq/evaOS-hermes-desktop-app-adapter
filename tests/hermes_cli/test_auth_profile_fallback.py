@@ -71,6 +71,7 @@ def _write(path: Path, payload: dict) -> None:
     path.write_text(json.dumps(payload, indent=2))
     if "shared-auth" in path.parts and os.name != "nt":
         path.chmod(0o660)
+        os.chown(path, -1, os.getgid())
 
 
 # ---------------------------------------------------------------------------
@@ -291,8 +292,28 @@ def test_managed_shared_auth_rejects_world_permissions(profile_env, monkeypatch)
     _write(profile_env["profile"] / "auth.json", _make_auth_store(pool={}))
     monkeypatch.setenv("HERMES_SHARED_AUTH_FILE", str(shared))
 
-    with pytest.raises(RuntimeError, match="managed auth store is corrupt"):
+    with pytest.raises(RuntimeError, match="unsafe metadata"):
         read_credential_pool("openrouter")
+
+
+def test_managed_shared_auth_rejects_unapproved_owner(profile_env, monkeypatch):
+    from hermes_cli import auth as auth_mod
+
+    if os.name == "nt":
+        pytest.skip("POSIX owner validation")
+    shared = profile_env["global"] / "shared-auth" / "auth.json"
+    shared.parent.mkdir()
+    _write(shared, _make_auth_store(pool={"openrouter": [_pool_entry()]}))
+    _write(profile_env["profile"] / "auth.json", _make_auth_store(pool={}))
+    monkeypatch.setenv("HERMES_SHARED_AUTH_FILE", str(shared))
+    monkeypatch.setattr(
+        auth_mod,
+        "_managed_shared_auth_owner_is_authorized",
+        lambda owner_uid, gid: False,
+    )
+
+    with pytest.raises(RuntimeError, match="unsafe metadata"):
+        auth_mod.read_credential_pool("openrouter")
 
 
 def test_managed_shared_pool_does_not_override_local_provider(
@@ -368,6 +389,9 @@ def test_managed_shared_auth_corruption_fails_closed(profile_env, monkeypatch):
     shared = profile_env["global"] / "shared-auth" / "auth.json"
     shared.parent.mkdir()
     shared.write_text("{broken", encoding="utf-8")
+    if os.name != "nt":
+        shared.chmod(0o660)
+        os.chown(shared, -1, os.getgid())
     _write(profile_env["profile"] / "auth.json", _make_auth_store(pool={}))
     monkeypatch.setenv("HERMES_SHARED_AUTH_FILE", str(shared))
 

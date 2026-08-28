@@ -73,6 +73,7 @@ def test_two_profile_processes_share_only_the_managed_auth_file(tmp_path):
     )
     if os.name != "nt":
         shared.chmod(0o660)
+        os.chown(shared, -1, os.getgid())
 
     profiles = {}
     for name, sibling, personality in (
