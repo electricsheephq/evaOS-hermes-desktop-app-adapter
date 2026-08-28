@@ -74,6 +74,24 @@ def test_dashboard_and_tui_reject_sibling_profile(managed_profile_env, monkeypat
     assert tui_server._profile_home("main") is None
 
 
+def test_managed_gateway_rejects_reserved_default_selector(managed_profile_env):
+    from fastapi import HTTPException
+    from hermes_cli import web_server
+
+    with pytest.raises(HTTPException) as exc_info:
+        web_server._gateway_subcommand("default", "start")
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail == "profile is not authorized"
+
+
+def test_unmanaged_gateway_preserves_upstream_default_selector(monkeypatch):
+    from hermes_cli import web_server
+
+    monkeypatch.delenv("HERMES_SHARED_AUTH_FILE", raising=False)
+    assert web_server._gateway_subcommand("default", "start") == ["gateway", "start"]
+
+
 def test_managed_dashboard_exposes_only_its_profile(
     managed_profile_env, tmp_path, monkeypatch
 ):

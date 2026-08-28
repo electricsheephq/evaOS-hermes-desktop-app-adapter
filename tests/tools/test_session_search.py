@@ -487,6 +487,13 @@ class TestSessionLink:
 # =========================================================================
 
 class TestCrossProfileRead:
+    @pytest.fixture(autouse=True)
+    def _managed_scope(self, monkeypatch, tmp_path):
+        monkeypatch.setenv(
+            "HERMES_SHARED_AUTH_FILE",
+            str(tmp_path / "managed-shared-auth.json"),
+        )
+
     def _seed_shared_profiles(self, db):
         db.create_session(
             "default_current",
@@ -702,6 +709,31 @@ class TestCrossProfileRead:
                 current_session_id="default_session",
             )
         )
+        assert result["success"] is True
+        assert result["session_id"] == "jarvis_session"
+
+    @pytest.mark.parametrize(
+        "selector",
+        [
+            {"session_id": "jarvis_session", "profile": "jarvis"},
+            {"session_id": "jarvis/jarvis_session"},
+        ],
+    )
+    def test_unmanaged_scope_preserves_upstream_cross_profile_read(
+        self, db, tmp_path, monkeypatch, selector
+    ):
+        self._seed_shared_profiles(db)
+        self._patch_profiles(monkeypatch, db.db_path.parent)
+        monkeypatch.delenv("HERMES_SHARED_AUTH_FILE", raising=False)
+
+        result = json.loads(
+            session_search(
+                db=db,
+                current_session_id="default_current",
+                **selector,
+            )
+        )
+
         assert result["success"] is True
         assert result["session_id"] == "jarvis_session"
 

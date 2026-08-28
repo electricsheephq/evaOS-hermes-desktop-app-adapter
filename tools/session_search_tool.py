@@ -35,6 +35,7 @@ support.
 
 import json
 import logging
+import os
 from typing import Any, Dict, List, Optional, Union
 
 from hermes_state_common import _RESET_END_REASONS
@@ -346,10 +347,11 @@ def _shape_message(
 def _resolve_profile_db(profile: str):
     """Open another profile's ``state.db`` read-only, or None for the current one.
 
-    This helper is only reached through the explicit trusted non-agent
-    boundary. ``read_only=True`` (mode=ro) takes no write lock — safe to point
-    at a live profile's DB, including our own. Returns None when no profile is
-    given (use the caller's default db).
+    Managed evaOS processes reach this helper only through the explicit
+    trusted non-agent boundary. Unmanaged upstream processes retain the native
+    profile selector. ``read_only=True`` (mode=ro) takes no write lock — safe
+    to point at a live profile's DB, including our own. Returns None when no
+    profile is given (use the caller's default db).
     """
     if profile is None or not str(profile).strip():
         return None
@@ -1073,10 +1075,11 @@ def _session_search_impl(
     Read:      pass ``session_id`` (no anchor) — dumps the whole session.
     Browse:    pass nothing.
 
-    ``profile`` is reserved for the explicit trusted non-agent boundary below;
-    agent-facing calls may only name their already-routed own profile. Scroll
-    wins over read/discovery when an anchor is set — the agent has asked for a
-    specific slice.
+    In managed evaOS processes, ``profile`` is reserved for the explicit
+    trusted non-agent boundary below; agent-facing calls may only name their
+    already-routed own profile. Unmanaged processes preserve upstream profile
+    selection. Scroll wins over read/discovery when an anchor is set — the
+    agent has asked for a specific slice.
     """
     # Normalise a raw `@session:<profile>/<id>` link value passed as session_id.
     # Session ids never contain "/", so a slash unambiguously means profile/id —
@@ -1090,12 +1093,21 @@ def _session_search_impl(
             if emb_profile and (profile is None or not str(profile).strip()):
                 profile = emb_profile
 
-    routed_profile = _routed_profile(db, current_session_id)
+    managed_scope = bool(os.getenv("HERMES_SHARED_AUTH_FILE", "").strip())
+    routed_profile = (
+        _routed_profile(db, current_session_id) if managed_scope else None
+    )
 
-    # The model-facing tool is intentionally profile-local. An explicit own
-    # profile is harmless when it matches the persisted route; a sibling
-    # profile can never widen this tool's read scope.
-    if profile is not None and str(profile).strip() and not _trusted_cross_profile:
+    # The managed model-facing tool is intentionally profile-local. An
+    # explicit own profile is harmless when it matches the persisted route; a
+    # sibling profile can never widen this tool's read scope. Outside managed
+    # evaOS, retain upstream's native profile selector.
+    if (
+        managed_scope
+        and profile is not None
+        and str(profile).strip()
+        and not _trusted_cross_profile
+    ):
         if routed_profile == _canonical_profile_name(profile):
             profile = None
         else:
@@ -1139,9 +1151,9 @@ def _session_search_impl(
         if json.loads(result).get("success"):
             return result
 
-        # Bare-id recovery is an explicit trusted operation only. Agent calls
-        # must not scan or open sibling profile databases after a local miss.
-        if _trusted_cross_profile:
+        # In managed evaOS, bare-id recovery is an explicit trusted operation
+        # only. Unmanaged upstream callers retain native profile discovery.
+        if _trusted_cross_profile or not managed_scope:
             located, owner = _locate_session_db(sid)
             if located is not None:
                 try:

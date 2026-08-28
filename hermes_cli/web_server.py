@@ -14900,7 +14900,10 @@ def _profile_cli_args(profile: Optional[str]) -> List[str]:
     profile (no args, legacy behavior).
     """
     requested = (profile or "").strip()
-    if not requested or requested.lower() in {"current", "default"}:
+    if not requested or requested.lower() == "current":
+        return []
+    requested = _managed_profile_or_http(requested)
+    if requested.lower() == "default":
         return []
     from hermes_cli import profiles as profiles_mod
     _resolve_profile_dir(requested)
