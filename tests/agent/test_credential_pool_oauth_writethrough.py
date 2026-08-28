@@ -316,6 +316,117 @@ def test_codex_pool_refresh_holds_auth_store_lock_across_post(monkeypatch, tmp_p
     assert lock_held["during_post"] is True
 
 
+def test_managed_codex_pools_share_the_source_refresh_lock(monkeypatch, tmp_path):
+    """Two profile pools serialize a single-use refresh on shared auth."""
+    import contextlib
+
+    provider = "openai-codex"
+    shared_path = tmp_path / "shared" / "auth.json"
+    entry = _entry(
+        provider,
+        id="codex-shared",
+        access_token="old-access",
+        refresh_token="old-refresh",
+    )
+    shared_entry = {"value": entry}
+    shared_entry_guard = threading.Lock()
+    keyed_locks = {}
+    keyed_locks_guard = threading.Lock()
+    lock_targets = []
+
+    @contextlib.contextmanager
+    def tracking_lock(timeout_seconds=A.AUTH_LOCK_TIMEOUT_SECONDS, *, target_path=None):
+        del timeout_seconds
+        key = str(target_path) if target_path is not None else threading.current_thread().name
+        with keyed_locks_guard:
+            lock = keyed_locks.setdefault(key, threading.Lock())
+            lock_targets.append(target_path)
+        with lock:
+            yield
+
+    def sync_from_shared(pool, current):
+        with shared_entry_guard:
+            persisted = shared_entry["value"]
+        if (
+            persisted.access_token != current.access_token
+            or persisted.refresh_token != current.refresh_token
+        ):
+            pool._replace_entry(current, persisted)
+            return persisted
+        return current
+
+    def persist_to_shared(pool, *, removed_ids=None):
+        del removed_ids
+        with shared_entry_guard:
+            shared_entry["value"] = pool._entries[0]
+
+    post_started = threading.Event()
+    second_attempting = threading.Event()
+    posts = []
+    posts_guard = threading.Lock()
+
+    def fake_refresh(access_token, refresh_token, **kwargs):
+        del kwargs
+        with posts_guard:
+            sequence = len(posts) + 1
+            posts.append((access_token, refresh_token))
+        if sequence == 1:
+            post_started.set()
+            assert second_attempting.wait(timeout=5)
+        return {
+            "access_token": f"new-access-{sequence}",
+            "refresh_token": f"new-refresh-{sequence}",
+            "last_refresh": "2026-08-29T00:00:00Z",
+        }
+
+    monkeypatch.setattr(CP, "_auth_store_lock", tracking_lock)
+    monkeypatch.setattr(
+        CredentialPool,
+        "_sync_codex_entry_from_auth_store",
+        sync_from_shared,
+    )
+    monkeypatch.setattr(CredentialPool, "_persist", persist_to_shared)
+    monkeypatch.setattr(
+        CredentialPool,
+        "_sync_device_code_entry_to_auth_store",
+        lambda self, updated: None,
+    )
+    monkeypatch.setattr(
+        CredentialPool,
+        "_entry_needs_refresh",
+        lambda self, current: current.access_token == "old-access",
+    )
+    monkeypatch.setattr(A, "refresh_codex_oauth_pure", fake_refresh)
+
+    first_pool = CredentialPool(provider, [entry], auth_source_path=shared_path)
+    second_pool = CredentialPool(provider, [entry], auth_source_path=shared_path)
+    results = {}
+
+    def refresh(name, pool, *, signal_attempt=False):
+        if signal_attempt:
+            second_attempting.set()
+        results[name] = pool._refresh_entry(entry, force=False)
+
+    first = threading.Thread(target=refresh, args=("first", first_pool))
+    first.start()
+    assert post_started.wait(timeout=5)
+    second = threading.Thread(
+        target=refresh,
+        args=("second", second_pool),
+        kwargs={"signal_attempt": True},
+    )
+    second.start()
+    first.join(timeout=5)
+    second.join(timeout=5)
+
+    assert not first.is_alive()
+    assert not second.is_alive()
+    assert posts == [("old-access", "old-refresh")]
+    assert results["first"].access_token == "new-access-1"
+    assert results["second"].access_token == "new-access-1"
+    assert lock_targets == [shared_path, shared_path]
+
+
 def test_write_through_fires_on_every_refresh_not_just_first(
     profile_and_root, monkeypatch
 ):

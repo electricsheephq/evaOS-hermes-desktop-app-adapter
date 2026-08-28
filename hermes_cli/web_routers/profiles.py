@@ -1230,6 +1230,7 @@ async def describe_profile_auto_endpoint(name: str, body: ProfileDescribeAuto):
 async def export_profile_endpoint(name: str, body: ProfileExport):
     from hermes_cli import profiles as profiles_mod
 
+    name = _managed_profile_or_http(name)
     _resolve_profile_dir(name)
 
     output = (body.output or "").strip()

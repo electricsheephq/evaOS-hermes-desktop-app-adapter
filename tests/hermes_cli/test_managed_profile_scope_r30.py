@@ -76,6 +76,33 @@ def test_managed_current_hub_selector_validates_process_home(
         assert exc_info.value.detail == "managed gateway is not bound to a named profile"
 
 
+def test_managed_current_export_uses_process_profile(
+    managed_profile_env, tmp_path, monkeypatch
+):
+    from fastapi.testclient import TestClient
+    from hermes_cli import profiles, web_server
+
+    output = tmp_path / "main-export.tar.gz"
+    calls = []
+
+    def fake_export(name, destination, *, extra_files=None):
+        calls.append((name, destination, extra_files))
+        return output
+
+    monkeypatch.setattr(profiles, "export_profile", fake_export)
+    client = TestClient(web_server.app)
+    client.headers[web_server._SESSION_HEADER_NAME] = web_server._SESSION_TOKEN
+
+    response = client.post(
+        "/api/profiles/current/export",
+        json={"output": str(output)},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True, "archive": str(output)}
+    assert calls == [("main", str(output), None)]
+
+
 def test_dashboard_and_tui_reject_sibling_profile(managed_profile_env, monkeypatch):
     from fastapi import HTTPException
     from hermes_cli import web_server

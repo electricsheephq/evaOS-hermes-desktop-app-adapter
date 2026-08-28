@@ -264,7 +264,9 @@ async def test_lease_mint_redacts_compact_json_credentials(tmp_path):
             {},
             text=(
                 '{"Authorization":"lease-token-under-test",'
-                '"x-api-key":"api-key-under-test"}'
+                '"x-api-key":"api-key-under-test",'
+                '"access_token":"access-token-under-test",'
+                '"refresh_token":"refresh-token-under-test"}'
             ),
         )
 
@@ -275,6 +277,8 @@ async def test_lease_mint_redacts_compact_json_credentials(tmp_path):
     detail = str(caught.value)
     assert "lease-token-under-test" not in detail
     assert "api-key-under-test" not in detail
+    assert "access-token-under-test" not in detail
+    assert "refresh-token-under-test" not in detail
     assert "[redacted]" in detail
 
 

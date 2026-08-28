@@ -1409,7 +1409,8 @@ class CredentialPool:
                 else self._sync_xai_oauth_entry_from_pool_store
             )
             with _auth_store_lock(
-                timeout_seconds=self._single_use_refresh_lock_timeout()
+                timeout_seconds=self._single_use_refresh_lock_timeout(),
+                target_path=self._auth_source_path,
             ):
                 synced = sync_entry(entry)
                 if self.provider == "openai-codex":
