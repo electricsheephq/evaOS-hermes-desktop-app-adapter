@@ -28,6 +28,40 @@ def test_lease_auth_binds_to_the_sdk_http_stack():
     assert httpx.__name__ == "httpx2"
     assert issubclass(EvaosLeaseHttpAuth, httpx.Auth)
 
+
+@pytest.mark.asyncio
+async def test_broker_mint_transport_ignores_proxy_environment(monkeypatch):
+    from tools import evaos_mcp_lease as lease_module
+
+    observed = {}
+
+    class Client:
+        def __init__(self, **kwargs):
+            observed.update(kwargs)
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, _exc_type, _exc, _tb):
+            return False
+
+        async def post(self, url, *, headers, json):
+            observed.update(url=url, headers=headers, payload=json)
+            return _Response(200, {})
+
+    monkeypatch.setenv("HTTPS_PROXY", "https://profile-proxy.invalid")
+    monkeypatch.setenv("SSL_CERT_FILE", "/profile-controlled/ca.pem")
+    monkeypatch.setattr(lease_module._SDK_HTTPX, "AsyncClient", Client)
+
+    await lease_module._default_transport(
+        "https://example.supabase.co/functions/v1/desktop-runtime-session",
+        {"X-Test": "redacted"},
+        {"action": "pipedream_mcp_lease", "app_slug": "google_sheets"},
+    )
+
+    assert observed["trust_env"] is False
+    assert observed["follow_redirects"] is False
+
 class _Response:
     def __init__(self, status_code: int, payload: dict, *, text: str = ""):
         self.status_code = status_code
@@ -1001,6 +1035,38 @@ def test_managed_config_accepts_exact_agent_account_mode():
             "account_id": DIRECT_ACCOUNT_ID,
         }
     )
+
+
+def test_managed_runtime_binds_lease_identity_to_root_overlay(monkeypatch):
+    from hermes_cli import managed_profile_scope, managed_scope
+
+    authority = {
+        "auth": "evaos_lease",
+        "app_slug": "google_sheets",
+        "lazy": True,
+        "customer_id": DIRECT_CUSTOMER_ID,
+        "agent_id": DIRECT_AGENT_ID,
+        "account_id": DIRECT_ACCOUNT_ID,
+    }
+    monkeypatch.setattr(managed_profile_scope, "managed_profile_name", lambda: "main")
+    monkeypatch.setattr(
+        managed_scope,
+        "load_managed_config",
+        lambda: {"mcp_servers": {"pipedream-google-sheets": authority}},
+    )
+
+    task = MCPServerTask("pipedream-google-sheets")
+    task._auth_type = "evaos_lease"
+    task._validate_evaos_lease_config({**authority, "tools": {"include": ["read"]}})
+
+    forged = {**authority, "agent_id": "sibling"}
+    with pytest.raises(EvaosLeaseError, match="not root-configured"):
+        task._validate_evaos_lease_config(forged)
+
+    alternate = MCPServerTask("profile-added-server")
+    alternate._auth_type = "evaos_lease"
+    with pytest.raises(EvaosLeaseError, match="not root-configured"):
+        alternate._validate_evaos_lease_config(authority)
 
 
 def test_managed_config_rejects_mixed_profile_and_agent_identity():

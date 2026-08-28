@@ -2576,6 +2576,50 @@ class MCPServerTask:
                 "managed MCP customer_id and agent_id must be valid together"
             )
 
+        # A managed profile may edit its user config, including adding another
+        # MCP server.  Lease identity is therefore authoritative only when the
+        # exact server and identity tuple also exist in the root-owned managed
+        # overlay installed for this profile.  The overlay still permits
+        # harmless user options (for example tool filters), but an alternate
+        # server name or forged account/profile tuple fails before the broker
+        # credential is read.
+        from hermes_cli.managed_profile_scope import managed_profile_name
+
+        try:
+            managed_profile = managed_profile_name()
+        except Exception as exc:
+            raise EvaosLeaseError(
+                "managed MCP profile authority is unavailable"
+            ) from exc
+        if managed_profile is not None:
+            from hermes_cli import managed_scope
+
+            managed_servers = managed_scope.load_managed_config().get("mcp_servers")
+            authority = (
+                managed_servers.get(self.name)
+                if isinstance(managed_servers, dict)
+                else None
+            )
+            authority_fields = (
+                "auth",
+                "app_slug",
+                "external_user_id",
+                "account_id",
+                "customer_id",
+                "agent_id",
+            )
+            if (
+                not isinstance(authority, dict)
+                or authority.get("auth") != "evaos_lease"
+                or any(
+                    config.get(field) != authority.get(field)
+                    for field in authority_fields
+                )
+            ):
+                raise EvaosLeaseError(
+                    "managed MCP lease identity is not root-configured"
+                )
+
     def _warn_evaos_lease_failure(self, exc: Exception) -> None:
         if self._evaos_lease_warning_emitted:
             return

@@ -222,7 +222,8 @@ _ENV_VAR_NAME_DENYLIST: frozenset[str] = frozenset({
     # NOT a HERMES_* blanket: integration credentials (HERMES_GEMINI_*,
     # HERMES_LANGFUSE_*, HERMES_SPOTIFY_*, ...) ARE allowed.
     "HERMES_HOME", "HERMES_PROFILE", "HERMES_CONFIG", "HERMES_ENV",
-    "HERMES_CONFIG_PATH", "HERMES_ENV_PATH",
+    "HERMES_CONFIG_PATH", "HERMES_ENV_PATH", "HERMES_MANAGED_DIR",
+    "HERMES_SHARED_AUTH_FILE",
     # MCP catalog trust root. Package-manager wrappers may still provide this
     # in the process environment; only generic persistence writes are blocked.
     "HERMES_OPTIONAL_MCPS",
@@ -4477,8 +4478,7 @@ def remove_env_value(key: str) -> bool:
             file=sys.stderr,
         )
         return False
-    if not _ENV_VAR_NAME_RE.match(key):
-        raise ValueError(f"Invalid environment variable name: {key!r}")
+    validate_env_var_name_for_write(key)
     env_path = get_env_path()
     if not env_path.exists():
         os.environ.pop(key, None)

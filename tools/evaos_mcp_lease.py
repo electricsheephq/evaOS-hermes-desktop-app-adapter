@@ -373,6 +373,7 @@ async def _default_transport(
     async with _SDK_HTTPX.AsyncClient(
         follow_redirects=False,
         timeout=_SDK_HTTPX.Timeout(15.0),
+        trust_env=False,
     ) as client:
         return await client.post(url, headers=headers, json=payload)
 
