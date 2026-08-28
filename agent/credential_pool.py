@@ -670,18 +670,22 @@ def _write_through_provider_state_to_global_root(
     ``invalid_grant`` once its access token expires.
 
     Only updates ``providers.<provider_id>`` in the root store; never touches
-    the profile store (the caller already saved that). Swallows all errors — a
-    failed write-through degrades to the pre-existing behavior (root stale), it
-    must never break the profile's own successful save. Mirrors
-    ``hermes_cli.auth._write_through_xai_oauth_to_global_root`` (which covers
-    the non-pool xAI refresh path) for the credential-pool refresh path.
+    the profile store. Legacy root fallback keeps best-effort behavior. A
+    configured ``HERMES_SHARED_AUTH_FILE`` is managed release authority, so
+    path, read, parse, lock, and write failures propagate instead of leaving a
+    revoked root token available to sibling gateways.
     """
+    managed_shared = bool(os.getenv("HERMES_SHARED_AUTH_FILE", "").strip())
     try:
         global_path = auth_mod._global_auth_file_path()
     except Exception:
+        if managed_shared:
+            raise
         return
     if global_path is None:
         # Classic mode (profile == root); the profile save already hit root.
+        if managed_shared:
+            raise RuntimeError("configured shared auth writeback path is unavailable")
         return
     # Seat belt: under pytest, refuse to write the real user's
     # ~/.hermes/auth.json even when HERMES_HOME points at a profile path
@@ -702,8 +706,11 @@ def _write_through_provider_state_to_global_root(
             state,
             global_path,
             set_active=False,
+            fail_closed=managed_shared,
         )
-    except Exception as exc:  # pragma: no cover - best effort
+    except Exception as exc:
+        if managed_shared:
+            raise RuntimeError("managed shared auth writeback failed") from exc
         logger.debug(
             "%s pool refresh: write-through to global root failed: %s",
             provider_id,
@@ -1374,6 +1381,10 @@ class CredentialPool:
                     )
                     _save_auth_store(auth_store)
         except Exception as exc:
+            if os.getenv("HERMES_SHARED_AUTH_FILE", "").strip():
+                raise RuntimeError(
+                    f"managed shared auth sync failed for {self.provider}"
+                ) from exc
             logger.debug("Failed to sync %s pool entry back to auth store: %s", self.provider, exc)
 
     def _refresh_entry(self, entry: PooledCredential, *, force: bool) -> Optional[PooledCredential]:

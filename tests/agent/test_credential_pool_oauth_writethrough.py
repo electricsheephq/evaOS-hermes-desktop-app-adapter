@@ -70,6 +70,88 @@ def profile_and_root(tmp_path, monkeypatch):
     return profile_path, root_path
 
 
+@pytest.mark.parametrize("initial_bytes", [None, b"{not-json"])
+def test_managed_shared_write_through_refuses_missing_or_corrupt_store(
+    profile_and_root, monkeypatch, initial_bytes
+):
+    """Managed shared auth never creates an empty replacement on failure."""
+    _profile_path, root_path = profile_and_root
+    monkeypatch.setenv("HERMES_SHARED_AUTH_FILE", str(root_path))
+    if initial_bytes is not None:
+        root_path.parent.mkdir(parents=True, exist_ok=True)
+        root_path.write_bytes(initial_bytes)
+    before = root_path.read_bytes() if root_path.exists() else None
+
+    with pytest.raises(RuntimeError, match="managed shared auth writeback failed"):
+        CP._write_through_provider_state_to_global_root(
+            "openai-codex",
+            {"tokens": {"access_token": "new", "refresh_token": "new-r"}},
+        )
+
+    after = root_path.read_bytes() if root_path.exists() else None
+    assert after == before
+
+
+@pytest.mark.parametrize("failure", [TimeoutError("lock"), OSError("write")])
+def test_managed_shared_write_through_propagates_lock_and_write_failures(
+    profile_and_root, monkeypatch, failure
+):
+    """Lock and write errors stop managed gateways instead of going stale."""
+    _profile_path, root_path = profile_and_root
+    _write_store(root_path, {"version": 1, "providers": {}})
+    monkeypatch.setenv("HERMES_SHARED_AUTH_FILE", str(root_path))
+
+    def fail_persist(*args, **kwargs):
+        raise failure
+
+    monkeypatch.setattr(A, "_persist_provider_state_to_store", fail_persist)
+    with pytest.raises(RuntimeError, match="managed shared auth writeback failed"):
+        CP._write_through_provider_state_to_global_root(
+            "openai-codex",
+            {"tokens": {"access_token": "new", "refresh_token": "new-r"}},
+        )
+
+
+def test_managed_shared_pool_sync_does_not_swallow_writeback_failure(
+    profile_and_root, monkeypatch
+):
+    profile_path, root_path = profile_and_root
+    _write_store(profile_path, {"version": 1, "providers": {}})
+    _write_store(
+        root_path,
+        {
+            "version": 1,
+            "providers": {
+                "openai-codex": {
+                    "tokens": {"access_token": "old", "refresh_token": "old-r"}
+                }
+            },
+        },
+    )
+    monkeypatch.setenv("HERMES_SHARED_AUTH_FILE", str(root_path))
+    monkeypatch.setattr(CP, "_global_auth_file_path", lambda: root_path)
+    monkeypatch.setattr(CP, "_same_path", lambda left, right: left == right)
+
+    def fail_writeback(*args, **kwargs):
+        raise RuntimeError("writeback failed")
+
+    monkeypatch.setattr(
+        CP,
+        "_write_through_provider_state_to_global_root",
+        fail_writeback,
+    )
+    entry = _entry(
+        "openai-codex",
+        id="codex-1",
+        access_token="new",
+        refresh_token="new-r",
+    )
+    pool = CredentialPool("openai-codex", [entry])
+
+    with pytest.raises(RuntimeError, match="managed shared auth sync failed"):
+        pool._sync_device_code_entry_to_auth_store(entry)
+
+
 
 
 
@@ -104,8 +186,8 @@ def test_global_write_through_preserves_concurrent_root_update(
     writer_done = threading.Event()
     real_auth_load = A._load_auth_store
 
-    def paused_helper_load(path=None):
-        store = real_auth_load(path)
+    def paused_helper_load(path=None, **kwargs):
+        store = real_auth_load(path, **kwargs)
         if threading.current_thread().name == "profile-write-through":
             target_holder = A._auth_lock_holder_for(root_path)
             if getattr(target_holder, "depth", 0) > 0:
@@ -316,4 +398,3 @@ def test_write_through_fires_on_every_refresh_not_just_first(
         "The old code self-disabled write-through here (#74339)"
     )
     assert root_tokens["refresh_token"] == "rf2"
-

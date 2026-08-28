@@ -1638,10 +1638,11 @@ def _persist_provider_state_to_store(
     target_path: Path,
     *,
     set_active: bool = False,
+    fail_closed: bool = False,
 ) -> Path:
     """Merge one provider into a specific auth store under that store's lock."""
     with _auth_store_lock(target_path=target_path):
-        auth_store = _load_auth_store(target_path)
+        auth_store = _load_auth_store(target_path, fail_closed=fail_closed)
         _store_provider_state(
             auth_store,
             provider_id,
