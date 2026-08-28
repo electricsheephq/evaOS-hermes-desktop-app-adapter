@@ -489,10 +489,23 @@ class TestSessionLink:
 class TestCrossProfileRead:
     @pytest.fixture(autouse=True)
     def _managed_scope(self, monkeypatch, tmp_path):
+        from pathlib import Path
+        from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+
+        machine_home = tmp_path / "managed-user"
+        profile_home = machine_home / ".hermes" / "profiles" / "main"
+        profile_home.mkdir(parents=True)
+        monkeypatch.setattr(Path, "home", lambda: machine_home)
+        monkeypatch.setenv("HERMES_HOME", str(profile_home))
         monkeypatch.setenv(
             "HERMES_SHARED_AUTH_FILE",
-            str(tmp_path / "managed-shared-auth.json"),
+            str(machine_home / ".hermes" / "shared-auth" / "auth.json"),
         )
+        token = set_hermes_home_override(profile_home)
+        try:
+            yield
+        finally:
+            reset_hermes_home_override(token)
 
     def _seed_shared_profiles(self, db):
         db.create_session(
@@ -538,7 +551,11 @@ class TestCrossProfileRead:
         monkeypatch.setattr(profiles_mod, "get_profile_dir", lambda n: home)
 
     def test_default_profile_owns_search_read_and_scroll(self, db):
+        from tools.session_search_tool import _is_managed_profile_database, _routed_profile
+
+        assert not _is_managed_profile_database(db)
         default_anchor, _ = self._seed_shared_profiles(db)
+        assert _routed_profile(db, "default_current") == "default"
 
         discovery = json.loads(
             session_search(
@@ -736,6 +753,61 @@ class TestCrossProfileRead:
 
         assert result["success"] is True
         assert result["session_id"] == "jarvis_session"
+
+    def test_managed_private_database_preserves_unowned_legacy_session(
+        self, tmp_path, monkeypatch
+    ):
+        from pathlib import Path
+        from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+
+        profile_home = tmp_path / ".hermes" / "profiles" / "main"
+        profile_home.mkdir(parents=True)
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        monkeypatch.setenv("HERMES_HOME", str(profile_home))
+        home_token = set_hermes_home_override(profile_home)
+        local_db = SessionDB(profile_home / "state.db")
+        try:
+            local_db.create_session(
+                "managed-current",
+                source="cli",
+                session_key="agent:main:managed-current",
+                profile_name="main",
+            )
+            local_db.create_session("legacy-session", source="cli")
+            local_db._conn.execute(
+                "UPDATE sessions SET title = ? WHERE id = ?",
+                ("Legacy continuity", "legacy-session"),
+            )
+            local_db.append_message(
+                "legacy-session",
+                role="user",
+                content="legacy continuity marker",
+            )
+            local_db._conn.commit()
+
+            read = json.loads(
+                session_search(
+                    session_id="legacy-session",
+                    db=local_db,
+                    current_session_id="managed-current",
+                )
+            )
+            discovered = json.loads(
+                session_search(
+                    query="Legacy continuity",
+                    db=local_db,
+                    current_session_id="managed-current",
+                )
+            )
+        finally:
+            local_db.close()
+            reset_hermes_home_override(home_token)
+
+        assert read["success"] is True
+        assert read["session_id"] == "legacy-session"
+        assert [row["session_id"] for row in discovered["results"]] == [
+            "legacy-session"
+        ]
 
     def _seed_default_and_main_profiles(self, db):
         db.create_session(

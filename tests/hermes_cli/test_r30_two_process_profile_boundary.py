@@ -71,6 +71,8 @@ def test_two_profile_processes_share_only_the_managed_auth_file(tmp_path):
             },
         },
     )
+    if os.name != "nt":
+        shared.chmod(0o660)
 
     profiles = {}
     for name, sibling, personality in (
@@ -120,4 +122,3 @@ def test_two_profile_processes_share_only_the_managed_auth_file(tmp_path):
             "sibling_denied": True,
             "skill_marker": name,
         }
-

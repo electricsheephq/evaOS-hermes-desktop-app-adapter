@@ -37,8 +37,10 @@ jobs:
           fi
 
           desktop_release="$(
-            gh api "repos/${REPOSITORY}/releases?per_page=100" --jq '
-              map(
+            gh api --paginate --slurp "repos/${REPOSITORY}/releases?per_page=100" |
+            jq -r '
+              flatten
+              | map(
                 select(
                   .draft == false and
                   .prerelease == false and

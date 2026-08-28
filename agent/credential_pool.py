@@ -3213,9 +3213,41 @@ def _seed_custom_pool(pool_key: str, entries: List[PooledCredential]) -> Tuple[b
     return changed, active_sources
 
 
+def _reconcile_profile_pool_sources(
+    provider: str,
+    entries: List[PooledCredential],
+) -> bool:
+    """Merge only sources owned by the active profile into ``entries``."""
+    if provider.startswith(CUSTOM_POOL_PREFIX):
+        custom_changed, custom_sources = _seed_custom_pool(provider, entries)
+        changed = custom_changed
+        changed |= _prune_stale_seeded_entries(entries, custom_sources)
+        return changed
+
+    singleton_changed, singleton_sources = _seed_from_singletons(provider, entries)
+    env_changed, env_sources = _seed_from_env(provider, entries)
+    changed = singleton_changed or env_changed
+    # ``load_pool()`` is a non-destructive read for env-seeded entries: a
+    # process missing a provider env var must not delete the persisted pool
+    # entry for every other process (#9331). File-backed singletons still
+    # prune when their backing file is gone.
+    changed |= _prune_stale_seeded_entries(
+        entries,
+        singleton_sources | env_sources,
+        prune_env_sources=False,
+    )
+    changed |= _normalize_pool_priorities(provider, entries)
+    return changed
+
+
 def load_pool(provider: str) -> CredentialPool:
     provider = (provider or "").strip().lower()
     raw_entries, auth_source_path = read_credential_pool_with_source(provider)
+    active_path = auth_mod._auth_file_path()
+    managed_shared_fallback = bool(
+        os.getenv("HERMES_SHARED_AUTH_FILE", "").strip()
+        and not _same_path(auth_source_path, active_path)
+    )
     disk_ids = {
         entry.get("id")
         for entry in raw_entries
@@ -3237,37 +3269,40 @@ def load_pool(provider: str) -> CredentialPool:
         for payload in raw_entries
     )
     if raw_needs_auth_normalization:
-        # A profile may be reading this provider from the global-root fallback.
-        # Keep that fallback read-only: only the store that owns these rows may
-        # rewrite them. Loading the default/root profile will heal global rows.
-        active_pool = _load_auth_store().get("credential_pool")
-        active_entries = active_pool.get(provider) if isinstance(active_pool, dict) else None
-        raw_needs_auth_normalization = bool(active_entries)
+        if not managed_shared_fallback:
+            # A legacy profile may be reading this provider from the global
+            # fallback. Keep that fallback read-only: only the owning store may
+            # rewrite it. Managed shared auth is explicit write authority.
+            active_pool = _load_auth_store().get("credential_pool")
+            active_entries = (
+                active_pool.get(provider) if isinstance(active_pool, dict) else None
+            )
+            raw_needs_auth_normalization = bool(active_entries)
 
-    if provider.startswith(CUSTOM_POOL_PREFIX):
-        # Custom endpoint pool — seed from custom_providers config and model config
-        custom_changed, custom_sources = _seed_custom_pool(provider, entries)
-        changed = raw_needs_sanitization or raw_needs_auth_normalization or custom_changed
-        changed |= _prune_stale_seeded_entries(entries, custom_sources)
-    else:
-        singleton_changed, singleton_sources = _seed_from_singletons(provider, entries)
-        env_changed, env_sources = _seed_from_env(provider, entries)
-        changed = (
-            raw_needs_sanitization
-            or raw_needs_auth_normalization
-            or singleton_changed
-            or env_changed
-        )
-        # ``load_pool()`` is a non-destructive read for env-seeded entries: a
-        # process missing a provider env var must not delete the persisted
-        # pool entry for every other process (#9331). File-backed singletons
-        # still prune when their backing file is gone.
-        changed |= _prune_stale_seeded_entries(
-            entries,
-            singleton_sources | env_sources,
-            prune_env_sources=False,
-        )
+    if managed_shared_fallback:
+        # The shared store owns only the rows already present there. Discover
+        # profile-local env, singleton, or custom-provider sources into a fresh
+        # list so they can never be merged back into the sibling-readable file.
+        profile_entries: List[PooledCredential] = []
+        profile_changed = _reconcile_profile_pool_sources(provider, profile_entries)
+        if profile_entries:
+            if profile_changed:
+                write_credential_pool(
+                    provider,
+                    [entry.to_dict() for entry in profile_entries],
+                    target_path=active_path,
+                )
+            return CredentialPool(
+                provider,
+                profile_entries,
+                auth_source_path=active_path,
+            )
+
+        changed = raw_needs_sanitization or raw_needs_auth_normalization
         changed |= _normalize_pool_priorities(provider, entries)
+    else:
+        changed = raw_needs_sanitization or raw_needs_auth_normalization
+        changed |= _reconcile_profile_pool_sources(provider, entries)
 
     if changed:
         new_ids = {entry.id for entry in entries}

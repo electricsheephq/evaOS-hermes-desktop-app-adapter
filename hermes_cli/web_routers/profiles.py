@@ -420,6 +420,8 @@ def get_profiles_sessions_sidebar(
         targets = []
     if not targets and not managed_name:
         targets.append(("default", profiles_mod.get_profile_dir("default")))
+    if managed_name:
+        targets = [target for target in targets if target[0] == managed_name]
 
     recents_scope = (recents_profile or "all").strip() or "all"
     recents_exclude_list = [s for s in (recents_exclude or "").split(",") if s.strip()]

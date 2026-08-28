@@ -410,6 +410,35 @@ def _routed_profile(db, current_session_id: Optional[str]) -> Optional[str]:
         return None
 
 
+def _is_managed_profile_database(db) -> bool:
+    """Return whether ``db`` is the private DB for this managed process.
+
+    r30.2 serves each employee profile from a distinct ``HERMES_HOME`` and
+    Linux user. Its own ``state.db`` is therefore already the isolation
+    boundary and may legitimately contain pre-profile legacy rows. Multiplex
+    databases are not used for the employee-isolation path and keep the
+    persisted row filter below as a defensive compatibility boundary.
+    """
+    if not os.getenv("HERMES_SHARED_AUTH_FILE", "").strip():
+        return False
+    db_path = getattr(db, "db_path", None)
+    if db_path is None:
+        return False
+    try:
+        from pathlib import Path
+
+        from hermes_cli.managed_profile_scope import managed_profile_name
+        from hermes_constants import get_hermes_home
+
+        if not managed_profile_name():
+            return False
+        return Path(db_path).resolve(strict=False) == (
+            get_hermes_home() / "state.db"
+        ).resolve(strict=False)
+    except Exception:
+        return False
+
+
 def _session_matches_profile(
     db, session_id: str, routed_profile: Optional[str]
 ) -> bool:
@@ -1094,9 +1123,18 @@ def _session_search_impl(
                 profile = emb_profile
 
     managed_scope = bool(os.getenv("HERMES_SHARED_AUTH_FILE", "").strip())
-    routed_profile = (
-        _routed_profile(db, current_session_id) if managed_scope else None
-    )
+    selector_profile = _routed_profile(db, current_session_id) if managed_scope else None
+    managed_local_db = managed_scope and _is_managed_profile_database(db)
+    if managed_local_db:
+        try:
+            from hermes_cli.managed_profile_scope import managed_profile_name
+
+            selector_profile = _canonical_profile_name(managed_profile_name())
+        except Exception:
+            # The persisted route remains a safe fallback for synthetic tests
+            # and for an already-open DB while process-home validation fails.
+            pass
+    routed_profile = selector_profile if managed_scope and not managed_local_db else None
 
     # The managed model-facing tool is intentionally profile-local. An
     # explicit own profile is harmless when it matches the persisted route; a
@@ -1108,7 +1146,7 @@ def _session_search_impl(
         and str(profile).strip()
         and not _trusted_cross_profile
     ):
-        if routed_profile == _canonical_profile_name(profile):
+        if selector_profile == _canonical_profile_name(profile):
             profile = None
         else:
             return tool_error(

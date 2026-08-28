@@ -1296,7 +1296,11 @@ def _open_managed_auth_read_fd(auth_file: Path, gid: int) -> int:
     fd = os.open(str(auth_file), os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
     try:
         auth_stat = os.fstat(fd)
-        if not stat.S_ISREG(auth_stat.st_mode) or auth_stat.st_gid != gid:
+        if (
+            not stat.S_ISREG(auth_stat.st_mode)
+            or auth_stat.st_gid != gid
+            or stat.S_IMODE(auth_stat.st_mode) & 0o007
+        ):
             raise RuntimeError("managed auth store has unsafe metadata")
     except BaseException:
         os.close(fd)

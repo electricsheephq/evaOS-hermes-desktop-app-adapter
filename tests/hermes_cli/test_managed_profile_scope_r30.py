@@ -118,3 +118,46 @@ def test_managed_dashboard_exposes_only_its_profile(
     create = client.post("/api/profiles", json={"name": "new-profile"})
     assert create.status_code == 403
     assert create.json()["detail"] == "profile lifecycle is managed by evaOS"
+
+
+def test_managed_sidebar_reads_only_the_process_profile(
+    managed_profile_env, tmp_path, monkeypatch
+):
+    from fastapi.testclient import TestClient
+    from hermes_cli import profiles, web_server
+    from hermes_state import SessionDB
+
+    sibling = tmp_path / ".hermes" / "profiles" / "sibling"
+    sibling.mkdir()
+    for home, session_id in (
+        (managed_profile_env, "main-session"),
+        (sibling, "sibling-session"),
+    ):
+        db = SessionDB(home / "state.db")
+        try:
+            db.create_session(session_id, source="cli")
+            db.append_message(session_id, role="user", content="synthetic")
+        finally:
+            db.close()
+
+    monkeypatch.setattr(
+        profiles,
+        "profiles_to_serve",
+        lambda *, multiplex: [
+            ("main", managed_profile_env),
+            ("sibling", sibling),
+        ],
+    )
+    client = TestClient(web_server.app)
+    client.headers[web_server._SESSION_HEADER_NAME] = web_server._SESSION_TOKEN
+
+    response = client.get(
+        "/api/profiles/sessions/sidebar",
+        params={"recents_profile": "all", "recents_exclude": "cron"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert {row["id"] for row in payload["recents"]["sessions"]} == {
+        "main-session"
+    }
