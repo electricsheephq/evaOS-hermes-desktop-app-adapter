@@ -22,6 +22,7 @@ def _task_with_pids(pids, *, http=False):
     task = object.__new__(MCPServerTask)
     task._stdio_child_pids = pids
     task._config = {"url": "http://example.invalid"} if http else {"command": "x"}
+    task._auth_type = ""
     return task
 
 
