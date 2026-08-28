@@ -59,6 +59,23 @@ def test_managed_default_home_fails_closed(tmp_path, monkeypatch):
         managed_profile_name()
 
 
+def test_managed_current_hub_selector_validates_process_home(
+    managed_profile_env, tmp_path, monkeypatch
+):
+    from fastapi import HTTPException
+    from hermes_cli import web_server
+
+    assert web_server._profile_cli_args(None) == []
+    assert web_server._profile_cli_args("current") == []
+
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / ".hermes"))
+    for selector in (None, "current"):
+        with pytest.raises(HTTPException) as exc_info:
+            web_server._profile_cli_args(selector)
+        assert exc_info.value.status_code == 503
+        assert exc_info.value.detail == "managed gateway is not bound to a named profile"
+
+
 def test_dashboard_and_tui_reject_sibling_profile(managed_profile_env, monkeypatch):
     from fastapi import HTTPException
     from hermes_cli import web_server
