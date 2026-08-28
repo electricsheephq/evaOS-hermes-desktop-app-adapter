@@ -103,6 +103,56 @@ def test_managed_current_export_uses_process_profile(
     assert calls == [("main", str(output), None)]
 
 
+def test_managed_current_profile_actions_use_canonical_process_name(
+    managed_profile_env, monkeypatch
+):
+    from fastapi.testclient import TestClient
+    from hermes_cli import profile_describer, web_server
+
+    calls = []
+
+    def fake_describe(name, *, overwrite=False):
+        calls.append((name, overwrite))
+        return profile_describer.DescribeOutcome(
+            profile_name=name,
+            ok=True,
+            description="synthetic description",
+        )
+
+    monkeypatch.setattr(profile_describer, "describe_profile", fake_describe)
+    client = TestClient(web_server.app)
+    client.headers[web_server._SESSION_HEADER_NAME] = web_server._SESSION_TOKEN
+
+    setup = client.get("/api/profiles/current/setup-command")
+    assert setup.status_code == 200
+    assert setup.json() == {"command": "main setup"}
+
+    described = client.post(
+        "/api/profiles/current/describe-auto",
+        json={"overwrite": True},
+    )
+    assert described.status_code == 200
+    assert calls == [("main", True)]
+
+
+def test_managed_named_process_skips_default_multiplex_scope(
+    managed_profile_env, monkeypatch
+):
+    from gateway.config import PORT_BINDING_PLATFORM_VALUES
+    from hermes_cli import web_server
+
+    monkeypatch.setattr(
+        web_server,
+        "_config_profile_scope",
+        lambda _profile: (_ for _ in ()).throw(
+            AssertionError("managed process entered default multiplex scope")
+        ),
+    )
+
+    platform_id = sorted(PORT_BINDING_PLATFORM_VALUES)[0]
+    assert web_server._multiplex_port_binding_conflict(platform_id, "current") is None
+
+
 def test_dashboard_and_tui_reject_sibling_profile(managed_profile_env, monkeypatch):
     from fastapi import HTTPException
     from hermes_cli import web_server

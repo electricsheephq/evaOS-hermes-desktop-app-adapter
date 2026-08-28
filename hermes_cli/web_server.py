@@ -10595,6 +10595,16 @@ def _multiplex_port_binding_conflict(
     if platform_id not in PORT_BINDING_PLATFORM_VALUES:
         return None
 
+    from hermes_cli.managed_profile_scope import managed_profile_name
+
+    # evaOS r30 serves one named profile per process.  Its managed process
+    # never enters upstream's default-profile multiplex scope, so inspecting
+    # that sibling scope would both violate the boundary and reject a valid
+    # per-profile channel configuration.
+    _managed_profile_or_http(requested_profile)
+    if managed_profile_name() is not None:
+        return None
+
     requested = (requested_profile or "").strip()
     if not requested or requested.lower() == "current":
         from hermes_cli.profiles import get_active_profile_name
@@ -15118,6 +15128,7 @@ def _resolve_profile_dir(name: str) -> Path:
 
 def _profile_setup_command(name: str) -> str:
     """Return the shell command used to configure a profile in the CLI."""
+    name = _managed_profile_or_http(name)
     _resolve_profile_dir(name)
     return "hermes setup" if name == "default" else f"{name} setup"
 

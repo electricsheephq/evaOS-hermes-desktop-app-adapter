@@ -1201,6 +1201,7 @@ async def describe_profile_auto_endpoint(name: str, body: ProfileDescribeAuto):
     ``ok: false`` with a reason rather than an HTTP error so the UI can
     surface it inline and let the operator fix config and retry.
     """
+    name = _managed_profile_or_http(name)
     _resolve_profile_dir(name)
     try:
         from hermes_cli import profile_describer

@@ -729,6 +729,13 @@ class CredentialPool:
         self.provider = provider
         self._auth_source_path = auth_source_path
         self._entries = sorted(entries, key=lambda entry: entry.priority)
+        self._shared_persistence_base: Optional[Dict[str, Dict[str, Any]]] = None
+        managed_shared_path = os.getenv("HERMES_SHARED_AUTH_FILE", "").strip()
+        if managed_shared_path and auth_source_path is not None:
+            if _same_path(auth_source_path, Path(managed_shared_path)):
+                self._shared_persistence_base = {
+                    entry.id: entry.to_dict() for entry in self._entries
+                }
         self._current_id: Optional[str] = None
         self._strategy = get_pool_strategy(provider)
         # RLock: the mutation primitives below (_replace_entry/_persist)
@@ -856,12 +863,47 @@ class CredentialPool:
         # Self-locking (RLock): snapshotting self._entries must not race a
         # concurrent rotation when called from the deferred refresh path.
         with self._lock:
+            serialized = [entry.to_dict() for entry in self._entries]
+            base_entries = (
+                list(self._shared_persistence_base.values())
+                if self._shared_persistence_base is not None
+                else None
+            )
             write_credential_pool(
                 self.provider,
-                [entry.to_dict() for entry in self._entries],
+                serialized,
                 removed_ids=removed_ids,
                 target_path=self._auth_source_path,
+                base_entries=base_entries,
             )
+            if self._shared_persistence_base is not None:
+                with _auth_store_lock(target_path=self._auth_source_path):
+                    persisted_store = _load_auth_store(
+                        self._auth_source_path,
+                        fail_closed=True,
+                    )
+                persisted_pool = persisted_store.get("credential_pool")
+                persisted_raw = (
+                    persisted_pool.get(self.provider)
+                    if isinstance(persisted_pool, dict)
+                    else None
+                )
+                persisted_entries = [
+                    PooledCredential.from_dict(self.provider, entry)
+                    for entry in (persisted_raw or [])
+                    if isinstance(entry, dict)
+                ]
+                self._entries = sorted(
+                    persisted_entries,
+                    key=lambda entry: entry.priority,
+                )
+                if self._current_id and not any(
+                    entry.id == self._current_id for entry in self._entries
+                ):
+                    self._current_id = None
+                self._shared_persistence_base = {
+                    entry.id: entry.to_dict() for entry in self._entries
+                }
 
     def _is_terminal_auth_failure(
         self,
@@ -2446,12 +2488,7 @@ class CredentialPool:
                 replace(entry, priority=new_priority)
                 for new_priority, entry in enumerate(self._entries)
             ]
-            write_credential_pool(
-                self.provider,
-                [entry.to_dict() for entry in self._entries],
-                removed_ids=[removed.id],
-                target_path=self._auth_source_path,
-            )
+            self._persist(removed_ids=[removed.id])
             if self._current_id == removed.id:
                 self._current_id = None
             return removed
@@ -2583,10 +2620,24 @@ def _normalize_pool_priorities(provider: str, entries: List[PooledCredential]) -
     return changed
 
 
-def _seed_from_singletons(provider: str, entries: List[PooledCredential]) -> Tuple[bool, Set[str]]:
+def _seed_from_singletons(
+    provider: str,
+    entries: List[PooledCredential],
+    *,
+    allow_global_provider_fallback: bool = True,
+) -> Tuple[bool, Set[str]]:
     changed = False
     active_sources: Set[str] = set()
     auth_store = _load_auth_store()
+
+    def _provider_state(provider_id: str) -> Optional[Dict[str, Any]]:
+        if allow_global_provider_fallback:
+            return _load_provider_state(auth_store, provider_id)
+        providers = auth_store.get("providers")
+        if not isinstance(providers, dict):
+            return None
+        state = providers.get(provider_id)
+        return dict(state) if isinstance(state, dict) else None
 
     # Shared suppression gate — used at every upsert site so
     # `hermes auth remove <provider> <N>` is stable across all source types.
@@ -2675,7 +2726,7 @@ def _seed_from_singletons(provider: str, entries: List[PooledCredential]) -> Tup
                 )
 
     elif provider == "nous":
-        state = _load_provider_state(auth_store, "nous")
+        state = _provider_state("nous")
         has_runtime_material = bool(
             isinstance(state, dict)
             and (
@@ -2850,8 +2901,7 @@ def _seed_from_singletons(provider: str, entries: List[PooledCredential]) -> Tup
         # always refreshes on expiry, so instead read raw state here to avoid
         # surprise network calls during provider discovery.
         try:
-            from hermes_cli.auth import get_provider_auth_state
-            state = get_provider_auth_state("minimax-oauth")
+            state = _provider_state("minimax-oauth")
             if state and state.get("access_token"):
                 source_name = "oauth"
                 if not _is_suppressed(provider, source_name):
@@ -2892,7 +2942,7 @@ def _seed_from_singletons(provider: str, entries: List[PooledCredential]) -> Tup
         if _is_suppressed(provider, "device_code"):
             return changed, active_sources
 
-        state = _load_provider_state(auth_store, "openai-codex")
+        state = _provider_state("openai-codex")
         tokens = state.get("tokens") if isinstance(state, dict) else None
         # Hermes owns its own Codex auth state — we do NOT auto-import from
         # ~/.codex/auth.json at pool-load time.  OAuth refresh tokens are
@@ -2924,7 +2974,7 @@ def _seed_from_singletons(provider: str, entries: List[PooledCredential]) -> Tup
         # (``providers["xai-oauth"]``).  Surface them in the pool too so
         # ``hermes auth list`` reflects the logged-in state and so the pool
         # is the single source of truth for refresh during runtime resolution.
-        state = _load_provider_state(auth_store, "xai-oauth")
+        state = _provider_state("xai-oauth")
         tokens = state.get("tokens") if isinstance(state, dict) else None
         if isinstance(tokens, dict) and tokens.get("access_token"):
             # Device code is the only supported xAI OAuth flow; the singleton is
@@ -3217,6 +3267,8 @@ def _seed_custom_pool(pool_key: str, entries: List[PooledCredential]) -> Tuple[b
 def _reconcile_profile_pool_sources(
     provider: str,
     entries: List[PooledCredential],
+    *,
+    allow_global_provider_fallback: bool = True,
 ) -> bool:
     """Merge only sources owned by the active profile into ``entries``."""
     if provider.startswith(CUSTOM_POOL_PREFIX):
@@ -3225,7 +3277,19 @@ def _reconcile_profile_pool_sources(
         changed |= _prune_stale_seeded_entries(entries, custom_sources)
         return changed
 
-    singleton_changed, singleton_sources = _seed_from_singletons(provider, entries)
+    if allow_global_provider_fallback:
+        # Preserve the long-standing two-argument seam used by provider
+        # plugins and tests outside managed r30.
+        singleton_changed, singleton_sources = _seed_from_singletons(
+            provider,
+            entries,
+        )
+    else:
+        singleton_changed, singleton_sources = _seed_from_singletons(
+            provider,
+            entries,
+            allow_global_provider_fallback=False,
+        )
     env_changed, env_sources = _seed_from_env(provider, entries)
     changed = singleton_changed or env_changed
     # ``load_pool()`` is a non-destructive read for env-seeded entries: a
@@ -3245,8 +3309,9 @@ def load_pool(provider: str) -> CredentialPool:
     provider = (provider or "").strip().lower()
     raw_entries, auth_source_path = read_credential_pool_with_source(provider)
     active_path = auth_mod._auth_file_path()
+    managed_shared = bool(os.getenv("HERMES_SHARED_AUTH_FILE", "").strip())
     managed_shared_fallback = bool(
-        os.getenv("HERMES_SHARED_AUTH_FILE", "").strip()
+        managed_shared
         and not _same_path(auth_source_path, active_path)
     )
     disk_ids = {
@@ -3285,7 +3350,11 @@ def load_pool(provider: str) -> CredentialPool:
         # profile-local env, singleton, or custom-provider sources into a fresh
         # list so they can never be merged back into the sibling-readable file.
         profile_entries: List[PooledCredential] = []
-        profile_changed = _reconcile_profile_pool_sources(provider, profile_entries)
+        profile_changed = _reconcile_profile_pool_sources(
+            provider,
+            profile_entries,
+            allow_global_provider_fallback=False,
+        )
         if profile_entries:
             if profile_changed:
                 write_credential_pool(
@@ -3303,7 +3372,11 @@ def load_pool(provider: str) -> CredentialPool:
         changed |= _normalize_pool_priorities(provider, entries)
     else:
         changed = raw_needs_sanitization or raw_needs_auth_normalization
-        changed |= _reconcile_profile_pool_sources(provider, entries)
+        changed |= _reconcile_profile_pool_sources(
+            provider,
+            entries,
+            allow_global_provider_fallback=not managed_shared,
+        )
 
     if changed:
         new_ids = {entry.id for entry in entries}
