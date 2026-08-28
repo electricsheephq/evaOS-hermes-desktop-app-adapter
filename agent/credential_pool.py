@@ -9,6 +9,7 @@ import threading
 import time
 import uuid
 import re
+from contextlib import contextmanager
 from dataclasses import dataclass, fields, replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -1450,10 +1451,7 @@ class CredentialPool:
                 if self.provider == "openai-codex"
                 else self._sync_xai_oauth_entry_from_pool_store
             )
-            with _auth_store_lock(
-                timeout_seconds=self._single_use_refresh_lock_timeout(),
-                target_path=self._auth_source_path,
-            ):
+            with self._single_use_refresh_store_lock():
                 synced = sync_entry(entry)
                 if self.provider == "openai-codex":
                     if synced is not entry:
@@ -1468,6 +1466,32 @@ class CredentialPool:
                     return synced
                 return self._refresh_entry_impl(synced, force=force)
         return self._refresh_entry_impl(entry, force=force)
+
+    @contextmanager
+    def _single_use_refresh_store_lock(self):
+        """Lock profile state before a distinct managed shared authority.
+
+        Refresh writeback already follows profile-local -> shared-root order.
+        Use the same order around the single-use token POST so two profile
+        processes cannot each hold one auth-store lock while waiting for the
+        other. When the pool is profile-owned, the one local lock is enough.
+        """
+        timeout_seconds = self._single_use_refresh_lock_timeout()
+        active_path = auth_mod._auth_file_path()
+        source_path = self._auth_source_path
+        if source_path is not None and not _same_path(source_path, active_path):
+            with _auth_store_lock(timeout_seconds=timeout_seconds):
+                with _auth_store_lock(
+                    timeout_seconds=timeout_seconds,
+                    target_path=source_path,
+                ):
+                    yield
+            return
+        with _auth_store_lock(
+            timeout_seconds=timeout_seconds,
+            target_path=source_path,
+        ):
+            yield
 
     def _single_use_refresh_lock_timeout(self) -> float:
         """Lock timeout for single-use-refresh-token providers.
@@ -3385,6 +3409,7 @@ def load_pool(provider: str) -> CredentialPool:
             [entry.to_dict() for entry in sorted(entries, key=lambda item: item.priority)],
             removed_ids=disk_ids - new_ids,
             target_path=auth_source_path,
+            base_entries=raw_entries if managed_shared_fallback else None,
         )
     return CredentialPool(
         provider,

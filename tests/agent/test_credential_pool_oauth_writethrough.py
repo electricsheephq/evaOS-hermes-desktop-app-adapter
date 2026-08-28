@@ -321,7 +321,9 @@ def test_managed_codex_pools_share_the_source_refresh_lock(monkeypatch, tmp_path
     import contextlib
 
     provider = "openai-codex"
+    profile_path = tmp_path / "profile" / "auth.json"
     shared_path = tmp_path / "shared" / "auth.json"
+    monkeypatch.setattr(A, "_auth_file_path", lambda: profile_path)
     entry = _entry(
         provider,
         id="codex-shared",
@@ -424,7 +426,52 @@ def test_managed_codex_pools_share_the_source_refresh_lock(monkeypatch, tmp_path
     assert posts == [("old-access", "old-refresh")]
     assert results["first"].access_token == "new-access-1"
     assert results["second"].access_token == "new-access-1"
-    assert lock_targets == [shared_path, shared_path]
+    assert lock_targets == [None, shared_path, None, shared_path]
+
+
+def test_managed_shared_normalization_uses_exact_three_way_base(
+    monkeypatch, tmp_path
+):
+    """A normalization write cannot overwrite a concurrent token rotation."""
+    profile_path = tmp_path / "profile" / "auth.json"
+    shared_path = tmp_path / "shared" / "auth.json"
+    raw_entry = {
+        "id": "shared-oat",
+        "label": "cred",
+        "auth_type": "api_key",
+        "priority": 0,
+        "source": "hermes_pkce",
+        "access_token": "sk-ant-oat-existing",
+        "refresh_token": "refresh-existing",
+    }
+    raw_entries = [raw_entry]
+    captured = {}
+
+    monkeypatch.setenv("HERMES_SHARED_AUTH_FILE", str(shared_path))
+    monkeypatch.setattr(A, "_auth_file_path", lambda: profile_path)
+    monkeypatch.setattr(
+        CP,
+        "read_credential_pool_with_source",
+        lambda provider: ([dict(raw_entry)], shared_path),
+    )
+    monkeypatch.setattr(
+        CP,
+        "_reconcile_profile_pool_sources",
+        lambda *args, **kwargs: False,
+    )
+
+    def capture_write(provider, entries, **kwargs):
+        captured.update(provider=provider, entries=entries, **kwargs)
+        return shared_path
+
+    monkeypatch.setattr(CP, "write_credential_pool", capture_write)
+
+    pool = CP.load_pool("anthropic")
+
+    assert pool._entries[0].auth_type == AUTH_TYPE_OAUTH
+    assert captured["target_path"] == shared_path
+    assert captured["base_entries"] == raw_entries
+    assert captured["entries"][0]["auth_type"] == AUTH_TYPE_OAUTH
 
 
 def test_write_through_fires_on_every_refresh_not_just_first(

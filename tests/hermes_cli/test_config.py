@@ -1220,6 +1220,8 @@ class TestEnvWriteDenylist:
             "HERMES_SINGLE_QUERY_SESSION",
             "HERMES_SESSION_KEY",
             "HERMES_SESSION_PLATFORM",
+            "EVAOS_DESKTOP_RUNTIME_SESSION_URL",
+            "PIPEDREAM_AGENT_BROKER_SECRET_FILE",
         ],
     )
     def test_hermes_security_control_keys_are_not_writable(self, protected_key):
