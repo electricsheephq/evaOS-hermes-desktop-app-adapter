@@ -1,4 +1,6 @@
+import os
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -17,6 +19,28 @@ def managed_profile_env(tmp_path, monkeypatch):
     return profile_home
 
 
+@pytest.fixture
+def flat_managed_profile_env(tmp_path, monkeypatch):
+    root = tmp_path / "hermes"
+    profile_home = root / "main"
+    profile_home.mkdir(parents=True)
+    shared_auth = root / "shared-auth" / "auth.json"
+    shared_auth.parent.mkdir()
+    shared_auth.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setenv("HERMES_HOME", str(profile_home))
+    monkeypatch.setenv("HERMES_SHARED_AUTH_FILE", str(shared_auth))
+
+    from hermes_cli import profiles
+    pwd = pytest.importorskip("pwd")
+
+    monkeypatch.setattr(os, "geteuid", lambda: 4242)
+    monkeypatch.setattr(
+        pwd, "getpwuid", lambda _uid: SimpleNamespace(pw_name="hermes-main")
+    )
+    return root, profile_home
+
+
 def test_managed_profile_scope_is_bound_to_process_home(managed_profile_env):
     from hermes_cli.managed_profile_scope import (
         ManagedProfileScopeError,
@@ -33,6 +57,140 @@ def test_managed_profile_scope_is_bound_to_process_home(managed_profile_env):
         require_managed_profile("sibling")
     with pytest.raises(ManagedProfileScopeError, match="not authorized"):
         require_managed_profile("default")
+
+
+def test_flat_managed_profile_scope_resolves_its_own_home_and_denies_siblings(
+    flat_managed_profile_env,
+):
+    from gateway.platforms.api_server import _prefix_names_served_profile
+    from hermes_cli import profiles
+    from hermes_cli.managed_profile_scope import (
+        ManagedProfileScopeError,
+        managed_profile_name,
+        require_managed_profile,
+    )
+
+    _root, profile_home = flat_managed_profile_env
+    assert managed_profile_name() == "main"
+    assert profiles.get_active_profile_name() == "main"
+    assert profiles.get_profile_dir("main") == profile_home
+    assert profiles.get_profile_dir("default") == profile_home
+    assert profiles.profile_matches_home("main") is True
+    assert profiles.profile_matches_home("default") is False
+    assert profiles.profile_matches_home("sibling") is False
+    assert _prefix_names_served_profile("main") is True
+    assert _prefix_names_served_profile("default") is False
+    assert require_managed_profile(None) == "main"
+    with pytest.raises(ManagedProfileScopeError, match="not authorized"):
+        require_managed_profile("sibling")
+    with pytest.raises(ManagedProfileScopeError, match="not authorized"):
+        require_managed_profile("default")
+
+
+def test_flat_managed_profile_resolves_and_lists_only_current_identity(
+    flat_managed_profile_env,
+):
+    from hermes_cli import profiles
+
+    _root, profile_home = flat_managed_profile_env
+    assert profiles.resolve_profile_env("main") == str(profile_home)
+    assert profiles.list_profile_names() == ["main"]
+
+    listed = profiles.list_profiles()
+    assert [item.name for item in listed] == ["main"]
+    assert [item.path for item in listed] == [profile_home]
+    assert listed[0].is_default is False
+
+
+def test_flat_managed_explicit_selector_preserves_configured_symlink_spelling(
+    flat_managed_profile_env, tmp_path, monkeypatch
+):
+    from hermes_cli import profiles
+
+    _root, profile_home = flat_managed_profile_env
+    launch_root = tmp_path / "launch"
+    launch_root.mkdir()
+    configured_home = launch_root / "main"
+    configured_home.symlink_to(profile_home, target_is_directory=True)
+    monkeypatch.setenv("HERMES_HOME", str(configured_home))
+
+    assert profiles.resolve_profile_env("main") == str(configured_home)
+
+
+def test_flat_managed_profile_lifecycle_cannot_remove_or_rename_active_home(
+    flat_managed_profile_env,
+):
+    from hermes_cli import profiles
+
+    _root, profile_home = flat_managed_profile_env
+    with pytest.raises(ValueError, match="profile lifecycle is managed by evaOS"):
+        profiles.delete_profile("main", yes=True)
+    with pytest.raises(ValueError, match="profile lifecycle is managed by evaOS"):
+        profiles.rename_profile("main", "renamed")
+    with pytest.raises(ValueError, match="profile lifecycle is managed by evaOS"):
+        profiles.rename_profile("default", "renamed")
+    assert profile_home.is_dir()
+
+
+def test_flat_managed_profile_requires_matching_service_user(
+    flat_managed_profile_env, monkeypatch
+):
+    from hermes_cli import profiles
+    pwd = pytest.importorskip("pwd")
+
+    monkeypatch.setattr(
+        pwd, "getpwuid", lambda _uid: SimpleNamespace(pw_name="hermes-sibling")
+    )
+    assert profiles.get_active_profile_name() != "main"
+    assert profiles.profile_matches_home("main") is False
+
+
+def test_flat_managed_profile_requires_shared_auth_root(
+    flat_managed_profile_env, tmp_path, monkeypatch
+):
+    from hermes_cli import profiles
+
+    _root, profile_home = flat_managed_profile_env
+    other_auth = tmp_path / "other-hermes" / "shared-auth" / "auth.json"
+    monkeypatch.setenv("HERMES_SHARED_AUTH_FILE", str(other_auth))
+    assert profiles.get_active_profile_name() != "main"
+    assert profiles.profile_matches_home("main") is False
+    assert profiles.get_profile_dir("main") != profile_home
+
+
+def test_nested_managed_profile_resolution_stays_upstream(managed_profile_env):
+    from hermes_cli import profiles
+
+    assert profiles.get_active_profile_name() == "main"
+    assert profiles.get_profile_dir("main") == managed_profile_env
+    assert profiles.profile_matches_home("main") is True
+
+
+def test_flat_managed_session_create_reports_main_without_nested_redirect(
+    flat_managed_profile_env, monkeypatch
+):
+    from tui_gateway import server
+
+    _root, profile_home = flat_managed_profile_env
+    monkeypatch.setattr(server, "_hermes_home", profile_home)
+    monkeypatch.setattr(server, "_schedule_agent_build", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        server, "_schedule_session_cap_enforcement", lambda *args, **kwargs: None
+    )
+    monkeypatch.setattr(server, "_completion_cwd", lambda params=None: str(profile_home))
+
+    response = server._methods["session.create"](
+        "flat-session", {"profile": "main", "cols": 80}
+    )
+    assert "result" in response, response
+    assert response["result"]["info"]["profile_name"] == "main"
+    sid = response["result"]["session_id"]
+    try:
+        assert server._sessions[sid]["profile_home"] is None
+        assert server._profile_home("main") is None
+    finally:
+        with server._sessions_lock:
+            server._sessions.pop(sid, None)
 
 
 def test_unmanaged_scope_preserves_upstream_selectors(monkeypatch):
