@@ -4463,6 +4463,10 @@ def remove_env_value(key: str) -> bool:
 
     Returns True if the key was found and removed, False otherwise.
     """
+    # Reject protected authority keys before consulting any environment-backed
+    # managed-path state.  A forged or unreadable HERMES_MANAGED_DIR must not
+    # be dereferenced merely because a generic caller attempted to remove it.
+    validate_env_var_name_for_write(key)
     if is_managed():
         managed_error(f"remove {key}")
         return False
@@ -4478,7 +4482,6 @@ def remove_env_value(key: str) -> bool:
             file=sys.stderr,
         )
         return False
-    validate_env_var_name_for_write(key)
     env_path = get_env_path()
     if not env_path.exists():
         os.environ.pop(key, None)
