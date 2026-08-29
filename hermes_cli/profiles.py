@@ -2578,7 +2578,7 @@ def rename_profile(old_name: str, new_name: str) -> Path:
     validate_profile_name(old_canon)
 
     flat = _flat_managed_profile()
-    if flat is not None and old_canon == flat[0]:
+    if flat is not None and old_canon in {flat[0], "default"}:
         raise ValueError(
             f"Cannot rename active managed profile '{old_canon}': "
             "profile lifecycle is managed by evaOS."

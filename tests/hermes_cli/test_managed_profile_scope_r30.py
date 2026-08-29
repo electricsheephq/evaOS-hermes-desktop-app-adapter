@@ -127,6 +127,8 @@ def test_flat_managed_profile_lifecycle_cannot_remove_or_rename_active_home(
         profiles.delete_profile("main", yes=True)
     with pytest.raises(ValueError, match="profile lifecycle is managed by evaOS"):
         profiles.rename_profile("main", "renamed")
+    with pytest.raises(ValueError, match="profile lifecycle is managed by evaOS"):
+        profiles.rename_profile("default", "renamed")
     assert profile_home.is_dir()
 
 
