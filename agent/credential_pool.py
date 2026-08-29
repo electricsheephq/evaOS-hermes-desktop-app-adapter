@@ -719,6 +719,27 @@ def _write_through_provider_state_to_global_root(
         )
 
 
+def _persist_terminal_provider_quarantine(
+    auth_store: Dict[str, Any],
+    provider_id: str,
+    state: Dict[str, Any],
+    source_path: Optional[Path],
+) -> None:
+    """Persist terminal OAuth quarantine to the state source that was read."""
+    global_root = _global_auth_file_path()
+    if (
+        source_path is not None
+        and global_root is not None
+        and _same_path(source_path, global_root)
+    ):
+        # A profile resolved this provider from the sanctioned shared source.
+        # Quarantine there and do not create a profile-local shadow provider.
+        _write_through_provider_state_to_global_root(provider_id, state)
+        return
+    _save_provider_state(auth_store, provider_id, state)
+    _save_auth_store(auth_store)
+
+
 class CredentialPool:
     def __init__(
         self,
@@ -1674,7 +1695,10 @@ class CredentialPool:
                     try:
                         with _auth_store_lock():
                             auth_store = _load_auth_store()
-                            state = _load_provider_state(auth_store, "xai-oauth") or {}
+                            state, source_path = _load_provider_state_with_source(
+                                auth_store, "xai-oauth"
+                            )
+                            state = state or {}
                             if isinstance(state, dict):
                                 tokens = state.get("tokens") or {}
                                 if isinstance(tokens, dict):
@@ -1692,9 +1716,17 @@ class CredentialPool:
                                             "relogin_required": True,
                                             "at": datetime.now(timezone.utc).isoformat(),
                                         }
-                                        _save_provider_state(auth_store, "xai-oauth", state)
-                                        _save_auth_store(auth_store)
+                                        _persist_terminal_provider_quarantine(
+                                            auth_store,
+                                            "xai-oauth",
+                                            state,
+                                            source_path,
+                                        )
                     except Exception as clear_exc:
+                        if os.getenv("HERMES_SHARED_AUTH_FILE", "").strip():
+                            raise RuntimeError(
+                                "managed shared xAI OAuth quarantine failed"
+                            ) from clear_exc
                         logger.debug(
                             "Failed to clear terminal xAI OAuth state: %s", clear_exc
                         )
@@ -1749,7 +1781,10 @@ class CredentialPool:
                     try:
                         with _auth_store_lock():
                             auth_store = _load_auth_store()
-                            state = _load_provider_state(auth_store, "openai-codex") or {}
+                            state, source_path = _load_provider_state_with_source(
+                                auth_store, "openai-codex"
+                            )
+                            state = state or {}
                             if isinstance(state, dict):
                                 tokens = state.get("tokens") or {}
                                 if isinstance(tokens, dict):
@@ -1767,9 +1802,17 @@ class CredentialPool:
                                             "relogin_required": True,
                                             "at": datetime.now(timezone.utc).isoformat(),
                                         }
-                                        _save_provider_state(auth_store, "openai-codex", state)
-                                        _save_auth_store(auth_store)
+                                        _persist_terminal_provider_quarantine(
+                                            auth_store,
+                                            "openai-codex",
+                                            state,
+                                            source_path,
+                                        )
                     except Exception as clear_exc:
+                        if os.getenv("HERMES_SHARED_AUTH_FILE", "").strip():
+                            raise RuntimeError(
+                                "managed shared Codex OAuth quarantine failed"
+                            ) from clear_exc
                         logger.debug(
                             "Failed to clear terminal Codex OAuth state: %s", clear_exc
                         )

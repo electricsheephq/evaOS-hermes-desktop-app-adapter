@@ -4349,6 +4349,10 @@ def _env_line_defines_key(
 
 def save_env_value(key: str, value: str):
     """Save or update a value in ~/.hermes/.env."""
+    # Reject fixed authority names before any environment-backed managed-path
+    # lookup.  Dynamic placeholders referenced by root-managed config are
+    # covered by managed_scope.is_env_managed() below.
+    validate_env_var_name_for_write(key)
     if is_managed():
         managed_error(f"set {key}")
         return
@@ -4365,7 +4369,6 @@ def save_env_value(key: str, value: str):
             file=sys.stderr,
         )
         return
-    validate_env_var_name_for_write(key)
     value = value.replace("\n", "").replace("\r", "")
     # API keys / tokens must be ASCII — strip non-ASCII with a warning.
     value = _check_non_ascii_credential(key, value)
@@ -4578,13 +4581,27 @@ def reload_env() -> int:
     """
     env_vars = load_env()
     known_keys = set(OPTIONAL_ENV_VARS.keys()) | _EXTRA_ENV_KEYS
+    # A profile-owned .env may be reloaded through the dashboard, TUI, or
+    # gateway RPC.  Keep package/root authority and every placeholder consumed
+    # by managed config outside that writable surface, just as startup dotenv
+    # loading does.
+    from hermes_cli import managed_scope
+    from hermes_cli.env_loader import _MANAGED_RUNTIME_AUTHORITY_KEYS
+
+    managed_authority_keys = set(_MANAGED_RUNTIME_AUTHORITY_KEYS)
+    managed_authority_keys.update(managed_scope.load_managed_env())
+    managed_authority_keys.update(managed_scope.managed_config_env_keys())
     count = 0
     for key, value in env_vars.items():
+        if key in managed_authority_keys:
+            continue
         if os.environ.get(key) != value:
             os.environ[key] = value
             count += 1
     # Remove known Hermes vars that are no longer in .env
     for key in known_keys:
+        if key in managed_authority_keys:
+            continue
         if key not in env_vars and key in os.environ:
             del os.environ[key]
             count += 1

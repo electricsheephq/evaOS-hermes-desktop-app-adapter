@@ -556,3 +556,68 @@ def test_write_through_fires_on_every_refresh_not_just_first(
         "The old code self-disabled write-through here (#74339)"
     )
     assert root_tokens["refresh_token"] == "rf2"
+
+
+@pytest.mark.parametrize("provider", ["openai-codex", "xai-oauth"])
+def test_terminal_quarantine_updates_managed_shared_source(
+    profile_and_root, monkeypatch, provider
+):
+    """Terminal refresh clears the shared source without creating a shadow."""
+    profile_path, root_path = profile_and_root
+    _write_store(profile_path, {"version": 1})
+    _write_store(
+        root_path,
+        {
+            "version": 1,
+            "providers": {
+                provider: {
+                    "tokens": {
+                        "access_token": "shared-access",
+                        "refresh_token": "shared-refresh",
+                    }
+                }
+            },
+        },
+    )
+    # Managed shared auth intentionally enforces its production metadata.
+    root_path.chmod(0o660)
+    monkeypatch.setenv("HERMES_SHARED_AUTH_FILE", str(root_path))
+    monkeypatch.setattr(CP, "_global_auth_file_path", lambda: root_path)
+    monkeypatch.setattr(CP, "_same_path", lambda a, b: a == b)
+
+    from hermes_cli.auth import AuthError
+
+    def terminal_failure(*_args, **_kwargs):
+        raise AuthError(
+            "refresh rejected",
+            provider=provider,
+            code=(
+                "codex_refresh_failed"
+                if provider == "openai-codex"
+                else "xai_refresh_failed"
+            ),
+            relogin_required=True,
+        )
+
+    refresh_name = (
+        "refresh_codex_oauth_pure"
+        if provider == "openai-codex"
+        else "refresh_xai_oauth_pure"
+    )
+    monkeypatch.setattr(CP.auth_mod, refresh_name, terminal_failure)
+    entry = _entry(
+        provider,
+        id="shared-entry",
+        access_token="shared-access",
+        refresh_token="shared-refresh",
+    )
+    pool = CredentialPool(provider, [entry])
+
+    assert pool._refresh_entry_impl(entry, force=True) is None
+
+    root_state = _read_store(root_path)["providers"][provider]
+    assert "access_token" not in root_state["tokens"]
+    assert "refresh_token" not in root_state["tokens"]
+    assert root_state["last_auth_error"]["relogin_required"] is True
+    profile_state = _read_store(profile_path)
+    assert provider not in profile_state.get("providers", {})

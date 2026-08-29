@@ -49,6 +49,10 @@ def env_homes(tmp_path, monkeypatch):
     (managed / ".env").write_text(
         "OPENAI_API_BASE=https://org.example/v1\n", encoding="utf-8"
     )
+    (managed / "config.yaml").write_text(
+        "mcp_servers:\n  evaos:\n    url: ${MANAGED_LEASE_ID}\n",
+        encoding="utf-8",
+    )
     from hermes_cli import managed_scope
 
     managed_scope.invalidate_managed_cache()
@@ -65,8 +69,17 @@ def test_save_env_value_managed_key_rejected(env_homes, capsys):
     assert "user.example" not in body
 
 
+def test_save_env_value_managed_config_placeholder_rejected(env_homes, capsys):
+    from hermes_cli.config import get_env_path, save_env_value
+
+    save_env_value("MANAGED_LEASE_ID", "profile-forged")
+    assert "managed" in capsys.readouterr().err.lower()
+    env_path = get_env_path()
+    body = env_path.read_text() if env_path.exists() else ""
+    assert "MANAGED_LEASE_ID" not in body
+
+
 
 
 # ── bulk save strips managed leaves ──────────────────────────────────────────
-
 

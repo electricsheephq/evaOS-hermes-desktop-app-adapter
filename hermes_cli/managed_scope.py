@@ -242,5 +242,5 @@ def is_key_managed(dotted_key: str) -> bool:
 
 
 def is_env_managed(name: str) -> bool:
-    """True if the env var name is pinned by the managed .env layer."""
-    return name in load_managed_env()
+    """True if the env name is owned by managed env or config placeholders."""
+    return name in load_managed_env() or name in managed_config_env_keys()
