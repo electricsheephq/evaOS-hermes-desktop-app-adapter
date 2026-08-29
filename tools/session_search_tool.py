@@ -35,6 +35,7 @@ support.
 
 import json
 import logging
+import os
 from typing import Any, Dict, List, Optional, Union
 
 from hermes_state_common import _RESET_END_REASONS
@@ -346,9 +347,9 @@ def _shape_message(
 def _resolve_profile_db(profile: str):
     """Open another profile's ``state.db`` read-only, or None for the current one.
 
-    The desktop's ``@session:<profile>/<id>`` links always carry the source
-    profile, so a linked session from profile B can be read while the agent
-    runs in profile A. ``read_only=True`` (mode=ro) takes no write lock — safe
+    Managed evaOS processes reach this helper only through the explicit
+    trusted non-agent boundary. Unmanaged upstream processes retain the native
+    profile selector. ``read_only=True`` (mode=ro) takes no write lock — safe
     to point at a live profile's DB, including our own. Returns None when no
     profile is given (use the caller's default db).
     """
@@ -366,13 +367,104 @@ def _resolve_profile_db(profile: str):
     return SessionDB(db_path=profiles_mod.get_profile_dir(canon) / "state.db", read_only=True)
 
 
+def _canonical_profile_name(value: Any) -> Optional[str]:
+    """Return the stable profile namespace used for session ownership checks."""
+    name = str(value or "").strip().casefold()
+    if name in ("", "default"):
+        return "default"
+    return name
+
+
+def _session_profile(meta: Dict[str, Any]) -> Optional[str]:
+    """Derive a session's routed profile from persisted ownership metadata."""
+    if not isinstance(meta, dict):
+        return None
+    profile = meta.get("profile_name")
+    if profile is not None and str(profile).strip():
+        return _canonical_profile_name(profile)
+
+    # Older gateway-created rows may have only the profile namespace in the
+    # stable session key. This is still an ownership marker, not caller input.
+    session_key = str(meta.get("session_key") or "")
+    parts = session_key.split(":")
+    if len(parts) >= 2 and parts[0] == "agent" and parts[1]:
+        # ``agent:main`` is the legacy namespace for the built-in default;
+        # an explicit profile_name above keeps a real named ``main`` profile
+        # distinct from it.
+        if parts[1].casefold() == "main":
+            return "default"
+        return _canonical_profile_name(parts[1])
+    return None
+
+
+def _routed_profile(db, current_session_id: Optional[str]) -> Optional[str]:
+    """Return the agent's persisted routed profile, when the row is available."""
+    if not current_session_id:
+        return None
+    try:
+        return _session_profile(db.get_session(current_session_id) or {})
+    except Exception:
+        logging.debug(
+            "failed to resolve routed profile for %s", current_session_id, exc_info=True
+        )
+        return None
+
+
+def _is_managed_profile_database(db) -> bool:
+    """Return whether ``db`` is the private DB for this managed process.
+
+    r30.2 serves each employee profile from a distinct ``HERMES_HOME`` and
+    Linux user. Its own ``state.db`` is therefore already the isolation
+    boundary and may legitimately contain pre-profile legacy rows. Multiplex
+    databases are not used for the employee-isolation path and keep the
+    persisted row filter below as a defensive compatibility boundary.
+    """
+    if not os.getenv("HERMES_SHARED_AUTH_FILE", "").strip():
+        return False
+    db_path = getattr(db, "db_path", None)
+    if db_path is None:
+        return False
+    try:
+        from pathlib import Path
+
+        from hermes_cli.managed_profile_scope import managed_profile_name
+        from hermes_constants import get_hermes_home
+
+        if not managed_profile_name():
+            return False
+        return Path(db_path).resolve(strict=False) == (
+            get_hermes_home() / "state.db"
+        ).resolve(strict=False)
+    except Exception:
+        return False
+
+
+def _session_matches_profile(
+    db, session_id: str, routed_profile: Optional[str]
+) -> bool:
+    """Return whether a session belongs to the current routed profile.
+
+    An unknown owner is not treated as visible once the caller has a known
+    routed profile. That keeps legacy or malformed rows fail-closed on the
+    shared multiplex database.
+    """
+    if routed_profile is None:
+        return True
+    try:
+        meta = db.get_session(session_id) or {}
+    except Exception:
+        logging.debug("failed to inspect session owner for %s", session_id, exc_info=True)
+        return False
+    return _session_profile(meta) == routed_profile
+
+
 def _session_link(session_id: str, profile: str = None) -> str:
     """The reference the agent writes to point the user at a session.
 
     Same value the desktop composer emits when a session is dragged into a
     message, so the desktop renders it as a link carrying the session's title.
-    The profile segment is omitted when we can't name it confidently — a bare
-    id still resolves, it just can't disambiguate across profiles.
+    The profile segment is omitted when we can't name it confidently. Agent
+    reads remain scoped to their routed profile even when a link is bare.
     """
     name = (profile or "").strip()
     if not name:
@@ -389,13 +481,12 @@ def _session_link(session_id: str, profile: str = None) -> str:
 
 
 def _locate_session_db(session_id: str):
-    """Scan every profile's ``state.db`` (read-only) for a session id.
+    """Scan every profile's ``state.db`` (read-only) for a trusted lookup.
 
     Returns ``(db, profile_name)`` for the first profile that owns the id, or
     ``(None, None)``. Session ids are globally unique (timestamp + random hex),
-    so the first hit is authoritative. This is the safety net for linked-session
-    reads where the model dropped the owning profile from the link and passed a
-    bare id — we find it wherever it actually lives instead of failing.
+    so the first hit is authoritative. Agent-facing calls never invoke this
+    fallback; it is reserved for the explicit trusted non-agent boundary.
     """
     from pathlib import Path
 
@@ -432,7 +523,14 @@ def _locate_session_db(session_id: str):
     return None, None
 
 
-def _read_session(db, session_id: str, head: int = 20, tail: int = 10, link_profile: str = None) -> str:
+def _read_session(
+    db,
+    session_id: str,
+    head: int = 20,
+    tail: int = 10,
+    link_profile: str = None,
+    routed_profile: Optional[str] = None,
+) -> str:
     """Read shape: dump a whole session by id (head + tail when large).
 
     Serves the linked-session case — the user dropped an @session reference and
@@ -446,6 +544,8 @@ def _read_session(db, session_id: str, head: int = 20, tail: int = 10, link_prof
         logging.debug("get_session failed for %s: %s", session_id, e, exc_info=True)
         meta = {}
     if not meta:
+        return tool_error(f"session_id not found: {session_id}", success=False)
+    if routed_profile is not None and _session_profile(meta) != routed_profile:
         return tool_error(f"session_id not found: {session_id}", success=False)
 
     try:
@@ -482,7 +582,13 @@ def _read_session(db, session_id: str, head: int = 20, tail: int = 10, link_prof
     return json.dumps(response, ensure_ascii=False)
 
 
-def _list_recent_sessions(db, limit: int, current_session_id: str = None, link_profile: str = None) -> str:
+def _list_recent_sessions(
+    db,
+    limit: int,
+    current_session_id: str = None,
+    link_profile: str = None,
+    routed_profile: Optional[str] = None,
+) -> str:
     """Return metadata for the most recent sessions (no LLM calls, no FTS5)."""
     try:
         # list_sessions_rich (include_children=False) already applies the
@@ -506,6 +612,8 @@ def _list_recent_sessions(db, limit: int, current_session_id: str = None, link_p
         results = []
         for s in sessions:
             sid = s.get("id", "")
+            if routed_profile is not None and _session_profile(s) != routed_profile:
+                continue
             if sid == current_session_id:
                 continue
             # Compression continuation: the root's original turns were
@@ -545,6 +653,7 @@ def _scroll(
     around_message_id: int,
     window: int = 5,
     current_session_id: str = None,
+    routed_profile: Optional[str] = None,
 ) -> str:
     """Scroll shape: return a window of messages centered on an anchor.
 
@@ -568,6 +677,19 @@ def _scroll(
         except (TypeError, ValueError):
             window = 5
     window = max(1, min(window, 20))
+
+    # Check the requested session before looking up an anchor. On the shared
+    # multiplex DB, an anchor can be a valid sibling id even when the caller's
+    # session_id is not; neither should cross the routed profile boundary.
+    try:
+        session_meta = db.get_session(session_id) or {}
+    except Exception as e:
+        logging.debug("get_session failed for %s: %s", session_id, e, exc_info=True)
+        session_meta = {}
+    if not session_meta:
+        return tool_error(f"session_id not found: {session_id}", success=False)
+    if routed_profile is not None and _session_profile(session_meta) != routed_profile:
+        return tool_error(f"session_id not found: {session_id}", success=False)
 
     # Locate the anchor before applying the current-lineage guard. Discovery
     # intentionally surfaces same-lineage history that is no longer in live
@@ -603,15 +725,6 @@ def _scroll(
                     "scroll rejected: anchor lives in the current session lineage (already in your active context)",
                     success=False,
                 )
-
-    # Session existence check
-    try:
-        session_meta = db.get_session(session_id) or {}
-    except Exception as e:
-        logging.debug("get_session failed for %s: %s", session_id, e, exc_info=True)
-        session_meta = {}
-    if not session_meta:
-        return tool_error(f"session_id not found: {session_id}", success=False)
 
     # Fetch the window
     try:
@@ -691,6 +804,7 @@ def _title_match_result(
     db,
     query: str,
     current_lineage_root: Optional[str],
+    routed_profile: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """Return a discovery-shaped result when the query matches a session title."""
     title_query = _normalize_title_query(query)
@@ -717,6 +831,8 @@ def _title_match_result(
     except Exception:
         logging.debug("get_session failed for title match %s", session_id, exc_info=True)
         session_meta = {}
+    if routed_profile is not None and _session_profile(session_meta) != routed_profile:
+        return None
     if session_meta.get("source") in _HIDDEN_SESSION_SOURCES:
         return None
 
@@ -767,11 +883,14 @@ def _discover(
     detail: str,
     current_session_id: str = None,
     link_profile: str = None,
+    routed_profile: Optional[str] = None,
 ) -> str:
     """Discovery shape: FTS5 plus adaptive or full result hydration."""
     role_list = role_filter if role_filter else ["user", "assistant"]
     current_lineage_root = _resolve_lineage(db, current_session_id) if current_session_id else None
-    title_result = _title_match_result(db, query, current_lineage_root)
+    title_result = _title_match_result(
+        db, query, current_lineage_root, routed_profile=routed_profile
+    )
 
     try:
         raw_results = db.search_messages(
@@ -828,7 +947,15 @@ def _discover(
         if len(seen_sessions) >= limit:
             break
         raw_sid = r["session_id"]
+        if routed_profile is not None and not _session_matches_profile(
+            db, raw_sid, routed_profile
+        ):
+            continue
         resolved_sid, _ = _resolve_to_parent(db, raw_sid)
+        if routed_profile is not None and not _session_matches_profile(
+            db, resolved_sid, routed_profile
+        ):
+            continue
         # Skip the current session lineage — UNLESS the hit's transcript has
         # left live context. Three sub-cases:
         #
@@ -968,6 +1095,7 @@ def _session_search_impl(
     detail: str = "adaptive",
     *,
     _owned_dbs: Optional[List[Any]] = None,
+    _trusted_cross_profile: bool = False,
 ) -> str:
     """Single-shape tool. Mode inferred from which args are set.
 
@@ -976,9 +1104,11 @@ def _session_search_impl(
     Read:      pass ``session_id`` (no anchor) — dumps the whole session.
     Browse:    pass nothing.
 
-    Pass ``profile`` to read another profile's sessions (e.g. resolving an
-    ``@session:<profile>/<id>`` link). Scroll wins over read/discovery when an
-    anchor is set — the agent has asked for a specific slice.
+    In managed evaOS processes, ``profile`` is reserved for the explicit
+    trusted non-agent boundary below; agent-facing calls may only name their
+    already-routed own profile. Unmanaged processes preserve upstream profile
+    selection. Scroll wins over read/discovery when an anchor is set — the
+    agent has asked for a specific slice.
     """
     # Normalise a raw `@session:<profile>/<id>` link value passed as session_id.
     # Session ids never contain "/", so a slash unambiguously means profile/id —
@@ -992,9 +1122,41 @@ def _session_search_impl(
             if emb_profile and (profile is None or not str(profile).strip()):
                 profile = emb_profile
 
-    # Cross-profile read: swap in the named profile's DB (read-only) for every
-    # shape below. The current-session-lineage guards no longer apply across
-    # profiles, but they key off ids that won't collide, so they stay inert.
+    managed_scope = bool(os.getenv("HERMES_SHARED_AUTH_FILE", "").strip())
+    selector_profile = _routed_profile(db, current_session_id) if managed_scope else None
+    managed_local_db = managed_scope and _is_managed_profile_database(db)
+    if managed_local_db:
+        try:
+            from hermes_cli.managed_profile_scope import managed_profile_name
+
+            selector_profile = _canonical_profile_name(managed_profile_name())
+        except Exception:
+            # The persisted route remains a safe fallback for synthetic tests
+            # and for an already-open DB while process-home validation fails.
+            pass
+    routed_profile = selector_profile if managed_scope and not managed_local_db else None
+
+    # The managed model-facing tool is intentionally profile-local. An
+    # explicit own profile is harmless when it matches the persisted route; a
+    # sibling profile can never widen this tool's read scope. Outside managed
+    # evaOS, retain upstream's native profile selector.
+    if (
+        managed_scope
+        and profile is not None
+        and str(profile).strip()
+        and not _trusted_cross_profile
+    ):
+        if selector_profile == _canonical_profile_name(profile):
+            profile = None
+        else:
+            return tool_error(
+                "cross-profile session access is unavailable to agent-facing session_search",
+                success=False,
+            )
+
+    # Trusted cross-profile read: swap in the named profile's DB (read-only)
+    # for every shape below. The DB boundary itself is the authorization
+    # boundary, so the target DB does not inherit the caller's profile filter.
     if profile is not None and str(profile).strip():
         try:
             profile_db = _resolve_profile_db(profile)
@@ -1005,6 +1167,7 @@ def _session_search_impl(
             if _owned_dbs is not None:
                 _owned_dbs.append(profile_db)
             current_session_id = None
+            routed_profile = None
 
     # Scroll shape takes precedence — explicit anchor beats any query.
     if (isinstance(session_id, str) and session_id.strip()) and around_message_id is not None:
@@ -1014,27 +1177,30 @@ def _session_search_impl(
             around_message_id=around_message_id,
             window=window,
             current_session_id=current_session_id,
+            routed_profile=routed_profile,
         )
 
     # Read shape: a session_id with no anchor → dump the whole session.
     if isinstance(session_id, str) and session_id.strip():
         sid = session_id.strip()
-        result = _read_session(db, sid, link_profile=profile)
+        result = _read_session(
+            db, sid, link_profile=profile, routed_profile=routed_profile
+        )
         if json.loads(result).get("success"):
             return result
 
-        # Miss in the target profile — the model may have dropped the owning
-        # profile from the link. Scan every profile and read it from wherever
-        # it lives, tagging the profile it was found in.
-        located, owner = _locate_session_db(sid)
-        if located is not None:
-            try:
-                found = json.loads(_read_session(located, sid, link_profile=owner))
-            finally:
-                located.close()
-            if found.get("success"):
-                found["profile"] = owner
-                return json.dumps(found, ensure_ascii=False)
+        # In managed evaOS, bare-id recovery is an explicit trusted operation
+        # only. Unmanaged upstream callers retain native profile discovery.
+        if _trusted_cross_profile or not managed_scope:
+            located, owner = _locate_session_db(sid)
+            if located is not None:
+                try:
+                    found = json.loads(_read_session(located, sid, link_profile=owner))
+                finally:
+                    located.close()
+                if found.get("success"):
+                    found["profile"] = owner
+                    return json.dumps(found, ensure_ascii=False)
         return result
 
     # Limit clamp [1, 10]
@@ -1047,7 +1213,13 @@ def _session_search_impl(
 
     # Browse shape: no query → recent sessions.
     if not query or not isinstance(query, str) or not query.strip():
-        return _list_recent_sessions(db, limit, current_session_id, link_profile=profile)
+        return _list_recent_sessions(
+            db,
+            limit,
+            current_session_id,
+            link_profile=profile or routed_profile,
+            routed_profile=routed_profile,
+        )
 
     # Parse role_filter
     role_list: Optional[List[str]] = None
@@ -1075,11 +1247,12 @@ def _session_search_impl(
         sort=sort_norm,
         detail=detail_norm,
         current_session_id=current_session_id,
-        link_profile=profile,
+        link_profile=profile or routed_profile,
+        routed_profile=routed_profile,
     )
 
 
-def session_search(
+def _run_session_search(
     query: str = "",
     role_filter: str = None,
     limit: int = 3,
@@ -1095,6 +1268,8 @@ def session_search(
     profile: str = None,
     # Discovery result shaping (appended to preserve positional compatibility)
     detail: str = "adaptive",
+    *,
+    trusted_cross_profile: bool,
 ) -> str:
     """Run session search and close databases opened by this invocation."""
     owned_dbs: List[Any] = []
@@ -1124,6 +1299,7 @@ def session_search(
             profile=profile,
             detail=detail,
             _owned_dbs=owned_dbs,
+            _trusted_cross_profile=trusted_cross_profile,
         )
     finally:
         for owned_db in reversed(owned_dbs):
@@ -1131,6 +1307,71 @@ def session_search(
                 owned_db.close()
             except Exception:
                 logging.debug("Failed to close session_search SessionDB", exc_info=True)
+
+
+def session_search(
+    query: str = "",
+    role_filter: str = None,
+    limit: int = 3,
+    db=None,
+    current_session_id: str = None,
+    session_id: str = None,
+    around_message_id: int = None,
+    window: int = 5,
+    sort: str = None,
+    profile: str = None,
+    detail: str = "adaptive",
+) -> str:
+    """Run profile-local agent-facing session search."""
+    return _run_session_search(
+        query=query,
+        role_filter=role_filter,
+        limit=limit,
+        db=db,
+        current_session_id=current_session_id,
+        session_id=session_id,
+        around_message_id=around_message_id,
+        window=window,
+        sort=sort,
+        profile=profile,
+        detail=detail,
+        trusted_cross_profile=False,
+    )
+
+
+def session_search_trusted(
+    query: str = "",
+    role_filter: str = None,
+    limit: int = 3,
+    db=None,
+    current_session_id: str = None,
+    session_id: str = None,
+    around_message_id: int = None,
+    window: int = 5,
+    sort: str = None,
+    profile: str = None,
+    detail: str = "adaptive",
+) -> str:
+    """Explicit non-agent boundary for authorized cross-profile reads.
+
+    The model-facing registry never calls this wrapper. Administrative or
+    desktop code that has already established its own authorization may opt in
+    explicitly, keeping that authority separate from the agent tool contract.
+    """
+    return _run_session_search(
+        query=query,
+        role_filter=role_filter,
+        limit=limit,
+        db=db,
+        current_session_id=current_session_id,
+        session_id=session_id,
+        around_message_id=around_message_id,
+        window=window,
+        sort=sort,
+        profile=profile,
+        detail=detail,
+        trusted_cross_profile=True,
+    )
 
 
 def check_session_search_requirements() -> bool:
@@ -1231,15 +1472,6 @@ SESSION_SEARCH_SCHEMA = {
                     "'user,assistant' (tool output is usually noise). Pass "
                     "'user,assistant,tool' to include tool output (debugging tool "
                     "behaviour) or 'tool' to search tool output only."
-                ),
-            },
-            "profile": {
-                "type": "string",
-                "description": (
-                    "Optional. Read sessions from another Hermes profile's database "
-                    "(read-only). Use when resolving an `@session:<profile>/<id>` link: "
-                    "pass the profile segment here with session_id as the id segment. "
-                    "Omit to use the current profile."
                 ),
             },
         },

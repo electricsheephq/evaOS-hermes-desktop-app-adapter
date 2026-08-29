@@ -22,6 +22,7 @@ import json
 import os
 import stat
 import sys
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -31,6 +32,13 @@ pytestmark = pytest.mark.skipif(
     sys.platform.startswith("win"),
     reason="POSIX mode bits not enforced on Windows",
 )
+
+
+def _write_managed_shared(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload))
+    os.chmod(path, 0o660)
+    os.chown(path, -1, os.getgid())
 
 
 # ---------------------------------------------------------------------------
@@ -67,6 +75,223 @@ def test_save_auth_store_writes_0o600_with_0o700_parent(tmp_path, monkeypatch):
     # Content survived the rewrite
     data = json.loads(auth_path.read_text())
     assert data["providers"]["openai-codex"]["tokens"]["access_token"] == "secret-x"
+
+
+def test_managed_shared_save_preserves_gid_and_group_mode(tmp_path, monkeypatch):
+    """Managed replacement and lock artifacts stay group-readable/writable."""
+    from hermes_cli import auth as auth_mod
+
+    root = tmp_path / ".hermes"
+    shared = root / "shared-auth" / "auth.json"
+    _write_managed_shared(shared, {"version": 1, "providers": {}})
+    shared_gid = shared.stat().st_gid
+    profile_home = root / "profiles" / "worker"
+    monkeypatch.setenv("HERMES_HOME", str(profile_home))
+    monkeypatch.setenv("HERMES_SHARED_AUTH_FILE", str(shared))
+    old_umask = os.umask(0o022)
+    try:
+        with auth_mod._auth_store_lock(target_path=shared):
+            pass
+        auth_mod._save_auth_store(
+            {"version": auth_mod.AUTH_STORE_VERSION, "providers": {}},
+            target_path=shared,
+        )
+        local = auth_mod._save_auth_store(
+            {"version": auth_mod.AUTH_STORE_VERSION, "providers": {}}
+        )
+    finally:
+        os.umask(old_umask)
+
+    assert stat.S_IMODE(shared.stat().st_mode) == 0o660
+    assert shared.stat().st_gid == shared_gid
+    lock = shared.with_suffix(".lock")
+    assert stat.S_IMODE(lock.stat().st_mode) == 0o660
+    assert lock.stat().st_gid == shared_gid
+    assert stat.S_IMODE(local.stat().st_mode) == 0o600
+
+
+def test_managed_shared_lock_does_not_rewrite_peer_owned_metadata(
+    tmp_path, monkeypatch
+):
+    """A sibling group member validates, but does not chmod/chown, an existing lock."""
+    from hermes_cli import auth as auth_mod
+
+    shared = tmp_path / "shared-auth" / "auth.json"
+    _write_managed_shared(shared, {"version": 1, "providers": {}})
+    lock = shared.with_suffix(".lock")
+    lock.write_text("")
+    os.chmod(lock, 0o660)
+    os.chown(lock, -1, os.getgid())
+    monkeypatch.setenv("HERMES_SHARED_AUTH_FILE", str(shared))
+
+    real_apply = auth_mod._apply_managed_auth_fd_metadata
+
+    def reject_existing_metadata_rewrite(fd, gid):
+        if os.fstat(fd).st_ino == lock.stat().st_ino:
+            raise AssertionError("existing peer-owned lock metadata must not be rewritten")
+        real_apply(fd, gid)
+
+    monkeypatch.setattr(
+        auth_mod, "_apply_managed_auth_fd_metadata", reject_existing_metadata_rewrite
+    )
+    with auth_mod._auth_store_lock(target_path=shared):
+        pass
+
+
+def test_managed_shared_lock_rejects_unsafe_existing_metadata(tmp_path, monkeypatch):
+    from hermes_cli import auth as auth_mod
+
+    shared = tmp_path / "shared-auth" / "auth.json"
+    _write_managed_shared(shared, {"version": 1, "providers": {}})
+    lock = shared.with_suffix(".lock")
+    lock.write_text("")
+    os.chmod(lock, 0o640)
+    monkeypatch.setenv("HERMES_SHARED_AUTH_FILE", str(shared))
+
+    with pytest.raises(RuntimeError, match="unsafe metadata"):
+        with auth_mod._auth_store_lock(target_path=shared):
+            pass
+
+
+def test_managed_shared_lock_is_initialized_before_publish(tmp_path, monkeypatch):
+    from hermes_cli import auth as auth_mod
+
+    shared = tmp_path / "shared-auth" / "auth.json"
+    _write_managed_shared(shared, {"version": 1, "providers": {}})
+    lock = shared.with_suffix(".lock")
+    monkeypatch.setenv("HERMES_SHARED_AUTH_FILE", str(shared))
+    real_apply = auth_mod._apply_managed_auth_fd_metadata
+
+    def assert_unpublished_then_apply(fd, gid):
+        assert not lock.exists()
+        real_apply(fd, gid)
+
+    monkeypatch.setattr(
+        auth_mod, "_apply_managed_auth_fd_metadata", assert_unpublished_then_apply
+    )
+    with auth_mod._auth_store_lock(target_path=shared):
+        pass
+
+    assert lock.is_file() and not lock.is_symlink()
+    assert stat.S_IMODE(lock.stat().st_mode) == 0o660
+
+
+def test_managed_shared_save_replaces_raced_symlink_without_following(
+    tmp_path, monkeypatch
+):
+    from hermes_cli import auth as auth_mod
+
+    shared = tmp_path / "shared-auth" / "auth.json"
+    _write_managed_shared(shared, {"version": 1, "providers": {}})
+    outside = tmp_path / "outside.json"
+    outside.write_text("unchanged")
+    monkeypatch.setenv("HERMES_SHARED_AUTH_FILE", str(shared))
+    real_replace = os.replace
+    raced = False
+
+    def race_then_replace(source, target):
+        nonlocal raced
+        if Path(target) == shared and not raced:
+            raced = True
+            shared.unlink()
+            shared.symlink_to(outside)
+        return real_replace(source, target)
+
+    monkeypatch.setattr(auth_mod.os, "replace", race_then_replace)
+    auth_mod._save_auth_store(
+        {"version": auth_mod.AUTH_STORE_VERSION, "providers": {}},
+        target_path=shared,
+    )
+
+    assert raced
+    assert shared.is_file() and not shared.is_symlink()
+    assert outside.read_text() == "unchanged"
+
+
+def test_managed_corrupt_copy_does_not_follow_source_symlink(tmp_path):
+    from hermes_cli import auth as auth_mod
+
+    shared = tmp_path / "shared-auth" / "auth.json"
+    shared.parent.mkdir()
+    outside = tmp_path / "private.env"
+    outside.write_text("PRIVATE_VALUE=do-not-copy")
+    shared.symlink_to(outside)
+    corrupt = shared.with_suffix(".json.corrupt")
+
+    with pytest.raises(RuntimeError, match="corruption source is unsafe"):
+        auth_mod._copy_managed_auth_artifact(shared, corrupt, outside.stat().st_gid)
+
+    assert not corrupt.exists()
+
+
+def test_managed_auth_read_uses_validated_descriptor_after_path_swap(tmp_path, monkeypatch):
+    from hermes_cli import auth as auth_mod
+
+    shared = tmp_path / "shared-auth" / "auth.json"
+    _write_managed_shared(shared, {"version": 1, "providers": {"nous": {}}})
+    outside = tmp_path / "outside.json"
+    outside.write_text(json.dumps({"version": 1, "providers": {"outside": {}}}))
+    monkeypatch.setenv("HERMES_SHARED_AUTH_FILE", str(shared))
+    real_fstat = auth_mod.os.fstat
+    swapped = False
+
+    def swap_after_validation(fd):
+        nonlocal swapped
+        result = real_fstat(fd)
+        if not swapped and result.st_ino == shared.stat().st_ino:
+            shared.unlink()
+            shared.symlink_to(outside)
+            swapped = True
+        return result
+
+    monkeypatch.setattr(auth_mod.os, "fstat", swap_after_validation)
+    loaded = auth_mod._load_auth_store(shared)
+
+    assert swapped
+    assert loaded["providers"] == {"nous": {}}
+    assert outside.read_text() == json.dumps(
+        {"version": 1, "providers": {"outside": {}}}
+    )
+
+
+def test_managed_lock_flocks_validated_descriptor_after_path_swap(tmp_path, monkeypatch):
+    from hermes_cli import auth as auth_mod
+
+    if auth_mod.fcntl is None:
+        pytest.skip("fcntl is required for descriptor flock validation")
+    shared = tmp_path / "shared-auth" / "auth.json"
+    _write_managed_shared(shared, {"version": 1, "providers": {}})
+    lock = shared.with_suffix(".lock")
+    outside = tmp_path / "outside.lock"
+    outside.write_text("outside")
+    monkeypatch.setenv("HERMES_SHARED_AUTH_FILE", str(shared))
+    real_fstat = auth_mod.os.fstat
+    real_flock = auth_mod.fcntl.flock
+    original_inode = None
+    swapped = False
+
+    def swap_after_validation(fd):
+        nonlocal original_inode, swapped
+        result = real_fstat(fd)
+        if not swapped and lock.exists() and result.st_ino == lock.stat().st_ino:
+            original_inode = result.st_ino
+            lock.unlink()
+            lock.symlink_to(outside)
+            swapped = True
+        return result
+
+    def assert_descriptor(fd, operation):
+        if operation & auth_mod.fcntl.LOCK_EX:
+            assert real_fstat(fd).st_ino == original_inode
+        return real_flock(fd, operation)
+
+    monkeypatch.setattr(auth_mod.os, "fstat", swap_after_validation)
+    monkeypatch.setattr(auth_mod.fcntl, "flock", assert_descriptor)
+    with auth_mod._auth_store_lock(target_path=shared):
+        pass
+
+    assert swapped
+    assert outside.read_text() == "outside"
 
 
 # ---------------------------------------------------------------------------

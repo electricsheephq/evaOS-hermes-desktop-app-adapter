@@ -82,6 +82,27 @@ _PROFILE_MANAGED_ENV_KEYS: frozenset[str] = frozenset({
     "COPILOT_ACP_BASE_URL",
 })
 
+# Package-owned runtime authority is injected by the service or the root-owned
+# managed environment.  A profile-writable dotenv must never replace the
+# managed overlay, shared-auth source, systemd credential directory, broker
+# destination, or broker-secret path.
+_MANAGED_RUNTIME_AUTHORITY_KEYS: frozenset[str] = frozenset({
+    "HERMES_MANAGED_DIR",
+    "HERMES_SHARED_AUTH_FILE",
+    "CREDENTIALS_DIRECTORY",
+    "EVAOS_DESKTOP_RUNTIME_SESSION_URL",
+    "PIPEDREAM_AGENT_BROKER_SECRET_FILE",
+})
+
+
+def _restore_managed_runtime_authority(snapshot: dict[str, str | None]) -> None:
+    """Restore package-owned authority after profile-controlled env loads."""
+    for key, value in snapshot.items():
+        if value is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = value
+
 
 def _env_keys_defined_in_dotenv(path: Path) -> set[str]:
     """Return KEY names assigned in a dotenv file (including empty ``KEY=``).
@@ -485,6 +506,13 @@ def load_hermes_dotenv(
       dependencies into the process that replaces that same environment.
     """
     loaded: list[Path] = []
+    from hermes_cli import managed_scope
+
+    managed_runtime_authority_keys = set(_MANAGED_RUNTIME_AUTHORITY_KEYS)
+    managed_runtime_authority_keys.update(managed_scope.managed_config_env_keys())
+    managed_runtime_authority = {
+        key: os.environ.get(key) for key in managed_runtime_authority_keys
+    }
 
     home_path = Path(hermes_home or os.getenv("HERMES_HOME", Path.home() / ".hermes"))
     user_env = home_path / ".env"
@@ -534,8 +562,13 @@ def load_hermes_dotenv(
     # resolution is unnecessary for the updater.
     from hermes_cli import _early_recovery
 
+    # User/project dotenv files are profile-owned.  Restore the service-owned
+    # lease values before any secret-source client can observe them, then fence
+    # them again in case an external source supplied a same-named key.
+    _restore_managed_runtime_authority(managed_runtime_authority)
     if load_external_secrets and not _early_recovery._should_skip_external_secret_sources():
         _apply_external_secret_sources(home_path)
+    _restore_managed_runtime_authority(managed_runtime_authority)
     _apply_managed_env()
 
     # config.yaml is the documented source of truth for terminal.* settings,

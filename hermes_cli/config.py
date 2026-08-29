@@ -222,7 +222,8 @@ _ENV_VAR_NAME_DENYLIST: frozenset[str] = frozenset({
     # NOT a HERMES_* blanket: integration credentials (HERMES_GEMINI_*,
     # HERMES_LANGFUSE_*, HERMES_SPOTIFY_*, ...) ARE allowed.
     "HERMES_HOME", "HERMES_PROFILE", "HERMES_CONFIG", "HERMES_ENV",
-    "HERMES_CONFIG_PATH", "HERMES_ENV_PATH",
+    "HERMES_CONFIG_PATH", "HERMES_ENV_PATH", "HERMES_MANAGED_DIR",
+    "HERMES_SHARED_AUTH_FILE", "CREDENTIALS_DIRECTORY",
     # MCP catalog trust root. Package-manager wrappers may still provide this
     # in the process environment; only generic persistence writes are blocked.
     "HERMES_OPTIONAL_MCPS",
@@ -236,6 +237,11 @@ _ENV_VAR_NAME_DENYLIST: frozenset[str] = frozenset({
     "HERMES_INTERACTIVE", "HERMES_EXEC_ASK", "HERMES_GATEWAY_SESSION",
     "HERMES_CRON_SESSION", "HERMES_SINGLE_QUERY_SESSION",
     "HERMES_SESSION_KEY", "HERMES_SESSION_PLATFORM",
+    # Managed MCP lease authority. The package injects these through the
+    # service environment; a profile-writable dotenv must never redirect the
+    # root broker secret or the endpoint that receives it.
+    "EVAOS_DESKTOP_RUNTIME_SESSION_URL",
+    "PIPEDREAM_AGENT_BROKER_SECRET_FILE",
 })
 
 
@@ -4343,6 +4349,10 @@ def _env_line_defines_key(
 
 def save_env_value(key: str, value: str):
     """Save or update a value in ~/.hermes/.env."""
+    # Reject fixed authority names before any environment-backed managed-path
+    # lookup.  Dynamic placeholders referenced by root-managed config are
+    # covered by managed_scope.is_env_managed() below.
+    validate_env_var_name_for_write(key)
     if is_managed():
         managed_error(f"set {key}")
         return
@@ -4353,13 +4363,12 @@ def save_env_value(key: str, value: str):
     if managed_scope.is_env_managed(key):
         managed_dir = managed_scope.get_managed_dir()
         src = (managed_dir / ".env") if managed_dir else "the managed scope"
-        print(
+        message = (
             f"Cannot set {key}: it is managed by your administrator ({src}) "
-            f"and cannot be changed.",
-            file=sys.stderr,
+            "and cannot be changed."
         )
-        return
-    validate_env_var_name_for_write(key)
+        print(message, file=sys.stderr)
+        raise PermissionError(message)
     value = value.replace("\n", "").replace("\r", "")
     # API keys / tokens must be ASCII — strip non-ASCII with a warning.
     value = _check_non_ascii_credential(key, value)
@@ -4457,6 +4466,10 @@ def remove_env_value(key: str) -> bool:
 
     Returns True if the key was found and removed, False otherwise.
     """
+    # Reject protected authority keys before consulting any environment-backed
+    # managed-path state.  A forged or unreadable HERMES_MANAGED_DIR must not
+    # be dereferenced merely because a generic caller attempted to remove it.
+    validate_env_var_name_for_write(key)
     if is_managed():
         managed_error(f"remove {key}")
         return False
@@ -4472,8 +4485,6 @@ def remove_env_value(key: str) -> bool:
             file=sys.stderr,
         )
         return False
-    if not _ENV_VAR_NAME_RE.match(key):
-        raise ValueError(f"Invalid environment variable name: {key!r}")
     env_path = get_env_path()
     if not env_path.exists():
         os.environ.pop(key, None)
@@ -4570,13 +4581,27 @@ def reload_env() -> int:
     """
     env_vars = load_env()
     known_keys = set(OPTIONAL_ENV_VARS.keys()) | _EXTRA_ENV_KEYS
+    # A profile-owned .env may be reloaded through the dashboard, TUI, or
+    # gateway RPC.  Keep package/root authority and every placeholder consumed
+    # by managed config outside that writable surface, just as startup dotenv
+    # loading does.
+    from hermes_cli import managed_scope
+    from hermes_cli.env_loader import _MANAGED_RUNTIME_AUTHORITY_KEYS
+
+    managed_authority_keys = set(_MANAGED_RUNTIME_AUTHORITY_KEYS)
+    managed_authority_keys.update(managed_scope.load_managed_env())
+    managed_authority_keys.update(managed_scope.managed_config_env_keys())
     count = 0
     for key, value in env_vars.items():
+        if key in managed_authority_keys:
+            continue
         if os.environ.get(key) != value:
             os.environ[key] = value
             count += 1
     # Remove known Hermes vars that are no longer in .env
     for key in known_keys:
+        if key in managed_authority_keys:
+            continue
         if key not in env_vars and key in os.environ:
             del os.environ[key]
             count += 1

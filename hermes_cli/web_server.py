@@ -3429,8 +3429,14 @@ def _collect_profile_gateway_topology() -> Dict[str, Any]:
     """
     try:
         from hermes_cli.profiles import _check_gateway_running, profiles_to_serve
+        from hermes_cli.managed_profile_scope import managed_profile_name
         from gateway.status import read_runtime_status
-        homes = profiles_to_serve(True)
+        owner = managed_profile_name()
+        homes = (
+            [(owner, get_hermes_home())]
+            if owner is not None
+            else profiles_to_serve(True)
+        )
     except Exception:
         _log.debug("profile/gateway topology enumeration failed", exc_info=True)
         return {
@@ -8340,6 +8346,8 @@ async def set_env_var(body: EnvVarUpdate, profile: Optional[str] = None):
 
     try:
         return await asyncio.to_thread(_run)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     except ValueError as exc:
         # save_env_value raises ValueError for invalid names and for keys
         # on the denylist (LD_PRELOAD, PATH, PYTHONPATH, …). Surface the
@@ -10593,6 +10601,16 @@ def _multiplex_port_binding_conflict(
     from gateway.config import PORT_BINDING_PLATFORM_VALUES, load_gateway_config
 
     if platform_id not in PORT_BINDING_PLATFORM_VALUES:
+        return None
+
+    from hermes_cli.managed_profile_scope import managed_profile_name
+
+    # evaOS r30 serves one named profile per process.  Its managed process
+    # never enters upstream's default-profile multiplex scope, so inspecting
+    # that sibling scope would both violate the boundary and reject a valid
+    # per-profile channel configuration.
+    _managed_profile_or_http(requested_profile)
+    if managed_profile_name() is not None:
         return None
 
     requested = (requested_profile or "").strip()
@@ -12953,6 +12971,17 @@ def _cron_profile_dicts() -> List[Dict[str, Any]]:
     GIL pressure on large profile pools.
     """
     from hermes_cli import profiles as profiles_mod
+    from hermes_cli.managed_profile_scope import managed_profile_name
+
+    owner = managed_profile_name()
+    if owner is not None:
+        return [
+            {
+                "name": owner,
+                "path": str(get_hermes_home()),
+                "is_default": False,
+            }
+        ]
     try:
         return [
             {
@@ -12987,11 +13016,32 @@ def _cron_default_profile() -> str:
     return "default" if name in ("default", "custom") else name
 
 
+def _managed_profile_or_http(
+    profile: Optional[str], *, selectors_for_current: Tuple[str, ...] = ()
+) -> str:
+    """Resolve a dashboard selector against the managed process profile."""
+    from hermes_cli.managed_profile_scope import (
+        ManagedProfileScopeError,
+        require_managed_profile,
+    )
+
+    try:
+        return require_managed_profile(
+            profile,
+            selectors_for_current=selectors_for_current,
+        )
+    except ManagedProfileScopeError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
 def _cron_profile_home(profile: Optional[str]) -> Tuple[str, Path]:
     """Resolve a profile query value to (profile_name, HERMES_HOME)."""
     from hermes_cli import profiles as profiles_mod
 
-    raw = (profile or _cron_default_profile()).strip() or "default"
+    raw = _managed_profile_or_http(profile or _cron_default_profile())
+    raw = raw.strip() or "default"
     try:
         canon = profiles_mod.normalize_profile_name(raw)
         profiles_mod.validate_profile_name(canon)
@@ -14879,7 +14929,11 @@ def _profile_cli_args(profile: Optional[str]) -> List[str]:
     profile (no args, legacy behavior).
     """
     requested = (profile or "").strip()
-    if not requested or requested.lower() in {"current", "default"}:
+    resolved = _managed_profile_or_http(requested)
+    if not requested or requested.lower() == "current":
+        return []
+    requested = resolved
+    if requested.lower() == "default":
         return []
     from hermes_cli import profiles as profiles_mod
     _resolve_profile_dir(requested)
@@ -15081,6 +15135,7 @@ def _fallback_profile_dicts(profiles_mod) -> List[Dict[str, Any]]:
 def _resolve_profile_dir(name: str) -> Path:
     """Validate ``name`` and resolve to its directory or raise an HTTPException."""
     from hermes_cli import profiles as profiles_mod
+    name = _managed_profile_or_http(name)
     try:
         profiles_mod.validate_profile_name(name)
     except ValueError as e:
@@ -15092,6 +15147,7 @@ def _resolve_profile_dir(name: str) -> Path:
 
 def _profile_setup_command(name: str) -> str:
     """Return the shell command used to configure a profile in the CLI."""
+    name = _managed_profile_or_http(name)
     _resolve_profile_dir(name)
     return "hermes setup" if name == "default" else f"{name} setup"
 
@@ -15285,7 +15341,7 @@ def _profile_scope(profile: Optional[str]):
     imported the modules before a HERMES_HOME override, or under test
     isolation).
     """
-    requested = (profile or "").strip()
+    requested = _managed_profile_or_http(profile)
 
     from hermes_constants import (
         get_hermes_home,
@@ -15338,7 +15394,7 @@ def _config_profile_scope(profile: Optional[str]):
 
     None/""/"current" means the dashboard's own profile — no override.
     """
-    requested = (profile or "").strip()
+    requested = _managed_profile_or_http(profile)
     if not requested or requested.lower() == "current":
         yield None
         return

@@ -31,6 +31,100 @@ def test_recovered_update_retry_skips_external_secret_sources(tmp_path, monkeypa
     assert external_calls == []
 
 
+def test_profile_dotenv_cannot_override_managed_runtime_lease_authority(
+    tmp_path, monkeypatch
+):
+    import hermes_cli.env_loader as env_loader
+
+    home = tmp_path / "profile"
+    home.mkdir()
+    (home / ".env").write_text(
+        "EVAOS_DESKTOP_RUNTIME_SESSION_URL=https://profile.invalid/session\n"
+        "PIPEDREAM_AGENT_BROKER_SECRET_FILE=/profile/secret\n"
+        "HERMES_MANAGED_DIR=/profile/managed\n"
+        "HERMES_SHARED_AUTH_FILE=/profile/shared-auth.json\n"
+        "CREDENTIALS_DIRECTORY=/profile/credentials\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv(
+        "EVAOS_DESKTOP_RUNTIME_SESSION_URL", "https://runtime.invalid/session"
+    )
+    monkeypatch.setenv("PIPEDREAM_AGENT_BROKER_SECRET_FILE", "/runtime/secret")
+    monkeypatch.setenv("HERMES_MANAGED_DIR", "/runtime/managed")
+    monkeypatch.setenv("HERMES_SHARED_AUTH_FILE", "/runtime/shared-auth.json")
+    monkeypatch.setenv("CREDENTIALS_DIRECTORY", "/runtime/credentials")
+    monkeypatch.setattr(env_loader, "_apply_external_secret_sources", lambda _path: None)
+    monkeypatch.setattr(env_loader, "_apply_managed_env", lambda: None)
+
+    load_hermes_dotenv(hermes_home=home)
+
+    assert os.environ["EVAOS_DESKTOP_RUNTIME_SESSION_URL"] == (
+        "https://runtime.invalid/session"
+    )
+    assert os.environ["PIPEDREAM_AGENT_BROKER_SECRET_FILE"] == "/runtime/secret"
+    assert os.environ["HERMES_MANAGED_DIR"] == "/runtime/managed"
+    assert os.environ["HERMES_SHARED_AUTH_FILE"] == "/runtime/shared-auth.json"
+    assert os.environ["CREDENTIALS_DIRECTORY"] == "/runtime/credentials"
+
+
+def test_profile_dotenv_cannot_create_managed_runtime_lease_authority(
+    tmp_path, monkeypatch
+):
+    import hermes_cli.env_loader as env_loader
+
+    home = tmp_path / "profile"
+    home.mkdir()
+    (home / ".env").write_text(
+        "EVAOS_DESKTOP_RUNTIME_SESSION_URL=https://profile.invalid/session\n"
+        "PIPEDREAM_AGENT_BROKER_SECRET_FILE=/profile/secret\n"
+        "HERMES_MANAGED_DIR=/profile/managed\n"
+        "HERMES_SHARED_AUTH_FILE=/profile/shared-auth.json\n"
+        "CREDENTIALS_DIRECTORY=/profile/credentials\n",
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("EVAOS_DESKTOP_RUNTIME_SESSION_URL", raising=False)
+    monkeypatch.delenv("PIPEDREAM_AGENT_BROKER_SECRET_FILE", raising=False)
+    monkeypatch.delenv("HERMES_MANAGED_DIR", raising=False)
+    monkeypatch.delenv("HERMES_SHARED_AUTH_FILE", raising=False)
+    monkeypatch.delenv("CREDENTIALS_DIRECTORY", raising=False)
+    monkeypatch.setattr(env_loader, "_apply_external_secret_sources", lambda _path: None)
+    monkeypatch.setattr(env_loader, "_apply_managed_env", lambda: None)
+
+    load_hermes_dotenv(hermes_home=home)
+
+    assert "EVAOS_DESKTOP_RUNTIME_SESSION_URL" not in os.environ
+    assert "PIPEDREAM_AGENT_BROKER_SECRET_FILE" not in os.environ
+    assert "HERMES_MANAGED_DIR" not in os.environ
+    assert "HERMES_SHARED_AUTH_FILE" not in os.environ
+    assert "CREDENTIALS_DIRECTORY" not in os.environ
+
+
+def test_profile_dotenv_cannot_override_managed_config_placeholder(
+    tmp_path, monkeypatch
+):
+    import hermes_cli.env_loader as env_loader
+    from hermes_cli import managed_scope
+
+    home = tmp_path / "profile"
+    home.mkdir()
+    (home / ".env").write_text(
+        "EVAOS_TEST_AGENT_ID=sibling\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("EVAOS_TEST_AGENT_ID", "main")
+    monkeypatch.setattr(
+        managed_scope,
+        "managed_config_env_keys",
+        lambda: {"EVAOS_TEST_AGENT_ID"},
+    )
+    monkeypatch.setattr(env_loader, "_apply_external_secret_sources", lambda _path: None)
+    monkeypatch.setattr(env_loader, "_apply_managed_env", lambda: None)
+
+    load_hermes_dotenv(hermes_home=home)
+
+    assert os.environ["EVAOS_TEST_AGENT_ID"] == "main"
+
+
 def test_utf8_bom_does_not_mangle_first_key(tmp_path, monkeypatch):
     """A leading UTF-8 BOM must not prefix the first key name in os.environ.
 

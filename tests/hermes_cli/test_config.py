@@ -1220,6 +1220,11 @@ class TestEnvWriteDenylist:
             "HERMES_SINGLE_QUERY_SESSION",
             "HERMES_SESSION_KEY",
             "HERMES_SESSION_PLATFORM",
+            "HERMES_MANAGED_DIR",
+            "HERMES_SHARED_AUTH_FILE",
+            "CREDENTIALS_DIRECTORY",
+            "EVAOS_DESKTOP_RUNTIME_SESSION_URL",
+            "PIPEDREAM_AGENT_BROKER_SECRET_FILE",
         ],
     )
     def test_hermes_security_control_keys_are_not_writable(self, protected_key):
@@ -1228,6 +1233,28 @@ class TestEnvWriteDenylist:
             save_env_value(protected_key, "1")
 
         assert protected_key not in load_env()
+
+    @pytest.mark.parametrize(
+        "protected_key",
+        ["HERMES_MANAGED_DIR", "HERMES_SHARED_AUTH_FILE", "CREDENTIALS_DIRECTORY"],
+    )
+    def test_managed_authority_keys_are_not_removable(
+        self, protected_key, tmp_path, monkeypatch
+    ):
+        from hermes_cli.config import invalidate_env_cache, remove_env_value
+
+        env_path = tmp_path / ".env"
+        env_path.write_text(f"{protected_key}=/root/authority\n", encoding="utf-8")
+        monkeypatch.setenv(protected_key, "/root/authority")
+        invalidate_env_cache()
+
+        with pytest.raises(ValueError, match="denylist"):
+            remove_env_value(protected_key)
+
+        assert f"{protected_key}=/root/authority" in env_path.read_text(
+            encoding="utf-8"
+        )
+        assert os.environ[protected_key] == "/root/authority"
 
     def test_preexisting_optional_mcps_override_still_loads(self, tmp_path):
         """The writer gate must not migrate or ignore operator-owned .env state."""

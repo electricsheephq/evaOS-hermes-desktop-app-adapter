@@ -2387,7 +2387,9 @@ class MCPServerTask:
         "_task", "_ready", "_shutdown_event", "_reconnect_event",
         "_tools", "_error", "_config",
         "_sampling", "_elicitation",
-        "_registered_tool_names", "_auth_type", "_refresh_lock",
+        "_registered_tool_names", "_registered_scope", "_auth_type", "_refresh_lock",
+        "registration_home", "_evaos_lease_manager", "_evaos_lease_auth",
+        "_evaos_lease_warning_emitted",
         "_rpc_lock", "_pending_refresh_tasks",
         "_pending_call_context",
         "_lifecycle_started_at", "_last_tool_call_at",
@@ -2399,8 +2401,13 @@ class MCPServerTask:
         "_ever_connected",
     )
 
-    def __init__(self, name: str):
+    def __init__(self, name: str, registration_home: Optional[str] = None):
         self.name = name
+        if registration_home is None:
+            from hermes_constants import get_hermes_home
+
+            registration_home = str(get_hermes_home())
+        self.registration_home = os.path.realpath(os.path.expanduser(registration_home))
         self.session: Optional[Any] = None
         self.tool_timeout: float = _DEFAULT_TOOL_TIMEOUT
         self._task: Optional[asyncio.Task] = None
@@ -2462,6 +2469,9 @@ class MCPServerTask:
         # (#81995).
         self._stdio_child_pids: Set[int] = set()
         self._auth_type: str = ""
+        self._evaos_lease_manager: Optional[Any] = None
+        self._evaos_lease_auth: Optional[Any] = None
+        self._evaos_lease_warning_emitted = False
         self._refresh_lock = asyncio.Lock()
         # MCP stdio sessions are a single JSON-RPC stream. Some servers emit
         # list_changed notifications during startup; if the notification
@@ -2504,7 +2514,126 @@ class MCPServerTask:
 
     def _is_http(self) -> bool:
         """Check if this server uses HTTP transport."""
-        return "url" in self._config
+        return "url" in self._config or self._auth_type == "evaos_lease"
+
+    def _validate_evaos_lease_config(self, config: dict) -> None:
+        """Reject connection and credential overrides for managed MCP auth."""
+        if self._auth_type != "evaos_lease":
+            return
+        from tools.evaos_mcp_lease import EvaosLeaseError
+
+        conflicting = {
+            "url", "headers", "command", "args", "env", "transport",
+            "oauth", "client_cert", "identity_header",
+        } & set(config)
+        if conflicting or config.get("ssl_verify") is False:
+            raise EvaosLeaseError(
+                "managed MCP config may specify only root-configured app "
+                "identity plus non-credential runtime options"
+            )
+        app_slug = config.get("app_slug")
+        if not isinstance(app_slug, str) or re.fullmatch(
+            r"[a-z0-9][a-z0-9_-]{0,127}", app_slug
+        ) is None:
+            raise EvaosLeaseError("managed MCP app slug is invalid")
+        external_user_id = config.get("external_user_id")
+        account_id = config.get("account_id")
+        customer_id = config.get("customer_id")
+        agent_id = config.get("agent_id")
+        has_profile_identity = external_user_id is not None
+        has_agent_identity = customer_id is not None or agent_id is not None
+        if has_profile_identity and has_agent_identity:
+            raise EvaosLeaseError(
+                "managed MCP profile and agent identity modes are mutually exclusive"
+            )
+        if not has_agent_identity and (external_user_id is None) != (account_id is None):
+            raise EvaosLeaseError(
+                "managed MCP external_user_id and account_id must be configured together"
+            )
+        if external_user_id is not None:
+            if not isinstance(external_user_id, str) or re.fullmatch(
+                r"[A-Za-z0-9._:-]{1,180}", external_user_id
+            ) is None:
+                raise EvaosLeaseError("managed MCP external user id is invalid")
+            if not isinstance(account_id, str) or re.fullmatch(
+                r"apn_[A-Za-z0-9_-]+", account_id
+            ) is None:
+                raise EvaosLeaseError("managed MCP account id is invalid")
+        if has_agent_identity and (
+            not isinstance(customer_id, str)
+            or re.fullmatch(r"[A-Za-z0-9._:-]{1,180}", customer_id) is None
+            or not isinstance(agent_id, str)
+            or re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,63}", agent_id) is None
+            or (
+                account_id is not None
+                and (
+                    not isinstance(account_id, str)
+                    or re.fullmatch(r"apn_[A-Za-z0-9_-]+", account_id) is None
+                )
+            )
+        ):
+            raise EvaosLeaseError(
+                "managed MCP customer_id and agent_id must be valid together"
+            )
+
+        # A managed profile may edit its user config, including adding another
+        # MCP server.  Lease identity is therefore authoritative only when the
+        # exact server and identity tuple also exist in the root-owned managed
+        # overlay installed for this profile.  The overlay still permits
+        # harmless user options (for example tool filters), but an alternate
+        # server name or forged account/profile tuple fails before the broker
+        # credential is read.
+        from hermes_cli.managed_profile_scope import managed_profile_name
+
+        try:
+            managed_profile = managed_profile_name()
+        except Exception as exc:
+            raise EvaosLeaseError(
+                "managed MCP profile authority is unavailable"
+            ) from exc
+        if managed_profile is not None:
+            from hermes_cli import managed_scope
+
+            # Compare against the same expanded/normalized root overlay that
+            # load_config() applied to the effective server.  Reading the raw
+            # YAML here would reject supported ${VAR} authority values after
+            # the effective config had already expanded them.
+            managed_servers = managed_scope.apply_managed_overlay({}).get(
+                "mcp_servers"
+            )
+            authority = (
+                managed_servers.get(self.name)
+                if isinstance(managed_servers, dict)
+                else None
+            )
+            authority_fields = (
+                "auth",
+                "app_slug",
+                "external_user_id",
+                "account_id",
+                "customer_id",
+                "agent_id",
+            )
+            if (
+                not isinstance(authority, dict)
+                or authority.get("auth") != "evaos_lease"
+                or any(
+                    config.get(field) != authority.get(field)
+                    for field in authority_fields
+                )
+            ):
+                raise EvaosLeaseError(
+                    "managed MCP lease identity is not root-configured"
+                )
+
+    def _warn_evaos_lease_failure(self, exc: Exception) -> None:
+        if self._evaos_lease_warning_emitted:
+            return
+        self._evaos_lease_warning_emitted = True
+        logger.warning(
+            "MCP server '%s' profile '%s': managed Pipedream lease mint failed: %s",
+            self.name, os.path.basename(self.registration_home), exc,
+        )
 
     def _advertises_tools(self) -> bool:
         """Whether the server advertises the ``tools`` capability.
@@ -3595,8 +3724,37 @@ class MCPServerTask:
                 "Upgrade the mcp package to get HTTP support."
             )
 
-        url = config["url"]
-        headers = dict(config.get("headers") or {})
+        _lease_auth = None
+        if self._auth_type == "evaos_lease":
+            from tools.evaos_mcp_lease import (
+                EvaosLeaseHttpAuth,
+                EvaosLeaseManager,
+                EvaosLeaseSource,
+            )
+
+            if self._evaos_lease_manager is None:
+                source = EvaosLeaseSource(
+                    profile_key=self.registration_home,
+                    app_slug=config["app_slug"],
+                    external_user_id=config.get("external_user_id"),
+                    account_id=config.get("account_id"),
+                    customer_id=config.get("customer_id"),
+                    agent_id=config.get("agent_id"),
+                )
+                self._evaos_lease_manager = EvaosLeaseManager(
+                    source=source,
+                    on_mint_failure=self._warn_evaos_lease_failure,
+                )
+                self._evaos_lease_auth = EvaosLeaseHttpAuth(
+                    self._evaos_lease_manager
+                )
+            lease = await self._evaos_lease_manager.get_lease()
+            url = lease.mcp_url
+            headers = dict(lease.headers)
+            _lease_auth = self._evaos_lease_auth
+        else:
+            url = config["url"]
+            headers = dict(config.get("headers") or {})
         # Portable Agent Plugins v1 packages set strict_redirect_headers:
         # configured headers are visible package data and MUST NOT be
         # forwarded to a different origin through a redirect (spec §7.2.1).
@@ -3780,6 +3938,10 @@ class MCPServerTask:
                 client_kwargs["headers"] = headers
             if _oauth_auth is not None:
                 client_kwargs["auth"] = _oauth_auth
+            elif _lease_auth is not None:
+                client_kwargs["auth"] = _lease_auth
+                client_kwargs["follow_redirects"] = False
+                client_kwargs["trust_env"] = False
             if client_cert is not None:
                 client_kwargs["cert"] = client_cert
 
@@ -3821,6 +3983,11 @@ class MCPServerTask:
             return reason
         else:
             # Deprecated API (mcp < 1.24.0): manages httpx client internally.
+            if _lease_auth is not None:
+                raise ImportError(
+                    f"MCP server '{self.name}' requires mcp >= 1.24.0 to "
+                    "disable environment proxying for managed lease auth."
+                )
             if _strict_cfg_headers:
                 # Fail closed: without an owned httpx client we cannot hook
                 # redirects, so the v1 cross-origin header boundary cannot be
@@ -3837,6 +4004,8 @@ class MCPServerTask:
             }
             if _oauth_auth is not None:
                 _http_kwargs["auth"] = _oauth_auth
+            elif _lease_auth is not None:
+                _http_kwargs["auth"] = _lease_auth
             try:
                 async with streamablehttp_client(url, **_http_kwargs) as (
                     read_stream, write_stream, _get_session_id,
@@ -3964,6 +4133,14 @@ class MCPServerTask:
         else:
             self._elicitation = None
 
+        try:
+            self._validate_evaos_lease_config(config)
+        except Exception as exc:
+            logger.warning("MCP server '%s': %s", self.name, exc)
+            self._error = exc
+            self._ready.set()
+            return
+
         # Validate: warn if both url and command are present
         if "url" in config and "command" in config:
             logger.warning(
@@ -3978,7 +4155,7 @@ class MCPServerTask:
         # means a typo in config.yaml fails fast with a clear error — and
         # critically, no reconnect-backoff burn.  (Ported from
         # anomalyco/opencode#25019.)
-        if self._is_http():
+        if self._is_http() and self._auth_type != "evaos_lease":
             try:
                 _validate_remote_mcp_url(self.name, config.get("url"))
             except InvalidMcpUrlError as exc:
@@ -7371,7 +7548,7 @@ def _register_server_tools(name: str, server: MCPServerTask, config: dict) -> Li
             for mcp_tool in server._tools:
                 if not _should_register(mcp_tool.name):
                     continue
-                schema_obj = getattr(mcp_tool, "inputSchema", None)
+                schema_obj = mcp_field(mcp_tool, "input_schema", "inputSchema")
                 tools_payload.append({
                     "name": mcp_tool.name,
                     "description": mcp_tool.description or "",

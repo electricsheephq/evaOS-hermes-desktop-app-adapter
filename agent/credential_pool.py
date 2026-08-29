@@ -9,6 +9,7 @@ import threading
 import time
 import uuid
 import re
+from contextlib import contextmanager
 from dataclasses import dataclass, fields, replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -39,6 +40,7 @@ from hermes_cli.auth import (
     _save_provider_state,
     _store_provider_state,
     read_credential_pool,
+    read_credential_pool_with_source,
     write_credential_pool,
 )
 
@@ -669,18 +671,22 @@ def _write_through_provider_state_to_global_root(
     ``invalid_grant`` once its access token expires.
 
     Only updates ``providers.<provider_id>`` in the root store; never touches
-    the profile store (the caller already saved that). Swallows all errors — a
-    failed write-through degrades to the pre-existing behavior (root stale), it
-    must never break the profile's own successful save. Mirrors
-    ``hermes_cli.auth._write_through_xai_oauth_to_global_root`` (which covers
-    the non-pool xAI refresh path) for the credential-pool refresh path.
+    the profile store. Legacy root fallback keeps best-effort behavior. A
+    configured ``HERMES_SHARED_AUTH_FILE`` is managed release authority, so
+    path, read, parse, lock, and write failures propagate instead of leaving a
+    revoked root token available to sibling gateways.
     """
+    managed_shared = bool(os.getenv("HERMES_SHARED_AUTH_FILE", "").strip())
     try:
         global_path = auth_mod._global_auth_file_path()
     except Exception:
+        if managed_shared:
+            raise
         return
     if global_path is None:
         # Classic mode (profile == root); the profile save already hit root.
+        if managed_shared:
+            raise RuntimeError("configured shared auth writeback path is unavailable")
         return
     # Seat belt: under pytest, refuse to write the real user's
     # ~/.hermes/auth.json even when HERMES_HOME points at a profile path
@@ -701,8 +707,11 @@ def _write_through_provider_state_to_global_root(
             state,
             global_path,
             set_active=False,
+            fail_closed=managed_shared,
         )
-    except Exception as exc:  # pragma: no cover - best effort
+    except Exception as exc:
+        if managed_shared:
+            raise RuntimeError("managed shared auth writeback failed") from exc
         logger.debug(
             "%s pool refresh: write-through to global root failed: %s",
             provider_id,
@@ -710,10 +719,52 @@ def _write_through_provider_state_to_global_root(
         )
 
 
+def _persist_terminal_provider_quarantine(
+    auth_store: Dict[str, Any],
+    provider_id: str,
+    state: Dict[str, Any],
+    source_path: Optional[Path],
+) -> None:
+    """Persist terminal OAuth quarantine to the state source that was read."""
+    global_root = _global_auth_file_path()
+    if (
+        source_path is not None
+        and global_root is not None
+        and _same_path(source_path, global_root)
+    ):
+        # A profile resolved this provider from the sanctioned shared source.
+        # Quarantine there and do not create a profile-local shadow provider.
+        _write_through_provider_state_to_global_root(provider_id, state)
+        return
+    _save_provider_state(auth_store, provider_id, state)
+    _save_auth_store(auth_store)
+
+
 class CredentialPool:
-    def __init__(self, provider: str, entries: List[PooledCredential]):
+    def __init__(
+        self,
+        provider: str,
+        entries: List[PooledCredential],
+        *,
+        auth_source_path: Optional[Path] = None,
+        profile_shadow_path: Optional[Path] = None,
+    ):
         self.provider = provider
+        self._auth_source_path = auth_source_path
+        # A managed shared-auth fallback remains the write authority for
+        # status/rotation changes to rows already present there.  A newly
+        # supplied profile credential, however, must establish a local shadow
+        # rather than append personal auth material to the sibling-readable
+        # shared store.
+        self._profile_shadow_path = profile_shadow_path
         self._entries = sorted(entries, key=lambda entry: entry.priority)
+        self._shared_persistence_base: Optional[Dict[str, Dict[str, Any]]] = None
+        managed_shared_path = os.getenv("HERMES_SHARED_AUTH_FILE", "").strip()
+        if managed_shared_path and auth_source_path is not None:
+            if _same_path(auth_source_path, Path(managed_shared_path)):
+                self._shared_persistence_base = {
+                    entry.id: entry.to_dict() for entry in self._entries
+                }
         self._current_id: Optional[str] = None
         self._strategy = get_pool_strategy(provider)
         # RLock: the mutation primitives below (_replace_entry/_persist)
@@ -841,11 +892,47 @@ class CredentialPool:
         # Self-locking (RLock): snapshotting self._entries must not race a
         # concurrent rotation when called from the deferred refresh path.
         with self._lock:
+            serialized = [entry.to_dict() for entry in self._entries]
+            base_entries = (
+                list(self._shared_persistence_base.values())
+                if self._shared_persistence_base is not None
+                else None
+            )
             write_credential_pool(
                 self.provider,
-                [entry.to_dict() for entry in self._entries],
+                serialized,
                 removed_ids=removed_ids,
+                target_path=self._auth_source_path,
+                base_entries=base_entries,
             )
+            if self._shared_persistence_base is not None:
+                with _auth_store_lock(target_path=self._auth_source_path):
+                    persisted_store = _load_auth_store(
+                        self._auth_source_path,
+                        fail_closed=True,
+                    )
+                persisted_pool = persisted_store.get("credential_pool")
+                persisted_raw = (
+                    persisted_pool.get(self.provider)
+                    if isinstance(persisted_pool, dict)
+                    else None
+                )
+                persisted_entries = [
+                    PooledCredential.from_dict(self.provider, entry)
+                    for entry in (persisted_raw or [])
+                    if isinstance(entry, dict)
+                ]
+                self._entries = sorted(
+                    persisted_entries,
+                    key=lambda entry: entry.priority,
+                )
+                if self._current_id and not any(
+                    entry.id == self._current_id for entry in self._entries
+                ):
+                    self._current_id = None
+                self._shared_persistence_base = {
+                    entry.id: entry.to_dict() for entry in self._entries
+                }
 
     def _is_terminal_auth_failure(
         self,
@@ -1365,6 +1452,10 @@ class CredentialPool:
                     )
                     _save_auth_store(auth_store)
         except Exception as exc:
+            if os.getenv("HERMES_SHARED_AUTH_FILE", "").strip():
+                raise RuntimeError(
+                    f"managed shared auth sync failed for {self.provider}"
+                ) from exc
             logger.debug("Failed to sync %s pool entry back to auth store: %s", self.provider, exc)
 
     def _refresh_entry(self, entry: PooledCredential, *, force: bool) -> Optional[PooledCredential]:
@@ -1388,9 +1479,7 @@ class CredentialPool:
                 if self.provider == "openai-codex"
                 else self._sync_xai_oauth_entry_from_pool_store
             )
-            with _auth_store_lock(
-                timeout_seconds=self._single_use_refresh_lock_timeout()
-            ):
+            with self._single_use_refresh_store_lock():
                 synced = sync_entry(entry)
                 if self.provider == "openai-codex":
                     if synced is not entry:
@@ -1405,6 +1494,32 @@ class CredentialPool:
                     return synced
                 return self._refresh_entry_impl(synced, force=force)
         return self._refresh_entry_impl(entry, force=force)
+
+    @contextmanager
+    def _single_use_refresh_store_lock(self):
+        """Lock profile state before a distinct managed shared authority.
+
+        Refresh writeback already follows profile-local -> shared-root order.
+        Use the same order around the single-use token POST so two profile
+        processes cannot each hold one auth-store lock while waiting for the
+        other. When the pool is profile-owned, the one local lock is enough.
+        """
+        timeout_seconds = self._single_use_refresh_lock_timeout()
+        active_path = auth_mod._auth_file_path()
+        source_path = self._auth_source_path
+        if source_path is not None and not _same_path(source_path, active_path):
+            with _auth_store_lock(timeout_seconds=timeout_seconds):
+                with _auth_store_lock(
+                    timeout_seconds=timeout_seconds,
+                    target_path=source_path,
+                ):
+                    yield
+            return
+        with _auth_store_lock(
+            timeout_seconds=timeout_seconds,
+            target_path=source_path,
+        ):
+            yield
 
     def _single_use_refresh_lock_timeout(self) -> float:
         """Lock timeout for single-use-refresh-token providers.
@@ -1580,7 +1695,10 @@ class CredentialPool:
                     try:
                         with _auth_store_lock():
                             auth_store = _load_auth_store()
-                            state = _load_provider_state(auth_store, "xai-oauth") or {}
+                            state, source_path = _load_provider_state_with_source(
+                                auth_store, "xai-oauth"
+                            )
+                            state = state or {}
                             if isinstance(state, dict):
                                 tokens = state.get("tokens") or {}
                                 if isinstance(tokens, dict):
@@ -1598,9 +1716,17 @@ class CredentialPool:
                                             "relogin_required": True,
                                             "at": datetime.now(timezone.utc).isoformat(),
                                         }
-                                        _save_provider_state(auth_store, "xai-oauth", state)
-                                        _save_auth_store(auth_store)
+                                        _persist_terminal_provider_quarantine(
+                                            auth_store,
+                                            "xai-oauth",
+                                            state,
+                                            source_path,
+                                        )
                     except Exception as clear_exc:
+                        if os.getenv("HERMES_SHARED_AUTH_FILE", "").strip():
+                            raise RuntimeError(
+                                "managed shared xAI OAuth quarantine failed"
+                            ) from clear_exc
                         logger.debug(
                             "Failed to clear terminal xAI OAuth state: %s", clear_exc
                         )
@@ -1655,7 +1781,10 @@ class CredentialPool:
                     try:
                         with _auth_store_lock():
                             auth_store = _load_auth_store()
-                            state = _load_provider_state(auth_store, "openai-codex") or {}
+                            state, source_path = _load_provider_state_with_source(
+                                auth_store, "openai-codex"
+                            )
+                            state = state or {}
                             if isinstance(state, dict):
                                 tokens = state.get("tokens") or {}
                                 if isinstance(tokens, dict):
@@ -1673,9 +1802,17 @@ class CredentialPool:
                                             "relogin_required": True,
                                             "at": datetime.now(timezone.utc).isoformat(),
                                         }
-                                        _save_provider_state(auth_store, "openai-codex", state)
-                                        _save_auth_store(auth_store)
+                                        _persist_terminal_provider_quarantine(
+                                            auth_store,
+                                            "openai-codex",
+                                            state,
+                                            source_path,
+                                        )
                     except Exception as clear_exc:
+                        if os.getenv("HERMES_SHARED_AUTH_FILE", "").strip():
+                            raise RuntimeError(
+                                "managed shared Codex OAuth quarantine failed"
+                            ) from clear_exc
                         logger.debug(
                             "Failed to clear terminal Codex OAuth state: %s", clear_exc
                         )
@@ -2420,16 +2557,16 @@ class CredentialPool:
         with self._lock:
             if index < 1 or index > len(self._entries):
                 return None
+            if self._profile_shadow_path is not None:
+                raise PermissionError(
+                    "managed shared credentials cannot be removed from a profile"
+                )
             removed = self._entries.pop(index - 1)
             self._entries = [
                 replace(entry, priority=new_priority)
                 for new_priority, entry in enumerate(self._entries)
             ]
-            write_credential_pool(
-                self.provider,
-                [entry.to_dict() for entry in self._entries],
-                removed_ids=[removed.id],
-            )
+            self._persist(removed_ids=[removed.id])
             if self._current_id == removed.id:
                 self._current_id = None
             return removed
@@ -2462,6 +2599,41 @@ class CredentialPool:
 
     def add_entry(self, entry: PooledCredential) -> PooledCredential:
         with self._lock:
+            if self._profile_shadow_path is not None:
+                shadow_path = self._profile_shadow_path
+                entry = replace(entry, priority=0)
+                write_credential_pool(
+                    self.provider,
+                    [entry.to_dict()],
+                    target_path=shadow_path,
+                )
+                with _auth_store_lock(target_path=shadow_path):
+                    persisted_store = _load_auth_store(shadow_path)
+                persisted_pool = persisted_store.get("credential_pool")
+                persisted_raw = (
+                    persisted_pool.get(self.provider)
+                    if isinstance(persisted_pool, dict)
+                    else None
+                )
+                self._entries = sorted(
+                    [
+                        PooledCredential.from_dict(self.provider, payload)
+                        for payload in (persisted_raw or [])
+                        if isinstance(payload, dict)
+                    ],
+                    key=lambda item: item.priority,
+                )
+                self._auth_source_path = shadow_path
+                self._profile_shadow_path = None
+                self._shared_persistence_base = None
+                if self._current_id and not any(
+                    candidate.id == self._current_id for candidate in self._entries
+                ):
+                    self._current_id = None
+                return next(
+                    (candidate for candidate in self._entries if candidate.id == entry.id),
+                    entry,
+                )
             entry = replace(entry, priority=_next_priority(self._entries))
             self._entries.append(entry)
             self._persist()
@@ -2561,10 +2733,24 @@ def _normalize_pool_priorities(provider: str, entries: List[PooledCredential]) -
     return changed
 
 
-def _seed_from_singletons(provider: str, entries: List[PooledCredential]) -> Tuple[bool, Set[str]]:
+def _seed_from_singletons(
+    provider: str,
+    entries: List[PooledCredential],
+    *,
+    allow_global_provider_fallback: bool = True,
+) -> Tuple[bool, Set[str]]:
     changed = False
     active_sources: Set[str] = set()
     auth_store = _load_auth_store()
+
+    def _provider_state(provider_id: str) -> Optional[Dict[str, Any]]:
+        if allow_global_provider_fallback:
+            return _load_provider_state(auth_store, provider_id)
+        providers = auth_store.get("providers")
+        if not isinstance(providers, dict):
+            return None
+        state = providers.get(provider_id)
+        return dict(state) if isinstance(state, dict) else None
 
     # Shared suppression gate — used at every upsert site so
     # `hermes auth remove <provider> <N>` is stable across all source types.
@@ -2653,7 +2839,7 @@ def _seed_from_singletons(provider: str, entries: List[PooledCredential]) -> Tup
                 )
 
     elif provider == "nous":
-        state = _load_provider_state(auth_store, "nous")
+        state = _provider_state("nous")
         has_runtime_material = bool(
             isinstance(state, dict)
             and (
@@ -2828,8 +3014,7 @@ def _seed_from_singletons(provider: str, entries: List[PooledCredential]) -> Tup
         # always refreshes on expiry, so instead read raw state here to avoid
         # surprise network calls during provider discovery.
         try:
-            from hermes_cli.auth import get_provider_auth_state
-            state = get_provider_auth_state("minimax-oauth")
+            state = _provider_state("minimax-oauth")
             if state and state.get("access_token"):
                 source_name = "oauth"
                 if not _is_suppressed(provider, source_name):
@@ -2870,7 +3055,7 @@ def _seed_from_singletons(provider: str, entries: List[PooledCredential]) -> Tup
         if _is_suppressed(provider, "device_code"):
             return changed, active_sources
 
-        state = _load_provider_state(auth_store, "openai-codex")
+        state = _provider_state("openai-codex")
         tokens = state.get("tokens") if isinstance(state, dict) else None
         # Hermes owns its own Codex auth state — we do NOT auto-import from
         # ~/.codex/auth.json at pool-load time.  OAuth refresh tokens are
@@ -2902,7 +3087,7 @@ def _seed_from_singletons(provider: str, entries: List[PooledCredential]) -> Tup
         # (``providers["xai-oauth"]``).  Surface them in the pool too so
         # ``hermes auth list`` reflects the logged-in state and so the pool
         # is the single source of truth for refresh during runtime resolution.
-        state = _load_provider_state(auth_store, "xai-oauth")
+        state = _provider_state("xai-oauth")
         tokens = state.get("tokens") if isinstance(state, dict) else None
         if isinstance(tokens, dict) and tokens.get("access_token"):
             # Device code is the only supported xAI OAuth flow; the singleton is
@@ -3192,9 +3377,56 @@ def _seed_custom_pool(pool_key: str, entries: List[PooledCredential]) -> Tuple[b
     return changed, active_sources
 
 
+def _reconcile_profile_pool_sources(
+    provider: str,
+    entries: List[PooledCredential],
+    *,
+    allow_global_provider_fallback: bool = True,
+) -> bool:
+    """Merge only sources owned by the active profile into ``entries``."""
+    if provider.startswith(CUSTOM_POOL_PREFIX):
+        custom_changed, custom_sources = _seed_custom_pool(provider, entries)
+        changed = custom_changed
+        changed |= _prune_stale_seeded_entries(entries, custom_sources)
+        return changed
+
+    if allow_global_provider_fallback:
+        # Preserve the long-standing two-argument seam used by provider
+        # plugins and tests outside managed r30.
+        singleton_changed, singleton_sources = _seed_from_singletons(
+            provider,
+            entries,
+        )
+    else:
+        singleton_changed, singleton_sources = _seed_from_singletons(
+            provider,
+            entries,
+            allow_global_provider_fallback=False,
+        )
+    env_changed, env_sources = _seed_from_env(provider, entries)
+    changed = singleton_changed or env_changed
+    # ``load_pool()`` is a non-destructive read for env-seeded entries: a
+    # process missing a provider env var must not delete the persisted pool
+    # entry for every other process (#9331). File-backed singletons still
+    # prune when their backing file is gone.
+    changed |= _prune_stale_seeded_entries(
+        entries,
+        singleton_sources | env_sources,
+        prune_env_sources=False,
+    )
+    changed |= _normalize_pool_priorities(provider, entries)
+    return changed
+
+
 def load_pool(provider: str) -> CredentialPool:
     provider = (provider or "").strip().lower()
-    raw_entries = read_credential_pool(provider)
+    raw_entries, auth_source_path = read_credential_pool_with_source(provider)
+    active_path = auth_mod._auth_file_path()
+    managed_shared = bool(os.getenv("HERMES_SHARED_AUTH_FILE", "").strip())
+    managed_shared_fallback = bool(
+        managed_shared
+        and not _same_path(auth_source_path, active_path)
+    )
     disk_ids = {
         entry.get("id")
         for entry in raw_entries
@@ -3216,37 +3448,48 @@ def load_pool(provider: str) -> CredentialPool:
         for payload in raw_entries
     )
     if raw_needs_auth_normalization:
-        # A profile may be reading this provider from the global-root fallback.
-        # Keep that fallback read-only: only the store that owns these rows may
-        # rewrite them. Loading the default/root profile will heal global rows.
-        active_pool = _load_auth_store().get("credential_pool")
-        active_entries = active_pool.get(provider) if isinstance(active_pool, dict) else None
-        raw_needs_auth_normalization = bool(active_entries)
+        if not managed_shared_fallback:
+            # A legacy profile may be reading this provider from the global
+            # fallback. Keep that fallback read-only: only the owning store may
+            # rewrite it. Managed shared auth is explicit write authority.
+            active_pool = _load_auth_store().get("credential_pool")
+            active_entries = (
+                active_pool.get(provider) if isinstance(active_pool, dict) else None
+            )
+            raw_needs_auth_normalization = bool(active_entries)
 
-    if provider.startswith(CUSTOM_POOL_PREFIX):
-        # Custom endpoint pool — seed from custom_providers config and model config
-        custom_changed, custom_sources = _seed_custom_pool(provider, entries)
-        changed = raw_needs_sanitization or raw_needs_auth_normalization or custom_changed
-        changed |= _prune_stale_seeded_entries(entries, custom_sources)
-    else:
-        singleton_changed, singleton_sources = _seed_from_singletons(provider, entries)
-        env_changed, env_sources = _seed_from_env(provider, entries)
-        changed = (
-            raw_needs_sanitization
-            or raw_needs_auth_normalization
-            or singleton_changed
-            or env_changed
+    if managed_shared_fallback:
+        # The shared store owns only the rows already present there. Discover
+        # profile-local env, singleton, or custom-provider sources into a fresh
+        # list so they can never be merged back into the sibling-readable file.
+        profile_entries: List[PooledCredential] = []
+        profile_changed = _reconcile_profile_pool_sources(
+            provider,
+            profile_entries,
+            allow_global_provider_fallback=False,
         )
-        # ``load_pool()`` is a non-destructive read for env-seeded entries: a
-        # process missing a provider env var must not delete the persisted
-        # pool entry for every other process (#9331). File-backed singletons
-        # still prune when their backing file is gone.
-        changed |= _prune_stale_seeded_entries(
-            entries,
-            singleton_sources | env_sources,
-            prune_env_sources=False,
-        )
+        if profile_entries:
+            if profile_changed:
+                write_credential_pool(
+                    provider,
+                    [entry.to_dict() for entry in profile_entries],
+                    target_path=active_path,
+                )
+            return CredentialPool(
+                provider,
+                profile_entries,
+                auth_source_path=active_path,
+            )
+
+        changed = raw_needs_sanitization or raw_needs_auth_normalization
         changed |= _normalize_pool_priorities(provider, entries)
+    else:
+        changed = raw_needs_sanitization or raw_needs_auth_normalization
+        changed |= _reconcile_profile_pool_sources(
+            provider,
+            entries,
+            allow_global_provider_fallback=not managed_shared,
+        )
 
     if changed:
         new_ids = {entry.id for entry in entries}
@@ -3254,5 +3497,12 @@ def load_pool(provider: str) -> CredentialPool:
             provider,
             [entry.to_dict() for entry in sorted(entries, key=lambda item: item.priority)],
             removed_ids=disk_ids - new_ids,
+            target_path=auth_source_path,
+            base_entries=raw_entries if managed_shared_fallback else None,
         )
-    return CredentialPool(provider, entries)
+    return CredentialPool(
+        provider,
+        entries,
+        auth_source_path=auth_source_path,
+        profile_shadow_path=active_path if managed_shared_fallback else None,
+    )
