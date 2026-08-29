@@ -20,6 +20,7 @@ from __future__ import annotations
 import copy
 import logging
 import os
+import re
 import threading
 from pathlib import Path
 from typing import Dict, Optional
@@ -123,6 +124,37 @@ def load_managed_config() -> dict:
         lambda f: yaml.safe_load(f) or {},
     )
     return parsed if isinstance(parsed, dict) else {}
+
+
+def managed_config_env_keys() -> set[str]:
+    """Return environment names referenced by the root-managed config.
+
+    Profile dotenv loading uses this before it mutates ``os.environ`` so a
+    writable profile cannot redefine a placeholder that supplies managed MCP
+    identity or another administrator-owned config leaf.
+    """
+
+    keys: set[str] = set()
+
+    def visit(value) -> None:
+        if isinstance(value, str):
+            for match in re.finditer(r"\${([^}]+)}", value):
+                ref = match.group(1).strip()
+                if ref.startswith("env:"):
+                    ref = ref[len("env:"):].strip()
+                elif ":" in ref and re.match(r"^[a-z][a-z0-9_-]*:", ref):
+                    continue
+                if ref:
+                    keys.add(ref)
+        elif isinstance(value, dict):
+            for child in value.values():
+                visit(child)
+        elif isinstance(value, list):
+            for child in value:
+                visit(child)
+
+    visit(load_managed_config())
+    return keys
 
 
 def load_managed_env() -> Dict[str, str]:

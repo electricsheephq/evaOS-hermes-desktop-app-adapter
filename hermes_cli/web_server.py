@@ -3429,8 +3429,14 @@ def _collect_profile_gateway_topology() -> Dict[str, Any]:
     """
     try:
         from hermes_cli.profiles import _check_gateway_running, profiles_to_serve
+        from hermes_cli.managed_profile_scope import managed_profile_name
         from gateway.status import read_runtime_status
-        homes = profiles_to_serve(True)
+        owner = managed_profile_name()
+        homes = (
+            [(owner, get_hermes_home())]
+            if owner is not None
+            else profiles_to_serve(True)
+        )
     except Exception:
         _log.debug("profile/gateway topology enumeration failed", exc_info=True)
         return {
@@ -12963,6 +12969,17 @@ def _cron_profile_dicts() -> List[Dict[str, Any]]:
     GIL pressure on large profile pools.
     """
     from hermes_cli import profiles as profiles_mod
+    from hermes_cli.managed_profile_scope import managed_profile_name
+
+    owner = managed_profile_name()
+    if owner is not None:
+        return [
+            {
+                "name": owner,
+                "path": str(get_hermes_home()),
+                "is_default": False,
+            }
+        ]
     try:
         return [
             {

@@ -3941,6 +3941,7 @@ class MCPServerTask:
             elif _lease_auth is not None:
                 client_kwargs["auth"] = _lease_auth
                 client_kwargs["follow_redirects"] = False
+                client_kwargs["trust_env"] = False
             if client_cert is not None:
                 client_kwargs["cert"] = client_cert
 
@@ -3982,6 +3983,11 @@ class MCPServerTask:
             return reason
         else:
             # Deprecated API (mcp < 1.24.0): manages httpx client internally.
+            if _lease_auth is not None:
+                raise ImportError(
+                    f"MCP server '{self.name}' requires mcp >= 1.24.0 to "
+                    "disable environment proxying for managed lease auth."
+                )
             if _strict_cfg_headers:
                 # Fail closed: without an owned httpx client we cannot hook
                 # redirects, so the v1 cross-origin header boundary cannot be

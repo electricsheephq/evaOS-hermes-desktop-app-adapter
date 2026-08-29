@@ -99,6 +99,32 @@ def test_profile_dotenv_cannot_create_managed_runtime_lease_authority(
     assert "CREDENTIALS_DIRECTORY" not in os.environ
 
 
+def test_profile_dotenv_cannot_override_managed_config_placeholder(
+    tmp_path, monkeypatch
+):
+    import hermes_cli.env_loader as env_loader
+    from hermes_cli import managed_scope
+
+    home = tmp_path / "profile"
+    home.mkdir()
+    (home / ".env").write_text(
+        "EVAOS_TEST_AGENT_ID=sibling\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("EVAOS_TEST_AGENT_ID", "main")
+    monkeypatch.setattr(
+        managed_scope,
+        "managed_config_env_keys",
+        lambda: {"EVAOS_TEST_AGENT_ID"},
+    )
+    monkeypatch.setattr(env_loader, "_apply_external_secret_sources", lambda _path: None)
+    monkeypatch.setattr(env_loader, "_apply_managed_env", lambda: None)
+
+    load_hermes_dotenv(hermes_home=home)
+
+    assert os.environ["EVAOS_TEST_AGENT_ID"] == "main"
+
+
 def test_utf8_bom_does_not_mangle_first_key(tmp_path, monkeypatch):
     """A leading UTF-8 BOM must not prefix the first key name in os.environ.
 

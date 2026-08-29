@@ -2514,6 +2514,10 @@ class CredentialPool:
         with self._lock:
             if index < 1 or index > len(self._entries):
                 return None
+            if self._profile_shadow_path is not None:
+                raise PermissionError(
+                    "managed shared credentials cannot be removed from a profile"
+                )
             removed = self._entries.pop(index - 1)
             self._entries = [
                 replace(entry, priority=new_priority)

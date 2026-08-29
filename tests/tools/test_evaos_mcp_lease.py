@@ -618,6 +618,7 @@ async def test_managed_config_mounts_through_r5_lease(
             url=url,
             headers=http_client.headers,
             auth=http_client.auth,
+            trust_env=http_client._trust_env,
         )
         return CaptureTransport()
 
@@ -661,6 +662,7 @@ async def test_managed_config_mounts_through_r5_lease(
         datetime.now(timezone.utc) + timedelta(minutes=10)
     )["headers"]
     assert isinstance(mounted["auth"], EvaosLeaseHttpAuth)
+    assert mounted["trust_env"] is False
 
 
 def test_identity_keyed_managed_config_remains_tolerated():

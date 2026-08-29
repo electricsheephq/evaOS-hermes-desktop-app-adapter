@@ -464,7 +464,7 @@ def test_managed_shared_pool_preserves_concurrent_process_updates(
         assert shared.stat().st_gid == shared.with_suffix(".lock").stat().st_gid
 
 
-def test_managed_shared_pool_does_not_resurrect_concurrent_removal(
+def test_managed_profile_cannot_remove_shared_pool_or_resurrect_root_removal(
     profile_env, monkeypatch
 ):
     from agent.credential_pool import load_pool
@@ -482,10 +482,17 @@ def test_managed_shared_pool_does_not_resurrect_concurrent_removal(
 
     removing_pool = load_pool("openrouter")
     stale_pool = load_pool("openrouter")
-    removed = removing_pool.remove_index(1)
-    assert removed is not None and removed.id == "shared-a"
+    with pytest.raises(
+        PermissionError,
+        match="managed shared credentials cannot be removed from a profile",
+    ):
+        removing_pool.remove_index(1)
+    assert {
+        entry["id"]
+        for entry in json.loads(shared.read_text())["credential_pool"]["openrouter"]
+    } == {"shared-a", "shared-b"}
 
-    # A separate process rotates B after both pools loaded.  The stale status
+    # A root-owned action removes A and rotates B after both pools loaded. The stale status
     # update must preserve this token and must not recreate removed A.
     write_credential_pool(
         "openrouter",

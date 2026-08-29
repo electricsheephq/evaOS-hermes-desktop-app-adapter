@@ -506,8 +506,12 @@ def load_hermes_dotenv(
       dependencies into the process that replaces that same environment.
     """
     loaded: list[Path] = []
+    from hermes_cli import managed_scope
+
+    managed_runtime_authority_keys = set(_MANAGED_RUNTIME_AUTHORITY_KEYS)
+    managed_runtime_authority_keys.update(managed_scope.managed_config_env_keys())
     managed_runtime_authority = {
-        key: os.environ.get(key) for key in _MANAGED_RUNTIME_AUTHORITY_KEYS
+        key: os.environ.get(key) for key in managed_runtime_authority_keys
     }
 
     home_path = Path(hermes_home or os.getenv("HERMES_HOME", Path.home() / ".hermes"))
