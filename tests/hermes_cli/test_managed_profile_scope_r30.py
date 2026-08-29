@@ -73,12 +73,29 @@ def test_flat_managed_profile_scope_resolves_its_own_home_and_denies_siblings(
     assert managed_profile_name() == "main"
     assert profiles.get_active_profile_name() == "main"
     assert profiles.get_profile_dir("main") == profile_home
+    assert profiles.get_profile_dir("default") == profile_home
     assert profiles.profile_matches_home("main") is True
-    assert profiles.profile_matches_home("default") is False
     assert profiles.profile_matches_home("sibling") is False
     assert require_managed_profile(None) == "main"
     with pytest.raises(ManagedProfileScopeError, match="not authorized"):
         require_managed_profile("sibling")
+    with pytest.raises(ManagedProfileScopeError, match="not authorized"):
+        require_managed_profile("default")
+
+
+def test_flat_managed_profile_resolves_and_lists_only_current_identity(
+    flat_managed_profile_env,
+):
+    from hermes_cli import profiles
+
+    _root, profile_home = flat_managed_profile_env
+    assert profiles.resolve_profile_env("main") == str(profile_home)
+    assert profiles.list_profile_names() == ["main"]
+
+    listed = profiles.list_profiles()
+    assert [item.name for item in listed] == ["main"]
+    assert [item.path for item in listed] == [profile_home]
+    assert listed[0].is_default is False
 
 
 def test_flat_managed_profile_requires_matching_service_user(

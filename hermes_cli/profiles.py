@@ -440,7 +440,7 @@ def get_profile_dir(name: str) -> Path:
     flat = _flat_managed_profile()
     if canon == "default":
         if flat is not None:
-            return flat[2]
+            return flat[1]
         return _get_default_hermes_home()
     if flat is not None:
         if canon == flat[0]:
@@ -496,6 +496,10 @@ def list_profile_names() -> List[str]:
     it is a directory scan, safe to call from hot paths (cron delivery-target
     listings, create-time validation).
     """
+    flat = _flat_managed_profile()
+    if flat is not None:
+        return [flat[0]]
+
     names = ["default"]
     profiles_root = _get_profiles_root()
     try:
@@ -1090,6 +1094,10 @@ def get_profile_info(name: str) -> ProfileInfo:
 
 def list_profiles() -> List[ProfileInfo]:
     """Return info for all profiles, including the default."""
+    flat = _flat_managed_profile()
+    if flat is not None:
+        return [get_profile_info(flat[0])]
+
     profiles = []
     wrapper_dir = _get_wrapper_dir()
 
@@ -2629,6 +2637,10 @@ def resolve_profile_env(profile_name: str) -> str:
     """
     canon = normalize_profile_name(profile_name)
     validate_profile_name(canon)
+    flat = _flat_managed_profile()
+    if flat is not None and canon == flat[0]:
+        return str(flat[1])
+
     env_home = os.environ.get("HERMES_HOME", "").strip()
     if env_home:
         env_path = Path(env_home)
