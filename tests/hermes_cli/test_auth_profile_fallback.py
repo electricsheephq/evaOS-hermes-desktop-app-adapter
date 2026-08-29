@@ -473,6 +473,39 @@ def test_managed_shared_pool_does_not_resurrect_concurrent_removal(
     assert [entry.id for entry in stale_pool.entries()] == ["shared-b"]
 
 
+def test_managed_shared_pool_sanitizes_disk_only_borrowed_secrets(
+    profile_env, monkeypatch
+):
+    from hermes_cli.auth import write_credential_pool
+
+    shared = profile_env["global"] / "shared-auth" / "auth.json"
+    shared.parent.mkdir()
+    raw_disk_entry = _pool_entry(
+        id="shared-a",
+        source="bitwarden",
+        access_token="borrowed-token",
+        client_secret="borrowed-client-secret",
+    )
+    _write(shared, _make_auth_store(pool={"openrouter": [raw_disk_entry]}))
+    _write(profile_env["profile"] / "auth.json", _make_auth_store(pool={}))
+    monkeypatch.setenv("HERMES_SHARED_AUTH_FILE", str(shared))
+
+    base_entry = dict(raw_disk_entry)
+    updated_entry = {**raw_disk_entry, "last_status": "exhausted"}
+    write_credential_pool(
+        "openrouter",
+        [updated_entry],
+        base_entries=[base_entry],
+        target_path=shared,
+    )
+
+    persisted = json.loads(shared.read_text())["credential_pool"]["openrouter"][0]
+    assert persisted["last_status"] == "exhausted"
+    assert "access_token" not in persisted
+    assert "client_secret" not in persisted
+    assert persisted["secret_fingerprint"].startswith("sha256:")
+
+
 def test_managed_shared_auth_corruption_fails_closed(profile_env, monkeypatch):
     from hermes_cli.auth import read_credential_pool
 

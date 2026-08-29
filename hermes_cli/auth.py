@@ -2230,7 +2230,9 @@ def write_credential_pool(
                     candidate = _merge_disk_cooldown_state(
                         candidate, disk_entry, provider_id
                     )
-                merged.append(candidate)
+                merged.append(
+                    sanitize_borrowed_credential_payload(candidate, provider_id)
+                )
         for disk_entry in existing_list:
             if not isinstance(disk_entry, dict):
                 continue

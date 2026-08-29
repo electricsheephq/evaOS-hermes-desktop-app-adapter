@@ -31,6 +31,56 @@ def test_recovered_update_retry_skips_external_secret_sources(tmp_path, monkeypa
     assert external_calls == []
 
 
+def test_profile_dotenv_cannot_override_managed_runtime_lease_authority(
+    tmp_path, monkeypatch
+):
+    import hermes_cli.env_loader as env_loader
+
+    home = tmp_path / "profile"
+    home.mkdir()
+    (home / ".env").write_text(
+        "EVAOS_DESKTOP_RUNTIME_SESSION_URL=https://profile.invalid/session\n"
+        "PIPEDREAM_AGENT_BROKER_SECRET_FILE=/profile/secret\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv(
+        "EVAOS_DESKTOP_RUNTIME_SESSION_URL", "https://runtime.invalid/session"
+    )
+    monkeypatch.setenv("PIPEDREAM_AGENT_BROKER_SECRET_FILE", "/runtime/secret")
+    monkeypatch.setattr(env_loader, "_apply_external_secret_sources", lambda _path: None)
+    monkeypatch.setattr(env_loader, "_apply_managed_env", lambda: None)
+
+    load_hermes_dotenv(hermes_home=home)
+
+    assert os.environ["EVAOS_DESKTOP_RUNTIME_SESSION_URL"] == (
+        "https://runtime.invalid/session"
+    )
+    assert os.environ["PIPEDREAM_AGENT_BROKER_SECRET_FILE"] == "/runtime/secret"
+
+
+def test_profile_dotenv_cannot_create_managed_runtime_lease_authority(
+    tmp_path, monkeypatch
+):
+    import hermes_cli.env_loader as env_loader
+
+    home = tmp_path / "profile"
+    home.mkdir()
+    (home / ".env").write_text(
+        "EVAOS_DESKTOP_RUNTIME_SESSION_URL=https://profile.invalid/session\n"
+        "PIPEDREAM_AGENT_BROKER_SECRET_FILE=/profile/secret\n",
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("EVAOS_DESKTOP_RUNTIME_SESSION_URL", raising=False)
+    monkeypatch.delenv("PIPEDREAM_AGENT_BROKER_SECRET_FILE", raising=False)
+    monkeypatch.setattr(env_loader, "_apply_external_secret_sources", lambda _path: None)
+    monkeypatch.setattr(env_loader, "_apply_managed_env", lambda: None)
+
+    load_hermes_dotenv(hermes_home=home)
+
+    assert "EVAOS_DESKTOP_RUNTIME_SESSION_URL" not in os.environ
+    assert "PIPEDREAM_AGENT_BROKER_SECRET_FILE" not in os.environ
+
+
 def test_utf8_bom_does_not_mangle_first_key(tmp_path, monkeypatch):
     """A leading UTF-8 BOM must not prefix the first key name in os.environ.
 

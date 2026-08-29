@@ -451,6 +451,7 @@ describe('useVirtualHistory offset cache reuse', () => {
       scroll.scrollTo(0)
       await delay(20)
       scroll.scrollTo(5)
+      await vi.waitFor(() => expect(expose.current!.virtualHistory.start).toBeGreaterThan(0), { timeout: 2_000 })
       const adjustScrollTop = vi.spyOn(scroll, 'adjustScrollTop')
 
       instance.rerender(React.createElement(Harness, { columns: 80, expose, initialHeights, items }))
