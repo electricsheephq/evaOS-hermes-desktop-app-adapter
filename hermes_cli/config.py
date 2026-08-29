@@ -4363,12 +4363,12 @@ def save_env_value(key: str, value: str):
     if managed_scope.is_env_managed(key):
         managed_dir = managed_scope.get_managed_dir()
         src = (managed_dir / ".env") if managed_dir else "the managed scope"
-        print(
+        message = (
             f"Cannot set {key}: it is managed by your administrator ({src}) "
-            f"and cannot be changed.",
-            file=sys.stderr,
+            "and cannot be changed."
         )
-        return
+        print(message, file=sys.stderr)
+        raise PermissionError(message)
     value = value.replace("\n", "").replace("\r", "")
     # API keys / tokens must be ASCII — strip non-ASCII with a warning.
     value = _check_non_ascii_credential(key, value)

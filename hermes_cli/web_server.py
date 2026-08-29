@@ -8346,6 +8346,8 @@ async def set_env_var(body: EnvVarUpdate, profile: Optional[str] = None):
 
     try:
         return await asyncio.to_thread(_run)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     except ValueError as exc:
         # save_env_value raises ValueError for invalid names and for keys
         # on the denylist (LD_PRELOAD, PATH, PYTHONPATH, …). Surface the

@@ -62,7 +62,8 @@ def env_homes(tmp_path, monkeypatch):
 def test_save_env_value_managed_key_rejected(env_homes, capsys):
     from hermes_cli.config import save_env_value, get_env_path
 
-    save_env_value("OPENAI_API_BASE", "https://user.example/v1")
+    with pytest.raises(PermissionError, match="managed by your administrator"):
+        save_env_value("OPENAI_API_BASE", "https://user.example/v1")
     assert "managed" in capsys.readouterr().err.lower()
     env_path = get_env_path()
     body = env_path.read_text() if env_path.exists() else ""
@@ -72,14 +73,21 @@ def test_save_env_value_managed_key_rejected(env_homes, capsys):
 def test_save_env_value_managed_config_placeholder_rejected(env_homes, capsys):
     from hermes_cli.config import get_env_path, save_env_value
 
-    save_env_value("MANAGED_LEASE_ID", "profile-forged")
+    with pytest.raises(PermissionError, match="managed by your administrator"):
+        save_env_value("MANAGED_LEASE_ID", "profile-forged")
     assert "managed" in capsys.readouterr().err.lower()
     env_path = get_env_path()
     body = env_path.read_text() if env_path.exists() else ""
     assert "MANAGED_LEASE_ID" not in body
 
 
+def test_provider_credential_save_propagates_managed_placeholder_refusal(env_homes):
+    from hermes_cli.credential_lifecycle import save_provider_env_credential
+
+    with pytest.raises(PermissionError, match="managed by your administrator"):
+        save_provider_env_credential("MANAGED_LEASE_ID", "profile-forged")
+
+
 
 
 # ── bulk save strips managed leaves ──────────────────────────────────────────
-
