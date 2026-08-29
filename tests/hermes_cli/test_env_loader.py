@@ -40,13 +40,19 @@ def test_profile_dotenv_cannot_override_managed_runtime_lease_authority(
     home.mkdir()
     (home / ".env").write_text(
         "EVAOS_DESKTOP_RUNTIME_SESSION_URL=https://profile.invalid/session\n"
-        "PIPEDREAM_AGENT_BROKER_SECRET_FILE=/profile/secret\n",
+        "PIPEDREAM_AGENT_BROKER_SECRET_FILE=/profile/secret\n"
+        "HERMES_MANAGED_DIR=/profile/managed\n"
+        "HERMES_SHARED_AUTH_FILE=/profile/shared-auth.json\n"
+        "CREDENTIALS_DIRECTORY=/profile/credentials\n",
         encoding="utf-8",
     )
     monkeypatch.setenv(
         "EVAOS_DESKTOP_RUNTIME_SESSION_URL", "https://runtime.invalid/session"
     )
     monkeypatch.setenv("PIPEDREAM_AGENT_BROKER_SECRET_FILE", "/runtime/secret")
+    monkeypatch.setenv("HERMES_MANAGED_DIR", "/runtime/managed")
+    monkeypatch.setenv("HERMES_SHARED_AUTH_FILE", "/runtime/shared-auth.json")
+    monkeypatch.setenv("CREDENTIALS_DIRECTORY", "/runtime/credentials")
     monkeypatch.setattr(env_loader, "_apply_external_secret_sources", lambda _path: None)
     monkeypatch.setattr(env_loader, "_apply_managed_env", lambda: None)
 
@@ -56,6 +62,9 @@ def test_profile_dotenv_cannot_override_managed_runtime_lease_authority(
         "https://runtime.invalid/session"
     )
     assert os.environ["PIPEDREAM_AGENT_BROKER_SECRET_FILE"] == "/runtime/secret"
+    assert os.environ["HERMES_MANAGED_DIR"] == "/runtime/managed"
+    assert os.environ["HERMES_SHARED_AUTH_FILE"] == "/runtime/shared-auth.json"
+    assert os.environ["CREDENTIALS_DIRECTORY"] == "/runtime/credentials"
 
 
 def test_profile_dotenv_cannot_create_managed_runtime_lease_authority(
@@ -67,11 +76,17 @@ def test_profile_dotenv_cannot_create_managed_runtime_lease_authority(
     home.mkdir()
     (home / ".env").write_text(
         "EVAOS_DESKTOP_RUNTIME_SESSION_URL=https://profile.invalid/session\n"
-        "PIPEDREAM_AGENT_BROKER_SECRET_FILE=/profile/secret\n",
+        "PIPEDREAM_AGENT_BROKER_SECRET_FILE=/profile/secret\n"
+        "HERMES_MANAGED_DIR=/profile/managed\n"
+        "HERMES_SHARED_AUTH_FILE=/profile/shared-auth.json\n"
+        "CREDENTIALS_DIRECTORY=/profile/credentials\n",
         encoding="utf-8",
     )
     monkeypatch.delenv("EVAOS_DESKTOP_RUNTIME_SESSION_URL", raising=False)
     monkeypatch.delenv("PIPEDREAM_AGENT_BROKER_SECRET_FILE", raising=False)
+    monkeypatch.delenv("HERMES_MANAGED_DIR", raising=False)
+    monkeypatch.delenv("HERMES_SHARED_AUTH_FILE", raising=False)
+    monkeypatch.delenv("CREDENTIALS_DIRECTORY", raising=False)
     monkeypatch.setattr(env_loader, "_apply_external_secret_sources", lambda _path: None)
     monkeypatch.setattr(env_loader, "_apply_managed_env", lambda: None)
 
@@ -79,6 +94,9 @@ def test_profile_dotenv_cannot_create_managed_runtime_lease_authority(
 
     assert "EVAOS_DESKTOP_RUNTIME_SESSION_URL" not in os.environ
     assert "PIPEDREAM_AGENT_BROKER_SECRET_FILE" not in os.environ
+    assert "HERMES_MANAGED_DIR" not in os.environ
+    assert "HERMES_SHARED_AUTH_FILE" not in os.environ
+    assert "CREDENTIALS_DIRECTORY" not in os.environ
 
 
 def test_utf8_bom_does_not_mangle_first_key(tmp_path, monkeypatch):

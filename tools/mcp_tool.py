@@ -2594,7 +2594,13 @@ class MCPServerTask:
         if managed_profile is not None:
             from hermes_cli import managed_scope
 
-            managed_servers = managed_scope.load_managed_config().get("mcp_servers")
+            # Compare against the same expanded/normalized root overlay that
+            # load_config() applied to the effective server.  Reading the raw
+            # YAML here would reject supported ${VAR} authority values after
+            # the effective config had already expanded them.
+            managed_servers = managed_scope.apply_managed_overlay({}).get(
+                "mcp_servers"
+            )
             authority = (
                 managed_servers.get(self.name)
                 if isinstance(managed_servers, dict)

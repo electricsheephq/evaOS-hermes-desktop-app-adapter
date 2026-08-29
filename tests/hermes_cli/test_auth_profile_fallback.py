@@ -250,6 +250,38 @@ def test_managed_shared_pool_persists_status_to_shared_source(
     assert not profile_data.get("credential_pool", {}).get("openrouter")
 
 
+def test_managed_shared_pool_adds_manual_credential_to_profile_shadow(
+    profile_env, monkeypatch
+):
+    from agent.credential_pool import PooledCredential, load_pool
+
+    shared = profile_env["global"] / "shared-auth" / "auth.json"
+    shared.parent.mkdir()
+    _write(shared, _make_auth_store(pool={
+        "openrouter": [_pool_entry(id="shared-1", access_token="shared-synthetic")],
+    }))
+    profile_auth = profile_env["profile"] / "auth.json"
+    _write(profile_auth, _make_auth_store(pool={}))
+    monkeypatch.setenv("HERMES_SHARED_AUTH_FILE", str(shared))
+    shared_before = shared.read_bytes()
+
+    pool = load_pool("openrouter")
+    added = pool.add_entry(
+        PooledCredential.from_dict(
+            "openrouter",
+            _pool_entry(id="profile-manual", access_token="profile-synthetic"),
+        )
+    )
+
+    assert added.id == "profile-manual"
+    assert shared.read_bytes() == shared_before
+    profile_data = json.loads(profile_auth.read_text())
+    assert [entry["id"] for entry in profile_data["credential_pool"]["openrouter"]] == [
+        "profile-manual"
+    ]
+    assert [entry.id for entry in pool.entries()] == ["profile-manual"]
+
+
 def test_managed_profile_source_creates_local_shadow_without_mutating_shared(
     profile_env, monkeypatch
 ):

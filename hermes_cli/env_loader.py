@@ -82,10 +82,14 @@ _PROFILE_MANAGED_ENV_KEYS: frozenset[str] = frozenset({
     "COPILOT_ACP_BASE_URL",
 })
 
-# Package-owned lease authority is injected by the service or the root-owned
-# managed environment.  A profile-writable dotenv must never replace either
-# the broker destination or the file that contains its root-managed secret.
+# Package-owned runtime authority is injected by the service or the root-owned
+# managed environment.  A profile-writable dotenv must never replace the
+# managed overlay, shared-auth source, systemd credential directory, broker
+# destination, or broker-secret path.
 _MANAGED_RUNTIME_AUTHORITY_KEYS: frozenset[str] = frozenset({
+    "HERMES_MANAGED_DIR",
+    "HERMES_SHARED_AUTH_FILE",
+    "CREDENTIALS_DIRECTORY",
     "EVAOS_DESKTOP_RUNTIME_SESSION_URL",
     "PIPEDREAM_AGENT_BROKER_SECRET_FILE",
 })

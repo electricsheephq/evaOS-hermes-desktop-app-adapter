@@ -223,7 +223,7 @@ _ENV_VAR_NAME_DENYLIST: frozenset[str] = frozenset({
     # HERMES_LANGFUSE_*, HERMES_SPOTIFY_*, ...) ARE allowed.
     "HERMES_HOME", "HERMES_PROFILE", "HERMES_CONFIG", "HERMES_ENV",
     "HERMES_CONFIG_PATH", "HERMES_ENV_PATH", "HERMES_MANAGED_DIR",
-    "HERMES_SHARED_AUTH_FILE",
+    "HERMES_SHARED_AUTH_FILE", "CREDENTIALS_DIRECTORY",
     # MCP catalog trust root. Package-manager wrappers may still provide this
     # in the process environment; only generic persistence writes are blocked.
     "HERMES_OPTIONAL_MCPS",

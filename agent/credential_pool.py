@@ -726,9 +726,16 @@ class CredentialPool:
         entries: List[PooledCredential],
         *,
         auth_source_path: Optional[Path] = None,
+        profile_shadow_path: Optional[Path] = None,
     ):
         self.provider = provider
         self._auth_source_path = auth_source_path
+        # A managed shared-auth fallback remains the write authority for
+        # status/rotation changes to rows already present there.  A newly
+        # supplied profile credential, however, must establish a local shadow
+        # rather than append personal auth material to the sibling-readable
+        # shared store.
+        self._profile_shadow_path = profile_shadow_path
         self._entries = sorted(entries, key=lambda entry: entry.priority)
         self._shared_persistence_base: Optional[Dict[str, Dict[str, Any]]] = None
         managed_shared_path = os.getenv("HERMES_SHARED_AUTH_FILE", "").strip()
@@ -2545,6 +2552,41 @@ class CredentialPool:
 
     def add_entry(self, entry: PooledCredential) -> PooledCredential:
         with self._lock:
+            if self._profile_shadow_path is not None:
+                shadow_path = self._profile_shadow_path
+                entry = replace(entry, priority=0)
+                write_credential_pool(
+                    self.provider,
+                    [entry.to_dict()],
+                    target_path=shadow_path,
+                )
+                with _auth_store_lock(target_path=shadow_path):
+                    persisted_store = _load_auth_store(shadow_path)
+                persisted_pool = persisted_store.get("credential_pool")
+                persisted_raw = (
+                    persisted_pool.get(self.provider)
+                    if isinstance(persisted_pool, dict)
+                    else None
+                )
+                self._entries = sorted(
+                    [
+                        PooledCredential.from_dict(self.provider, payload)
+                        for payload in (persisted_raw or [])
+                        if isinstance(payload, dict)
+                    ],
+                    key=lambda item: item.priority,
+                )
+                self._auth_source_path = shadow_path
+                self._profile_shadow_path = None
+                self._shared_persistence_base = None
+                if self._current_id and not any(
+                    candidate.id == self._current_id for candidate in self._entries
+                ):
+                    self._current_id = None
+                return next(
+                    (candidate for candidate in self._entries if candidate.id == entry.id),
+                    entry,
+                )
             entry = replace(entry, priority=_next_priority(self._entries))
             self._entries.append(entry)
             self._persist()
@@ -3415,4 +3457,5 @@ def load_pool(provider: str) -> CredentialPool:
         provider,
         entries,
         auth_source_path=auth_source_path,
+        profile_shadow_path=active_path if managed_shared_fallback else None,
     )

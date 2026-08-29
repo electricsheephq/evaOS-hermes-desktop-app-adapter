@@ -1222,6 +1222,7 @@ class TestEnvWriteDenylist:
             "HERMES_SESSION_PLATFORM",
             "HERMES_MANAGED_DIR",
             "HERMES_SHARED_AUTH_FILE",
+            "CREDENTIALS_DIRECTORY",
             "EVAOS_DESKTOP_RUNTIME_SESSION_URL",
             "PIPEDREAM_AGENT_BROKER_SECRET_FILE",
         ],
@@ -1235,7 +1236,7 @@ class TestEnvWriteDenylist:
 
     @pytest.mark.parametrize(
         "protected_key",
-        ["HERMES_MANAGED_DIR", "HERMES_SHARED_AUTH_FILE"],
+        ["HERMES_MANAGED_DIR", "HERMES_SHARED_AUTH_FILE", "CREDENTIALS_DIRECTORY"],
     )
     def test_managed_authority_keys_are_not_removable(
         self, protected_key, tmp_path, monkeypatch

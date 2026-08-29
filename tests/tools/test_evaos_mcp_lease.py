@@ -1069,6 +1069,35 @@ def test_managed_runtime_binds_lease_identity_to_root_overlay(monkeypatch):
         alternate._validate_evaos_lease_config(authority)
 
 
+def test_managed_runtime_expands_root_overlay_lease_identity(monkeypatch):
+    from hermes_cli import managed_profile_scope, managed_scope
+
+    monkeypatch.setenv("EVAOS_TEST_APP_SLUG", "google_sheets")
+    monkeypatch.setenv("EVAOS_TEST_AGENT_ID", DIRECT_AGENT_ID)
+    raw_authority = {
+        "auth": "evaos_lease",
+        "app_slug": "${EVAOS_TEST_APP_SLUG}",
+        "customer_id": DIRECT_CUSTOMER_ID,
+        "agent_id": "${EVAOS_TEST_AGENT_ID}",
+        "account_id": DIRECT_ACCOUNT_ID,
+    }
+    effective_authority = {
+        **raw_authority,
+        "app_slug": "google_sheets",
+        "agent_id": DIRECT_AGENT_ID,
+    }
+    monkeypatch.setattr(managed_profile_scope, "managed_profile_name", lambda: "main")
+    monkeypatch.setattr(
+        managed_scope,
+        "load_managed_config",
+        lambda: {"mcp_servers": {"pipedream-google-sheets": raw_authority}},
+    )
+
+    task = MCPServerTask("pipedream-google-sheets")
+    task._auth_type = "evaos_lease"
+    task._validate_evaos_lease_config(effective_authority)
+
+
 def test_managed_config_rejects_mixed_profile_and_agent_identity():
     task = MCPServerTask("pipedream-google-sheets")
     task._auth_type = "evaos_lease"
