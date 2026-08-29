@@ -470,7 +470,13 @@ def profile_matches_home(name: str, home: "Path | None" = None) -> bool:
     Invalid profile names return False (fail closed).
     """
     try:
-        target = get_profile_dir(name)
+        canon = normalize_profile_name(name)
+        flat = _flat_managed_profile()
+        # ``default`` remains a physical alias for unprefixed artifact paths,
+        # but it is never a routable identity in a managed flat process.
+        if flat is not None and canon == "default":
+            return False
+        target = get_profile_dir(canon)
     except Exception:
         return False
     if home is None:
@@ -1753,6 +1759,13 @@ def delete_profile(name: str, yes: bool = False) -> Path:
             "To remove everything, use: hermes uninstall"
         )
 
+    flat = _flat_managed_profile()
+    if flat is not None and canon == flat[0]:
+        raise ValueError(
+            f"Cannot delete active managed profile '{canon}': "
+            "profile lifecycle is managed by evaOS."
+        )
+
     profile_dir = get_profile_dir(canon)
     if not profile_dir.is_dir():
         raise FileNotFoundError(f"Profile '{canon}' does not exist.")
@@ -2564,6 +2577,13 @@ def rename_profile(old_name: str, new_name: str) -> Path:
     old_canon = normalize_profile_name(old_name)
     validate_profile_name(old_canon)
 
+    flat = _flat_managed_profile()
+    if flat is not None and old_canon == flat[0]:
+        raise ValueError(
+            f"Cannot rename active managed profile '{old_canon}': "
+            "profile lifecycle is managed by evaOS."
+        )
+
     if old_canon == "default":
         if not (new_name or "").strip():
             raise ValueError("Display name cannot be empty.")
@@ -2637,11 +2657,14 @@ def resolve_profile_env(profile_name: str) -> str:
     """
     canon = normalize_profile_name(profile_name)
     validate_profile_name(canon)
+    env_home = os.environ.get("HERMES_HOME", "").strip()
     flat = _flat_managed_profile()
     if flat is not None and canon == flat[0]:
-        return str(flat[1])
+        # The resolved path established the managed identity. Preserve the
+        # launcher's configured spelling (including a junction/symlink alias)
+        # when returning the environment override.
+        return env_home or str(flat[1])
 
-    env_home = os.environ.get("HERMES_HOME", "").strip()
     if env_home:
         env_path = Path(env_home)
         # A profile-shaped env value means the root is the grandparent

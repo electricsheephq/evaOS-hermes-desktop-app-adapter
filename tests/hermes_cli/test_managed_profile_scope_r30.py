@@ -62,6 +62,7 @@ def test_managed_profile_scope_is_bound_to_process_home(managed_profile_env):
 def test_flat_managed_profile_scope_resolves_its_own_home_and_denies_siblings(
     flat_managed_profile_env,
 ):
+    from gateway.platforms.api_server import _prefix_names_served_profile
     from hermes_cli import profiles
     from hermes_cli.managed_profile_scope import (
         ManagedProfileScopeError,
@@ -75,7 +76,10 @@ def test_flat_managed_profile_scope_resolves_its_own_home_and_denies_siblings(
     assert profiles.get_profile_dir("main") == profile_home
     assert profiles.get_profile_dir("default") == profile_home
     assert profiles.profile_matches_home("main") is True
+    assert profiles.profile_matches_home("default") is False
     assert profiles.profile_matches_home("sibling") is False
+    assert _prefix_names_served_profile("main") is True
+    assert _prefix_names_served_profile("default") is False
     assert require_managed_profile(None) == "main"
     with pytest.raises(ManagedProfileScopeError, match="not authorized"):
         require_managed_profile("sibling")
@@ -96,6 +100,34 @@ def test_flat_managed_profile_resolves_and_lists_only_current_identity(
     assert [item.name for item in listed] == ["main"]
     assert [item.path for item in listed] == [profile_home]
     assert listed[0].is_default is False
+
+
+def test_flat_managed_explicit_selector_preserves_configured_symlink_spelling(
+    flat_managed_profile_env, tmp_path, monkeypatch
+):
+    from hermes_cli import profiles
+
+    _root, profile_home = flat_managed_profile_env
+    launch_root = tmp_path / "launch"
+    launch_root.mkdir()
+    configured_home = launch_root / "main"
+    configured_home.symlink_to(profile_home, target_is_directory=True)
+    monkeypatch.setenv("HERMES_HOME", str(configured_home))
+
+    assert profiles.resolve_profile_env("main") == str(configured_home)
+
+
+def test_flat_managed_profile_lifecycle_cannot_remove_or_rename_active_home(
+    flat_managed_profile_env,
+):
+    from hermes_cli import profiles
+
+    _root, profile_home = flat_managed_profile_env
+    with pytest.raises(ValueError, match="profile lifecycle is managed by evaOS"):
+        profiles.delete_profile("main", yes=True)
+    with pytest.raises(ValueError, match="profile lifecycle is managed by evaOS"):
+        profiles.rename_profile("main", "renamed")
+    assert profile_home.is_dir()
 
 
 def test_flat_managed_profile_requires_matching_service_user(
