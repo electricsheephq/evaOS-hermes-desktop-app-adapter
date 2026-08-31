@@ -67,22 +67,40 @@ export function ProfilesView({ onClose }: ProfilesViewProps) {
 
   const refresh = useCallback(async () => {
     try {
-      const statusPromise = window.hermesDesktop?.eva?.status
-        ? window.hermesDesktop.eva.status().catch(() => null)
-        : Promise.resolve(null)
-
       const activeProfilePromise = window.hermesDesktop?.profile?.get
-        ? window.hermesDesktop.profile.get().catch(() => null)
-        : Promise.resolve(null)
+        ? window.hermesDesktop.profile
+            .get()
+            .then(value => ({ ok: true as const, value }))
+            .catch(() => ({ ok: false as const }))
+        : Promise.resolve({ ok: false as const })
 
-      const [list, status, activeProfile] = await Promise.all([refreshProfiles(), statusPromise, activeProfilePromise])
-      const profileName = typeof activeProfile?.profile === 'string' ? activeProfile.profile.trim() : ''
+      // profile.get() may refresh managed enrollment on a 401. Resolve it
+      // before reading the matching display metadata so the two values cannot
+      // come from different enrollment generations.
+      const [list, activeProfileResult] = await Promise.all([refreshProfiles(), activeProfilePromise])
 
-      setManagedPresentation(
-        status?.managed && profileName
-          ? { agentDisplayName: status.agentDisplayName, profileName }
-          : null
-      )
+      if (activeProfileResult.ok) {
+        const statusResult = window.hermesDesktop?.eva?.status
+          ? await window.hermesDesktop.eva
+              .status()
+              .then(value => ({ ok: true as const, value }))
+              .catch(() => ({ ok: false as const }))
+          : { ok: false as const }
+
+        if (statusResult.ok) {
+          const profileName =
+            typeof activeProfileResult.value?.profile === 'string'
+              ? activeProfileResult.value.profile.trim()
+              : ''
+
+          setManagedPresentation(
+            statusResult.value?.managed && profileName
+              ? { agentDisplayName: statusResult.value.agentDisplayName, profileName }
+              : null
+          )
+        }
+      }
+
       setProfiles(list)
       setSelectedName(current => {
         if (current && list.some(p => p.name === current)) {

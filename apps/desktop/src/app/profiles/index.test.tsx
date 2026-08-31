@@ -150,6 +150,45 @@ describe('ProfilesView', () => {
     await waitFor(() => expect(getProfileSoul).toHaveBeenCalledWith(canonicalProfile))
   })
 
+  it('reads display metadata after the active profile and retains the last valid label on refresh failure', async () => {
+    const canonicalProfile = 'e-managed-profile'
+    const callOrder: string[] = []
+
+    const getProfile = vi
+      .fn()
+      .mockImplementationOnce(async () => {
+        callOrder.push('profile')
+
+        return { profile: canonicalProfile }
+      })
+      .mockRejectedValueOnce(new Error('transient profile read failure'))
+
+    const getStatus = vi.fn().mockImplementation(async () => {
+      callOrder.push('status')
+
+      return { agentDisplayName: 'Asuka', managed: true }
+    })
+
+    Object.defineProperty(window, 'hermesDesktop', {
+      configurable: true,
+      value: {
+        eva: { status: getStatus },
+        profile: { get: getProfile }
+      }
+    })
+    vi.mocked(refreshProfiles).mockResolvedValue([makeProfile(canonicalProfile)])
+
+    await renderProfilesView()
+
+    expect(await screen.findByRole('heading', { name: 'Asuka' })).toBeTruthy()
+    expect(callOrder).toEqual(['profile', 'status'])
+
+    fireEvent.keyDown(window, { key: 'r' })
+    await waitFor(() => expect(getProfile).toHaveBeenCalledTimes(2))
+    expect(getStatus).toHaveBeenCalledTimes(1)
+    expect(await screen.findByRole('heading', { name: 'Asuka' })).toBeTruthy()
+  })
+
   it('opens the shared create dialog with the SOUL.md field (parity with the rail)', async () => {
     vi.mocked(refreshProfiles).mockResolvedValue([])
 
