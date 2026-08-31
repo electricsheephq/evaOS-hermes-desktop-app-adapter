@@ -21,7 +21,8 @@ const {
   normalizeHermesEnrollment,
   parseEvaDesktopAuthCallback,
   pollEvaDeviceCode,
-  publicEvaEnrollmentStatus
+  publicEvaEnrollmentStatus,
+  resolveEvaManagedDesktopProfile
 } = require('./eva-managed.cjs')
 
 const FUTURE = '2099-07-19T12:00:00.000Z'
@@ -694,4 +695,14 @@ test('renderer-facing enrollment status never exposes tokens or backend URLs', (
   const serialized = JSON.stringify(status)
   assert.equal(status.agentId, 'jane')
   assert.doesNotMatch(serialized, /desktop-secret|runtime-secret|secret-endpoint/)
+})
+
+test('managed desktop profile uses only the backend-authoritative current process identity', () => {
+  assert.equal(resolveEvaManagedDesktopProfile({ active: 'asuka-eva02', current: 'asuka-eva02' }), 'asuka-eva02')
+  for (const response of [null, {}, { current: 'default' }, { current: '../main' }, { current: 'ASUKA' }]) {
+    assert.throws(
+      () => resolveEvaManagedDesktopProfile(response),
+      error => error instanceof EvaBrokerError && error.code === 'invalid-profile-scope'
+    )
+  }
 })

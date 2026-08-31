@@ -6,6 +6,7 @@ import { SETTINGS_ROUTE } from '@/app/routes'
 import type { HermesConnection } from '@/global'
 import { HermesGateway } from '@/hermes'
 import { translateNow } from '@/i18n'
+import { isManagedEvaosAgent } from '@/i18n/managed-brand'
 import { desktopDefaultCwd } from '@/lib/desktop-fs'
 import { reconnectBackoffDelayMs } from '@/lib/reconnect-backoff'
 import {
@@ -288,7 +289,10 @@ export function useGatewayBoot({
         $activeGatewayProfile.set(profileKey)
         setPrimaryGateway(gateway, profileKey)
         void ensureGatewayForProfile(profileKey)
-      } catch {
+      } catch (error) {
+        if (isManagedEvaosAgent()) {
+          throw error
+        }
         $activeGatewayProfile.set('default')
       }
     }

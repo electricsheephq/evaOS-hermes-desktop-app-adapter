@@ -324,8 +324,22 @@ const DESKTOP_COMMAND_SPECS: readonly DesktopCommandSpec[] = [
   { name: '/usage', description: 'Show token usage for this session', surface: exec() },
   { name: '/version', description: 'Show evaOS Agent version', surface: exec() },
 
-  // No desktop surface, but carry an alias (underscore spelling variants).
-  { name: '/reload-mcp', aliases: ['/reload_mcp'], surface: unavailable('advanced') },
+  {
+    name: '/reload-mcp',
+    description: 'Reload MCP servers and refresh tools for this session',
+    aliases: ['/reload_mcp'],
+    surface: rpc('reload.mcp', ctx => {
+      const choice = ctx.arg.trim().toLowerCase()
+      if (choice === 'always') {
+        return { session_id: ctx.sessionId, confirm: true, always: true }
+      }
+      if (['now', 'approve', 'once', 'yes'].includes(choice)) {
+        return { session_id: ctx.sessionId, confirm: true }
+      }
+      return { session_id: ctx.sessionId }
+    }),
+    argumentMode: 'text'
+  },
   { name: '/reload-skills', aliases: ['/reload_skills'], surface: unavailable('advanced') }
 ]
 

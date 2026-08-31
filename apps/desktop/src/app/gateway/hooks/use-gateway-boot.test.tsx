@@ -3,6 +3,7 @@ import { MemoryRouter, useLocation, useNavigate } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { $desktopBoot, applyDesktopBootProgress } from '@/store/boot'
+import { $activeGatewayProfile } from '@/store/profile'
 import { $gatewayState, $sessionsLoading } from '@/store/session'
 
 import { takeGatewaySurvivor } from './gateway-hmr-survivor'
@@ -170,6 +171,7 @@ beforeEach(() => {
   navigateRoute = null
   ;(globalThis as { WebSocket: unknown }).WebSocket = FakeWebSocket
   ;(window as { hermesDesktop?: unknown }).hermesDesktop = fakeDesktop()
+  $activeGatewayProfile.set('default')
   $gatewayState.set('idle')
   $desktopBoot.set({
     error: null,
@@ -220,6 +222,39 @@ async function advanceBackoff() {
 }
 
 describe('useGatewayBoot remote reconnect loop (real hook, fake socket)', () => {
+  it('adopts the backend-authoritative managed profile before session refresh', async () => {
+    const desktop = fakeDesktop()
+    desktop.profile.get = vi.fn(async () => ({ profile: 'asuka-eva02' }))
+    const refreshSessions = vi.fn(async () => undefined)
+    ;(window as unknown as { hermesDesktop: unknown }).hermesDesktop = { ...desktop, eva: {} }
+
+    render(
+      <MemoryRouter>
+        <Harness refreshSessions={refreshSessions} />
+      </MemoryRouter>
+    )
+    await flushAsync()
+
+    expect($activeGatewayProfile.get()).toBe('asuka-eva02')
+    expect(refreshSessions).toHaveBeenCalled()
+    expect($desktopBoot.get().error).toBeNull()
+  })
+
+  it('fails closed when a managed boot cannot verify its assigned profile', async () => {
+    const desktop = fakeDesktop()
+    desktop.profile.get = vi.fn(async () => {
+      throw new Error('assigned profile unavailable')
+    })
+    ;(window as unknown as { hermesDesktop: unknown }).hermesDesktop = { ...desktop, eva: {} }
+
+    renderHarness()
+    await flushAsync()
+
+    expect($activeGatewayProfile.get()).toBe('default')
+    expect($desktopBoot.get().error).toBe('assigned profile unavailable')
+    expect($desktopBoot.get().visible).toBe(true)
+  })
+
   it('redirects managed sign-in-required boot to Gateway settings without a generic boot failure', async () => {
     const desktop = fakeDesktop()
     desktop.getConnection = vi.fn(async () => {
