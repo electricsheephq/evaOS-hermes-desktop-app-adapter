@@ -13,6 +13,7 @@ import pytest
 
 import cli as cli_mod
 from hermes_cli import main as main_mod
+from hermes_cli import managed_scope
 from hermes_cli import mcp_startup
 
 
@@ -163,10 +164,62 @@ def test_portable_only_mcp_configuration_opens_startup_gate(monkeypatch):
     assert mcp_startup._has_configured_mcp_servers() is True
 
 
+def test_managed_only_mcp_configuration_opens_startup_gate(monkeypatch, tmp_path):
+    hermes_home = tmp_path / "hermes-home"
+    managed_dir = tmp_path / "managed"
+    hermes_home.mkdir()
+    managed_dir.mkdir()
+    (hermes_home / "config.yaml").write_text("{}\n", encoding="utf-8")
+    (managed_dir / "config.yaml").write_text(
+        "mcp_servers:\n"
+        "  managed:\n"
+        "    auth: evaos_lease\n"
+        "    account_id: ${MANAGED_MCP_ACCOUNT_ID}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+    monkeypatch.setenv("HERMES_MANAGED_DIR", str(managed_dir))
+    monkeypatch.setenv("MANAGED_MCP_ACCOUNT_ID", "managed-account")
+    managed_scope.invalidate_managed_cache()
 
+    from tools import mcp_tool
 
+    observed_servers = {}
 
+    def _discover_from_effective_config():
+        observed_servers.update(mcp_tool._load_mcp_config())
+        return []
 
+    monkeypatch.setitem(
+        sys.modules,
+        "tools.mcp_oauth",
+        types.SimpleNamespace(suppress_interactive_oauth=lambda: nullcontext()),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "hermes_cli.plugins",
+        types.SimpleNamespace(
+            discover_plugins=lambda: None,
+            get_plugin_manager=lambda: types.SimpleNamespace(
+                get_portable_mcp_servers=lambda: {},
+            ),
+        ),
+    )
+    monkeypatch.setattr(mcp_tool, "discover_mcp_tools", _discover_from_effective_config)
+    monkeypatch.setattr(
+        mcp_tool,
+        "get_mcp_status",
+        lambda: [{"connected": True}],
+    )
+
+    mcp_startup.start_background_mcp_discovery(
+        logger=_retry_logger(),
+        thread_name="test-managed-mcp-discovery",
+    )
+    assert mcp_startup._mcp_discovery_thread is not None
+    mcp_startup._mcp_discovery_thread.join(timeout=1.0)
+
+    assert observed_servers["managed"]["account_id"] == "managed-account"
 
 
 def _retry_logger():
@@ -197,5 +250,3 @@ def _install_retry_stubs(monkeypatch, *, connected: bool, calls: dict):
             get_mcp_status=lambda: [{"connected": connected}],
         ),
     )
-
-
