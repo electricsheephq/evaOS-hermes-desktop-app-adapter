@@ -83,6 +83,10 @@ function createEvaManagedRuntime(options) {
     let runtime = null
     if (desktop) {
       try {
+        const persistedDisplayName = parsed.runtime?.agent_display_name
+        if (typeof persistedDisplayName !== 'string' || !persistedDisplayName.trim()) {
+          throw new Error('legacy enrollment has no assigned-agent display label')
+        }
         runtime = normalizeHermesEnrollment({
           schema_version: EVA_MANAGED_POLICY.enrollmentSchemaVersion,
           runtime: parsed.runtime?.runtime,
@@ -140,7 +144,7 @@ function createEvaManagedRuntime(options) {
             expires_at: state.runtime.expiresAt,
             base_url: state.runtime.baseUrl,
             agent_id: state.runtime.agentId,
-            agent_display_name: state.runtime.agentDisplayName,
+            agent_display_name: state.runtime.agentDisplayName ?? state.runtime.agentId,
             customer_id: state.runtime.customerId,
             runtime: state.runtime.runtime
           }
