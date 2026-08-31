@@ -6,6 +6,7 @@ import { SETTINGS_ROUTE } from '@/app/routes'
 import type { HermesConnection } from '@/global'
 import { HermesGateway } from '@/hermes'
 import { translateNow } from '@/i18n'
+import { isManagedEvaosAgent } from '@/i18n/managed-brand'
 import { desktopDefaultCwd } from '@/lib/desktop-fs'
 import { reconnectBackoffDelayMs } from '@/lib/reconnect-backoff'
 import {
@@ -285,11 +286,26 @@ export function useGatewayBoot({
       try {
         const pref = await desktop.profile?.get?.()
         const profileKey = (pref?.profile ?? '').trim() || 'default'
+        sourceProfile = profileKey
         $activeGatewayProfile.set(profileKey)
         setPrimaryGateway(gateway, profileKey)
         void ensureGatewayForProfile(profileKey)
-      } catch {
+      } catch (error) {
+        if (isManagedEvaosAgent()) {
+          sourceProfile = 'default'
+          $activeGatewayProfile.set('default')
+          closeSecondaryGateways()
+          gateway.close()
+          publish(null)
+          callbacksRef.current.onGatewayReady(null)
+          setPrimaryGateway(null)
+          $gateway.set(null)
+          throw error
+        }
+
+        sourceProfile = 'default'
         $activeGatewayProfile.set('default')
+        setPrimaryGateway(gateway, 'default')
       }
     }
 
@@ -331,6 +347,15 @@ export function useGatewayBoot({
           return
         }
 
+        // A connection change can also change the backend-assigned profile.
+        // Adopt it before opening the replacement socket for the same reason as
+        // cold boot: events may arrive immediately after the handshake.
+        await adoptPrimaryProfile()
+
+        if (cancelled) {
+          return
+        }
+
         publish(conn)
         const wsUrl = await resolveGatewayWsUrl(desktop, conn)
         await gateway.connect(wsUrl)
@@ -339,9 +364,6 @@ export function useGatewayBoot({
           return
         }
 
-        // Same shape as boot(): profile first (session scope depends on it),
-        // then the independent fetches concurrently.
-        await adoptPrimaryProfile()
         await Promise.all([
           seedDefaultCwd(),
           callbacksRef.current.refreshHermesConfig().catch(() => undefined),
@@ -405,6 +427,7 @@ export function useGatewayBoot({
     }
 
     const gateway = adoptedFromHmr ? survivor!.gateway : new HermesGateway()
+    let sourceProfile = normalizeProfileKey(survivor?.profile ?? $activeGatewayProfile.get())
 
     callbacksRef.current.onGatewayReady(gateway)
     setPrimaryGateway(gateway, survivor?.profile ?? normalizeProfileKey($activeGatewayProfile.get()))
@@ -437,8 +460,6 @@ export function useGatewayBoot({
         scheduleReconnect()
       }
     })
-
-    const sourceProfile = normalizeProfileKey($activeGatewayProfile.get())
 
     const offEvent = gateway.onEvent(event =>
       callbacksRef.current.handleGatewayEvent({ ...event, profile: sourceProfile })
@@ -528,6 +549,16 @@ export function useGatewayBoot({
           return
         }
 
+        // Resolve the backend-authoritative managed profile before opening the
+        // socket. Gateway events can arrive as soon as the WebSocket opens; if
+        // profile adoption happens afterwards, those events can be tagged with
+        // the stale/default profile and leak state into the wrong session scope.
+        await adoptPrimaryProfile()
+
+        if (cancelled) {
+          return
+        }
+
         setDesktopBootStep({
           phase: 'renderer.gateway.connect',
           message: translateNow('boot.steps.connectingGateway'),
@@ -545,13 +576,6 @@ export function useGatewayBoot({
         if (cancelled) {
           return
         }
-
-        // Profile adoption must land first: refreshSessions scopes its fetch by
-        // $profileScope ← $activeGatewayProfile. The remaining three fetches
-        // (cwd seed, config, sessions) are independent REST calls — running
-        // them serially added their sum to time-to-populated-sidebar when only
-        // the max is needed.
-        await adoptPrimaryProfile()
 
         setDesktopBootStep({
           phase: 'renderer.config',

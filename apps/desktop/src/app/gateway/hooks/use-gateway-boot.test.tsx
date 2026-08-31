@@ -3,6 +3,7 @@ import { MemoryRouter, useLocation, useNavigate } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { $desktopBoot, applyDesktopBootProgress } from '@/store/boot'
+import { $activeGatewayProfile } from '@/store/profile'
 import { $gatewayState, $sessionsLoading } from '@/store/session'
 
 import { takeGatewaySurvivor } from './gateway-hmr-survivor'
@@ -79,6 +80,10 @@ class FakeWebSocket {
     this.emit('close', {})
   }
 
+  message(frame: unknown) {
+    this.emit('message', { data: JSON.stringify(frame) })
+  }
+
   private emit(type: string, ev: unknown) {
     for (const fn of this.listeners[type] ?? []) {
       fn(ev)
@@ -125,13 +130,20 @@ function fakeDesktop() {
 
 function Harness({
   beforeConnectionSwitch = () => undefined,
+  handleGatewayEvent = () => undefined,
+  onGatewayReady = () => undefined,
   refreshSessions
-}: { beforeConnectionSwitch?: () => void; refreshSessions?: () => Promise<void> } = {}) {
+}: {
+  beforeConnectionSwitch?: () => void
+  handleGatewayEvent?: (event: { profile?: string }) => void
+  onGatewayReady?: (gateway: unknown) => void
+  refreshSessions?: () => Promise<void>
+} = {}) {
   useGatewayBoot({
     beforeConnectionSwitch,
-    handleGatewayEvent: () => undefined,
+    handleGatewayEvent,
     onConnectionReady: () => undefined,
-    onGatewayReady: () => undefined,
+    onGatewayReady,
     refreshHermesConfig: async () => undefined,
     refreshSessions: refreshSessions ?? (async () => undefined)
   })
@@ -170,6 +182,7 @@ beforeEach(() => {
   navigateRoute = null
   ;(globalThis as { WebSocket: unknown }).WebSocket = FakeWebSocket
   ;(window as { hermesDesktop?: unknown }).hermesDesktop = fakeDesktop()
+  $activeGatewayProfile.set('default')
   $gatewayState.set('idle')
   $desktopBoot.set({
     error: null,
@@ -220,6 +233,130 @@ async function advanceBackoff() {
 }
 
 describe('useGatewayBoot remote reconnect loop (real hook, fake socket)', () => {
+  it('adopts the backend-authoritative managed profile before session refresh', async () => {
+    const desktop = fakeDesktop()
+    desktop.profile.get = vi.fn(async () => ({ profile: 'asuka-eva02' }))
+    const refreshSessions = vi.fn(async () => undefined)
+
+    ;(window as unknown as { hermesDesktop: unknown }).hermesDesktop = { ...desktop, eva: {} }
+
+    render(
+      <MemoryRouter>
+        <Harness refreshSessions={refreshSessions} />
+      </MemoryRouter>
+    )
+    await flushAsync()
+
+    expect($activeGatewayProfile.get()).toBe('asuka-eva02')
+    expect(refreshSessions).toHaveBeenCalled()
+    expect($desktopBoot.get().error).toBeNull()
+  })
+
+  it('tags primary gateway events with the profile adopted during managed boot', async () => {
+    const desktop = fakeDesktop()
+    desktop.profile.get = vi.fn(async () => ({ profile: 'asuka-eva02' }))
+    const events: Array<{ profile?: string }> = []
+
+    ;(window as unknown as { hermesDesktop: unknown }).hermesDesktop = { ...desktop, eva: {} }
+
+    render(
+      <MemoryRouter>
+        <Harness handleGatewayEvent={event => events.push(event)} />
+      </MemoryRouter>
+    )
+    await flushAsync()
+
+    FakeWebSocket.instances[0]?.message({
+      jsonrpc: '2.0',
+      method: 'event',
+      params: { type: 'session.updated', session_id: 's-1' }
+    })
+
+    expect(events).toContainEqual(expect.objectContaining({ profile: 'asuka-eva02' }))
+  })
+
+  it('does not connect the managed gateway before the authoritative profile resolves', async () => {
+    const desktop = fakeDesktop()
+    let resolveProfile: ((value: { profile: string }) => void) | undefined
+    const profile = new Promise<{ profile: string }>(resolve => {
+      resolveProfile = resolve
+    })
+    desktop.profile.get = vi.fn(() => profile)
+    const events: Array<{ profile?: string }> = []
+
+    ;(window as unknown as { hermesDesktop: unknown }).hermesDesktop = { ...desktop, eva: {} }
+
+    render(
+      <MemoryRouter>
+        <Harness handleGatewayEvent={event => events.push(event)} />
+      </MemoryRouter>
+    )
+    await flushAsync()
+
+    expect(FakeWebSocket.instances).toHaveLength(0)
+    expect(events).toEqual([])
+
+    resolveProfile?.({ profile: 'asuka-eva02' })
+    await flushAsync()
+
+    FakeWebSocket.instances[0]?.message({
+      jsonrpc: '2.0',
+      method: 'event',
+      params: { type: 'session.updated', session_id: 's-1' }
+    })
+
+    expect(events).toContainEqual(expect.objectContaining({ profile: 'asuka-eva02' }))
+  })
+
+  it('fails closed when a managed boot cannot verify its assigned profile', async () => {
+    const desktop = fakeDesktop()
+    desktop.profile.get = vi.fn(async () => {
+      throw new Error('assigned profile unavailable')
+    })
+    ;(window as unknown as { hermesDesktop: unknown }).hermesDesktop = { ...desktop, eva: {} }
+    $activeGatewayProfile.set('previous-profile')
+    const gateways: unknown[] = []
+
+    render(
+      <MemoryRouter>
+        <Harness onGatewayReady={gateway => gateways.push(gateway)} />
+      </MemoryRouter>
+    )
+    await flushAsync()
+
+    expect($activeGatewayProfile.get()).toBe('default')
+    expect($desktopBoot.get().error).toBe('assigned profile unavailable')
+    expect($desktopBoot.get().visible).toBe(true)
+    expect(FakeWebSocket.instances).toHaveLength(0)
+    expect(gateways.at(-1)).toBeNull()
+  })
+
+  it('keeps non-managed event scope aligned when profile lookup falls back to default', async () => {
+    const desktop = fakeDesktop()
+    desktop.profile.get = vi.fn(async () => {
+      throw new Error('profile preference unavailable')
+    })
+    ;(window as unknown as { hermesDesktop: unknown }).hermesDesktop = desktop
+    $activeGatewayProfile.set('previous-profile')
+    const events: Array<{ profile?: string }> = []
+
+    render(
+      <MemoryRouter>
+        <Harness handleGatewayEvent={event => events.push(event)} />
+      </MemoryRouter>
+    )
+    await flushAsync()
+
+    FakeWebSocket.instances[0]?.message({
+      jsonrpc: '2.0',
+      method: 'event',
+      params: { type: 'session.updated', session_id: 's-default' }
+    })
+
+    expect($activeGatewayProfile.get()).toBe('default')
+    expect(events).toContainEqual(expect.objectContaining({ profile: 'default' }))
+  })
+
   it('redirects managed sign-in-required boot to Gateway settings without a generic boot failure', async () => {
     const desktop = fakeDesktop()
     desktop.getConnection = vi.fn(async () => {
@@ -354,6 +491,57 @@ describe('useGatewayBoot remote reconnect loop (real hook, fake socket)', () => 
     expect(beforeConnectionSwitch).toHaveBeenCalledTimes(1)
     await flushAsync()
     expect($gatewayState.get()).toBe('open')
+  })
+
+  it('does not reconnect an applied managed gateway before its authoritative profile resolves', async () => {
+    const desktop = fakeDesktop()
+    const events: Array<{ profile?: string }> = []
+    ;(window as unknown as { hermesDesktop: unknown }).hermesDesktop = { ...desktop, eva: {} }
+
+    render(
+      <MemoryRouter>
+        <Harness handleGatewayEvent={event => events.push(event)} />
+      </MemoryRouter>
+    )
+    await flushAsync()
+    expect(FakeWebSocket.instances).toHaveLength(1)
+
+    let resolveProfile: ((value: { profile: string }) => void) | undefined
+    const profile = new Promise<{ profile: string }>(resolve => {
+      resolveProfile = resolve
+    })
+    desktop.profile.get = vi.fn(() => profile)
+
+    act(() => connectionApplied?.())
+    await flushAsync()
+
+    expect(FakeWebSocket.instances).toHaveLength(1)
+    expect(events).toEqual([])
+
+    await act(async () => {
+      resolveProfile?.({ profile: 'asuka-eva02' })
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(FakeWebSocket.instances).toHaveLength(2)
+    expect(FakeWebSocket.instances[1]?.readyState).toBe(0)
+    FakeWebSocket.instances[0]?.message({
+      jsonrpc: '2.0',
+      method: 'event',
+      params: { type: 'session.updated', session_id: 's-old' }
+    })
+    expect(events).toEqual([])
+
+    await flushAsync()
+
+    expect(FakeWebSocket.instances).toHaveLength(2)
+    FakeWebSocket.instances[1]?.message({
+      jsonrpc: '2.0',
+      method: 'event',
+      params: { type: 'session.updated', session_id: 's-2' }
+    })
+    expect(events).toContainEqual(expect.objectContaining({ profile: 'asuka-eva02' }))
   })
 
   it('a remote that drops post-boot keeps looping with NO boot.error (the dead-end CONNECTING combo)', async () => {

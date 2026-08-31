@@ -150,6 +150,33 @@ describe('desktop slash command curation', () => {
     }
   })
 
+  it('routes /reload-mcp through its confirmed current-session RPC', () => {
+    const command = resolveDesktopCommand('/reload-mcp')
+    const alias = resolveDesktopCommand('/reload_mcp')
+    expect(command?.surface.kind).toBe('rpc')
+    expect(alias?.name).toBe('/reload-mcp')
+    expect(isDesktopSlashSuggestion('/reload-mcp')).toBe(true)
+    expect(isDesktopSlashSuggestion('/reload_mcp')).toBe(false)
+    expect(desktopSlashCommandArgumentMode('/reload-mcp')).toBe('text')
+
+    if (command?.surface.kind !== 'rpc') {
+      return
+    }
+
+    expect(command.surface.rpc).toBe('reload.mcp')
+    expect(command.surface.timeoutMs).toBe(300_000)
+    expect(command.surface.fallbackToExec).toBe(false)
+    const context = { command: '/reload-mcp', name: 'reload-mcp', sessionId: 's-1' }
+    expect(command.surface.buildParams({ ...context, arg: '' })).toEqual({ session_id: 's-1' })
+    expect(command.surface.buildParams({ ...context, arg: 'now' })).toEqual({ session_id: 's-1', confirm: true })
+    expect(command.surface.buildParams({ ...context, arg: 'always' })).toEqual({
+      session_id: 's-1',
+      confirm: true,
+      always: true
+    })
+    expect(command.surface.buildParams({ ...context, arg: 'now please' })).toEqual({ session_id: 's-1' })
+  })
+
   it('keeps commands with richer CLI semantics on the slash worker', () => {
     for (const name of ['/agents', '/steer', '/stop', '/usage']) {
       expect(resolveDesktopCommand(name)?.surface).toEqual({ kind: 'exec' })

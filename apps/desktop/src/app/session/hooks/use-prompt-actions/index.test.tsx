@@ -996,6 +996,34 @@ describe('usePromptActions exec fallback error reporting', () => {
     expect(renderedSeedTexts(seeds).some(text => text.includes('session status from slash worker'))).toBe(true)
   })
 
+  it('does not bypass reload.mcp confirmation when the dedicated RPC is unavailable', async () => {
+    const seeds: Record<string, unknown>[] = []
+
+    const requestGateway = vi.fn(async (method: string) => {
+      if (method === 'reload.mcp') {
+        throw new Error('method not found: reload.mcp')
+      }
+
+      throw new Error(`unexpected method: ${method}`)
+    })
+
+    let handle: HarnessHandle | null = null
+    await actRender(
+      <Harness
+        onReady={h => (handle = h)}
+        onSeedState={s => seeds.push(s)}
+        refreshSessions={async () => undefined}
+        requestGateway={requestGateway}
+      />
+    )
+
+    await handle!.submitText('/reload-mcp now')
+
+    expect(requestGateway).toHaveBeenCalledWith('reload.mcp', expect.objectContaining({ confirm: true }), 300_000)
+    expect(requestGateway.mock.calls.some(([method]) => method === 'slash.exec')).toBe(false)
+    expect(renderedSeedTexts(seeds).some(text => text.includes('method not found: reload.mcp'))).toBe(true)
+  })
+
   it('still reports a real command.dispatch failure for skill/quick commands', async () => {
     const seeds: Record<string, unknown>[] = []
 
