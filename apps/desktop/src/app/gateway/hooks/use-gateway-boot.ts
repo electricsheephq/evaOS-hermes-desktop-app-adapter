@@ -303,7 +303,9 @@ export function useGatewayBoot({
           throw error
         }
 
+        sourceProfile = 'default'
         $activeGatewayProfile.set('default')
+        setPrimaryGateway(gateway, 'default')
       }
     }
 

@@ -331,6 +331,32 @@ describe('useGatewayBoot remote reconnect loop (real hook, fake socket)', () => 
     expect(gateways.at(-1)).toBeNull()
   })
 
+  it('keeps non-managed event scope aligned when profile lookup falls back to default', async () => {
+    const desktop = fakeDesktop()
+    desktop.profile.get = vi.fn(async () => {
+      throw new Error('profile preference unavailable')
+    })
+    ;(window as unknown as { hermesDesktop: unknown }).hermesDesktop = desktop
+    $activeGatewayProfile.set('previous-profile')
+    const events: Array<{ profile?: string }> = []
+
+    render(
+      <MemoryRouter>
+        <Harness handleGatewayEvent={event => events.push(event)} />
+      </MemoryRouter>
+    )
+    await flushAsync()
+
+    FakeWebSocket.instances[0]?.message({
+      jsonrpc: '2.0',
+      method: 'event',
+      params: { type: 'session.updated', session_id: 's-default' }
+    })
+
+    expect($activeGatewayProfile.get()).toBe('default')
+    expect(events).toContainEqual(expect.objectContaining({ profile: 'default' }))
+  })
+
   it('redirects managed sign-in-required boot to Gateway settings without a generic boot failure', async () => {
     const desktop = fakeDesktop()
     desktop.getConnection = vi.fn(async () => {
@@ -492,7 +518,21 @@ describe('useGatewayBoot remote reconnect loop (real hook, fake socket)', () => 
     expect(FakeWebSocket.instances).toHaveLength(1)
     expect(events).toEqual([])
 
-    resolveProfile?.({ profile: 'asuka-eva02' })
+    await act(async () => {
+      resolveProfile?.({ profile: 'asuka-eva02' })
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(FakeWebSocket.instances).toHaveLength(2)
+    expect(FakeWebSocket.instances[1]?.readyState).toBe(0)
+    FakeWebSocket.instances[0]?.message({
+      jsonrpc: '2.0',
+      method: 'event',
+      params: { type: 'session.updated', session_id: 's-old' }
+    })
+    expect(events).toEqual([])
+
     await flushAsync()
 
     expect(FakeWebSocket.instances).toHaveLength(2)
