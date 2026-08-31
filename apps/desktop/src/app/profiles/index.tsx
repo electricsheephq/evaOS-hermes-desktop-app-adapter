@@ -39,6 +39,21 @@ interface ProfilesViewProps {
   onClose: () => void
 }
 
+interface ManagedProfilePresentation {
+  agentDisplayName?: null | string
+  agentId: null | string
+}
+
+export function resolveManagedProfileDisplayName(
+  profileName: string,
+  presentation: ManagedProfilePresentation | null
+): string {
+  const canonicalAgentId = presentation?.agentId?.trim()
+  const displayName = presentation?.agentDisplayName?.trim()
+
+  return canonicalAgentId && displayName && profileName === canonicalAgentId ? displayName : profileName
+}
+
 export function ProfilesView({ onClose }: ProfilesViewProps) {
   const { t } = useI18n()
   const p = t.profiles
@@ -48,10 +63,17 @@ export function ProfilesView({ onClose }: ProfilesViewProps) {
   const [createOpen, setCreateOpen] = useState(false)
   const [pendingRename, setPendingRename] = useState<null | ProfileInfo>(null)
   const [pendingDelete, setPendingDelete] = useState<null | ProfileInfo>(null)
+  const [managedPresentation, setManagedPresentation] = useState<ManagedProfilePresentation | null>(null)
 
   const refresh = useCallback(async () => {
     try {
-      const list = await refreshProfiles()
+      const statusPromise = window.hermesDesktop?.eva?.status
+        ? window.hermesDesktop.eva.status().catch(() => null)
+        : Promise.resolve(null)
+
+      const [list, status] = await Promise.all([refreshProfiles(), statusPromise])
+
+      setManagedPresentation(status?.managed ? status : null)
       setProfiles(list)
       setSelectedName(current => {
         if (current && list.some(p => p.name === current)) {
@@ -86,10 +108,16 @@ export function ProfilesView({ onClose }: ProfilesViewProps) {
       return profiles ?? []
     }
 
-    return profiles.filter(
-      profile => profile.name.toLowerCase().includes(q) || (profile.model ?? '').toLowerCase().includes(q)
-    )
-  }, [profiles, query])
+    return profiles.filter(profile => {
+      const displayName = resolveManagedProfileDisplayName(profile.name, managedPresentation)
+
+      return (
+        profile.name.toLowerCase().includes(q) ||
+        displayName.toLowerCase().includes(q) ||
+        (profile.model ?? '').toLowerCase().includes(q)
+      )
+    })
+  }, [managedPresentation, profiles, query])
 
   // The shared Create/Rename dialogs own the createProfile / renameProfile /
   // updateProfileSoul calls; the panel just selects the resulting profile and
@@ -130,6 +158,7 @@ export function ProfilesView({ onClose }: ProfilesViewProps) {
               {visibleProfiles.map(profile => (
                 <ProfileRow
                   active={selected?.name === profile.name}
+                  displayName={resolveManagedProfileDisplayName(profile.name, managedPresentation)}
                   key={profile.name}
                   menuItems={
                     profile.is_default
@@ -152,7 +181,11 @@ export function ProfilesView({ onClose }: ProfilesViewProps) {
             </PanelList>
 
             {selected ? (
-              <ProfileDetail key={selected.name} profile={selected} />
+              <ProfileDetail
+                displayName={resolveManagedProfileDisplayName(selected.name, managedPresentation)}
+                key={selected.name}
+                profile={selected}
+              />
             ) : (
               <PanelEmpty description={p.selectPrompt} icon="account" />
             )}
@@ -189,11 +222,13 @@ export function ProfilesView({ onClose }: ProfilesViewProps) {
 
 function ProfileRow({
   active,
+  displayName,
   menuItems,
   onSelect,
   profile
 }: {
   active: boolean
+  displayName: string
   menuItems: PanelMenuItem[]
   onSelect: () => void
   profile: ProfileInfo
@@ -207,14 +242,14 @@ function ProfileRow({
         <ProfileGlyph
           color={resolveProfileColor(profile.name, colors)}
           isDefault={profile.is_default}
-          name={profile.name}
+          name={displayName}
         />
       }
       menuItems={menuItems}
-      menuLabel={profile.name}
+      menuLabel={displayName}
       onSelect={onSelect}
       rowKey={profile.name}
-      title={profile.name}
+      title={displayName}
     />
   )
 }
@@ -246,7 +281,7 @@ function ProfileGlyph({ color, isDefault, name }: { color: null | string; isDefa
   )
 }
 
-function ProfileDetail({ profile }: { profile: ProfileInfo }) {
+function ProfileDetail({ displayName, profile }: { displayName: string; profile: ProfileInfo }) {
   const { t } = useI18n()
   const p = t.profiles
 
@@ -255,7 +290,7 @@ function ProfileDetail({ profile }: { profile: ProfileInfo }) {
       <header className="space-y-3">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
-            <h3 className="text-[0.95rem] font-semibold tracking-tight text-foreground">{profile.name}</h3>
+            <h3 className="text-[0.95rem] font-semibold tracking-tight text-foreground">{displayName}</h3>
             {profile.is_default && <PanelPill tone="good">{p.defaultBadge}</PanelPill>}
             {profile.has_env && <PanelPill tone="muted">.env</PanelPill>}
           </div>

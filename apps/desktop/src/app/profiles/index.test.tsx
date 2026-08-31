@@ -2,7 +2,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import type * as Nanostores from 'nanostores'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { deleteProfile } from '@/hermes'
+import { deleteProfile, getProfileSoul } from '@/hermes'
 import { refreshProfiles, selectProfile, setActiveProfile } from '@/store/profile'
 import type { ProfileInfo } from '@/types/hermes'
 
@@ -16,6 +16,17 @@ import { ProfilesView } from './index'
 // precisely because nothing rendered this view.
 
 afterEach(cleanup)
+
+const originalHermesDesktop = Object.getOwnPropertyDescriptor(window, 'hermesDesktop')
+
+afterEach(() => {
+  if (originalHermesDesktop) {
+    Object.defineProperty(window, 'hermesDesktop', originalHermesDesktop)
+  } else {
+    // @ts-expect-error Test cleanup restores the pre-test absence of the preload bridge.
+    delete window.hermesDesktop
+  }
+})
 
 // Real i18n (useI18n falls back to English with no provider), so labels are the
 // actual strings — no brittle key snapshot to maintain here.
@@ -112,6 +123,30 @@ async function deleteTheNamedProfile() {
 }
 
 describe('ProfilesView', () => {
+  it('renders the authorized managed label while profile operations retain the canonical id', async () => {
+    const canonicalProfile = 'e-managed-profile'
+
+    Object.defineProperty(window, 'hermesDesktop', {
+      configurable: true,
+      value: {
+        eva: {
+          status: vi.fn().mockResolvedValue({
+            agentDisplayName: 'Asuka',
+            agentId: canonicalProfile,
+            managed: true
+          })
+        }
+      }
+    })
+    vi.mocked(refreshProfiles).mockResolvedValue([makeProfile(canonicalProfile)])
+
+    await renderProfilesView()
+
+    expect(await screen.findByRole('heading', { name: 'Asuka' })).toBeTruthy()
+    expect(await screen.findAllByRole('button', { name: 'Asuka' })).toHaveLength(2)
+    await waitFor(() => expect(getProfileSoul).toHaveBeenCalledWith(canonicalProfile))
+  })
+
   it('opens the shared create dialog with the SOUL.md field (parity with the rail)', async () => {
     vi.mocked(refreshProfiles).mockResolvedValue([])
 
