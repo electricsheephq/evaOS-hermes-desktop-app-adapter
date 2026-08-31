@@ -164,28 +164,28 @@ def test_portable_only_mcp_configuration_opens_startup_gate(monkeypatch):
     assert mcp_startup._has_configured_mcp_servers() is True
 
 
-def test_managed_only_mcp_configuration_opens_startup_gate(monkeypatch):
-    monkeypatch.setitem(
-        sys.modules,
-        "hermes_cli.config",
-        types.SimpleNamespace(read_raw_config=lambda: {}),
+def test_managed_only_mcp_configuration_opens_startup_gate(monkeypatch, tmp_path):
+    hermes_home = tmp_path / "hermes-home"
+    managed_dir = tmp_path / "managed"
+    hermes_home.mkdir()
+    managed_dir.mkdir()
+    (hermes_home / "config.yaml").write_text("{}\n", encoding="utf-8")
+    (managed_dir / "config.yaml").write_text(
+        "mcp_servers:\n"
+        "  managed:\n"
+        "    auth: evaos_lease\n"
+        "    account_id: ${MANAGED_MCP_ACCOUNT_ID}\n",
+        encoding="utf-8",
     )
-    monkeypatch.setattr(
-        managed_scope,
-        "apply_managed_overlay",
-        lambda config: {
-            **config,
-            "mcp_servers": {"managed": {"auth": "evaos_lease"}},
-        },
-    )
+    monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+    monkeypatch.setenv("HERMES_MANAGED_DIR", str(managed_dir))
+    monkeypatch.setenv("MANAGED_MCP_ACCOUNT_ID", "managed-account")
+    managed_scope.invalidate_managed_cache()
 
     assert mcp_startup._has_configured_mcp_servers() is True
-
-
-
-
-
-
+    config_mod = sys.modules["hermes_cli.config"]
+    merged = managed_scope.apply_managed_overlay(config_mod.read_raw_config() or {})
+    assert merged["mcp_servers"]["managed"]["account_id"] == "managed-account"
 
 
 def _retry_logger():
