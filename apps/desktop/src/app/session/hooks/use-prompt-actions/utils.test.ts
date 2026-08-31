@@ -229,6 +229,15 @@ describe('renderRpcResult', () => {
         renderRpcResult({ status: 'confirm_required', message: 'Confirm MCP reload.' }, 'reload_mcp')
       ).toBe('Confirm MCP reload.')
     })
+
+    it('renders case-insensitive command spellings without exposing the raw envelope', () => {
+      expect(renderRpcResult({ status: 'reloaded', loaded_rev: 'rev-a' }, 'RELOAD-MCP')).toBe(
+        'MCP servers reloaded and tools refreshed for this session.'
+      )
+      expect(
+        renderRpcResult({ status: 'confirm_required', message: 'Confirm MCP reload.' }, 'RELOAD_MCP')
+      ).toBe('Confirm MCP reload.')
+    })
   })
 
   describe('process.stop', () => {
