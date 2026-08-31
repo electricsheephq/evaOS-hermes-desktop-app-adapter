@@ -541,6 +541,16 @@ export function useGatewayBoot({
           return
         }
 
+        // Resolve the backend-authoritative managed profile before opening the
+        // socket. Gateway events can arrive as soon as the WebSocket opens; if
+        // profile adoption happens afterwards, those events can be tagged with
+        // the stale/default profile and leak state into the wrong session scope.
+        await adoptPrimaryProfile()
+
+        if (cancelled) {
+          return
+        }
+
         setDesktopBootStep({
           phase: 'renderer.gateway.connect',
           message: translateNow('boot.steps.connectingGateway'),
@@ -558,13 +568,6 @@ export function useGatewayBoot({
         if (cancelled) {
           return
         }
-
-        // Profile adoption must land first: refreshSessions scopes its fetch by
-        // $profileScope ← $activeGatewayProfile. The remaining three fetches
-        // (cwd seed, config, sessions) are independent REST calls — running
-        // them serially added their sum to time-to-populated-sidebar when only
-        // the max is needed.
-        await adoptPrimaryProfile()
 
         setDesktopBootStep({
           phase: 'renderer.config',

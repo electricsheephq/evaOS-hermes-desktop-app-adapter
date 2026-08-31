@@ -1020,7 +1020,7 @@ describe('usePromptActions exec fallback error reporting', () => {
     await handle!.submitText('/reload-mcp now')
 
     expect(requestGateway).toHaveBeenCalledWith('reload.mcp', expect.objectContaining({ confirm: true }), 300_000)
-    expect(requestGateway).not.toHaveBeenCalledWith('slash.exec', expect.anything(), expect.anything())
+    expect(requestGateway.mock.calls.some(([method]) => method === 'slash.exec')).toBe(false)
     expect(renderedSeedTexts(seeds).some(text => text.includes('method not found: reload.mcp'))).toBe(true)
   })
 

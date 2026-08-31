@@ -275,6 +275,39 @@ describe('useGatewayBoot remote reconnect loop (real hook, fake socket)', () => 
     expect(events).toContainEqual(expect.objectContaining({ profile: 'asuka-eva02' }))
   })
 
+  it('does not connect the managed gateway before the authoritative profile resolves', async () => {
+    const desktop = fakeDesktop()
+    let resolveProfile: ((value: { profile: string }) => void) | undefined
+    const profile = new Promise<{ profile: string }>(resolve => {
+      resolveProfile = resolve
+    })
+    desktop.profile.get = vi.fn(() => profile)
+    const events: Array<{ profile?: string }> = []
+
+    ;(window as unknown as { hermesDesktop: unknown }).hermesDesktop = { ...desktop, eva: {} }
+
+    render(
+      <MemoryRouter>
+        <Harness handleGatewayEvent={event => events.push(event)} />
+      </MemoryRouter>
+    )
+    await flushAsync()
+
+    expect(FakeWebSocket.instances).toHaveLength(0)
+    expect(events).toEqual([])
+
+    resolveProfile?.({ profile: 'asuka-eva02' })
+    await flushAsync()
+
+    FakeWebSocket.instances[0]?.message({
+      jsonrpc: '2.0',
+      method: 'event',
+      params: { type: 'session.updated', session_id: 's-1' }
+    })
+
+    expect(events).toContainEqual(expect.objectContaining({ profile: 'asuka-eva02' }))
+  })
+
   it('fails closed when a managed boot cannot verify its assigned profile', async () => {
     const desktop = fakeDesktop()
     desktop.profile.get = vi.fn(async () => {
@@ -294,7 +327,7 @@ describe('useGatewayBoot remote reconnect loop (real hook, fake socket)', () => 
     expect($activeGatewayProfile.get()).toBe('default')
     expect($desktopBoot.get().error).toBe('assigned profile unavailable')
     expect($desktopBoot.get().visible).toBe(true)
-    expect(FakeWebSocket.instances[0]?.readyState).toBe(FakeWebSocket.CLOSED)
+    expect(FakeWebSocket.instances).toHaveLength(0)
     expect(gateways.at(-1)).toBeNull()
   })
 
