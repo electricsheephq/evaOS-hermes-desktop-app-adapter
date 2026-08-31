@@ -715,11 +715,23 @@ function publicEvaEnrollmentStatus(state, now = Date.now()) {
 }
 
 function resolveEvaManagedDesktopProfile(response) {
-  const current = String(response?.current || '').trim()
+  const current = typeof response?.current === 'string' ? response.current.trim() : ''
   if (current === 'default' || !/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/.test(current)) {
     throw new EvaBrokerError('evaOS Agent could not verify its assigned profile.', 502, 'invalid-profile-scope')
   }
   return current
+}
+
+async function resolveEvaManagedDesktopProfileFromSources(readActiveProfile, readEnrollmentStatus) {
+  try {
+    return resolveEvaManagedDesktopProfile(await readActiveProfile())
+  } catch (error) {
+    if (Number(error?.statusCode) !== 404) {
+      throw error
+    }
+
+    return resolveEvaManagedDesktopProfile({ current: readEnrollmentStatus()?.agentId })
+  }
 }
 
 module.exports = {
@@ -746,5 +758,6 @@ module.exports = {
   pollEvaDeviceCode,
   publicEvaEnrollmentStatus,
   resolveEvaManagedDesktopProfile,
+  resolveEvaManagedDesktopProfileFromSources,
   revokeEvaDesktopSession
 }

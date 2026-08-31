@@ -22,7 +22,8 @@ const {
   parseEvaDesktopAuthCallback,
   pollEvaDeviceCode,
   publicEvaEnrollmentStatus,
-  resolveEvaManagedDesktopProfile
+  resolveEvaManagedDesktopProfile,
+  resolveEvaManagedDesktopProfileFromSources
 } = require('./eva-managed.cjs')
 
 const FUTURE = '2099-07-19T12:00:00.000Z'
@@ -699,10 +700,56 @@ test('renderer-facing enrollment status never exposes tokens or backend URLs', (
 
 test('managed desktop profile uses only the backend-authoritative current process identity', () => {
   assert.equal(resolveEvaManagedDesktopProfile({ active: 'asuka-eva02', current: 'asuka-eva02' }), 'asuka-eva02')
-  for (const response of [null, {}, { current: 'default' }, { current: '../main' }, { current: 'ASUKA' }]) {
+  for (const response of [
+    null,
+    {},
+    { current: 'default' },
+    { current: '../main' },
+    { current: 'ASUKA' },
+    { current: true },
+    { current: 123 }
+  ]) {
     assert.throws(
       () => resolveEvaManagedDesktopProfile(response),
       error => error instanceof EvaBrokerError && error.code === 'invalid-profile-scope'
     )
   }
+})
+
+test('managed desktop profile falls back to enrolled identity only when the active endpoint is absent', async () => {
+  const missing = Object.assign(new Error('404: missing'), { statusCode: 404 })
+  assert.equal(
+    await resolveEvaManagedDesktopProfileFromSources(
+      async () => {
+        throw missing
+      },
+      () => ({ agentId: 'asuka-eva02' })
+    ),
+    'asuka-eva02'
+  )
+
+  for (const error of [
+    Object.assign(new Error('unauthorized'), { statusCode: 401 }),
+    Object.assign(new Error('forbidden'), { statusCode: 403 }),
+    Object.assign(new Error('unavailable'), { statusCode: 503 }),
+    new Error('transport failed')
+  ]) {
+    await assert.rejects(
+      () =>
+        resolveEvaManagedDesktopProfileFromSources(
+          async () => Promise.reject(error),
+          () => ({ agentId: 'asuka-eva02' })
+        ),
+      candidate => candidate === error
+    )
+  }
+
+  await assert.rejects(
+    () => resolveEvaManagedDesktopProfileFromSources(async () => ({ current: true }), () => ({ agentId: 'asuka-eva02' })),
+    error => error instanceof EvaBrokerError && error.code === 'invalid-profile-scope'
+  )
+  await assert.rejects(
+    () => resolveEvaManagedDesktopProfileFromSources(async () => Promise.reject(missing), () => ({ agentId: 'default' })),
+    error => error instanceof EvaBrokerError && error.code === 'invalid-profile-scope'
+  )
 })

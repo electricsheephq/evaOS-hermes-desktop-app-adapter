@@ -96,7 +96,7 @@ const {
   assertEvaManagedLocalTerminalAllowed,
   buildEvaAccountRendererResetScript,
   EVA_MANAGED_POLICY,
-  resolveEvaManagedDesktopProfile
+  resolveEvaManagedDesktopProfileFromSources
 } = require('./eva-managed.cjs')
 const { createEvaMediaGrantCodec } = require('./eva-media-grant.cjs')
 const { createEvaManagedRuntime } = require('./eva-runtime.cjs')
@@ -10230,16 +10230,23 @@ ipcMain.handle('hermes:profile:get', async () => {
   if (!EVA_MANAGED_BUILD) {
     return { profile: readActiveDesktopProfile() }
   }
-  const response = await evaManagedRuntime.requestApi({ path: '/api/profiles/active', method: 'GET' })
-  return { profile: resolveEvaManagedDesktopProfile(response) }
+
+  const profile = await resolveEvaManagedDesktopProfileFromSources(
+    () => evaManagedRuntime.requestApi({ path: '/api/profiles/active', method: 'GET' }),
+    () => evaManagedRuntime.status()
+  )
+
+  return { profile }
 })
 ipcMain.handle('hermes:profile:set', async (_event, name) => {
   if (EVA_MANAGED_BUILD) {
     if (!name || name === 'default') {
       return { profile: 'default' }
     }
+
     throw new Error('evaOS Agent uses the agent assigned by Electric Sheep; Desktop profiles cannot change it.')
   }
+
   const next = writeActiveDesktopProfile(name)
 
   // Switching profiles is a backend re-home: relaunch the dashboard under the

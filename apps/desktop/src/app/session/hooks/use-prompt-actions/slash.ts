@@ -463,7 +463,7 @@ export function useSlashCommand(deps: SlashCommandDeps) {
           // managed runtime exposes the dedicated RPC surface. Desktop and its
           // gateway update independently; older gateways still support the
           // slash-worker route.
-          if (isMissingRpcMethod(err)) {
+          if (surface.fallbackToExec !== false && isMissingRpcMethod(err)) {
             await runExec(ctx)
 
             return

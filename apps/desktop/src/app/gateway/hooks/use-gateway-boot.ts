@@ -286,13 +286,23 @@ export function useGatewayBoot({
       try {
         const pref = await desktop.profile?.get?.()
         const profileKey = (pref?.profile ?? '').trim() || 'default'
+        sourceProfile = profileKey
         $activeGatewayProfile.set(profileKey)
         setPrimaryGateway(gateway, profileKey)
         void ensureGatewayForProfile(profileKey)
       } catch (error) {
         if (isManagedEvaosAgent()) {
+          sourceProfile = 'default'
+          $activeGatewayProfile.set('default')
+          closeSecondaryGateways()
+          gateway.close()
+          publish(null)
+          callbacksRef.current.onGatewayReady(null)
+          setPrimaryGateway(null)
+          $gateway.set(null)
           throw error
         }
+
         $activeGatewayProfile.set('default')
       }
     }
@@ -409,6 +419,7 @@ export function useGatewayBoot({
     }
 
     const gateway = adoptedFromHmr ? survivor!.gateway : new HermesGateway()
+    let sourceProfile = normalizeProfileKey(survivor?.profile ?? $activeGatewayProfile.get())
 
     callbacksRef.current.onGatewayReady(gateway)
     setPrimaryGateway(gateway, survivor?.profile ?? normalizeProfileKey($activeGatewayProfile.get()))
@@ -441,8 +452,6 @@ export function useGatewayBoot({
         scheduleReconnect()
       }
     })
-
-    const sourceProfile = normalizeProfileKey($activeGatewayProfile.get())
 
     const offEvent = gateway.onEvent(event =>
       callbacksRef.current.handleGatewayEvent({ ...event, profile: sourceProfile })

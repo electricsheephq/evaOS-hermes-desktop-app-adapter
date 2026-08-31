@@ -162,7 +162,10 @@ describe('desktop slash command curation', () => {
     if (command?.surface.kind !== 'rpc') {
       return
     }
+
     expect(command.surface.rpc).toBe('reload.mcp')
+    expect(command.surface.timeoutMs).toBe(300_000)
+    expect(command.surface.fallbackToExec).toBe(false)
     const context = { command: '/reload-mcp', name: 'reload-mcp', sessionId: 's-1' }
     expect(command.surface.buildParams({ ...context, arg: '' })).toEqual({ session_id: 's-1' })
     expect(command.surface.buildParams({ ...context, arg: 'now' })).toEqual({ session_id: 's-1', confirm: true })

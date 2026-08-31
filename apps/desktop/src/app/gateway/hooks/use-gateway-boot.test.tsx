@@ -80,6 +80,10 @@ class FakeWebSocket {
     this.emit('close', {})
   }
 
+  message(frame: unknown) {
+    this.emit('message', { data: JSON.stringify(frame) })
+  }
+
   private emit(type: string, ev: unknown) {
     for (const fn of this.listeners[type] ?? []) {
       fn(ev)
@@ -126,13 +130,20 @@ function fakeDesktop() {
 
 function Harness({
   beforeConnectionSwitch = () => undefined,
+  handleGatewayEvent = () => undefined,
+  onGatewayReady = () => undefined,
   refreshSessions
-}: { beforeConnectionSwitch?: () => void; refreshSessions?: () => Promise<void> } = {}) {
+}: {
+  beforeConnectionSwitch?: () => void
+  handleGatewayEvent?: (event: { profile?: string }) => void
+  onGatewayReady?: (gateway: unknown) => void
+  refreshSessions?: () => Promise<void>
+} = {}) {
   useGatewayBoot({
     beforeConnectionSwitch,
-    handleGatewayEvent: () => undefined,
+    handleGatewayEvent,
     onConnectionReady: () => undefined,
-    onGatewayReady: () => undefined,
+    onGatewayReady,
     refreshHermesConfig: async () => undefined,
     refreshSessions: refreshSessions ?? (async () => undefined)
   })
@@ -226,6 +237,7 @@ describe('useGatewayBoot remote reconnect loop (real hook, fake socket)', () => 
     const desktop = fakeDesktop()
     desktop.profile.get = vi.fn(async () => ({ profile: 'asuka-eva02' }))
     const refreshSessions = vi.fn(async () => undefined)
+
     ;(window as unknown as { hermesDesktop: unknown }).hermesDesktop = { ...desktop, eva: {} }
 
     render(
@@ -240,19 +252,50 @@ describe('useGatewayBoot remote reconnect loop (real hook, fake socket)', () => 
     expect($desktopBoot.get().error).toBeNull()
   })
 
+  it('tags primary gateway events with the profile adopted during managed boot', async () => {
+    const desktop = fakeDesktop()
+    desktop.profile.get = vi.fn(async () => ({ profile: 'asuka-eva02' }))
+    const events: Array<{ profile?: string }> = []
+
+    ;(window as unknown as { hermesDesktop: unknown }).hermesDesktop = { ...desktop, eva: {} }
+
+    render(
+      <MemoryRouter>
+        <Harness handleGatewayEvent={event => events.push(event)} />
+      </MemoryRouter>
+    )
+    await flushAsync()
+
+    FakeWebSocket.instances[0]?.message({
+      jsonrpc: '2.0',
+      method: 'event',
+      params: { type: 'session.updated', session_id: 's-1' }
+    })
+
+    expect(events).toContainEqual(expect.objectContaining({ profile: 'asuka-eva02' }))
+  })
+
   it('fails closed when a managed boot cannot verify its assigned profile', async () => {
     const desktop = fakeDesktop()
     desktop.profile.get = vi.fn(async () => {
       throw new Error('assigned profile unavailable')
     })
     ;(window as unknown as { hermesDesktop: unknown }).hermesDesktop = { ...desktop, eva: {} }
+    $activeGatewayProfile.set('previous-profile')
+    const gateways: unknown[] = []
 
-    renderHarness()
+    render(
+      <MemoryRouter>
+        <Harness onGatewayReady={gateway => gateways.push(gateway)} />
+      </MemoryRouter>
+    )
     await flushAsync()
 
     expect($activeGatewayProfile.get()).toBe('default')
     expect($desktopBoot.get().error).toBe('assigned profile unavailable')
     expect($desktopBoot.get().visible).toBe(true)
+    expect(FakeWebSocket.instances[0]?.readyState).toBe(FakeWebSocket.CLOSED)
+    expect(gateways.at(-1)).toBeNull()
   })
 
   it('redirects managed sign-in-required boot to Gateway settings without a generic boot failure', async () => {

@@ -94,6 +94,7 @@ export type DesktopCommandSurface =
       kind: 'rpc'
       rpc: string
       timeoutMs?: number
+      fallbackToExec?: boolean
       buildParams: (ctx: SlashCommandBuildCtx) => Record<string, unknown>
     }
   | { kind: 'exec' }
@@ -155,8 +156,15 @@ const unavailable = (reason: DesktopUnavailableReason): DesktopCommandSurface =>
 const rpc = (
   rpcName: string,
   buildParams: (ctx: SlashCommandBuildCtx) => Record<string, unknown>,
-  timeoutMs?: number
-): DesktopCommandSurface => ({ kind: 'rpc', rpc: rpcName, timeoutMs, buildParams })
+  timeoutMs?: number,
+  fallbackToExec = true
+): DesktopCommandSurface => ({
+  kind: 'rpc',
+  rpc: rpcName,
+  timeoutMs,
+  ...(fallbackToExec ? {} : { fallbackToExec: false }),
+  buildParams
+})
 
 /**
  * THE source of truth for desktop slash commands. Everything below — execution
@@ -328,16 +336,24 @@ const DESKTOP_COMMAND_SPECS: readonly DesktopCommandSpec[] = [
     name: '/reload-mcp',
     description: 'Reload MCP servers and refresh tools for this session',
     aliases: ['/reload_mcp'],
-    surface: rpc('reload.mcp', ctx => {
-      const choice = ctx.arg.trim().toLowerCase()
-      if (choice === 'always') {
-        return { session_id: ctx.sessionId, confirm: true, always: true }
-      }
-      if (['now', 'approve', 'once', 'yes'].includes(choice)) {
-        return { session_id: ctx.sessionId, confirm: true }
-      }
-      return { session_id: ctx.sessionId }
-    }),
+    surface: rpc(
+      'reload.mcp',
+      ctx => {
+        const choice = ctx.arg.trim().toLowerCase()
+
+        if (choice === 'always') {
+          return { session_id: ctx.sessionId, confirm: true, always: true }
+        }
+
+        if (['now', 'approve', 'once', 'yes'].includes(choice)) {
+          return { session_id: ctx.sessionId, confirm: true }
+        }
+
+        return { session_id: ctx.sessionId }
+      },
+      300_000,
+      false
+    ),
     argumentMode: 'text'
   },
   { name: '/reload-skills', aliases: ['/reload_skills'], surface: unavailable('advanced') }
