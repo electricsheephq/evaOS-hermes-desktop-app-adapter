@@ -500,6 +500,18 @@ export interface SessionSourceFilter {
   excludeSources?: string[]
 }
 
+function sessionListProfile(profile: 'all' | (string & {})): string {
+  // Managed enrollment authorizes one concrete profile. The aggregate selector
+  // is still valid for unmanaged/admin backends, but a managed backend can
+  // reject it even when the request is read-only. Keep explicit selectors
+  // unchanged so the Electron policy remains the final authorization gate.
+  if (profile === 'all' && isManagedEvaosAgent()) {
+    return getApiRequestProfile() || 'default'
+  }
+
+  return profile
+}
+
 export async function listAllProfileSessions(
   limit = 40,
   minMessages = 0,
@@ -513,15 +525,16 @@ export async function listAllProfileSessions(
   const excludeParam = filter.excludeSources?.length
     ? `&exclude_sources=${encodeURIComponent(filter.excludeSources.join(','))}`
     : ''
+  const scopedProfile = sessionListProfile(profile)
 
   const result = await window.hermesDesktop.api<PaginatedSessions>({
     path:
       `/api/profiles/sessions?limit=${limit}&offset=0&min_messages=${Math.max(0, minMessages)}` +
-      `&archived=${archived}&order=${order}&profile=${encodeURIComponent(profile)}${sourceParam}${excludeParam}`,
-    // This aggregate endpoint is served by the primary backend. Keep its
-    // endpoint-level selector independent from Electron's backend-routing
-    // profile so managed policy can reject ambiguous query-only selectors.
-    profile: 'default',
+      `&archived=${archived}&order=${order}&profile=${encodeURIComponent(scopedProfile)}${sourceParam}${excludeParam}`,
+    // Unmanaged aggregate reads are served by the primary backend. Managed
+    // reads use the same concrete selector for the endpoint and IPC route so
+    // the signed assignment is enforced end to end.
+    profile: scopedProfile === 'all' ? 'default' : scopedProfile,
     timeoutMs: SESSION_LIST_REQUEST_TIMEOUT_MS
   })
 

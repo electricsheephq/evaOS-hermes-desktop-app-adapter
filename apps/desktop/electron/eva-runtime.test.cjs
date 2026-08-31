@@ -26,12 +26,24 @@ function writeEnrollment(statePath) {
         expires_at: EXPIRED,
         base_url: 'https://hermes-customer-one.ecs.electricsheephq.com',
         agent_id: 'main',
+        agent_display_name: 'Asuka',
         customer_id: 'customer-one',
         runtime: 'hermes'
       }
     })
   )
 }
+
+test('cold launch preserves the authorized assigned-agent display label', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-display-label-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeActiveEnrollment(statePath)
+
+  const runtime = makeManagedRuntime(statePath)
+
+  assert.equal(runtime.status().agentDisplayName, 'Asuka')
+})
 
 function writeActiveEnrollment(statePath) {
   fs.writeFileSync(
@@ -49,6 +61,7 @@ function writeActiveEnrollment(statePath) {
         expires_at: FUTURE,
         base_url: 'https://hermes-customer-one.ecs.electricsheephq.com',
         agent_id: 'main',
+        agent_display_name: 'Asuka',
         customer_id: 'customer-one',
         runtime: 'hermes'
       }

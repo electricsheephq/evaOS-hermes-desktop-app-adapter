@@ -3,7 +3,12 @@ import { describe, expect, it } from 'vitest'
 import { ar } from './ar'
 import { en } from './en'
 import { ja } from './ja'
-import { createManagedTranslations, managedProviderDisplayValue, sanitizeManagedBrandText } from './managed-brand'
+import {
+  createManagedTranslations,
+  managedProviderDisplayValue,
+  managedVendorDisplayName,
+  sanitizeManagedBrandText
+} from './managed-brand'
 import { zh } from './zh'
 import { zhHant } from './zh-hant'
 
@@ -52,6 +57,11 @@ describe('managed evaOS Agent branding', () => {
     ).toBe('Managed Browser Use included with your managed agent')
     expect(managedProviderDisplayValue('nous', 'Nous Portal', false)).toBe('Nous Portal')
     expect(managedProviderDisplayValue('openai', 'Nous-compatible proxy', true)).toBe('Nous-compatible proxy')
+  })
+
+  it('derives the managed business label from existing localized vendor copy', () => {
+    expect(managedVendorDisplayName(en.settings.gateway.managed.accountTitle)).toBe('Electric Sheep')
+    expect(managedVendorDisplayName('Compte géré')).toBe('Electric Sheep')
   })
 
   it('sanitizes function-valued provider copy after dynamic backend labels are rendered', () => {

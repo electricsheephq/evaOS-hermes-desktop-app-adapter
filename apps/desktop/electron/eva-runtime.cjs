@@ -91,7 +91,8 @@ function createEvaManagedRuntime(options) {
             base_url: parsed.runtime?.base_url,
             session_token: options.decryptSecret(parsed.runtime?.token),
             expires_at: parsed.runtime?.expires_at,
-            agent_id: parsed.runtime?.agent_id
+            agent_id: parsed.runtime?.agent_id,
+            agent_display_name: parsed.runtime?.agent_display_name
           }
         })
       } catch {
@@ -139,6 +140,7 @@ function createEvaManagedRuntime(options) {
             expires_at: state.runtime.expiresAt,
             base_url: state.runtime.baseUrl,
             agent_id: state.runtime.agentId,
+            agent_display_name: state.runtime.agentDisplayName,
             customer_id: state.runtime.customerId,
             runtime: state.runtime.runtime
           }
