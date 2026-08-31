@@ -182,10 +182,44 @@ def test_managed_only_mcp_configuration_opens_startup_gate(monkeypatch, tmp_path
     monkeypatch.setenv("MANAGED_MCP_ACCOUNT_ID", "managed-account")
     managed_scope.invalidate_managed_cache()
 
-    assert mcp_startup._has_configured_mcp_servers() is True
-    config_mod = sys.modules["hermes_cli.config"]
-    merged = managed_scope.apply_managed_overlay(config_mod.read_raw_config() or {})
-    assert merged["mcp_servers"]["managed"]["account_id"] == "managed-account"
+    from tools import mcp_tool
+
+    observed_servers = {}
+
+    def _discover_from_effective_config():
+        observed_servers.update(mcp_tool._load_mcp_config())
+        return []
+
+    monkeypatch.setitem(
+        sys.modules,
+        "tools.mcp_oauth",
+        types.SimpleNamespace(suppress_interactive_oauth=lambda: nullcontext()),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "hermes_cli.plugins",
+        types.SimpleNamespace(
+            discover_plugins=lambda: None,
+            get_plugin_manager=lambda: types.SimpleNamespace(
+                get_portable_mcp_servers=lambda: {},
+            ),
+        ),
+    )
+    monkeypatch.setattr(mcp_tool, "discover_mcp_tools", _discover_from_effective_config)
+    monkeypatch.setattr(
+        mcp_tool,
+        "get_mcp_status",
+        lambda: [{"connected": True}],
+    )
+
+    mcp_startup.start_background_mcp_discovery(
+        logger=_retry_logger(),
+        thread_name="test-managed-mcp-discovery",
+    )
+    assert mcp_startup._mcp_discovery_thread is not None
+    mcp_startup._mcp_discovery_thread.join(timeout=1.0)
+
+    assert observed_servers["managed"]["account_id"] == "managed-account"
 
 
 def _retry_logger():
