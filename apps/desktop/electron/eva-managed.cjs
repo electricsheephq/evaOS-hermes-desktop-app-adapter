@@ -716,7 +716,7 @@ function publicEvaEnrollmentStatus(state, now = Date.now()) {
 
 function resolveEvaManagedDesktopProfile(response) {
   const current = typeof response?.current === 'string' ? response.current.trim() : ''
-  if (current === 'default' || !/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/.test(current)) {
+  if (current === 'default' || !/^[a-z0-9][a-z0-9_-]{0,63}$/.test(current)) {
     throw new EvaBrokerError('evaOS Agent could not verify its assigned profile.', 502, 'invalid-profile-scope')
   }
   return current

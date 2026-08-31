@@ -700,12 +700,16 @@ test('renderer-facing enrollment status never exposes tokens or backend URLs', (
 
 test('managed desktop profile uses only the backend-authoritative current process identity', () => {
   assert.equal(resolveEvaManagedDesktopProfile({ active: 'asuka-eva02', current: 'asuka-eva02' }), 'asuka-eva02')
+  assert.equal(resolveEvaManagedDesktopProfile({ current: 'worker_alpha' }), 'worker_alpha')
+  assert.equal(resolveEvaManagedDesktopProfile({ current: 'worker-' }), 'worker-')
+  assert.equal(resolveEvaManagedDesktopProfile({ current: `a${'_'.repeat(63)}` }), `a${'_'.repeat(63)}`)
   for (const response of [
     null,
     {},
     { current: 'default' },
     { current: '../main' },
     { current: 'ASUKA' },
+    { current: `a${'_'.repeat(64)}` },
     { current: true },
     { current: 123 }
   ]) {
