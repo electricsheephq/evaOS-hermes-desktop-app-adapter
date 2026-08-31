@@ -467,6 +467,43 @@ describe('useGatewayBoot remote reconnect loop (real hook, fake socket)', () => 
     expect($gatewayState.get()).toBe('open')
   })
 
+  it('does not reconnect an applied managed gateway before its authoritative profile resolves', async () => {
+    const desktop = fakeDesktop()
+    const events: Array<{ profile?: string }> = []
+    ;(window as unknown as { hermesDesktop: unknown }).hermesDesktop = { ...desktop, eva: {} }
+
+    render(
+      <MemoryRouter>
+        <Harness handleGatewayEvent={event => events.push(event)} />
+      </MemoryRouter>
+    )
+    await flushAsync()
+    expect(FakeWebSocket.instances).toHaveLength(1)
+
+    let resolveProfile: ((value: { profile: string }) => void) | undefined
+    const profile = new Promise<{ profile: string }>(resolve => {
+      resolveProfile = resolve
+    })
+    desktop.profile.get = vi.fn(() => profile)
+
+    act(() => connectionApplied?.())
+    await flushAsync()
+
+    expect(FakeWebSocket.instances).toHaveLength(1)
+    expect(events).toEqual([])
+
+    resolveProfile?.({ profile: 'asuka-eva02' })
+    await flushAsync()
+
+    expect(FakeWebSocket.instances).toHaveLength(2)
+    FakeWebSocket.instances[1]?.message({
+      jsonrpc: '2.0',
+      method: 'event',
+      params: { type: 'session.updated', session_id: 's-2' }
+    })
+    expect(events).toContainEqual(expect.objectContaining({ profile: 'asuka-eva02' }))
+  })
+
   it('a remote that drops post-boot keeps looping with NO boot.error (the dead-end CONNECTING combo)', async () => {
     renderHarness()
     await flushAsync()

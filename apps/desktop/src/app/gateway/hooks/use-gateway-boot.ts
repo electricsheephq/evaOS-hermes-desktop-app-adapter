@@ -345,6 +345,15 @@ export function useGatewayBoot({
           return
         }
 
+        // A connection change can also change the backend-assigned profile.
+        // Adopt it before opening the replacement socket for the same reason as
+        // cold boot: events may arrive immediately after the handshake.
+        await adoptPrimaryProfile()
+
+        if (cancelled) {
+          return
+        }
+
         publish(conn)
         const wsUrl = await resolveGatewayWsUrl(desktop, conn)
         await gateway.connect(wsUrl)
@@ -353,9 +362,6 @@ export function useGatewayBoot({
           return
         }
 
-        // Same shape as boot(): profile first (session scope depends on it),
-        // then the independent fetches concurrently.
-        await adoptPrimaryProfile()
         await Promise.all([
           seedDefaultCwd(),
           callbacksRef.current.refreshHermesConfig().catch(() => undefined),
