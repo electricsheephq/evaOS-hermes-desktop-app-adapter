@@ -189,6 +189,49 @@ describe('ProfilesView', () => {
     expect(await screen.findByRole('heading', { name: 'Asuka' })).toBeTruthy()
   })
 
+  it('ignores an older managed refresh that completes after a newer one', async () => {
+    const canonicalProfile = 'e-managed-profile'
+    let resolveFirstProfile: ((value: { profile: string }) => void) | undefined
+
+    const getProfile = vi
+      .fn()
+      .mockImplementationOnce(
+        () =>
+          new Promise<{ profile: string }>(resolve => {
+            resolveFirstProfile = resolve
+          })
+      )
+      .mockResolvedValueOnce({ profile: canonicalProfile })
+
+    const getStatus = vi
+      .fn()
+      .mockResolvedValueOnce({ agentDisplayName: 'Asuka current', managed: true })
+      .mockResolvedValueOnce({ agentDisplayName: 'Asuka stale', managed: true })
+
+    Object.defineProperty(window, 'hermesDesktop', {
+      configurable: true,
+      value: {
+        eva: { status: getStatus },
+        profile: { get: getProfile }
+      }
+    })
+    vi.mocked(refreshProfiles).mockResolvedValue([makeProfile(canonicalProfile)])
+
+    render(<ProfilesView onClose={vi.fn()} />)
+    await waitFor(() => expect(getProfile).toHaveBeenCalledTimes(1))
+
+    fireEvent.keyDown(window, { key: 'r' })
+    expect(await screen.findByRole('heading', { name: 'Asuka current' })).toBeTruthy()
+
+    await act(async () => {
+      resolveFirstProfile?.({ profile: canonicalProfile })
+    })
+    await waitFor(() => expect(getStatus).toHaveBeenCalledTimes(2))
+
+    expect(screen.getByRole('heading', { name: 'Asuka current' })).toBeTruthy()
+    expect(screen.queryByRole('heading', { name: 'Asuka stale' })).toBeNull()
+  })
+
   it('opens the shared create dialog with the SOUL.md field (parity with the rail)', async () => {
     vi.mocked(refreshProfiles).mockResolvedValue([])
 

@@ -64,8 +64,11 @@ export function ProfilesView({ onClose }: ProfilesViewProps) {
   const [pendingRename, setPendingRename] = useState<null | ProfileInfo>(null)
   const [pendingDelete, setPendingDelete] = useState<null | ProfileInfo>(null)
   const [managedPresentation, setManagedPresentation] = useState<ManagedProfilePresentation | null>(null)
+  const refreshGeneration = useRef(0)
 
   const refresh = useCallback(async () => {
+    const generation = ++refreshGeneration.current
+
     try {
       const activeProfilePromise = window.hermesDesktop?.profile?.get
         ? window.hermesDesktop.profile
@@ -78,6 +81,7 @@ export function ProfilesView({ onClose }: ProfilesViewProps) {
       // before reading the matching display metadata so the two values cannot
       // come from different enrollment generations.
       const [list, activeProfileResult] = await Promise.all([refreshProfiles(), activeProfilePromise])
+      let nextManagedPresentation: ManagedProfilePresentation | null | undefined
 
       if (activeProfileResult.ok) {
         const statusResult = window.hermesDesktop?.eva?.status
@@ -93,12 +97,19 @@ export function ProfilesView({ onClose }: ProfilesViewProps) {
               ? activeProfileResult.value.profile.trim()
               : ''
 
-          setManagedPresentation(
+          nextManagedPresentation =
             statusResult.value?.managed && profileName
               ? { agentDisplayName: statusResult.value.agentDisplayName, profileName }
               : null
-          )
         }
+      }
+
+      if (generation !== refreshGeneration.current) {
+        return
+      }
+
+      if (nextManagedPresentation !== undefined) {
+        setManagedPresentation(nextManagedPresentation)
       }
 
       setProfiles(list)
@@ -110,7 +121,9 @@ export function ProfilesView({ onClose }: ProfilesViewProps) {
         return list.find(p => p.is_default)?.name ?? list[0]?.name ?? null
       })
     } catch (err) {
-      notifyError(err, p.failedLoad)
+      if (generation === refreshGeneration.current) {
+        notifyError(err, p.failedLoad)
+      }
     }
   }, [p])
 
