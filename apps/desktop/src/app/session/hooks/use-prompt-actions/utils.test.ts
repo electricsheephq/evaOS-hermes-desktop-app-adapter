@@ -220,6 +220,15 @@ describe('renderRpcResult', () => {
         'MCP servers reloaded and tools refreshed for this session.'
       )
     })
+
+    it('renders the supported underscore alias without exposing the raw envelope', () => {
+      expect(renderRpcResult({ status: 'reloaded', loaded_rev: 'rev-a' }, 'reload_mcp')).toBe(
+        'MCP servers reloaded and tools refreshed for this session.'
+      )
+      expect(
+        renderRpcResult({ status: 'confirm_required', message: 'Confirm MCP reload.' }, 'reload_mcp')
+      ).toBe('Confirm MCP reload.')
+    })
   })
 
   describe('process.stop', () => {

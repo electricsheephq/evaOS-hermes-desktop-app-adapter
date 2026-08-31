@@ -265,7 +265,7 @@ export function renderRpcResult(response: unknown, name: string): string {
 
   // reload.mcp — surface the backend's confirmation warning verbatim and a
   // concise completion line instead of exposing the raw RPC envelope.
-  if (name === 'reload-mcp' && (r.status === 'confirm_required' || r.status === 'reloaded')) {
+  if ((name === 'reload-mcp' || name === 'reload_mcp') && (r.status === 'confirm_required' || r.status === 'reloaded')) {
     if (r.status === 'confirm_required') {
       return typeof r.message === 'string' && r.message.trim()
         ? r.message.trim()
