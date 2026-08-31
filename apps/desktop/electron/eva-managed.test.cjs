@@ -600,10 +600,12 @@ test('managed enrollment accepts server-selected accounts and rejects mismatched
       base_url: 'https://hermes-jackie-david.ecs.electricsheephq.com',
       session_token: 'opaque-runtime-session',
       expires_at: FUTURE,
-      agent_id: 'louis'
+      agent_id: 'louis',
+      agent_display_name: 'Asuka'
     }
   }
   assert.equal(normalizeHermesEnrollment(payload).agentId, 'louis')
+  assert.equal(normalizeHermesEnrollment(payload).agentDisplayName, 'Asuka')
   const benjamin = normalizeHermesEnrollment({
     ...payload,
     customer_id: 'benjamin-kennedy',
@@ -615,6 +617,7 @@ test('managed enrollment accepts server-selected accounts and rejects mismatched
   })
   assert.equal(benjamin.customerId, 'benjamin-kennedy')
   assert.equal(benjamin.agentId, 'benjamin-agent')
+  assert.equal(benjamin.agentDisplayName, 'Asuka')
   assert.throws(
     () => normalizeHermesEnrollment({ ...payload, customer_id: 'another-customer' }),
     error => error instanceof EvaBrokerError && error.code === 'wrong-customer'
@@ -690,11 +693,13 @@ test('renderer-facing enrollment status never exposes tokens or backend URLs', (
       expiresAt: FUTURE,
       customerId: 'jackie-david',
       agentId: 'jane',
+      agentDisplayName: 'Asuka',
       baseUrl: 'https://secret-endpoint.example'
     }
   })
   const serialized = JSON.stringify(status)
   assert.equal(status.agentId, 'jane')
+  assert.equal(status.agentDisplayName, 'Asuka')
   assert.doesNotMatch(serialized, /desktop-secret|runtime-secret|secret-endpoint/)
 })
 

@@ -14,6 +14,7 @@ import type {
   EvaManagedStatus
 } from '@/global'
 import { useI18n } from '@/i18n'
+import { managedVendorDisplayName } from '@/i18n/managed-brand'
 import { ExternalLink } from '@/lib/external-link'
 import {
   AlertCircle,
@@ -191,6 +192,7 @@ function ScopeChip({ active, label, onSelect }: { active: boolean; label: string
 function EvaManagedGatewaySettings({ embedded = false }: { embedded?: boolean } = {}) {
   const { t } = useI18n()
   const g = t.settings.gateway.managed
+  const businessDisplayName = managedVendorDisplayName(g.accountTitle)
   const [status, setStatus] = useState<EvaManagedStatus | null>(null)
   const [busy, setBusy] = useState<'refresh' | 'sign-in' | 'sign-out' | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -261,8 +263,11 @@ function EvaManagedGatewaySettings({ embedded = false }: { embedded?: boolean } 
         {status ? (
           <div className="overflow-hidden rounded-xl border border-border/70">
             <ListRow description={status.email ?? g.notSignedIn} title={g.accountTitle} />
-            <ListRow description={status.customerId ?? g.assignedAfterSignIn} title={g.businessTitle} />
-            <ListRow description={status.agentId ?? g.assignedAfterSignIn} title={g.agentTitle} />
+            <ListRow description={businessDisplayName} title={g.businessTitle} />
+            <ListRow
+              description={status.agentDisplayName ?? status.agentId ?? g.assignedAfterSignIn}
+              title={g.agentTitle}
+            />
             <ListRow description={status.updateChannel} title={g.updateChannelTitle} />
           </div>
         ) : null}

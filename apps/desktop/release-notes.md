@@ -1,4 +1,7 @@
-# evaOS Agent 2026.7.20-es.12
+# evaOS Agent 2026.7.20-es.13
+
+- Scopes managed Artifacts, Archived Chats, and session pickers to the signed active agent profile instead of the aggregate profile selector.
+- Shows the authorized assigned-agent display name and the managed Electric Sheep vendor name while keeping canonical account and agent IDs internal.
 
 - Restores the assigned managed profile after every app restart so sessions load and new chats stay on the authorized agent.
 - Loads managed MCP configuration before server discovery, avoiding a manual reload on fresh sessions.

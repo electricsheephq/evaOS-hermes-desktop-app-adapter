@@ -31,6 +31,15 @@ export function sanitizeManagedBrandText(value: string): string {
   return sanitized.replaceAll('\uE100LEGAL_ATTRIBUTION\uE101', LEGAL_ATTRIBUTION)
 }
 
+/**
+ * Keep the managed Business row human-readable without using the opaque
+ * customer/VM slug. The existing localized account title is the presentation
+ * source for the vendor name; the fixed fallback is only for older catalogs.
+ */
+export function managedVendorDisplayName(accountTitle: string): string {
+  return accountTitle.match(/Electric Sheep/i)?.[0] ?? 'Electric Sheep'
+}
+
 function isNousProviderIdentity(providerIdentity: null | string | undefined): boolean {
   const normalized = providerIdentity?.trim().toLowerCase() ?? ''
 

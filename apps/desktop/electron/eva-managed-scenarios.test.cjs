@@ -42,6 +42,7 @@ function writeEnrollment(statePath, overrides = {}) {
             expires_at: FUTURE,
             base_url: MANAGED_BASE_URL,
             agent_id: 'main',
+            agent_display_name: overrides.agentDisplayName ?? 'Atris',
             customer_id: 'customer-one',
             runtime: 'hermes'
           }

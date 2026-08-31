@@ -524,6 +524,10 @@ function normalizeHermesEnrollment(payload, options = {}) {
     throw new EvaBrokerError('Electric Sheep returned an invalid assigned agent.', 403, 'wrong-agent')
   }
 
+  const rawDisplayName = typeof remote.agent_display_name === 'string' ? remote.agent_display_name.trim() : ''
+  const agentDisplayName =
+    rawDisplayName && rawDisplayName.length <= 120 && !hasAsciiControl(rawDisplayName) ? rawDisplayName : agentId
+
   const baseUrl = normalizeRemoteBaseUrl(remote.base_url, policy)
   const expectedOrigin = `https://hermes-${customerId}${policy.runtimeHostSuffix}`
   if (baseUrl !== expectedOrigin) {
@@ -535,6 +539,7 @@ function normalizeHermesEnrollment(payload, options = {}) {
     customerId,
     runtime: policy.runtime,
     agentId,
+    agentDisplayName,
     baseUrl,
     token: normalizeOpaqueToken(remote.session_token, 'evaOS Agent runtime session'),
     expiresAt: parseFutureTimestamp(remote.expires_at, 'evaOS Agent runtime session', now)
@@ -710,6 +715,7 @@ function publicEvaEnrollmentStatus(state, now = Date.now()) {
     runtimeSessionExpiresAt: runtime?.expiresAt ?? null,
     runtimeSessionActive: Boolean(runtime && !expiresSoon(runtime.expiresAt, 0, now)),
     agentId: runtime?.agentId ?? null,
+    agentDisplayName: runtime?.agentDisplayName ?? runtime?.agentId ?? null,
     updateChannel: EVA_MANAGED_POLICY.updateChannel
   }
 }

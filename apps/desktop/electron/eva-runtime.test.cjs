@@ -26,12 +26,56 @@ function writeEnrollment(statePath) {
         expires_at: EXPIRED,
         base_url: 'https://hermes-customer-one.ecs.electricsheephq.com',
         agent_id: 'main',
+        agent_display_name: 'Asuka',
         customer_id: 'customer-one',
         runtime: 'hermes'
       }
     })
   )
 }
+
+test('cold launch preserves the authorized assigned-agent display label', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-display-label-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeActiveEnrollment(statePath)
+
+  const runtime = makeManagedRuntime(statePath)
+
+  assert.equal(runtime.status().agentDisplayName, 'Asuka')
+})
+
+test('cold launch re-enrolls an unexpired ES12 state that has no display label', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-legacy-display-label-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeActiveEnrollment(statePath)
+  const legacy = JSON.parse(fs.readFileSync(statePath, 'utf8'))
+  delete legacy.runtime.agent_display_name
+  fs.writeFileSync(statePath, JSON.stringify(legacy))
+
+  let launches = 0
+  const runtime = makeManagedRuntime(statePath, {
+    launchRuntime: async () => {
+      launches += 1
+      return {
+        agentDisplayName: 'Asuka',
+        agentId: 'main',
+        baseUrl: 'https://hermes-customer-one.ecs.electricsheephq.com',
+        customerId: 'customer-one',
+        expiresAt: FUTURE,
+        runtime: 'hermes',
+        schemaVersion: 'evaos.hermes_desktop_enrollment.v1',
+        token: 'fresh-runtime-token'
+      }
+    }
+  })
+
+  await runtime.resolveBackend()
+
+  assert.equal(launches, 1)
+  assert.equal(runtime.status().agentDisplayName, 'Asuka')
+})
 
 function writeActiveEnrollment(statePath) {
   fs.writeFileSync(
@@ -49,6 +93,7 @@ function writeActiveEnrollment(statePath) {
         expires_at: FUTURE,
         base_url: 'https://hermes-customer-one.ecs.electricsheephq.com',
         agent_id: 'main',
+        agent_display_name: 'Asuka',
         customer_id: 'customer-one',
         runtime: 'hermes'
       }

@@ -100,6 +100,39 @@ describe('GatewaySettings', () => {
     expect(screen.queryByText(en.settings.gateway.localDesc)).toBeNull()
   })
 
+  it('uses managed enrollment labels for presentation while hiding canonical ids', async () => {
+    Object.defineProperty(window, 'hermesDesktop', {
+      configurable: true,
+      value: {
+        eva: {
+          status: vi.fn().mockResolvedValue({
+            agentDisplayName: 'Asuka',
+            agentId: 'canonical-agent',
+            customerId: 'canonical-customer',
+            desktopSessionActive: true,
+            desktopSessionExpiresAt: null,
+            email: null,
+            managed: true,
+            productName: 'evaOS Agent',
+            runtimeSessionActive: true,
+            runtimeSessionExpiresAt: null,
+            signedOut: false,
+            updateChannel: 'managed-beta'
+          })
+        }
+      }
+    })
+
+    const { GatewaySettings } = await import('./gateway-settings')
+
+    render(<GatewaySettings />)
+
+    expect(await screen.findByText('Electric Sheep')).toBeTruthy()
+    expect(await screen.findByText('Asuka')).toBeTruthy()
+    expect(screen.queryByText('canonical-customer')).toBeNull()
+    expect(screen.queryByText('canonical-agent')).toBeNull()
+  })
+
   it('shows and clears an SSH remote-profile mapping for a named Desktop profile', async () => {
     getConnectionConfig.mockImplementation(async profile =>
       profile === 'work'

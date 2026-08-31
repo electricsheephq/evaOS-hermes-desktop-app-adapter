@@ -331,6 +331,8 @@ export interface EvaManagedStatus {
   runtimeSessionExpiresAt: null | string
   runtimeSessionActive: boolean
   agentId: null | string
+  /** Authorized enrollment label for presentation; agentId remains canonical. */
+  agentDisplayName?: null | string
   updateChannel: string
 }
 

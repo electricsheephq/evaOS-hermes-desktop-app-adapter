@@ -500,6 +500,24 @@ export interface SessionSourceFilter {
   excludeSources?: string[]
 }
 
+function sessionListScope(profile: 'all' | (string & {})): { queryProfile: string; routingProfile: string } {
+  // Managed enrollment authorizes one concrete profile. The aggregate selector
+  // is still valid for unmanaged/admin backends, but a managed backend can
+  // reject it even when the request is read-only. Explicit selectors stay in
+  // the query, while the IPC route remains bound to the enrolled profile so
+  // Electron rejects any mismatch before the request reaches the backend.
+  if (isManagedEvaosAgent()) {
+    const routingProfile = getApiRequestProfile() || 'default'
+
+    return {
+      queryProfile: profile === 'all' ? routingProfile : profile,
+      routingProfile
+    }
+  }
+
+  return { queryProfile: profile, routingProfile: 'default' }
+}
+
 export async function listAllProfileSessions(
   limit = 40,
   minMessages = 0,
@@ -513,15 +531,16 @@ export async function listAllProfileSessions(
   const excludeParam = filter.excludeSources?.length
     ? `&exclude_sources=${encodeURIComponent(filter.excludeSources.join(','))}`
     : ''
+  const scope = sessionListScope(profile)
 
   const result = await window.hermesDesktop.api<PaginatedSessions>({
     path:
       `/api/profiles/sessions?limit=${limit}&offset=0&min_messages=${Math.max(0, minMessages)}` +
-      `&archived=${archived}&order=${order}&profile=${encodeURIComponent(profile)}${sourceParam}${excludeParam}`,
-    // This aggregate endpoint is served by the primary backend. Keep its
-    // endpoint-level selector independent from Electron's backend-routing
-    // profile so managed policy can reject ambiguous query-only selectors.
-    profile: 'default',
+      `&archived=${archived}&order=${order}&profile=${encodeURIComponent(scope.queryProfile)}${sourceParam}${excludeParam}`,
+    // Unmanaged aggregate reads are served by the primary backend. Managed
+    // routing stays bound to the enrolled profile, so an explicit different
+    // query selector is rejected by Electron before it reaches the backend.
+    profile: scope.routingProfile,
     timeoutMs: SESSION_LIST_REQUEST_TIMEOUT_MS
   })
 
