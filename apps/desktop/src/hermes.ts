@@ -500,16 +500,22 @@ export interface SessionSourceFilter {
   excludeSources?: string[]
 }
 
-function sessionListProfile(profile: 'all' | (string & {})): string {
+function sessionListScope(profile: 'all' | (string & {})): { queryProfile: string; routingProfile: string } {
   // Managed enrollment authorizes one concrete profile. The aggregate selector
   // is still valid for unmanaged/admin backends, but a managed backend can
-  // reject it even when the request is read-only. Keep explicit selectors
-  // unchanged so the Electron policy remains the final authorization gate.
-  if (profile === 'all' && isManagedEvaosAgent()) {
-    return getApiRequestProfile() || 'default'
+  // reject it even when the request is read-only. Explicit selectors stay in
+  // the query, while the IPC route remains bound to the enrolled profile so
+  // Electron rejects any mismatch before the request reaches the backend.
+  if (isManagedEvaosAgent()) {
+    const routingProfile = getApiRequestProfile() || 'default'
+
+    return {
+      queryProfile: profile === 'all' ? routingProfile : profile,
+      routingProfile
+    }
   }
 
-  return profile
+  return { queryProfile: profile, routingProfile: 'default' }
 }
 
 export async function listAllProfileSessions(
@@ -525,16 +531,16 @@ export async function listAllProfileSessions(
   const excludeParam = filter.excludeSources?.length
     ? `&exclude_sources=${encodeURIComponent(filter.excludeSources.join(','))}`
     : ''
-  const scopedProfile = sessionListProfile(profile)
+  const scope = sessionListScope(profile)
 
   const result = await window.hermesDesktop.api<PaginatedSessions>({
     path:
       `/api/profiles/sessions?limit=${limit}&offset=0&min_messages=${Math.max(0, minMessages)}` +
-      `&archived=${archived}&order=${order}&profile=${encodeURIComponent(scopedProfile)}${sourceParam}${excludeParam}`,
+      `&archived=${archived}&order=${order}&profile=${encodeURIComponent(scope.queryProfile)}${sourceParam}${excludeParam}`,
     // Unmanaged aggregate reads are served by the primary backend. Managed
-    // reads use the same concrete selector for the endpoint and IPC route so
-    // the signed assignment is enforced end to end.
-    profile: scopedProfile === 'all' ? 'default' : scopedProfile,
+    // routing stays bound to the enrolled profile, so an explicit different
+    // query selector is rejected by Electron before it reaches the backend.
+    profile: scope.routingProfile,
     timeoutMs: SESSION_LIST_REQUEST_TIMEOUT_MS
   })
 

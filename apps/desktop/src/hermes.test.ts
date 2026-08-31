@@ -109,6 +109,26 @@ describe('Hermes REST helpers', () => {
     )
   })
 
+  it('keeps explicit managed selectors routed through the enrolled profile for local denial', async () => {
+    setApiRequestProfile('assigned-profile')
+    Object.defineProperty(window, 'hermesDesktop', {
+      configurable: true,
+      value: { api, eva: {} }
+    })
+
+    await listAllProfileSessions(50, 1, 'exclude', 'recent', 'unauthorized-profile')
+
+    expect(api).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path:
+          '/api/profiles/sessions?limit=50&offset=0&min_messages=1&archived=exclude&order=recent' +
+          '&profile=unauthorized-profile',
+        profile: 'assigned-profile',
+        timeoutMs: 60_000
+      })
+    )
+  })
+
   it('batches the sidebar slices into a single request with per-slice limits + excludes', async () => {
     api.mockResolvedValue({ recents: { sessions: [] }, cron: { sessions: [] }, messaging: { sessions: [] } })
 
