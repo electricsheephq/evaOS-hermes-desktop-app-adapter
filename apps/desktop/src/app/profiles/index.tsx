@@ -41,17 +41,17 @@ interface ProfilesViewProps {
 
 interface ManagedProfilePresentation {
   agentDisplayName?: null | string
-  agentId: null | string
+  profileName: null | string
 }
 
 export function resolveManagedProfileDisplayName(
   profileName: string,
   presentation: ManagedProfilePresentation | null
 ): string {
-  const canonicalAgentId = presentation?.agentId?.trim()
+  const canonicalProfileName = presentation?.profileName?.trim()
   const displayName = presentation?.agentDisplayName?.trim()
 
-  return canonicalAgentId && displayName && profileName === canonicalAgentId ? displayName : profileName
+  return canonicalProfileName && displayName && profileName === canonicalProfileName ? displayName : profileName
 }
 
 export function ProfilesView({ onClose }: ProfilesViewProps) {
@@ -71,9 +71,18 @@ export function ProfilesView({ onClose }: ProfilesViewProps) {
         ? window.hermesDesktop.eva.status().catch(() => null)
         : Promise.resolve(null)
 
-      const [list, status] = await Promise.all([refreshProfiles(), statusPromise])
+      const activeProfilePromise = window.hermesDesktop?.profile?.get
+        ? window.hermesDesktop.profile.get().catch(() => null)
+        : Promise.resolve(null)
 
-      setManagedPresentation(status?.managed ? status : null)
+      const [list, status, activeProfile] = await Promise.all([refreshProfiles(), statusPromise, activeProfilePromise])
+      const profileName = typeof activeProfile?.profile === 'string' ? activeProfile.profile.trim() : ''
+
+      setManagedPresentation(
+        status?.managed && profileName
+          ? { agentDisplayName: status.agentDisplayName, profileName }
+          : null
+      )
       setProfiles(list)
       setSelectedName(current => {
         if (current && list.some(p => p.name === current)) {

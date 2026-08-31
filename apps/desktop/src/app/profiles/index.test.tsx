@@ -132,9 +132,12 @@ describe('ProfilesView', () => {
         eva: {
           status: vi.fn().mockResolvedValue({
             agentDisplayName: 'Asuka',
-            agentId: canonicalProfile,
+            agentId: 'enrollment-agent-id',
             managed: true
           })
+        },
+        profile: {
+          get: vi.fn().mockResolvedValue({ profile: canonicalProfile })
         }
       }
     })
