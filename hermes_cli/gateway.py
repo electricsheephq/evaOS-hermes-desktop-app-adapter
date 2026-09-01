@@ -337,6 +337,121 @@ def _graceful_restart_via_sigusr1(pid: int, drain_timeout: float) -> bool:
     return _wait_for_pid_exit(pid, max(drain_timeout, 1.0))
 
 
+def _runtime_status_matches_identity(
+    record: object, identity: tuple[int, float]
+) -> bool:
+    """Return whether one runtime-status record names ``identity`` exactly."""
+    if not isinstance(record, dict):
+        return False
+    try:
+        pid = int(record.get("pid"))
+        start_time = float(record.get("start_time"))
+    except (TypeError, ValueError):
+        return False
+    return pid == identity[0] and abs(start_time - identity[1]) <= 0.001
+
+
+def _wait_for_managed_external_gateway_replacement(
+    previous_identity: tuple[int, float], timeout: float = 30.0
+) -> bool:
+    """Wait for one profile-local external-supervisor replacement.
+
+    evaOS r30 uses a flat ``HERMES_HOME`` per Linux user and a root-owned
+    systemd template outside Hermes's ordinary user-service inventory.  The
+    profile-local PID, lock, and runtime-status records are therefore the
+    supported observation seam. Require one strict replacement identity whose
+    argv still carries ``--external-supervisor`` and whose runtime state is
+    ``running`` so a stale, manual, or startup-failed process cannot satisfy
+    the handoff.
+    """
+    from gateway.status import (
+        get_running_pid_identity_strict,
+        get_runtime_status_running_pid,
+        read_runtime_status,
+    )
+
+    pid_path = Path(get_hermes_home()) / "gateway.pid"
+    expected_home = Path(get_hermes_home())
+
+    deadline = time.monotonic() + max(timeout, 1.0)
+    while time.monotonic() < deadline:
+        try:
+            replacement = get_running_pid_identity_strict(pid_path)
+        except RuntimeError:
+            # PID and lock files are replaced separately during startup.  A
+            # transient mismatch is never accepted, but may converge before
+            # the bounded deadline.
+            replacement = None
+        if replacement is not None and replacement[0] != previous_identity[0]:
+            argv = _capture_gateway_argv(replacement[0])
+            if argv and "--external-supervisor" in argv:
+                runtime = read_runtime_status()
+                if isinstance(runtime, dict) and _runtime_status_matches_identity(
+                    runtime, replacement
+                ):
+                    if runtime.get("gateway_state") == "startup_failed":
+                        return False
+                    if (
+                        runtime.get("gateway_state") == "running"
+                        and get_runtime_status_running_pid(
+                            runtime, expected_home=expected_home
+                        )
+                        == replacement[0]
+                    ):
+                        return True
+        time.sleep(0.25)
+    return False
+
+
+def _restart_managed_external_gateway_if_applicable() -> bool:
+    """Restart the one gateway owned by a managed flat-profile process.
+
+    Returns ``False`` outside evaOS managed-flat-profile mode so upstream's
+    existing systemd/launchd/manual behavior remains unchanged.  Once managed
+    mode is detected, every ambiguity fails closed: falling through to the
+    ordinary manual restart would launch a credential-incomplete sibling
+    outside the root-owned supervisor.
+    """
+    from hermes_cli.profiles import _flat_managed_profile
+
+    flat_profile = _flat_managed_profile()
+    if flat_profile is None:
+        return False
+
+    from gateway.status import get_running_pid_identity_strict
+
+    pid_path = Path(get_hermes_home()) / "gateway.pid"
+    try:
+        identity = get_running_pid_identity_strict(pid_path)
+    except RuntimeError:
+        print_error("Managed gateway restart unavailable: gateway identity is invalid.")
+        raise SystemExit(1)
+    if identity is None:
+        print_error("Managed gateway restart unavailable: no profile-local gateway is running.")
+        raise SystemExit(1)
+
+    pid = identity[0]
+    argv = _capture_gateway_argv(pid)
+    if not argv or "--external-supervisor" not in argv:
+        print_error("Managed gateway restart unavailable: supervisor identity is invalid.")
+        raise SystemExit(1)
+
+    wait_budget = _get_restart_exit_wait_budget()
+    print(
+        "⏳ Managed gateway restarting gracefully — "
+        f"waiting up to {wait_budget:.0f}s for in-flight turns and drain..."
+    )
+    if not _graceful_restart_via_sigusr1(pid, wait_budget):
+        print_error("Managed gateway restart failed before supervisor handoff.")
+        raise SystemExit(1)
+    if not _wait_for_managed_external_gateway_replacement(identity):
+        print_error("Managed gateway restart failed: replacement was not observed.")
+        raise SystemExit(1)
+
+    print("✓ Managed gateway restarted through its external supervisor")
+    return True
+
+
 def _wait_for_pid_exit(pid: int, timeout: float) -> bool:
     """Wait up to ``timeout`` seconds for ``pid`` to leave the process table.
 
@@ -8332,6 +8447,16 @@ def _gateway_command_inner(args):
                 "Use `hermes gateway restart` from a shell outside the running gateway."
             )
             sys.exit(1)
+
+        # evaOS r30 runs each profile gateway in a root-owned systemd template
+        # that is intentionally outside Hermes's ordinary user-service
+        # inventory.  In that managed flat-profile layout, hand the restart to
+        # the already-running gateway (SIGUSR1 -> exit 75) and let its external
+        # supervisor create exactly one replacement.  Never fall through to
+        # the manual stop/foreground-start path: the agent service does not own
+        # the gateway's protected messaging credentials.
+        if _restart_managed_external_gateway_if_applicable():
+            return
 
         # Try service first, fall back to killing and restarting
         service_available = False
