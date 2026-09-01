@@ -5,6 +5,7 @@ const {
   EVA_MANAGED_POLICY,
   EvaBrokerError,
   assertEvaManagedApiRequestAllowed,
+  brokerPost,
   buildEvaDesktopAuthUrl,
   evaDesktopCodeChallenge,
   expiresSoon,
@@ -13,6 +14,7 @@ const {
   makeEvaDesktopCodeVerifier,
   normalizeDesktopSession,
   normalizeHermesEnrollment,
+  normalizeSupportEnrollment,
   parseEvaDesktopAuthCallback,
   pollEvaDeviceCode,
   publicEvaEnrollmentStatus,
@@ -21,6 +23,7 @@ const {
 const { createEvaWsRelay, normalizeEvaWsEndpoint, normalizeEvaWsProfile } = require('./eva-ws-relay.cjs')
 
 const RUNTIME_ENROLLMENT_RETRY_DELAYS_MS = Object.freeze([2_000, 5_000, 10_000, 20_000, 30_000])
+const SUPPORT_REQUEST_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._~-]{0,127}$/
 
 function createEvaManagedRuntime(options) {
   if (
@@ -41,6 +44,7 @@ function createEvaManagedRuntime(options) {
   const codeChallengeFor = options.codeChallengeFor ?? evaDesktopCodeChallenge
   const pollDeviceCode = options.pollDeviceCode ?? pollEvaDeviceCode
   const revokeDesktopSession = options.revokeDesktopSession ?? revokeEvaDesktopSession
+  const postBroker = options.brokerPost ?? brokerPost
   const createWsRelay = options.createWsRelay ?? createEvaWsRelay
   const statePath = options.statePath
   const now = options.now ?? Date.now
@@ -55,9 +59,10 @@ function createEvaManagedRuntime(options) {
   let runtimeGeneration = 0
   let runtimeSessionGeneration = 0
   let wsRelay = null
+  let supportRevalidated = false
 
   function emptyState(signedOut = false) {
-    return { desktop: null, runtime: null, signedOut }
+    return { desktop: null, runtime: null, delegatedSupport: null, signedOut }
   }
 
   function readState() {
@@ -103,7 +108,29 @@ function createEvaManagedRuntime(options) {
         runtime = null
       }
     }
-    return { desktop, runtime, signedOut: parsed.signed_out === true }
+
+    let delegatedSupport = null
+    let delegatedSupportNeedsClear = Boolean(parsed.delegated_support?.enrollment && !desktop)
+    if (desktop && parsed.delegated_support?.enrollment) {
+      try {
+        const serialized = options.decryptSecret(parsed.delegated_support.enrollment)
+        delegatedSupport = normalizeSupportEnrollment(JSON.parse(serialized), { now: now() })
+        if (expiresSoon(delegatedSupport.supportExpiresAt, 0, now())) {
+          delegatedSupport = null
+          delegatedSupportNeedsClear = true
+        }
+      } catch {
+        delegatedSupport = null
+        delegatedSupportNeedsClear = true
+      }
+    }
+    return {
+      desktop,
+      runtime,
+      delegatedSupport,
+      delegatedSupportNeedsClear,
+      signedOut: parsed.signed_out === true
+    }
   }
 
   function atomicWrite(payload) {
@@ -148,8 +175,82 @@ function createEvaManagedRuntime(options) {
             customer_id: state.runtime.customerId,
             runtime: state.runtime.runtime
           }
+        : null,
+      delegated_support: state.delegatedSupport
+        ? {
+            enrollment: options.encryptSecret(
+              JSON.stringify({
+                schema_version: state.delegatedSupport.schemaVersion,
+                runtime: state.delegatedSupport.runtime,
+                customer_id: state.delegatedSupport.customerId,
+                remote_backend: {
+                  base_url: state.delegatedSupport.baseUrl,
+                  session_token: state.delegatedSupport.token,
+                  expires_at: state.delegatedSupport.expiresAt,
+                  agent_id: state.delegatedSupport.agentId,
+                  agent_display_name: state.delegatedSupport.agentDisplayName
+                },
+                session_kind: state.delegatedSupport.sessionKind,
+                support_session_id: state.delegatedSupport.supportSessionId,
+                assignment_version: state.delegatedSupport.assignmentVersion,
+                support_expires_at: state.delegatedSupport.supportExpiresAt,
+                profile: state.delegatedSupport.profile,
+                signed_presentation: {
+                  customer_label: state.delegatedSupport.supportCustomerLabel,
+                  agent_label: state.delegatedSupport.supportAgentLabel,
+                  signature: state.delegatedSupport.supportPresentationSignature
+                }
+              })
+            )
+          }
         : null
     })
+  }
+
+  function currentState() {
+    let state = readState()
+    if (state.delegatedSupportNeedsClear) {
+      clearDelegatedSupportState(state)
+      state = { ...state, delegatedSupport: null, delegatedSupportNeedsClear: false }
+    }
+    return state
+  }
+
+  function clearDelegatedSupportState(
+    state = currentState(),
+    { resetRendererState = true, invalidateEnrollment = true } = {}
+  ) {
+    supportRevalidated = false
+    if (invalidateEnrollment) {
+      runtimeGeneration += 1
+      runtimeEnrollmentPromise = null
+      runtimeEnrollmentPromiseForced = false
+    }
+    runtimeSessionGeneration += 1
+    writeState({
+      desktop: state.desktop,
+      runtime: state.runtime,
+      delegatedSupport: null,
+      signedOut: state.signedOut
+    })
+    resetConnection()
+    wsRelay?.disconnectAll()
+    if (resetRendererState) void Promise.resolve(resetRenderer()).catch(() => undefined)
+  }
+
+  function supportProfileFor(runtime, requestedProfile) {
+    const requested = normalizeEvaWsProfile(requestedProfile)
+    if (runtime?.sessionKind === 'delegated_support') {
+      if (requested !== null && requested !== runtime.profile) {
+        throw new EvaBrokerError(
+          'evaOS Agent rejected a profile outside the support assignment.',
+          403,
+          'support-profile-mismatch'
+        )
+      }
+      return runtime.profile ?? null
+    }
+    return requested
   }
 
   function getWsRelay() {
@@ -172,12 +273,16 @@ function createEvaManagedRuntime(options) {
   }
 
   function clearRuntimeEnrollment() {
+    const state = currentState()
+    if (state.delegatedSupport) {
+      clearDelegatedSupportState(state)
+      return
+    }
     runtimeGeneration += 1
     runtimeEnrollmentPromise = null
     runtimeEnrollmentPromiseForced = false
     runtimeSessionGeneration += 1
-    const state = readState()
-    if (state.desktop) writeState({ desktop: state.desktop, runtime: null })
+    if (state.desktop) writeState({ desktop: state.desktop, runtime: null, delegatedSupport: null })
     resetConnection()
     wsRelay?.disconnectAll()
   }
@@ -225,6 +330,7 @@ function createEvaManagedRuntime(options) {
     signInPromise = null
     runtimeEnrollmentPromise = null
     runtimeEnrollmentPromiseForced = false
+    supportRevalidated = false
     resetRuntimeEnrollmentFailure()
     resetConnection()
     wsRelay?.disconnectAll()
@@ -282,7 +388,7 @@ function createEvaManagedRuntime(options) {
         const desktop = await pollDeviceCode(deviceCode, verifier, { signal: controller.signal })
         controller.abort()
         assertGeneration(generation)
-        writeState({ desktop, runtime: null })
+        writeState({ desktop, runtime: null, delegatedSupport: null })
         await advanceBootProgress('eva.authorized', 'Electric Sheep sign-in complete', 22)
         return desktop
       } finally {
@@ -324,7 +430,7 @@ function createEvaManagedRuntime(options) {
   }
 
   async function ensureDesktopSession() {
-    const state = readState()
+    const state = currentState()
     if (state.desktop && !expiresSoon(state.desktop.expiresAt, 0)) return state.desktop
     return requireSignIn()
   }
@@ -356,6 +462,104 @@ function createEvaManagedRuntime(options) {
     return `evaOS Agent enrollment was rejected (${statusCode ?? 'unknown'}).${diagnostic}`
   }
 
+  function assertSupportRequestId(value) {
+    const requestId = String(value || '').trim()
+    if (!SUPPORT_REQUEST_ID_RE.test(requestId)) {
+      throw new EvaBrokerError('evaOS Agent received an invalid support request.', 400, 'invalid-support-request')
+    }
+    return requestId
+  }
+
+  function assertSupportResumeMatches(previous, resumed) {
+    if (
+      resumed.supportSessionId !== previous.supportSessionId ||
+      resumed.assignmentVersion !== previous.assignmentVersion ||
+      resumed.customerId !== previous.customerId ||
+      resumed.agentId !== previous.agentId ||
+      (previous.profile && resumed.profile !== previous.profile) ||
+      Date.parse(resumed.supportExpiresAt) > Date.parse(previous.supportExpiresAt)
+    ) {
+      throw new EvaBrokerError('evaOS Agent rejected a changed support assignment.', 403, 'support-assignment-mismatch')
+    }
+  }
+
+  async function resumeDelegatedSupport(desktop, previous, auth, runtime) {
+    const payload = await postBroker(
+      {
+        action: 'internal_support_session_resume',
+        support_session_id: previous.supportSessionId
+      },
+      { desktopSession: desktop.token }
+    )
+    const resumed = normalizeSupportEnrollment(payload, { now: now() })
+    assertSupportResumeMatches(previous, resumed)
+    assertGeneration(auth, runtime)
+    writeState({ desktop, runtime: readState().runtime, delegatedSupport: resumed })
+    supportRevalidated = true
+    runtimeSessionGeneration += 1
+    resetConnection()
+    wsRelay?.disconnectAll()
+    resetRuntimeEnrollmentFailure()
+    return resumed
+  }
+
+  async function claimSupportRequest(requestId) {
+    const normalizedRequestId = assertSupportRequestId(requestId)
+    const desktop = await ensureDesktopSession()
+    const state = currentState()
+    if (state.delegatedSupport && !expiresSoon(state.delegatedSupport.supportExpiresAt, 0, now())) {
+      throw new EvaBrokerError('evaOS Agent already has an active support session.', 409, 'support-session-active')
+    }
+    const payload = await postBroker(
+      {
+        action: 'claim_internal_support_request',
+        request_id: normalizedRequestId
+      },
+      { desktopSession: desktop.token }
+    )
+    const support = normalizeSupportEnrollment(payload, { now: now() })
+    writeState({ desktop, runtime: state.runtime, delegatedSupport: support })
+    supportRevalidated = true
+    runtimeGeneration += 1
+    runtimeSessionGeneration += 1
+    runtimeEnrollmentPromise = null
+    runtimeEnrollmentPromiseForced = false
+    resetRuntimeEnrollmentFailure()
+    resetConnection()
+    wsRelay?.disconnectAll()
+    options.focusWindow?.()
+    await resetRenderer()
+    return publicEvaEnrollmentStatus({ desktop, runtime: state.runtime, delegatedSupport: support }, now())
+  }
+
+  async function endDelegatedSupport() {
+    const state = currentState()
+    const support = state.delegatedSupport
+    if (!support) return { ok: true }
+
+    let ok = true
+    try {
+      const desktop = state.desktop
+      if (!desktop || expiresSoon(desktop.expiresAt, 0, now())) {
+        throw new EvaBrokerError('Electric Sheep desktop session expired.', 401, 'session-expired')
+      }
+      await postBroker(
+        {
+          action: 'internal_support_session_end',
+          support_session_id: support.supportSessionId
+        },
+        { desktopSession: desktop.token }
+      )
+    } catch {
+      ok = false
+    } finally {
+      // The local session is always ended, even when the broker is unavailable;
+      // retaining an unconfirmed support route would be unsafe on restart.
+      clearDelegatedSupportState(state)
+    }
+    return { ok }
+  }
+
   async function ensureRuntimeEnrollment(input = {}) {
     const force = input.force === true
     if (runtimeEnrollmentPromise) {
@@ -368,8 +572,12 @@ function createEvaManagedRuntime(options) {
     }
     const auth = authGeneration
     const runtime = runtimeGeneration
-    const current = readState()
-    if (!force && current.runtime && !expiresSoon(current.runtime.expiresAt)) return current.runtime
+    const current = currentState()
+    const activeSupport = current.delegatedSupport && !expiresSoon(current.delegatedSupport.supportExpiresAt, 0, now())
+    if (activeSupport && !force && supportRevalidated && !expiresSoon(current.delegatedSupport.expiresAt)) {
+      return current.delegatedSupport
+    }
+    if (!force && !activeSupport && current.runtime && !expiresSoon(current.runtime.expiresAt)) return current.runtime
     if (!force && runtimeEnrollmentFailure && now() < runtimeEnrollmentFailure.nextRetryAt) {
       throw runtimeEnrollmentFailure.error
     }
@@ -380,6 +588,18 @@ function createEvaManagedRuntime(options) {
         assertGeneration(auth, runtime)
         await advanceBootProgress('eva.enroll', 'Resolving your assigned evaOS agent', 26)
         let enrollment
+        if (activeSupport) {
+          try {
+            return await resumeDelegatedSupport(desktop, current.delegatedSupport, auth, runtime)
+          } catch (error) {
+            const statusCode = statusCodeOf(error)
+            if (statusCode !== 401 && statusCode !== 403 && error?.code !== 'support-assignment-mismatch') throw error
+            // A revoked, expired, or changed assignment must not be used. The
+            // ordinary managed enrollment remains intact and is restored below.
+            clearDelegatedSupportState(current, { resetRendererState: true, invalidateEnrollment: false })
+            assertGeneration(auth, runtime)
+          }
+        }
         try {
           enrollment = await launchRuntime(desktop.token)
         } catch (error) {
@@ -388,7 +608,8 @@ function createEvaManagedRuntime(options) {
           return requireSignIn()
         }
         assertGeneration(auth, runtime)
-        writeState({ desktop, runtime: enrollment })
+        writeState({ desktop, runtime: enrollment, delegatedSupport: null })
+        supportRevalidated = false
         runtimeSessionGeneration += 1
         resetConnection()
         wsRelay?.disconnectAll()
@@ -438,19 +659,26 @@ function createEvaManagedRuntime(options) {
   }
 
   async function resolveBackend(input = {}) {
-    const profile = normalizeEvaWsProfile(input.profile)
+    let profile = normalizeEvaWsProfile(input.profile)
     let runtime = await ensureRuntimeEnrollment({ force: input.force })
+    profile = supportProfileFor(runtime, profile)
     try {
       await options.waitForHermes(runtime.baseUrl, runtime.token)
     } catch (error) {
       if (statusCodeOf(error) !== 401) throw error
       clearRuntimeEnrollment()
       runtime = await ensureRuntimeEnrollment({ force: true })
+      profile = supportProfileFor(runtime, profile)
       await options.waitForHermes(runtime.baseUrl, runtime.token)
     }
     const connection = {
       authMode: 'token',
-      baseUrl: `eva-managed://${runtime.customerId}`,
+      // Keep the renderer's connection key opaque while delegated support is
+      // active. The canonical account id remains main-process-only.
+      baseUrl:
+        runtime.sessionKind === 'delegated_support'
+          ? 'eva-managed://delegated-support'
+          : `eva-managed://${runtime.customerId}`,
       mode: 'remote',
       source: 'electric-sheep',
       token: '',
@@ -482,6 +710,7 @@ function createEvaManagedRuntime(options) {
   async function signIn() {
     invalidateAuthWork()
     writeState(emptyState())
+    supportRevalidated = false
     const desktop = await beginSignIn()
     const runtime = await ensureRuntimeEnrollment({ force: true })
     resetConnection()
@@ -489,7 +718,8 @@ function createEvaManagedRuntime(options) {
   }
 
   async function signOut() {
-    const state = readState()
+    const state = currentState()
+    if (state.delegatedSupport) await endDelegatedSupport()
     invalidateAuthWork()
     writeState(emptyState(true))
     if (state.desktop) await revokeDesktopSession(state.desktop.token).catch(() => false)
@@ -498,9 +728,11 @@ function createEvaManagedRuntime(options) {
   }
 
   async function refresh() {
-    const previousRuntime = readState().runtime
+    const previousState = currentState()
+    const previousRuntime = previousState.delegatedSupport ?? previousState.runtime
     const runtime = await ensureRuntimeEnrollment({ force: true })
-    const status = publicEvaEnrollmentStatus({ ...readState(), runtime })
+    const state = currentState()
+    const status = publicEvaEnrollmentStatus({ ...state, runtime: state.delegatedSupport ? state.runtime : runtime })
     if (
       !previousRuntime ||
       previousRuntime.customerId !== runtime.customerId ||
@@ -513,7 +745,8 @@ function createEvaManagedRuntime(options) {
 
   async function requestApi(request, retry = true) {
     const runtime = await ensureRuntimeEnrollment()
-    const allowed = assertEvaManagedApiRequestAllowed(request)
+    const profile = supportProfileFor(runtime, request?.profile)
+    const allowed = assertEvaManagedApiRequestAllowed(profile ? { ...request, profile } : request)
     const timeoutMs = options.resolveTimeoutMs(request?.timeoutMs)
     try {
       return await options.fetchJson(`${runtime.baseUrl}${allowed.path}`, runtime.token, {
@@ -526,7 +759,8 @@ function createEvaManagedRuntime(options) {
       if (!retry || statusCodeOf(error) !== 401) throw error
       clearRuntimeEnrollment()
       const refreshed = await ensureRuntimeEnrollment({ force: true })
-      const next = assertEvaManagedApiRequestAllowed(request)
+      const nextProfile = supportProfileFor(refreshed, request?.profile)
+      const next = assertEvaManagedApiRequestAllowed(nextProfile ? { ...request, profile: nextProfile } : request)
       return options.fetchJson(`${refreshed.baseUrl}${next.path}`, refreshed.token, {
         method: next.method,
         body: request?.body,
@@ -542,10 +776,11 @@ function createEvaManagedRuntime(options) {
     }
 
     const runtime = await ensureRuntimeEnrollment()
+    const profile = supportProfileFor(runtime, request?.profile)
     const allowed = assertEvaManagedApiRequestAllowed({
       method: 'GET',
       path: request?.path,
-      profile: request?.profile
+      profile
     })
     if (allowed.pathname !== '/api/files/download') {
       throw new EvaBrokerError('Managed media streaming blocked an unsupported endpoint.', 403, 'managed-policy')
@@ -555,10 +790,11 @@ function createEvaManagedRuntime(options) {
     if (retry && response?.status === 401) {
       clearRuntimeEnrollment()
       const refreshed = await ensureRuntimeEnrollment({ force: true })
+      const refreshedProfile = supportProfileFor(refreshed, request?.profile)
       const next = assertEvaManagedApiRequestAllowed({
         method: 'GET',
         path: request?.path,
-        profile: request?.profile
+        profile: refreshedProfile
       })
       return options.fetchMedia(`${refreshed.baseUrl}${next.path}`, refreshed.token, request?.headers)
     }
@@ -574,15 +810,18 @@ function createEvaManagedRuntime(options) {
   }
 
   return {
+    claimSupportRequest,
     close,
     completeCallback,
+    endSupportSession: endDelegatedSupport,
     freshWsUrl: async (input = {}) => {
-      await ensureRuntimeEnrollment()
       const request = typeof input === 'string' ? { profile: input } : input
+      const runtime = await ensureRuntimeEnrollment()
+      const profile = supportProfileFor(runtime, request.profile)
       return getWsRelay().mintTicket({
         generation: runtimeSessionGeneration,
         path: normalizeEvaWsEndpoint(request.path).path,
-        profile: normalizeEvaWsProfile(request.profile)
+        profile
       })
     },
     requestApi,
@@ -595,7 +834,7 @@ function createEvaManagedRuntime(options) {
     },
     signOut,
     refresh,
-    status: () => publicEvaEnrollmentStatus(readState())
+    status: () => publicEvaEnrollmentStatus(currentState())
   }
 }
 

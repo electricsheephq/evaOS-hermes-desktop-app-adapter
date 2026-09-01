@@ -40,4 +40,23 @@ describe('managed deep links', () => {
       type: 'unsupported'
     })
   })
+
+  it('strictly accepts only an opaque support request id', () => {
+    expect(classifyManagedDeepLink('evaos-agent://support/request-123', SCHEME)).toEqual({
+      type: 'support',
+      requestId: 'request-123'
+    })
+
+    for (const url of [
+      'evaos-agent://support/request-123?profile=main',
+      'evaos-agent://support/request-123/extra',
+      'evaos-agent://support/request-123/',
+      'evaos-agent://support/request%2F123',
+      'evaos-agent://support/../request-123',
+      'evaos-agent://support/request%0A123',
+      'evaos-agent://support/request-123#customer'
+    ]) {
+      expect(classifyManagedDeepLink(url, SCHEME), url).toEqual({ type: 'unsupported' })
+    }
+  })
 })

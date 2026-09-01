@@ -5,7 +5,10 @@ export interface RendererDeepLinkPayload {
 }
 
 export type ManagedDeepLink =
-  { type: 'auth-callback' } | { type: 'blueprint'; payload: RendererDeepLinkPayload } | { type: 'unsupported' }
+  | { type: 'auth-callback' }
+  | { type: 'blueprint'; payload: RendererDeepLinkPayload }
+  | { type: 'support'; requestId: string }
+  | { type: 'unsupported' }
 
 const SECRET_QUERY_KEY_RE =
   /(?:^|[._-])(?:auth|authorization|cookie|credential|device[_-]?code|secret|session|state|token)(?:$|[._-])/i
@@ -48,6 +51,34 @@ export function classifyManagedDeepLink(rawUrl: string, callbackScheme: string):
     // Authentication stays in the main process. Never return callback query
     // material in a renderer-facing object.
     return { type: 'auth-callback' }
+  }
+
+  if (url.hostname === 'support') {
+    // Support links intentionally carry only the opaque request id. Keep the
+    // route stricter than blueprint links: no selectors, query material, or
+    // encoded path components may reach the main-process claim path.
+    const rawText = String(rawUrl)
+    const schemeEnd = rawText.indexOf('://')
+    const rawAuthorityPath = schemeEnd < 0 ? '' : rawText.slice(schemeEnd + 3).split(/[?#]/, 1)[0]
+    const rawPathStart = rawAuthorityPath.indexOf('/')
+    const rawPath = rawPathStart < 0 ? '' : rawAuthorityPath.slice(rawPathStart)
+    if (
+      url.search ||
+      rawText.includes('?') ||
+      rawText.includes('#') ||
+      rawPath !== url.pathname ||
+      url.pathname.length < 2 ||
+      !/^\/[^/]+$/.test(url.pathname)
+    ) {
+      return { type: 'unsupported' }
+    }
+
+    const requestId = url.pathname.slice(1)
+    if (!/^[A-Za-z0-9][A-Za-z0-9._~-]{0,127}$/.test(requestId) || requestId.includes('%')) {
+      return { type: 'unsupported' }
+    }
+
+    return { type: 'support', requestId }
   }
 
   if (url.hostname !== 'blueprint') {
