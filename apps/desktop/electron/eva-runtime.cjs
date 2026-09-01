@@ -967,12 +967,13 @@ function createEvaManagedRuntime(options) {
     writeState({ ...emptyState(true), rendererCleanupPending: true })
     resetConnection()
     wsRelay?.disconnectAll()
+    const rendererReset = requestRendererReset()
     if (state.delegatedSupport) {
       const ended = await requestDelegatedSupportEnd(state).catch(() => false)
       if (!ended) rememberLog('[eva-managed] support session remote end failed after local sign-out')
     }
     if (state.desktop) await revokeDesktopSession(state.desktop.token).catch(() => false)
-    await requestRendererReset()
+    await rendererReset
     return { ok: true }
   }
 

@@ -1098,6 +1098,39 @@ test('sign-out severs local support access even when the remote end call fails',
   assert.ok(disconnects >= 1)
 })
 
+test('sign-out starts renderer isolation before remote support cleanup settles', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-support-signout-order-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeActiveEnrollment(statePath)
+  let releaseSupportEnd
+  const supportEndGate = new Promise(resolve => {
+    releaseSupportEnd = resolve
+  })
+  let rendererResetStarted = false
+  const runtime = makeManagedRuntime(statePath, {
+    brokerPost: async body => {
+      if (body.action === 'claim_internal_support_request') return supportEnrollment()
+      if (body.action === 'internal_support_session_end') {
+        await supportEndGate
+        return { ok: true }
+      }
+      throw new Error('unexpected action')
+    },
+    revokeDesktopSession: async () => true,
+    resetRenderer: async () => {
+      rendererResetStarted = true
+    }
+  })
+
+  await runtime.claimSupportRequest('request-123')
+  const signOut = runtime.signOut()
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(rendererResetStarted, true)
+  releaseSupportEnd()
+  assert.deepEqual(await signOut, { ok: true })
+})
+
 test('cold launch replaces an expired runtime enrollment before connecting', async t => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-expiry-'))
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
