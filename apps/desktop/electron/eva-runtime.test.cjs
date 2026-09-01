@@ -216,6 +216,40 @@ test('support claim separates encrypted delegated state and restores the ordinar
   })
 })
 
+test('delegated support rejects aggregate API profile selectors without changing ordinary managed access', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-support-profile-scope-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeActiveEnrollment(statePath)
+  sealExistingState(statePath)
+  const fetchedUrls = []
+  const runtime = makeManagedRuntime(statePath, {
+    encryptSecret: sealed,
+    decryptSecret: unsealed,
+    brokerPost: async body => {
+      if (body.action === 'claim_internal_support_request') return supportEnrollment()
+      if (body.action === 'internal_support_session_end') return { ok: true }
+      throw new Error('unexpected support action')
+    },
+    fetchJson: async url => {
+      fetchedUrls.push(url)
+      return { ok: true }
+    }
+  })
+
+  await runtime.claimSupportRequest('request-123')
+  await assert.rejects(
+    runtime.requestApi({ path: '/api/cron/jobs?profile=all' }),
+    error => error instanceof EvaBrokerError && error.code === 'managed-escape'
+  )
+  assert.equal(fetchedUrls.length, 0)
+
+  await runtime.endSupportSession()
+  await runtime.requestApi({ path: '/api/skills?profile=all', profile: 'main' })
+  assert.equal(fetchedUrls.length, 1)
+  assert.match(fetchedUrls[0], /\/api\/skills\?profile=all$/)
+})
+
 test('restart resumes only the same support assignment and rejects actor or replay failures before persistence', async t => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-support-resume-'))
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }))

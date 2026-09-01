@@ -746,7 +746,9 @@ function createEvaManagedRuntime(options) {
   async function requestApi(request, retry = true) {
     const runtime = await ensureRuntimeEnrollment()
     const profile = supportProfileFor(runtime, request?.profile)
-    const allowed = assertEvaManagedApiRequestAllowed(profile ? { ...request, profile } : request)
+    const allowed = assertEvaManagedApiRequestAllowed(profile ? { ...request, profile } : request, {
+      allowProfileSelectors: runtime.sessionKind !== 'delegated_support'
+    })
     const timeoutMs = options.resolveTimeoutMs(request?.timeoutMs)
     try {
       return await options.fetchJson(`${runtime.baseUrl}${allowed.path}`, runtime.token, {
@@ -760,7 +762,9 @@ function createEvaManagedRuntime(options) {
       clearRuntimeEnrollment()
       const refreshed = await ensureRuntimeEnrollment({ force: true })
       const nextProfile = supportProfileFor(refreshed, request?.profile)
-      const next = assertEvaManagedApiRequestAllowed(nextProfile ? { ...request, profile: nextProfile } : request)
+      const next = assertEvaManagedApiRequestAllowed(nextProfile ? { ...request, profile: nextProfile } : request, {
+        allowProfileSelectors: refreshed.sessionKind !== 'delegated_support'
+      })
       return options.fetchJson(`${refreshed.baseUrl}${next.path}`, refreshed.token, {
         method: next.method,
         body: request?.body,
@@ -781,6 +785,8 @@ function createEvaManagedRuntime(options) {
       method: 'GET',
       path: request?.path,
       profile
+    }, {
+      allowProfileSelectors: runtime.sessionKind !== 'delegated_support'
     })
     if (allowed.pathname !== '/api/files/download') {
       throw new EvaBrokerError('Managed media streaming blocked an unsupported endpoint.', 403, 'managed-policy')
@@ -795,6 +801,8 @@ function createEvaManagedRuntime(options) {
         method: 'GET',
         path: request?.path,
         profile: refreshedProfile
+      }, {
+        allowProfileSelectors: refreshed.sessionKind !== 'delegated_support'
       })
       return options.fetchMedia(`${refreshed.baseUrl}${next.path}`, refreshed.token, request?.headers)
     }
