@@ -29,7 +29,10 @@ import type { SubmitTextOptions } from './utils'
 
 import { uploadComposerAttachment, usePromptActions } from '.'
 
-const { mockRunGatewayRestart } = vi.hoisted(() => ({ mockRunGatewayRestart: vi.fn() }))
+const { mockInvalidateSlashCompletions, mockRunGatewayRestart } = vi.hoisted(() => ({
+  mockInvalidateSlashCompletions: vi.fn(),
+  mockRunGatewayRestart: vi.fn()
+}))
 
 vi.mock('@/hermes', () => ({
   getProfiles: vi.fn(async () => ({ profiles: [] })),
@@ -43,8 +46,13 @@ vi.mock('@/store/system-actions', () => ({
   runGatewayRestart: mockRunGatewayRestart
 }))
 
+vi.mock('@/lib/slash-completion-cache', () => ({
+  invalidateSlashCompletions: mockInvalidateSlashCompletions
+}))
+
 afterEach(() => {
   Reflect.deleteProperty(window, 'hermesDesktop')
+  mockInvalidateSlashCompletions.mockReset()
   mockRunGatewayRestart.mockReset()
 })
 
@@ -1066,6 +1074,7 @@ describe('usePromptActions exec fallback error reporting', () => {
 
     expect(requestGateway).toHaveBeenCalledWith('skills.reload', { session_id: RUNTIME_SESSION_ID }, undefined)
     expect(requestGateway.mock.calls.some(([method]) => method === 'slash.exec')).toBe(false)
+    expect(mockInvalidateSlashCompletions).toHaveBeenCalledTimes(1)
     expect(renderedSeedTexts(seeds).some(text => text.includes('4 skill(s) available'))).toBe(true)
   })
 

@@ -17,6 +17,7 @@ import {
 } from '@/lib/desktop-slash-commands'
 import { isMissingRpcMethod } from '@/lib/gateway-rpc'
 import { sanitizeDesktopSlashOutput } from '@/lib/managed-slash-output'
+import { invalidateSlashCompletions } from '@/lib/slash-completion-cache'
 import { setSessionYolo } from '@/lib/yolo-session'
 import { openCommandPalettePage } from '@/store/command-palette'
 import { setComposerDraft } from '@/store/composer'
@@ -465,6 +466,11 @@ export function useSlashCommand(deps: SlashCommandDeps) {
           // requestGateway layer keeps (30s) is too tight for RPCs that do
           // real work.
           const result = await requestGateway<unknown>(surface.rpc, params, surface.timeoutMs)
+
+          if (surface.rpc === 'skills.reload') {
+            invalidateSlashCompletions()
+          }
+
           const body = renderRpcResult(result, ctx.name)
 
           renderSlashOutput(body || `/${ctx.name}: no output`)
