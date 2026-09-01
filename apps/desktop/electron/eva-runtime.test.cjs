@@ -369,8 +369,10 @@ test('support end cannot report success before renderer isolation completes', as
     error => error instanceof EvaBrokerError && error.code === 'support-renderer-reset-failed'
   )
   assert.equal(ordinaryFetches, 0)
+  assert.deepEqual(await runtime.endSupportSession(), { ok: false })
 
   rendererCanReset = true
+  assert.deepEqual(await runtime.endSupportSession(), { ok: true })
   await runtime.requestApi({ method: 'GET', path: '/api/sessions' })
   assert.equal(ordinaryFetches, 1)
 })

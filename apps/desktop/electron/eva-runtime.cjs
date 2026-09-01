@@ -751,7 +751,17 @@ function createEvaManagedRuntime(options) {
   async function endDelegatedSupport() {
     const state = currentState()
     const support = state.delegatedSupport
-    if (!support) return { ok: true }
+    if (!support) {
+      if (!state.rendererCleanupPending) return { ok: true }
+      const isolated = await flushPendingRendererReset()
+      if (!isolated) {
+        supportEndError = true
+        rememberLog('[eva-managed] support session ended but renderer isolation is still pending')
+        return { ok: false }
+      }
+      supportEndError = null
+      return { ok: true }
+    }
     const auth = authGeneration
 
     try {
