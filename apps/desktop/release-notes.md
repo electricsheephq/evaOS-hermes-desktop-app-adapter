@@ -1,3 +1,8 @@
+# evaOS Agent 2026.7.20-es.14
+
+- Shows the authorized managed agent name in Profiles while keeping the canonical profile ID for routing, storage, and mutations.
+- Retains the ES13 fixes for managed Artifacts, Archived Chats, cold-boot sessions, MCP reload, and signed profile scope.
+
 # evaOS Agent 2026.7.20-es.13
 
 - Scopes managed Artifacts, Archived Chats, and session pickers to the signed active agent profile instead of the aggregate profile selector.
