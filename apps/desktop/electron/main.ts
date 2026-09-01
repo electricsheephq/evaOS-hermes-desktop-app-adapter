@@ -4420,14 +4420,15 @@ function fetchJson(url, token, options: any = {}) {
 
     const signal = options.signal
     const abortRequest = () => req.destroy(new Error('Managed support request cancelled.'))
+    req.on('error', rejectOnce)
     if (signal?.aborted) {
+      rejectOnce(new Error('Managed support request cancelled.'))
       abortRequest()
       return
     } else {
       signal?.addEventListener('abort', abortRequest, { once: true })
     }
     req.on('close', () => signal?.removeEventListener('abort', abortRequest))
-    req.on('error', rejectOnce)
     req.setTimeout(timeoutMs, () => {
       req.destroy(new Error(`Timed out connecting to Hermes backend after ${timeoutMs}ms`))
     })

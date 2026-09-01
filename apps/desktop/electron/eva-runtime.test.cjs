@@ -1819,6 +1819,31 @@ test('managed runtime forwards unknown APIs, bodies, uploads, and Hermes profile
   assert.equal(calls[0].options.upload, upload)
 })
 
+test('ordinary managed request failures preserve their original error', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-ordinary-error-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeActiveEnrollment(statePath)
+
+  const failure = new Error('ordinary backend unavailable')
+  const runtime = createEvaManagedRuntime({
+    statePath,
+    encryptSecret: value => value,
+    decryptSecret: value => value,
+    fetchJson: async () => {
+      throw failure
+    },
+    createWsRelay: () => ({
+      mintTicket: async () => 'ws://127.0.0.1:12345/managed',
+      disconnectAll: () => undefined,
+      close: async () => undefined
+    }),
+    resolveTimeoutMs: () => 1_000
+  })
+
+  await assert.rejects(runtime.requestApi({ path: '/api/sessions', method: 'GET' }), error => error === failure)
+})
+
 test('managed connections and endpoint tickets preserve the selected profile and runtime generation', async t => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-ws-profile-'))
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }))

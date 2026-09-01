@@ -388,6 +388,7 @@ function createEvaManagedRuntime(options) {
   }
 
   function normalizeSupportRequestError(error, guard) {
+    if (!guard) return error
     if (guard?.controller.signal.aborted || guard?.generation !== runtimeSessionGeneration) {
       return supportSessionExpiredError()
     }
