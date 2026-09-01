@@ -176,12 +176,16 @@ describe('ProfilesView', () => {
         profile: { get: getProfile }
       }
     })
-    vi.mocked(refreshProfiles).mockResolvedValue([makeProfile(canonicalProfile)])
+    vi.mocked(refreshProfiles).mockImplementation(async () => {
+      callOrder.push('list')
+
+      return [makeProfile(canonicalProfile)]
+    })
 
     await renderProfilesView()
 
     expect(await screen.findByRole('heading', { name: 'Asuka' })).toBeTruthy()
-    expect(callOrder).toEqual(['profile', 'status'])
+    expect(callOrder).toEqual(['list', 'profile', 'status'])
 
     fireEvent.keyDown(window, { key: 'r' })
     await waitFor(() => expect(getProfile).toHaveBeenCalledTimes(2))
@@ -189,9 +193,11 @@ describe('ProfilesView', () => {
     expect(await screen.findByRole('heading', { name: 'Asuka' })).toBeTruthy()
   })
 
-  it('ignores an older managed refresh that completes after a newer one', async () => {
+  it('coalesces overlapping managed refreshes before enrollment reads', async () => {
     const canonicalProfile = 'e-managed-profile'
     let resolveFirstProfile: ((value: { profile: string }) => void) | undefined
+
+    vi.mocked(refreshProfiles).mockClear()
 
     const getProfile = vi
       .fn()
@@ -201,12 +207,8 @@ describe('ProfilesView', () => {
             resolveFirstProfile = resolve
           })
       )
-      .mockResolvedValueOnce({ profile: canonicalProfile })
 
-    const getStatus = vi
-      .fn()
-      .mockResolvedValueOnce({ agentDisplayName: 'Asuka current', managed: true })
-      .mockResolvedValueOnce({ agentDisplayName: 'Asuka stale', managed: true })
+    const getStatus = vi.fn().mockResolvedValue({ agentDisplayName: 'Asuka current', managed: true })
 
     Object.defineProperty(window, 'hermesDesktop', {
       configurable: true,
@@ -221,15 +223,15 @@ describe('ProfilesView', () => {
     await waitFor(() => expect(getProfile).toHaveBeenCalledTimes(1))
 
     fireEvent.keyDown(window, { key: 'r' })
-    expect(await screen.findByRole('heading', { name: 'Asuka current' })).toBeTruthy()
+    expect(getProfile).toHaveBeenCalledTimes(1)
 
     await act(async () => {
       resolveFirstProfile?.({ profile: canonicalProfile })
     })
-    await waitFor(() => expect(getStatus).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(getStatus).toHaveBeenCalledTimes(1))
 
-    expect(screen.getByRole('heading', { name: 'Asuka current' })).toBeTruthy()
-    expect(screen.queryByRole('heading', { name: 'Asuka stale' })).toBeNull()
+    expect(await screen.findByRole('heading', { name: 'Asuka current' })).toBeTruthy()
+    expect(refreshProfiles).toHaveBeenCalledTimes(1)
   })
 
   it('opens the shared create dialog with the SOUL.md field (parity with the rail)', async () => {

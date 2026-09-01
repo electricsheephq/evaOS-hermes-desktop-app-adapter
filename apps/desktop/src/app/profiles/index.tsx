@@ -64,23 +64,31 @@ export function ProfilesView({ onClose }: ProfilesViewProps) {
   const [pendingRename, setPendingRename] = useState<null | ProfileInfo>(null)
   const [pendingDelete, setPendingDelete] = useState<null | ProfileInfo>(null)
   const [managedPresentation, setManagedPresentation] = useState<ManagedProfilePresentation | null>(null)
-  const refreshGeneration = useRef(0)
+  const refreshInFlight = useRef(false)
 
   const refresh = useCallback(async () => {
-    const generation = ++refreshGeneration.current
+    if (refreshInFlight.current) {
+      return
+    }
+
+    refreshInFlight.current = true
 
     try {
-      const activeProfilePromise = window.hermesDesktop?.profile?.get
-        ? window.hermesDesktop.profile
+      // Both managed reads can refresh enrollment after a 401. Keep them
+      // serialized, and coalesce overlapping view refreshes, so one recovery
+      // cannot clear or invalidate the other's forced enrollment.
+      const list = await refreshProfiles()
+
+      const activeProfileResult = window.hermesDesktop?.profile?.get
+        ? await window.hermesDesktop.profile
             .get()
             .then(value => ({ ok: true as const, value }))
             .catch(() => ({ ok: false as const }))
-        : Promise.resolve({ ok: false as const })
+        : { ok: false as const }
 
       // profile.get() may refresh managed enrollment on a 401. Resolve it
       // before reading the matching display metadata so the two values cannot
       // come from different enrollment generations.
-      const [list, activeProfileResult] = await Promise.all([refreshProfiles(), activeProfilePromise])
       let nextManagedPresentation: ManagedProfilePresentation | null | undefined
 
       if (activeProfileResult.ok) {
@@ -104,10 +112,6 @@ export function ProfilesView({ onClose }: ProfilesViewProps) {
         }
       }
 
-      if (generation !== refreshGeneration.current) {
-        return
-      }
-
       if (nextManagedPresentation !== undefined) {
         setManagedPresentation(nextManagedPresentation)
       }
@@ -121,9 +125,9 @@ export function ProfilesView({ onClose }: ProfilesViewProps) {
         return list.find(p => p.is_default)?.name ?? list[0]?.name ?? null
       })
     } catch (err) {
-      if (generation === refreshGeneration.current) {
-        notifyError(err, p.failedLoad)
-      }
+      notifyError(err, p.failedLoad)
+    } finally {
+      refreshInFlight.current = false
     }
   }, [p])
 
