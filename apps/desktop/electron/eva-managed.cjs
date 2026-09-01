@@ -63,8 +63,6 @@ const EVA_MANAGED_BLOCKED_GATEWAY_PREFIXES = ['billing.', 'subscription.']
 const EVA_MANAGED_HIDDEN_NOUS_COMMANDS = new Set(['subscription', 'topup', 'upgrade'])
 const EVA_MANAGED_PROFILE_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
 const EVA_MANAGED_PROFILE_SELECTORS = new Set(['all'])
-const EVA_SUPPORT_SESSION_KIND = 'delegated_support'
-const EVA_SUPPORT_MAX_DURATION_MS = 60 * 60 * 1_000
 const EVA_MANAGED_BROKER_CODE_RE = /^[a-z][a-z0-9]*(?:[_-][a-z0-9]+)*$/
 const EVA_MANAGED_SAFE_BROKER_CODES = new Set([
   'ambiguous_hermes_agent_binding',
@@ -85,13 +83,7 @@ const EVA_MANAGED_SAFE_BROKER_CODES = new Set([
   'missing_hermes_agent_binding',
   'missing_runtime_permission',
   'provider_ambiguous',
-  'revoke_upstream_failed',
-  'support_actor_mismatch',
-  'support_assignment_mismatch',
-  'support_assignment_revoked',
-  'support_request_replayed',
-  'support_session_active',
-  'support_session_expired'
+  'revoke_upstream_failed'
 ])
 const EVA_ACCOUNT_SCOPED_RENDERER_STORAGE_KEYS = Object.freeze([
   'hermes.desktop.composerQueue.v1',
@@ -214,8 +206,7 @@ function buildEvaAccountRendererResetScript() {
   })()`
 }
 
-function assertEvaManagedApiRequestAllowed(request, options = {}) {
-  const allowProfileSelectors = options.allowProfileSelectors !== false
+function assertEvaManagedApiRequestAllowed(request) {
   const method = String(request?.method || 'GET').toUpperCase()
   if (!EVA_MANAGED_API_METHODS.has(method)) {
     throw new EvaBrokerError('evaOS Agent blocked an invalid managed-backend method.', 400, 'managed-policy')
@@ -267,10 +258,7 @@ function assertEvaManagedApiRequestAllowed(request, options = {}) {
     if (routingProfile === null || !EVA_MANAGED_PROFILE_RE.test(endpointProfile)) {
       throw new EvaBrokerError('evaOS Agent blocked an invalid Hermes profile.', 400, 'managed-policy')
     }
-    if (
-      endpointProfile !== routingProfile &&
-      (!allowProfileSelectors || !EVA_MANAGED_PROFILE_SELECTORS.has(endpointProfile))
-    ) {
+    if (endpointProfile !== routingProfile && !EVA_MANAGED_PROFILE_SELECTORS.has(endpointProfile)) {
       throw new EvaBrokerError(
         'evaOS Agent connection and assignment are managed by Electric Sheep.',
         403,
@@ -558,103 +546,6 @@ function normalizeHermesEnrollment(payload, options = {}) {
   }
 }
 
-function normalizeSupportLabel(value, label) {
-  const normalized = typeof value === 'string' ? value.trim() : ''
-  if (!normalized || normalized.length > 120 || hasAsciiControl(normalized)) {
-    throw new EvaBrokerError(`Electric Sheep returned an invalid ${label}.`, 502, 'invalid-enrollment')
-  }
-  return normalized
-}
-
-function normalizeSupportEnrollment(payload, options = {}) {
-  const now = options.now ?? Date.now()
-  const support = payload?.support && typeof payload.support === 'object' ? payload.support : payload
-  if (
-    !payload ||
-    typeof payload !== 'object' ||
-    (payload.session_kind ?? support.session_kind) !== EVA_SUPPORT_SESSION_KIND
-  ) {
-    throw new EvaBrokerError('Electric Sheep returned a non-support enrollment.', 403, 'invalid-support-session')
-  }
-
-  const enrollment = normalizeHermesEnrollment(payload, options)
-  const supportSessionId = normalizeOpaqueToken(
-    payload.support_session_id ?? support.support_session_id,
-    'Electric Sheep support session'
-  )
-  let assignmentVersion
-  try {
-    assignmentVersion = normalizeOpaqueToken(
-      payload.assignment_version ?? support.assignment_version,
-      'Electric Sheep support assignment'
-    )
-  } catch {
-    throw new EvaBrokerError('Electric Sheep returned an invalid support assignment.', 403, 'invalid-support-session')
-  }
-  if (assignmentVersion.length > 256 || hasAsciiControl(assignmentVersion)) {
-    throw new EvaBrokerError('Electric Sheep returned an invalid support assignment.', 403, 'invalid-support-session')
-  }
-
-  const supportExpiresAt = parseFutureTimestamp(
-    payload.support_expires_at ?? support.support_expires_at ?? payload.support_deadline ?? support.deadline,
-    'Electric Sheep support session',
-    now
-  )
-  if (Date.parse(supportExpiresAt) > now + EVA_SUPPORT_MAX_DURATION_MS) {
-    throw new EvaBrokerError('Electric Sheep returned an unsafe support deadline.', 403, 'invalid-support-session')
-  }
-
-  const presentation =
-    (payload.signed_presentation && typeof payload.signed_presentation === 'object'
-      ? payload.signed_presentation
-      : null) ??
-    (payload.presentation && typeof payload.presentation === 'object' ? payload.presentation : null) ??
-    (payload.support_presentation && typeof payload.support_presentation === 'object'
-      ? payload.support_presentation
-      : null) ??
-    (support.signed_presentation && typeof support.signed_presentation === 'object'
-      ? support.signed_presentation
-      : support.presentation && typeof support.presentation === 'object'
-        ? support.presentation
-        : null)
-  if (!presentation) {
-    throw new EvaBrokerError('Electric Sheep returned no support presentation.', 502, 'invalid-enrollment')
-  }
-  const supportCustomerLabel = normalizeSupportLabel(
-    presentation.customer_label ?? presentation.customer_display_name ?? presentation.client_label,
-    'support customer label'
-  )
-  const supportAgentLabel = normalizeSupportLabel(
-    presentation.agent_label ?? presentation.agent_display_name,
-    'support agent label'
-  )
-  const presentationSignature = normalizeOpaqueToken(
-    presentation.signature ??
-      presentation.signed_label ??
-      payload.presentation_signature ??
-      support.presentation_signature,
-    'Electric Sheep support presentation'
-  )
-  const rawProfile = payload.profile ?? payload.allowed_profile ?? support.profile ?? support.allowed_profile
-  const profile = rawProfile == null ? null : String(rawProfile).trim()
-  if (profile === null || !EVA_MANAGED_PROFILE_RE.test(profile) || profile === 'all') {
-    throw new EvaBrokerError('Electric Sheep returned an invalid support profile.', 403, 'invalid-support-session')
-  }
-
-  return {
-    ...enrollment,
-    sessionKind: EVA_SUPPORT_SESSION_KIND,
-    supportSessionId,
-    assignmentVersion,
-    supportExpiresAt,
-    supportDeadline: supportExpiresAt,
-    supportCustomerLabel,
-    supportAgentLabel,
-    supportPresentationSignature: presentationSignature,
-    profile
-  }
-}
-
 async function brokerPost(body, options = {}) {
   const policy = options.policy ?? EVA_MANAGED_POLICY
   const fetchImpl = options.fetchImpl ?? globalThis.fetch
@@ -813,34 +704,19 @@ function expiresSoon(expiresAt, skewMs = EVA_MANAGED_POLICY.runtimeRefreshSkewMs
 function publicEvaEnrollmentStatus(state, now = Date.now()) {
   const desktop = state?.desktop ?? null
   const runtime = state?.runtime ?? null
-  const delegatedSupport =
-    state?.delegatedSupport ?? (runtime?.sessionKind === EVA_SUPPORT_SESSION_KIND ? runtime : null)
-  const delegatedSupportActive = Boolean(
-    delegatedSupport && !expiresSoon(delegatedSupport.supportExpiresAt, 0, now)
-  )
-  const presentationRuntime = delegatedSupportActive ? delegatedSupport : runtime
   return {
     managed: true,
     productName: EVA_MANAGED_POLICY.productName,
     signedOut: state?.signedOut === true,
-    customerId: delegatedSupportActive ? null : runtime?.customerId ?? null,
+    customerId: runtime?.customerId ?? null,
     email: desktop?.email ?? null,
     desktopSessionExpiresAt: desktop?.expiresAt ?? null,
     desktopSessionActive: Boolean(desktop && !expiresSoon(desktop.expiresAt, 0, now)),
-    runtimeSessionExpiresAt: presentationRuntime?.expiresAt ?? null,
-    runtimeSessionActive: Boolean(presentationRuntime && !expiresSoon(presentationRuntime.expiresAt, 0, now)),
-    agentId: delegatedSupportActive ? null : runtime?.agentId ?? null,
-    agentDisplayName: delegatedSupportActive
-      ? delegatedSupport.supportAgentLabel
-      : runtime?.agentDisplayName ?? runtime?.agentId ?? null,
-    updateChannel: EVA_MANAGED_POLICY.updateChannel,
-    delegatedSupportActive,
-    sessionKind: delegatedSupportActive ? EVA_SUPPORT_SESSION_KIND : 'ordinary',
-    supportCustomerLabel: delegatedSupportActive ? delegatedSupport.supportCustomerLabel : null,
-    supportAgentLabel: delegatedSupportActive ? delegatedSupport.supportAgentLabel : null,
-    supportExpiresAt: delegatedSupportActive ? delegatedSupport.supportExpiresAt : null,
-    supportDeadline: delegatedSupportActive ? delegatedSupport.supportDeadline : null,
-    assignmentVersion: delegatedSupportActive ? delegatedSupport.assignmentVersion : null
+    runtimeSessionExpiresAt: runtime?.expiresAt ?? null,
+    runtimeSessionActive: Boolean(runtime && !expiresSoon(runtime.expiresAt, 0, now)),
+    agentId: runtime?.agentId ?? null,
+    agentDisplayName: runtime?.agentDisplayName ?? runtime?.agentId ?? null,
+    updateChannel: EVA_MANAGED_POLICY.updateChannel
   }
 }
 
@@ -884,7 +760,6 @@ module.exports = {
   makeEvaDesktopCodeVerifier,
   normalizeDesktopSession,
   normalizeHermesEnrollment,
-  normalizeSupportEnrollment,
   parseEvaDesktopAuthCallback,
   pollEvaDeviceCode,
   publicEvaEnrollmentStatus,

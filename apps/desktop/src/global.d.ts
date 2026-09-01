@@ -114,7 +114,6 @@ declare global {
         signIn: () => Promise<EvaManagedStatus>
         signOut: () => Promise<{ ok: boolean }>
         refresh: () => Promise<EvaManagedStatus>
-        endSupportSession: () => Promise<{ ok: boolean }>
       }
       profile: {
         get: () => Promise<DesktopActiveProfile>
@@ -335,13 +334,6 @@ export interface EvaManagedStatus {
   /** Authorized enrollment label for presentation; agentId remains canonical. */
   agentDisplayName?: null | string
   updateChannel: string
-  delegatedSupportActive?: boolean
-  sessionKind?: 'ordinary' | 'delegated_support' | string
-  supportCustomerLabel?: null | string
-  supportAgentLabel?: null | string
-  supportExpiresAt?: null | string
-  supportDeadline?: null | string
-  assignmentVersion?: null | string
 }
 
 export interface DesktopMarketplaceThemeFile {

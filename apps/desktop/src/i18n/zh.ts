@@ -188,15 +188,6 @@ export const zh: Translations = {
     message: reason => `软件渲染已启用 — 检测到远程显示（${reason}）。为防止画面闪烁，已禁用 GPU 加速。`
   },
 
-  delegatedSupport: {
-    actingForCustomer: customer => `正在代表 ${customer} 操作`,
-    assignedAgent: agent => `智能体：${agent}`,
-    endsIn: countdown => `${countdown} 后结束`,
-    endSession: '结束支持会话',
-    endingSession: '正在结束支持会话…',
-    unavailable: '无法获取支持会话状态。'
-  },
-
   billingBlock: {
     titleNous: 'Nous 额度已用尽',
     titleProvider: provider => `额度已用尽 — ${provider}`,
