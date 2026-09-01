@@ -580,13 +580,24 @@ function normalizeSupportEnrollment(payload, options = {}) {
     payload.support_session_id,
     'Electric Sheep support session'
   )
-  let assignmentVersion
-  try {
-    assignmentVersion = normalizeOpaqueToken(payload.assignment_version, 'Electric Sheep support assignment')
-  } catch {
-    throw new EvaBrokerError('Electric Sheep returned an invalid support assignment.', 403, 'invalid-support-session')
+  if (typeof payload.admin_bypass !== 'boolean') {
+    throw new EvaBrokerError('Electric Sheep returned an invalid support admin proof.', 403, 'invalid-support-session')
   }
-  if (assignmentVersion.length > 256 || hasAsciiControl(assignmentVersion)) {
+  const adminBypass = payload.admin_bypass
+  let assignmentVersion
+  if (adminBypass) {
+    if (payload.assignment_version !== null) {
+      throw new EvaBrokerError('Electric Sheep returned an invalid support assignment.', 403, 'invalid-support-session')
+    }
+    assignmentVersion = null
+  } else {
+    try {
+      assignmentVersion = normalizeOpaqueToken(payload.assignment_version, 'Electric Sheep support assignment')
+    } catch {
+      throw new EvaBrokerError('Electric Sheep returned an invalid support assignment.', 403, 'invalid-support-session')
+    }
+  }
+  if (assignmentVersion !== null && (assignmentVersion.length > 256 || hasAsciiControl(assignmentVersion))) {
     throw new EvaBrokerError('Electric Sheep returned an invalid support assignment.', 403, 'invalid-support-session')
   }
 
@@ -622,6 +633,7 @@ function normalizeSupportEnrollment(payload, options = {}) {
     sessionKind: EVA_SUPPORT_SESSION_KIND,
     supportSessionId,
     assignmentVersion,
+    adminBypass,
     supportExpiresAt,
     supportDeadline: supportExpiresAt,
     supportCustomerLabel,

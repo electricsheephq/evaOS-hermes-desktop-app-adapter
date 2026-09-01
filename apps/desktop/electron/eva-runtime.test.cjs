@@ -119,7 +119,7 @@ function makeManagedRuntime(statePath, overrides = {}) {
   })
 }
 
-function supportEnrollment(now = Date.now()) {
+function supportEnrollment(now = Date.now(), overrides = {}) {
   return {
     schema_version: 'evaos.hermes_desktop_enrollment.v1',
     runtime: 'hermes',
@@ -134,12 +134,14 @@ function supportEnrollment(now = Date.now()) {
     session_kind: 'delegated_support',
     support_session_id: 'support-session',
     assignment_version: 'assignment-v1',
+    admin_bypass: false,
     support_expires_at: new Date(now + 30 * 60 * 1_000).toISOString(),
     profile: 'support',
     presentation: {
       customer_label: 'Customer',
       agent_label: 'Support agent'
-    }
+    },
+    ...overrides
   }
 }
 
@@ -172,7 +174,9 @@ test('support claim separates encrypted delegated state and restores the ordinar
     decryptSecret: unsealed,
     brokerPost: async (body, options) => {
       brokerCalls.push({ body, options })
-      if (body.action === 'claim_internal_support_request') return supportEnrollment()
+      if (body.action === 'claim_internal_support_request') {
+        return supportEnrollment(Date.now(), { admin_bypass: true, assignment_version: null })
+      }
       if (body.action === 'internal_support_session_end') return { ok: true }
       throw new Error('unexpected support action')
     },
@@ -201,6 +205,7 @@ test('support claim separates encrypted delegated state and restores the ordinar
     customer_label: 'Customer',
     agent_label: 'Support agent'
   })
+  assert.equal(JSON.parse(unsealed(persisted.delegated_support.enrollment)).admin_bypass, true)
   assert.deepEqual(brokerCalls[0].body, {
     action: 'claim_internal_support_request',
     request_id: 'request-123'
@@ -324,7 +329,7 @@ test('restart resumes only the same support assignment and rejects actor or repl
     decryptSecret: unsealed,
     brokerPost: async body => {
       if (body.action === 'claim_internal_support_request') {
-        claimedPayload = supportEnrollment()
+        claimedPayload = supportEnrollment(Date.now(), { admin_bypass: true, assignment_version: null })
         return claimedPayload
       }
       throw new Error('unexpected action')

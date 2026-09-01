@@ -198,6 +198,7 @@ function createEvaManagedRuntime(options) {
                 session_kind: state.delegatedSupport.sessionKind,
                 support_session_id: state.delegatedSupport.supportSessionId,
                 assignment_version: state.delegatedSupport.assignmentVersion,
+                admin_bypass: state.delegatedSupport.adminBypass,
                 support_expires_at: state.delegatedSupport.supportExpiresAt,
                 profile: state.delegatedSupport.profile,
                 presentation: {
@@ -519,6 +520,7 @@ function createEvaManagedRuntime(options) {
     if (
       resumed.supportSessionId !== previous.supportSessionId ||
       resumed.assignmentVersion !== previous.assignmentVersion ||
+      resumed.adminBypass !== previous.adminBypass ||
       resumed.customerId !== previous.customerId ||
       resumed.agentId !== previous.agentId ||
       (previous.profile && resumed.profile !== previous.profile) ||

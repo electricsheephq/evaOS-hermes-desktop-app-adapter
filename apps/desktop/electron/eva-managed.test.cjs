@@ -682,6 +682,7 @@ test('delegated support enrollment requires a bounded assignment and presentatio
     session_kind: 'delegated_support',
     support_session_id: 'support-session',
     assignment_version: 'assignment-v1',
+    admin_bypass: false,
     support_expires_at: new Date(now + 30 * 60 * 1_000).toISOString(),
     profile: 'support',
     presentation: {
@@ -694,13 +695,24 @@ test('delegated support enrollment requires a bounded assignment and presentatio
   assert.equal(support.sessionKind, 'delegated_support')
   assert.equal(support.supportSessionId, 'support-session')
   assert.equal(support.assignmentVersion, 'assignment-v1')
+  assert.equal(support.adminBypass, false)
   assert.equal(support.supportCustomerLabel, 'Customer')
   assert.equal(support.supportAgentLabel, 'Assigned agent')
   assert.equal(support.profile, 'support')
 
+  const adminSupport = normalizeSupportEnrollment(
+    { ...payload, admin_bypass: true, assignment_version: null },
+    { now }
+  )
+  assert.equal(adminSupport.adminBypass, true)
+  assert.equal(adminSupport.assignmentVersion, null)
+
   for (const invalid of [
     { ...payload, session_kind: 'ordinary' },
     { ...payload, assignment_version: '' },
+    { ...payload, assignment_version: null },
+    { ...payload, admin_bypass: true },
+    { ...payload, admin_bypass: 'false' },
     { ...payload, support_expires_at: new Date(now + 2 * 60 * 60 * 1_000).toISOString() },
     { ...payload, presentation: { ...payload.presentation, customer_label: '' } },
     { ...payload, profile: 'all' }
