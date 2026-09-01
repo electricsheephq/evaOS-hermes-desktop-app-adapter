@@ -6919,14 +6919,15 @@ async function resetEvaRendererSessions() {
     return false
   }
   const rendererSession = mainWindow.webContents.session
-  await mainWindow.webContents.executeJavaScript(buildEvaAccountRendererResetScript(), true).catch(() => undefined)
-  await Promise.allSettled([
+  await mainWindow.webContents.executeJavaScript(buildEvaAccountRendererResetScript(), true)
+  await Promise.all([
     rendererSession.clearStorageData({ storages: ['cachestorage', 'indexdb', 'serviceworkers'] }),
     rendererSession.clearCache()
   ])
-  if (!mainWindow.isDestroyed()) {
-    mainWindow.reload()
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    return false
   }
+  mainWindow.reload()
   return true
 }
 

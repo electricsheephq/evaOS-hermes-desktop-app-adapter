@@ -705,15 +705,22 @@ test('delegated sidebar requests are split into exact-profile session slices', a
   assert.deepEqual(result.messaging.sessions, [{ id: 'messaging' }])
 })
 
-test('support readiness 401 never carries the delegated profile into ordinary enrollment', async t => {
+test('support readiness 401 revalidates the same delegated assignment without ordinary fallback', async t => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-support-readiness-401-'))
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
   const statePath = path.join(directory, 'eva-enrollment.json')
   writeActiveEnrollment(statePath)
   let readinessCalls = 0
+  let resumeCalls = 0
+  let ordinaryLaunches = 0
+  const enrollment = supportEnrollment()
   const runtime = makeManagedRuntime(statePath, {
     brokerPost: async body => {
-      if (body.action === 'claim_internal_support_request') return supportEnrollment()
+      if (body.action === 'claim_internal_support_request') return enrollment
+      if (body.action === 'internal_support_session_resume') {
+        resumeCalls += 1
+        return enrollment
+      }
       throw new Error('unexpected action')
     },
     waitForHermes: async () => {
@@ -722,24 +729,58 @@ test('support readiness 401 never carries the delegated profile into ordinary en
         throw new EvaBrokerError('support runtime rejected', 401, 'session_expired')
       }
     },
-    launchRuntime: async () => ({
-      schemaVersion: 'evaos.hermes_desktop_enrollment.v1',
-      customerId: 'customer-one',
-      runtime: 'hermes',
-      agentId: 'main',
-      baseUrl: 'https://hermes-customer-one.ecs.electricsheephq.com',
-      token: 'ordinary-runtime',
-      expiresAt: FUTURE
-    })
+    launchRuntime: async () => {
+      ordinaryLaunches += 1
+      throw new Error('ordinary enrollment must not replace delegated support')
+    }
   })
   await runtime.claimSupportRequest('request-123')
 
-  await assert.rejects(
-    runtime.resolveBackend({ profile: 'support' }),
-    error => error instanceof EvaBrokerError && error.code === 'support-session-expired'
+  const backend = await runtime.resolveBackend({ profile: 'support' })
+  assert.equal(backend.profile, 'support')
+  assert.equal(runtime.status().delegatedSupportActive, true)
+  assert.equal(resumeCalls, 1)
+  assert.equal(ordinaryLaunches, 0)
+})
+
+test('delegated API 401 preserves the support handle and retries only after broker revalidation', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-support-api-401-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeActiveEnrollment(statePath)
+  let brokerResumes = 0
+  let fetches = 0
+  let ordinaryLaunches = 0
+  const enrollment = supportEnrollment()
+  const runtime = makeManagedRuntime(statePath, {
+    brokerPost: async body => {
+      if (body.action === 'claim_internal_support_request') return enrollment
+      if (body.action === 'internal_support_session_resume') {
+        brokerResumes += 1
+        return enrollment
+      }
+      throw new Error('unexpected action')
+    },
+    fetchJson: async () => {
+      fetches += 1
+      if (fetches === 1) throw new EvaBrokerError('runtime token rejected', 401, 'session_expired')
+      return { ok: true }
+    },
+    launchRuntime: async () => {
+      ordinaryLaunches += 1
+      throw new Error('ordinary enrollment must not replace delegated support')
+    }
+  })
+
+  await runtime.claimSupportRequest('request-123')
+  assert.deepEqual(
+    await runtime.requestApi({ method: 'GET', path: '/api/sessions', profile: 'support' }),
+    { ok: true }
   )
-  assert.equal(runtime.status().delegatedSupportActive, false)
-  assert.equal(runtime.status().customerId, 'customer-one')
+  assert.equal(fetches, 2)
+  assert.equal(brokerResumes, 1)
+  assert.equal(ordinaryLaunches, 0)
+  assert.equal(runtime.status().delegatedSupportActive, true)
 })
 
 test('claim actor mismatch or replay failure leaves ordinary enrollment untouched', async t => {

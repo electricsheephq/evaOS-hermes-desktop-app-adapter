@@ -416,7 +416,19 @@ function createEvaManagedRuntime(options) {
   function clearRuntimeEnrollment() {
     const state = currentState()
     if (state.delegatedSupport) {
-      clearDelegatedSupportState(state)
+      // A rejected Hermes token is not authoritative proof that the support
+      // assignment ended. Preserve the encrypted handle so the broker can
+      // revalidate or end it, while severing every connection issued under the
+      // rejected runtime credential.
+      supportRevalidated = false
+      runtimeGeneration += 1
+      runtimeEnrollmentPromise = null
+      runtimeEnrollmentPromiseForced = false
+      runtimeSessionGeneration += 1
+      for (const controller of supportRequestControllers) controller.abort()
+      supportRequestControllers.clear()
+      resetConnection()
+      wsRelay?.disconnectAll()
       return
     }
     runtimeGeneration += 1
@@ -1090,6 +1102,7 @@ function createEvaManagedRuntime(options) {
       const normalizedError = normalizeSupportRequestError(error, guard)
       if (guard && normalizedError?.code === 'support-session-expired') throw normalizedError
       if (!retry || statusCodeOf(normalizedError) !== 401) throw normalizedError
+      finishSupportRequestGuard(guard)
       clearRuntimeEnrollment()
       const refreshed = await ensureRuntimeEnrollment({ force: true })
       if (supportRequest && refreshed.sessionKind !== 'delegated_support') {
@@ -1100,12 +1113,22 @@ function createEvaManagedRuntime(options) {
         nextBound.profile ? { ...nextBound.request, profile: nextBound.profile } : nextBound.request,
         nextBound.policy
       )
-      return options.fetchJson(`${refreshed.baseUrl}${next.path}`, refreshed.token, {
-        method: next.method,
-        body: nextBound.request?.body,
-        upload: request?.upload,
-        timeoutMs
-      })
+      const refreshedGuard = startSupportRequestGuard(refreshed)
+      try {
+        const result = await options.fetchJson(`${refreshed.baseUrl}${next.path}`, refreshed.token, {
+          method: next.method,
+          body: nextBound.request?.body,
+          upload: request?.upload,
+          timeoutMs,
+          signal: refreshedGuard?.controller.signal
+        })
+        assertSupportRequestCurrent(refreshedGuard)
+        return result
+      } catch (retryError) {
+        throw normalizeSupportRequestError(retryError, refreshedGuard)
+      } finally {
+        finishSupportRequestGuard(refreshedGuard)
+      }
     } finally {
       finishSupportRequestGuard(guard)
     }
@@ -1162,6 +1185,7 @@ function createEvaManagedRuntime(options) {
           assertSupportRequestCurrent(refreshedGuard)
           return refreshedResponse
         } catch (error) {
+          finishSupportRequestGuard(refreshedGuard)
           throw normalizeSupportRequestError(error, refreshedGuard)
         }
       }
