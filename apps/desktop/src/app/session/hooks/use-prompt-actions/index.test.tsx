@@ -1096,6 +1096,10 @@ describe('usePromptActions exec fallback error reporting', () => {
         return { output: 'Reloading skills... 4 skill(s) available' } as never
       }
 
+      if (method === 'commands.catalog') {
+        return { pairs: [['/new-skill', 'Newly loaded skill']] } as never
+      }
+
       throw new Error(`unexpected method: ${method}`)
     })
 
@@ -1116,6 +1120,8 @@ describe('usePromptActions exec fallback error reporting', () => {
       'slash.exec',
       expect.objectContaining({ command: 'reload-skills', session_id: RUNTIME_SESSION_ID })
     )
+    expect(requestGateway).toHaveBeenCalledWith('commands.catalog', { session_id: RUNTIME_SESSION_ID })
+    expect(requestGateway.mock.invocationCallOrder[1]).toBeLessThan(requestGateway.mock.invocationCallOrder[2])
     expect(mockInvalidateSlashCompletions).toHaveBeenCalledTimes(1)
     expect(renderedSeedTexts(seeds).some(text => text.includes('4 skill(s) available'))).toBe(true)
   })
@@ -1162,6 +1168,7 @@ describe('usePromptActions exec fallback error reporting', () => {
       'slash.exec',
       expect.objectContaining({ command: 'reload-skills', session_id: RUNTIME_SESSION_ID })
     )
+    expect(requestGateway.mock.calls.some(([method]) => method === 'commands.catalog')).toBe(false)
     expect(mockInvalidateSlashCompletions).not.toHaveBeenCalled()
     expect(renderedSeedTexts(seeds).some(text => text.includes('legacy skill reload failed'))).toBe(true)
   })
@@ -1241,9 +1248,7 @@ describe('usePromptActions exec fallback error reporting', () => {
 
     expect(mockRunGatewayRestart).not.toHaveBeenCalled()
     expect(requestGateway).not.toHaveBeenCalled()
-    expect(
-      renderedSeedTexts(seeds).some(text => text.includes('no explicit profile target is supported'))
-    ).toBe(true)
+    expect(renderedSeedTexts(seeds).some(text => text.includes('no explicit profile target is supported'))).toBe(true)
   })
 
   it('still reports a real command.dispatch failure for skill/quick commands', async () => {

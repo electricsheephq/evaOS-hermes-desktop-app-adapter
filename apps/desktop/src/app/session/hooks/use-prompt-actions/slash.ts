@@ -487,7 +487,21 @@ export function useSlashCommand(deps: SlashCommandDeps) {
             const fallbackSucceeded = await runExec(ctx)
 
             if (fallbackSucceeded && surface.rpc === 'skills.reload') {
-              invalidateSlashCompletions()
+              try {
+                // The compatibility worker is a separate process. Its reload
+                // updates the profile's skills on disk, but the live gateway's
+                // command registry is refreshed only when it builds a new
+                // catalog. Force that scan before exposing a fresh renderer
+                // cache so the next slash completion sees the reloaded skills.
+                await requestGateway<CommandsCatalogLike>('commands.catalog', { session_id: sessionId })
+                invalidateSlashCompletions()
+              } catch (catalogErr) {
+                renderSlashOutput(
+                  `error: /${ctx.name} reloaded skills but could not refresh the command catalog: ${
+                    catalogErr instanceof Error ? catalogErr.message : String(catalogErr)
+                  }`
+                )
+              }
             }
 
             return

@@ -25,10 +25,10 @@ export interface GatewayRestartResult {
 // Poll a backend action to completion (or a bounded window), throwing on a
 // non-zero exit so the caller can surface the failure and preserving timeout
 // as an explicit status for inline lifecycle output.
-async function awaitAction(started: ActionResponse): Promise<Exclude<GatewayRestartStatus, 'failed'>> {
+async function awaitAction(started: ActionResponse, profile: string): Promise<Exclude<GatewayRestartStatus, 'failed'>> {
   for (let attempt = 0; attempt < POLL_ATTEMPTS; attempt += 1) {
     await new Promise(resolve => window.setTimeout(resolve, POLL_INTERVAL_MS))
-    const status = await getActionStatus(started.name, POLL_TIMEOUT_S)
+    const status = await getActionStatus(started.name, POLL_TIMEOUT_S, profile)
 
     if (!status.running) {
       if (status.exit_code != null && status.exit_code !== 0) {
@@ -52,13 +52,17 @@ export async function runGatewayRestart(): Promise<GatewayRestartResult> {
   $gatewayRestarting.set(true)
 
   try {
-    const started = await restartGateway()
+    // Pin both the restart request and every status poll to the profile that
+    // was current when the user invoked the action. A profile switch while the
+    // asynchronous restart is running must not retarget either half of the
+    // operation.
+    const started = await restartGateway(profile)
 
     if (!started.ok) {
       throw new Error(translateNow('commandCenter.gatewayRestartFailed'))
     }
 
-    return { profile, status: await awaitAction(started) }
+    return { profile, status: await awaitAction(started, profile) }
   } catch (err) {
     notifyError(err, translateNow('commandCenter.gatewayRestartFailed'))
 
