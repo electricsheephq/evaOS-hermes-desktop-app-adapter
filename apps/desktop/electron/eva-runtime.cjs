@@ -158,13 +158,13 @@ function createEvaManagedRuntime(options) {
 
   function writeState(state) {
     if (!state?.desktop) {
-      if (!state?.signedOut) {
+      if (!state?.signedOut && !state?.rendererCleanupPending) {
         fs.rmSync(statePath, { force: true })
         return
       }
       atomicWrite({
         schema_version: EVA_MANAGED_POLICY.schemaVersion,
-        signed_out: true,
+        signed_out: state?.signedOut === true,
         ...(state.rendererCleanupPending ? { renderer_cleanup_pending: true } : {})
       })
       return

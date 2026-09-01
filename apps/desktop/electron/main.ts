@@ -1089,6 +1089,10 @@ function registerMediaProtocol() {
 }
 
 let mainWindow = null
+// Quick Entry lives outside the main renderer. This declaration must precede
+// managed-runtime construction because stale support cleanup can run during
+// cold module initialization before the renderer window exists.
+let quickEntryLastState = null
 const backendConnectionState = createBackendConnectionState<ReturnType<typeof spawn>, any>()
 const remoteLiveness = new RemoteLivenessTracker()
 const remoteRevalidation = new RemoteRevalidationCoordinator()
@@ -9257,8 +9261,6 @@ let quickEntryWindow = null
 
 // Latest state push from the primary renderer (connection + recent sessions),
 // replayed to a quick window that spawns after the push happened.
-let quickEntryLastState = null
-
 function readQuickEntrySettings() {
   try {
     return sanitizeQuickEntrySettings(JSON.parse(fs.readFileSync(QUICK_ENTRY_CONFIG_PATH, 'utf8')))

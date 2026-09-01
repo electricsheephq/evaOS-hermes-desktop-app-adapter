@@ -668,6 +668,38 @@ test('renderer cleanup tombstone survives restart until a window confirms isolat
   assert.equal(JSON.parse(fs.readFileSync(statePath, 'utf8')).renderer_cleanup_pending, undefined)
 })
 
+test('renderer cleanup tombstone survives cold stale support with no desktop session', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-support-reset-no-desktop-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  fs.writeFileSync(
+    statePath,
+    JSON.stringify({
+      schema_version: 'evaos.eva_desktop_managed.v1',
+      signed_out: false,
+      delegated_support: { enrollment: sealed(JSON.stringify(supportEnrollment())) }
+    })
+  )
+
+  const first = makeManagedRuntime(statePath, {
+    encryptSecret: sealed,
+    decryptSecret: unsealed,
+    resetRenderer: async () => false
+  })
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(fs.existsSync(statePath), true)
+  assert.equal(JSON.parse(fs.readFileSync(statePath, 'utf8')).renderer_cleanup_pending, true)
+  await first.close()
+
+  const second = makeManagedRuntime(statePath, {
+    encryptSecret: sealed,
+    decryptSecret: unsealed,
+    resetRenderer: async () => true
+  })
+  assert.equal(await second.flushPendingRendererReset(), true)
+  assert.equal(fs.existsSync(statePath), false)
+})
+
 test('delegated sidebar requests are split into exact-profile session slices', async t => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-support-sidebar-'))
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
