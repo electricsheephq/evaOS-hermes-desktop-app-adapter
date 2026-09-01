@@ -410,6 +410,114 @@ test('expired delegated support state is cleared without harming ordinary enroll
   assert.equal(JSON.parse(fs.readFileSync(statePath, 'utf8')).delegated_support, null)
 })
 
+test('cold expired support defers renderer cleanup until a window can perform it', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-support-cold-reset-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeActiveEnrollment(statePath)
+  sealExistingState(statePath)
+  const expired = supportEnrollment(Date.now() - 60 * 60 * 1_000)
+  fs.writeFileSync(
+    statePath,
+    JSON.stringify({
+      ...JSON.parse(fs.readFileSync(statePath, 'utf8')),
+      delegated_support: { enrollment: sealed(JSON.stringify(expired)) }
+    })
+  )
+
+  let rendererAvailable = false
+  let resets = 0
+  const runtime = makeManagedRuntime(statePath, {
+    encryptSecret: sealed,
+    decryptSecret: unsealed,
+    resetRenderer: async () => {
+      resets += 1
+      return rendererAvailable
+    }
+  })
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(resets, 1)
+
+  rendererAvailable = true
+  assert.equal(await runtime.flushPendingRendererReset(), true)
+  assert.equal(resets, 2)
+  assert.equal(await runtime.flushPendingRendererReset(), false)
+})
+
+test('delegated sidebar requests are split into exact-profile session slices', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-support-sidebar-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeActiveEnrollment(statePath)
+  const urls = []
+  const runtime = makeManagedRuntime(statePath, {
+    brokerPost: async body => {
+      if (body.action === 'claim_internal_support_request') return supportEnrollment()
+      throw new Error('unexpected action')
+    },
+    fetchJson: async url => {
+      urls.push(url)
+      const parsed = new URL(url)
+      const source = parsed.searchParams.get('source')
+      return {
+        sessions: [{ id: source === 'cron' ? 'cron' : parsed.searchParams.has('exclude_sources') ? 'messaging' : 'recent' }],
+        total: 1
+      }
+    }
+  })
+  await runtime.claimSupportRequest('request-123')
+
+  const result = await runtime.requestApi({
+    method: 'GET',
+    path: '/api/profiles/sessions/sidebar?recents_profile=support&recents_limit=30&cron_limit=40&messaging_limit=50&recents_exclude=cron&messaging_exclude=cron'
+  })
+
+  assert.equal(urls.length, 3)
+  assert.ok(urls.every(url => new URL(url).pathname === '/api/profiles/sessions'))
+  assert.ok(urls.every(url => new URL(url).searchParams.get('profile') === 'support'))
+  assert.ok(urls.every(url => !url.includes('profile=all')))
+  assert.deepEqual(result.recents.sessions, [{ id: 'messaging' }])
+  assert.deepEqual(result.cron.sessions, [{ id: 'cron' }])
+  assert.deepEqual(result.messaging.sessions, [{ id: 'messaging' }])
+})
+
+test('support readiness 401 never carries the delegated profile into ordinary enrollment', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-support-readiness-401-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeActiveEnrollment(statePath)
+  let readinessCalls = 0
+  const runtime = makeManagedRuntime(statePath, {
+    brokerPost: async body => {
+      if (body.action === 'claim_internal_support_request') return supportEnrollment()
+      throw new Error('unexpected action')
+    },
+    waitForHermes: async () => {
+      readinessCalls += 1
+      if (readinessCalls === 1) {
+        throw new EvaBrokerError('support runtime rejected', 401, 'session_expired')
+      }
+    },
+    launchRuntime: async () => ({
+      schemaVersion: 'evaos.hermes_desktop_enrollment.v1',
+      customerId: 'customer-one',
+      runtime: 'hermes',
+      agentId: 'main',
+      baseUrl: 'https://hermes-customer-one.ecs.electricsheephq.com',
+      token: 'ordinary-runtime',
+      expiresAt: FUTURE
+    })
+  })
+  await runtime.claimSupportRequest('request-123')
+
+  await assert.rejects(
+    runtime.resolveBackend({ profile: 'support' }),
+    error => error instanceof EvaBrokerError && error.code === 'support-session-expired'
+  )
+  assert.equal(runtime.status().delegatedSupportActive, false)
+  assert.equal(runtime.status().customerId, 'customer-one')
+})
+
 test('claim actor mismatch or replay failure leaves ordinary enrollment untouched', async t => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-support-claim-rejected-'))
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }))

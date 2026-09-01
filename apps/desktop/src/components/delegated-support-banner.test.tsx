@@ -50,11 +50,14 @@ describe('DelegatedSupportBanner', () => {
       </I18nProvider>
     )
 
-    const banner = await screen.findByRole('alert')
+    const banner = await screen.findByRole('region', { name: 'Acting for Customer' })
     expect(banner.textContent).toMatch(/Acting for Customer/)
     expect(banner.textContent).toMatch(/Agent: Support agent/)
     expect(banner.textContent).toMatch(/Ends in 00:(?:29|30):/)
     expect((banner as HTMLElement).style.top).toBe('34px')
+    expect(banner.getAttribute('aria-live')).toBeNull()
+    expect(screen.queryByRole('alert')).toBeNull()
+    expect(screen.getByRole('status').textContent).toBe('Acting for Customer')
     expect(screen.getAllByRole('button')).toHaveLength(1)
 
     fireEvent.click(screen.getByRole('button', { name: 'End support session' }))
@@ -75,8 +78,8 @@ describe('DelegatedSupportBanner', () => {
       </I18nProvider>
     )
 
-    const banner = await screen.findByRole('alert')
-    expect((await screen.findByRole('status')).textContent).toContain('Unable to end support session. Try again.')
+    const banner = await screen.findByRole('region', { name: 'Acting for Customer' })
+    expect((await screen.findByText('Unable to end support session. Try again.')).getAttribute('role')).toBe('status')
     expect((screen.getByRole('button', { name: 'End support session' }) as HTMLButtonElement).disabled).toBe(false)
     expect(banner).toBeTruthy()
   })

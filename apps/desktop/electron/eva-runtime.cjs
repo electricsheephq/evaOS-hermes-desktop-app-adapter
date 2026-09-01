@@ -65,6 +65,7 @@ function createEvaManagedRuntime(options) {
   let supportExpiryTimer = null
   let supportExpiryTimestamp = null
   let supportEndError = null
+  let rendererResetPending = false
 
   function emptyState(signedOut = false) {
     return { desktop: null, runtime: null, delegatedSupport: null, signedOut }
@@ -220,6 +221,24 @@ function createEvaManagedRuntime(options) {
     supportExpiryTimestamp = null
   }
 
+  function requestRendererReset() {
+    rendererResetPending = true
+    return Promise.resolve(resetRenderer())
+      .then(performed => {
+        rendererResetPending = performed === false
+        return !rendererResetPending
+      })
+      .catch(() => {
+        rendererResetPending = true
+        return false
+      })
+  }
+
+  async function flushPendingRendererReset() {
+    if (!rendererResetPending) return false
+    return requestRendererReset()
+  }
+
   function armSupportExpiryTimer(support) {
     const supportExpiresAt = Date.parse(String(support?.supportExpiresAt || ''))
     if (!Number.isFinite(supportExpiresAt)) {
@@ -281,7 +300,7 @@ function createEvaManagedRuntime(options) {
     })
     resetConnection()
     wsRelay?.disconnectAll()
-    if (resetRendererState) void Promise.resolve(resetRenderer()).catch(() => undefined)
+    if (resetRendererState) void requestRendererReset()
   }
 
   function supportProfileFor(runtime, requestedProfile) {
@@ -748,8 +767,10 @@ function createEvaManagedRuntime(options) {
   }
 
   async function resolveBackend(input = {}) {
-    let profile = normalizeEvaWsProfile(input.profile)
+    const requestedProfile = normalizeEvaWsProfile(input.profile)
+    let profile = requestedProfile
     let runtime = await ensureRuntimeEnrollment({ force: input.force })
+    const supportRequest = runtime.sessionKind === 'delegated_support'
     profile = supportProfileFor(runtime, profile)
     try {
       await options.waitForHermes(runtime.baseUrl, runtime.token)
@@ -757,7 +778,10 @@ function createEvaManagedRuntime(options) {
       if (statusCodeOf(error) !== 401) throw error
       clearRuntimeEnrollment()
       runtime = await ensureRuntimeEnrollment({ force: true })
-      profile = supportProfileFor(runtime, profile)
+      if (supportRequest && runtime.sessionKind !== 'delegated_support') {
+        throw new EvaBrokerError('evaOS Agent support session expired.', 401, 'support-session-expired')
+      }
+      profile = supportProfileFor(runtime, requestedProfile)
       await options.waitForHermes(runtime.baseUrl, runtime.token)
     }
     const connection = {
@@ -886,9 +910,62 @@ function createEvaManagedRuntime(options) {
     }
   }
 
+  async function requestDelegatedSidebar(runtime, request, retry) {
+    const parsed = new URL(String(request?.path || ''), 'http://eva-managed.invalid')
+    const profile = runtime.profile
+    const slicePath = (limitKey, defaultLimit, extras = {}) => {
+      const params = new URLSearchParams({
+        limit: parsed.searchParams.get(limitKey) || defaultLimit,
+        offset: '0',
+        min_messages: '1',
+        archived: 'exclude',
+        order: 'recent',
+        profile,
+        ...extras
+      })
+      return params
+    }
+
+    const recents = slicePath('recents_limit', '20')
+    const recentsExclude = parsed.searchParams.get('recents_exclude')
+    if (recentsExclude) recents.set('exclude_sources', recentsExclude)
+
+    const cron = slicePath('cron_limit', '50', { source: 'cron' })
+    const messaging = slicePath('messaging_limit', '100')
+    const messagingExclude = parsed.searchParams.get('messaging_exclude')
+    if (messagingExclude) messaging.set('exclude_sources', messagingExclude)
+
+    const [recentsResult, cronResult, messagingResult] = await Promise.all([
+      requestApi({ ...request, method: 'GET', path: `/api/profiles/sessions?${recents.toString()}` }, retry),
+      requestApi({ ...request, method: 'GET', path: `/api/profiles/sessions?${cron.toString()}` }, retry),
+      requestApi({ ...request, method: 'GET', path: `/api/profiles/sessions?${messaging.toString()}` }, retry)
+    ])
+    const errors = [
+      ...(recentsResult?.errors ?? []),
+      ...(cronResult?.errors ?? []),
+      ...(messagingResult?.errors ?? [])
+    ]
+    return {
+      recents: {
+        profiles_truncated: recentsResult?.profiles_truncated ?? {},
+        sessions: recentsResult?.sessions ?? []
+      },
+      cron: { sessions: cronResult?.sessions ?? [] },
+      messaging: {
+        sessions: messagingResult?.sessions ?? [],
+        total: messagingResult?.total ?? messagingResult?.sessions?.length ?? 0
+      },
+      ...(errors.length ? { errors } : {})
+    }
+  }
+
   async function requestApi(request, retry = true) {
     const runtime = await ensureRuntimeEnrollment()
     const supportRequest = runtime.sessionKind === 'delegated_support'
+    const requestPath = new URL(String(request?.path || ''), 'http://eva-managed.invalid').pathname
+    if (supportRequest && requestPath === '/api/profiles/sessions/sidebar') {
+      return requestDelegatedSidebar(runtime, request, retry)
+    }
     const bound = bindSupportRequest(runtime, request)
     const allowed = assertEvaManagedApiRequestAllowed(bound.profile ? { ...bound.request, profile: bound.profile } : bound.request, bound.policy)
     const timeoutMs = options.resolveTimeoutMs(request?.timeoutMs)
@@ -977,6 +1054,7 @@ function createEvaManagedRuntime(options) {
     close,
     completeCallback,
     endSupportSession: endDelegatedSupport,
+    flushPendingRendererReset,
     freshWsUrl: async (input = {}) => {
       const request = typeof input === 'string' ? { profile: input } : input
       const runtime = await ensureRuntimeEnrollment()

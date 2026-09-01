@@ -6883,7 +6883,7 @@ async function resetEvaRendererSessions() {
     }
   }
   if (!mainWindow || mainWindow.isDestroyed()) {
-    return
+    return false
   }
   const rendererSession = mainWindow.webContents.session
   await mainWindow.webContents.executeJavaScript(buildEvaAccountRendererResetScript(), true).catch(() => undefined)
@@ -6894,6 +6894,7 @@ async function resetEvaRendererSessions() {
   if (!mainWindow.isDestroyed()) {
     mainWindow.reload()
   }
+  return true
 }
 
 const evaManagedRuntime = createEvaManagedRuntime({
@@ -9629,7 +9630,8 @@ function createWindow() {
   // the renderer misses are recovered by its getBootProgress() pull on mount.
   startHermes().catch(error => rememberLog(error.stack || error.message))
 
-  mainWindow.webContents.once('did-finish-load', () => {
+  mainWindow.webContents.once('did-finish-load', async () => {
+    await evaManagedRuntime.flushPendingRendererReset()
     // Zoom restore is handled by wireCommonWindowHandlers (shared with session
     // windows); no need to reapply it here.
     broadcastBootProgress()
