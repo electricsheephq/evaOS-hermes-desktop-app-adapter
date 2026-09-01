@@ -630,6 +630,44 @@ test('cold expired support defers renderer cleanup until a window can perform it
   assert.equal(await runtime.flushPendingRendererReset(), false)
 })
 
+test('renderer cleanup tombstone survives restart until a window confirms isolation', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-support-reset-restart-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeActiveEnrollment(statePath)
+  sealExistingState(statePath)
+  const expired = supportEnrollment(Date.now() - 60 * 60 * 1_000)
+  fs.writeFileSync(
+    statePath,
+    JSON.stringify({
+      ...JSON.parse(fs.readFileSync(statePath, 'utf8')),
+      delegated_support: { enrollment: sealed(JSON.stringify(expired)) }
+    })
+  )
+
+  const first = makeManagedRuntime(statePath, {
+    encryptSecret: sealed,
+    decryptSecret: unsealed,
+    resetRenderer: async () => false
+  })
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(JSON.parse(fs.readFileSync(statePath, 'utf8')).renderer_cleanup_pending, true)
+  await first.close()
+
+  let resets = 0
+  const second = makeManagedRuntime(statePath, {
+    encryptSecret: sealed,
+    decryptSecret: unsealed,
+    resetRenderer: async () => {
+      resets += 1
+      return true
+    }
+  })
+  assert.equal(await second.flushPendingRendererReset(), true)
+  assert.equal(resets, 1)
+  assert.equal(JSON.parse(fs.readFileSync(statePath, 'utf8')).renderer_cleanup_pending, undefined)
+})
+
 test('delegated sidebar requests are split into exact-profile session slices', async t => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-support-sidebar-'))
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
@@ -844,6 +882,107 @@ test('renderer reset failure refuses and remotely ends a claimed support session
   assert.equal(persisted.runtime.token, 'runtime-token')
   assert.equal(runtime.status().delegatedSupportActive, false)
   assert.equal(remoteEnds, 1)
+})
+
+test('renderer reset returning false refuses and remotely ends a claimed support session', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-support-renderer-unavailable-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeActiveEnrollment(statePath)
+  let remoteEnds = 0
+  const runtime = makeManagedRuntime(statePath, {
+    brokerPost: async body => {
+      if (body.action === 'claim_internal_support_request') return supportEnrollment()
+      if (body.action === 'internal_support_session_end') {
+        remoteEnds += 1
+        return { ok: true }
+      }
+      throw new Error('unexpected action')
+    },
+    resetRenderer: async () => false
+  })
+
+  await assert.rejects(
+    runtime.claimSupportRequest('request-123'),
+    error => error instanceof EvaBrokerError && error.code === 'support-renderer-reset-failed'
+  )
+  assert.equal(runtime.status().delegatedSupportActive, false)
+  assert.equal(remoteEnds, 1)
+})
+
+test('ending delegated support aborts and rejects an in-flight JSON request', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-support-request-abort-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeActiveEnrollment(statePath)
+  let releaseFetch
+  let requestSignal
+  const fetchGate = new Promise(resolve => {
+    releaseFetch = resolve
+  })
+  const runtime = makeManagedRuntime(statePath, {
+    brokerPost: async body => {
+      if (body.action === 'claim_internal_support_request') return supportEnrollment()
+      if (body.action === 'internal_support_session_end') return { ok: true }
+      throw new Error('unexpected action')
+    },
+    fetchJson: async (_url, _token, options) => {
+      requestSignal = options.signal
+      await fetchGate
+      return { customer: 'must-not-escape' }
+    }
+  })
+
+  await runtime.claimSupportRequest('request-123')
+  const request = runtime.requestApi({ method: 'GET', path: '/api/sessions', profile: 'support' })
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(requestSignal?.aborted, false)
+  assert.deepEqual(await runtime.endSupportSession(), { ok: true })
+  assert.equal(requestSignal.aborted, true)
+  releaseFetch()
+  await assert.rejects(
+    request,
+    error => error instanceof EvaBrokerError && error.code === 'support-session-expired'
+  )
+})
+
+test('ending delegated support aborts and rejects an in-flight media request', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-support-media-abort-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeActiveEnrollment(statePath)
+  let releaseFetch
+  let requestSignal
+  const fetchGate = new Promise(resolve => {
+    releaseFetch = resolve
+  })
+  const runtime = makeManagedRuntime(statePath, {
+    brokerPost: async body => {
+      if (body.action === 'claim_internal_support_request') return supportEnrollment()
+      if (body.action === 'internal_support_session_end') return { ok: true }
+      throw new Error('unexpected action')
+    },
+    fetchMedia: async (_url, _token, _headers, signal) => {
+      requestSignal = signal
+      await fetchGate
+      return { status: 200 }
+    }
+  })
+
+  await runtime.claimSupportRequest('request-123')
+  const request = runtime.requestMedia({
+    path: '/api/files/download?path=%2Fsrv%2Fsupport.mp3',
+    profile: 'support'
+  })
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(requestSignal?.aborted, false)
+  assert.deepEqual(await runtime.endSupportSession(), { ok: true })
+  assert.equal(requestSignal.aborted, true)
+  releaseFetch()
+  await assert.rejects(
+    request,
+    error => error instanceof EvaBrokerError && error.code === 'support-session-expired'
+  )
 })
 
 test('sign-out severs local support access even when the remote end call fails', async t => {

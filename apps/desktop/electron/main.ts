@@ -4332,6 +4332,26 @@ function fetchJson(url, token, options: any = {}) {
       return
     }
 
+    let settled = false
+
+    const resolveOnce = value => {
+      if (settled) {
+        return
+      }
+
+      settled = true
+      resolve(value)
+    }
+
+    const rejectOnce = error => {
+      if (settled) {
+        return
+      }
+
+      settled = true
+      reject(error)
+    }
+
     const req = client.request(
       parsed,
       {
@@ -4350,19 +4370,19 @@ function fetchJson(url, token, options: any = {}) {
       },
       res => {
         const chunks = []
-        res.on('error', reject)
+        res.on('error', rejectOnce)
         res.on('data', chunk => chunks.push(chunk))
         res.on('end', () => {
           const text = Buffer.concat(chunks).toString('utf8')
 
           if ((res.statusCode || 500) >= 400) {
-            reject(httpStatusError(res.statusCode || 500, text || res.statusMessage))
+            rejectOnce(httpStatusError(res.statusCode || 500, text || res.statusMessage))
 
             return
           }
 
           if (!text) {
-            resolve(null)
+            resolveOnce(null)
 
             return
           }
@@ -4375,7 +4395,7 @@ function fetchJson(url, token, options: any = {}) {
           const contentType = String(res.headers['content-type'] || '')
 
           if (looksHtml || contentType.includes('text/html')) {
-            reject(
+            rejectOnce(
               new Error(
                 `Expected JSON from ${url} but got HTML (status ${res.statusCode}). ` +
                   'The endpoint is likely missing on the Hermes backend.'
@@ -4386,15 +4406,24 @@ function fetchJson(url, token, options: any = {}) {
           }
 
           try {
-            resolve(JSON.parse(text))
+            resolveOnce(JSON.parse(text))
           } catch {
-            reject(new Error(`Invalid JSON from ${url} (status ${res.statusCode}): ${text.slice(0, 200)}`))
+            rejectOnce(new Error(`Invalid JSON from ${url} (status ${res.statusCode}): ${text.slice(0, 200)}`))
           }
         })
       }
     )
 
-    req.on('error', reject)
+    const signal = options.signal
+    const abortRequest = () => req.destroy(new Error('Managed support request cancelled.'))
+    if (signal?.aborted) {
+      abortRequest()
+      return
+    } else {
+      signal?.addEventListener('abort', abortRequest, { once: true })
+    }
+    req.on('close', () => signal?.removeEventListener('abort', abortRequest))
+    req.on('error', rejectOnce)
     req.setTimeout(timeoutMs, () => {
       req.destroy(new Error(`Timed out connecting to Hermes backend after ${timeoutMs}ms`))
     })
@@ -6877,6 +6906,10 @@ function decryptDesktopSecret(secret) {
 }
 
 async function resetEvaRendererSessions() {
+  // Quick Entry lives outside the main renderer. Drop its last projected
+  // sessions before closing auxiliary windows so no prior employee/customer
+  // context can reopen while the main renderer is re-homed.
+  quickEntryLastState = null
   for (const window of BrowserWindow.getAllWindows()) {
     if (window !== mainWindow && !window.isDestroyed()) {
       window.close()
@@ -6904,7 +6937,7 @@ const evaManagedRuntime = createEvaManagedRuntime({
   openExternal: url => shell.openExternal(url),
   waitForHermes,
   fetchJson,
-  fetchMedia: (url, token, requestHeaders) => {
+  fetchMedia: (url, token, requestHeaders, signal) => {
     const headers = new Headers(requestHeaders)
     headers.delete('authorization')
     headers.delete('cookie')
@@ -6914,7 +6947,8 @@ const evaManagedRuntime = createEvaManagedRuntime({
     return electronNet.fetch(url, {
       bypassCustomProtocolHandlers: true,
       headers,
-      redirect: 'error'
+      redirect: 'error',
+      signal
     })
   },
   resolveTimeoutMs: value => resolveTimeoutMs(value, DEFAULT_FETCH_TIMEOUT_MS),
