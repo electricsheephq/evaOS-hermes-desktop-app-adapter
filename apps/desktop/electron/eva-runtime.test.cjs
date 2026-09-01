@@ -435,6 +435,161 @@ test('claim actor mismatch or replay failure leaves ordinary enrollment untouche
   assert.equal(runtime.status().customerId, 'customer-one')
 })
 
+test('a late support claim cannot restore a signed-out employee session', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-support-signout-race-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeActiveEnrollment(statePath)
+
+  let releaseClaim
+  let markClaimStarted
+  let remoteEnds = 0
+  const claimStarted = new Promise(resolve => {
+    markClaimStarted = resolve
+  })
+  const claimGate = new Promise(resolve => {
+    releaseClaim = resolve
+  })
+  const runtime = makeManagedRuntime(statePath, {
+    brokerPost: async body => {
+      if (body.action === 'claim_internal_support_request') {
+        markClaimStarted()
+        await claimGate
+        return supportEnrollment()
+      }
+      if (body.action === 'internal_support_session_end') {
+        remoteEnds += 1
+        return { ok: true }
+      }
+      throw new Error('unexpected action')
+    },
+    revokeDesktopSession: async () => true,
+    resetRenderer: async () => undefined
+  })
+
+  const claim = runtime.claimSupportRequest('request-123')
+  await claimStarted
+  assert.deepEqual(await runtime.signOut(), { ok: true })
+  releaseClaim()
+
+  await assert.rejects(claim, error => error instanceof EvaBrokerError && error.code === 'stale-auth')
+  const persisted = JSON.parse(fs.readFileSync(statePath, 'utf8'))
+  assert.equal(persisted.signed_out, true)
+  assert.equal(persisted.desktop ?? null, null)
+  assert.equal(persisted.delegated_support ?? null, null)
+  assert.equal(remoteEnds, 1)
+})
+
+test('a late support claim cannot overwrite a replacement sign-in attempt', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-support-signin-race-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeActiveEnrollment(statePath)
+
+  let releaseClaim
+  let markClaimStarted
+  const claimStarted = new Promise(resolve => {
+    markClaimStarted = resolve
+  })
+  const claimGate = new Promise(resolve => {
+    releaseClaim = resolve
+  })
+  const runtime = makeManagedRuntime(statePath, {
+    brokerPost: async body => {
+      if (body.action === 'claim_internal_support_request') {
+        markClaimStarted()
+        await claimGate
+        return supportEnrollment()
+      }
+      if (body.action === 'internal_support_session_end') return { ok: true }
+      throw new Error('unexpected action')
+    },
+    loginTimeoutMs: 1_000,
+    openExternal: async () => undefined,
+    resetRenderer: async () => undefined
+  })
+
+  const claim = runtime.claimSupportRequest('request-123')
+  await claimStarted
+  const replacement = runtime.signIn()
+  await new Promise(resolve => setImmediate(resolve))
+  releaseClaim()
+
+  await assert.rejects(claim, error => error instanceof EvaBrokerError && error.code === 'stale-auth')
+  await runtime.close()
+  await assert.rejects(replacement, error => error instanceof EvaBrokerError && error.code === 'stale-auth')
+  assert.equal(fs.existsSync(statePath), false)
+})
+
+test('renderer reset failure refuses and remotely ends a claimed support session', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-support-renderer-reset-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeActiveEnrollment(statePath)
+  let remoteEnds = 0
+  const runtime = makeManagedRuntime(statePath, {
+    brokerPost: async body => {
+      if (body.action === 'claim_internal_support_request') return supportEnrollment()
+      if (body.action === 'internal_support_session_end') {
+        remoteEnds += 1
+        return { ok: true }
+      }
+      throw new Error('unexpected action')
+    },
+    resetRenderer: async () => {
+      throw new Error('renderer reset failed')
+    }
+  })
+
+  await assert.rejects(
+    runtime.claimSupportRequest('request-123'),
+    error => error instanceof EvaBrokerError && error.code === 'support-renderer-reset-failed'
+  )
+  const persisted = JSON.parse(fs.readFileSync(statePath, 'utf8'))
+  assert.equal(persisted.delegated_support, undefined)
+  assert.equal(persisted.runtime.token, 'runtime-token')
+  assert.equal(runtime.status().delegatedSupportActive, false)
+  assert.equal(remoteEnds, 1)
+})
+
+test('sign-out severs local support access even when the remote end call fails', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-support-signout-fail-closed-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeActiveEnrollment(statePath)
+  let disconnects = 0
+  const runtime = makeManagedRuntime(statePath, {
+    brokerPost: async body => {
+      if (body.action === 'claim_internal_support_request') return supportEnrollment()
+      if (body.action === 'internal_support_session_end') {
+        throw new EvaBrokerError('support end unavailable', 503, 'broker_unavailable')
+      }
+      throw new Error('unexpected action')
+    },
+    createWsRelay: () => ({
+      mintTicket: async () => 'ws://127.0.0.1:12345/managed',
+      disconnectAll: () => {
+        disconnects += 1
+      },
+      close: async () => undefined
+    }),
+    revokeDesktopSession: async () => false,
+    resetRenderer: async () => undefined
+  })
+
+  await runtime.claimSupportRequest('request-123')
+  await runtime.resolveBackend({ profile: 'support' })
+  assert.deepEqual(await runtime.signOut(), { ok: true })
+
+  const persisted = JSON.parse(fs.readFileSync(statePath, 'utf8'))
+  assert.equal(persisted.signed_out, true)
+  assert.equal(persisted.desktop ?? null, null)
+  assert.equal(persisted.runtime ?? null, null)
+  assert.equal(persisted.delegated_support ?? null, null)
+  assert.equal(runtime.status().delegatedSupportActive, false)
+  assert.ok(disconnects >= 1)
+})
+
 test('cold launch replaces an expired runtime enrollment before connecting', async t => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-expiry-'))
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }))

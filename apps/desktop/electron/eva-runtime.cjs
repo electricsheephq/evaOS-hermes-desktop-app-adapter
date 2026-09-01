@@ -555,6 +555,8 @@ function createEvaManagedRuntime(options) {
   async function claimSupportRequest(requestId) {
     const normalizedRequestId = assertSupportRequestId(requestId)
     const desktop = await ensureDesktopSession()
+    const auth = authGeneration
+    const runtime = runtimeGeneration
     const state = currentState()
     if (state.delegatedSupport && !expiresSoon(state.delegatedSupport.supportExpiresAt, 0, now())) {
       throw new EvaBrokerError('evaOS Agent already has an active support session.', 409, 'support-session-active')
@@ -567,7 +569,31 @@ function createEvaManagedRuntime(options) {
       { desktopSession: desktop.token }
     )
     const support = normalizeSupportEnrollment(payload, { now: now() })
-    writeState({ desktop, runtime: state.runtime, delegatedSupport: support })
+
+    try {
+      assertGeneration(auth, runtime)
+      let latest = currentState()
+      if (!latest.desktop || latest.desktop.token !== desktop.token || latest.desktop.email !== desktop.email) {
+        throw new EvaBrokerError('evaOS Agent ignored a stale support response.', 409, 'stale-auth')
+      }
+
+      await resetRenderer()
+      assertGeneration(auth, runtime)
+      latest = currentState()
+      if (!latest.desktop || latest.desktop.token !== desktop.token || latest.desktop.email !== desktop.email) {
+        throw new EvaBrokerError('evaOS Agent ignored a stale support response.', 409, 'stale-auth')
+      }
+      writeState({ desktop: latest.desktop, runtime: latest.runtime, delegatedSupport: support })
+    } catch (error) {
+      await requestDelegatedSupportEnd({ desktop, delegatedSupport: support }).catch(() => false)
+      if (error instanceof EvaBrokerError) throw error
+      throw new EvaBrokerError(
+        'evaOS Agent could not isolate the delegated support session.',
+        503,
+        'support-renderer-reset-failed'
+      )
+    }
+
     supportRevalidated = true
     supportEndError = null
     armSupportExpiryTimer(support)
@@ -579,11 +605,30 @@ function createEvaManagedRuntime(options) {
     resetConnection()
     wsRelay?.disconnectAll()
     options.focusWindow?.()
-    await resetRenderer()
     return publicEvaEnrollmentStatus(
-      { desktop, runtime: state.runtime, delegatedSupport: support, supportEndError },
+      { desktop, runtime: currentState().runtime, delegatedSupport: support, supportEndError },
       now()
     )
+  }
+
+  async function requestDelegatedSupportEnd(state) {
+    const support = state.delegatedSupport
+    const desktop = state.desktop
+    if (!support) return true
+    if (!desktop || expiresSoon(desktop.expiresAt, 0, now())) {
+      throw new EvaBrokerError('Electric Sheep desktop session expired.', 401, 'session-expired')
+    }
+    const result = await postBroker(
+      {
+        action: 'internal_support_session_end',
+        support_session_id: support.supportSessionId
+      },
+      { desktopSession: desktop.token }
+    )
+    if (result?.ok === false) {
+      throw new EvaBrokerError('Electric Sheep could not end the support session.', 502, 'support-end-failed')
+    }
+    return true
   }
 
   async function endDelegatedSupport() {
@@ -592,20 +637,7 @@ function createEvaManagedRuntime(options) {
     if (!support) return { ok: true }
 
     try {
-      const desktop = state.desktop
-      if (!desktop || expiresSoon(desktop.expiresAt, 0, now())) {
-        throw new EvaBrokerError('Electric Sheep desktop session expired.', 401, 'session-expired')
-      }
-      const result = await postBroker(
-        {
-          action: 'internal_support_session_end',
-          support_session_id: support.supportSessionId
-        },
-        { desktopSession: desktop.token }
-      )
-      if (result?.ok === false) {
-        throw new EvaBrokerError('Electric Sheep could not end the support session.', 502, 'support-end-failed')
-      }
+      await requestDelegatedSupportEnd(state)
     } catch {
       // Keep the encrypted handle and active relay so the operator can retry.
       // The absolute expiry timer remains the final safety boundary.
@@ -776,12 +808,16 @@ function createEvaManagedRuntime(options) {
 
   async function signOut() {
     const state = currentState()
-    if (state.delegatedSupport) {
-      const ended = await endDelegatedSupport()
-      if (!ended.ok) return ended
-    }
     invalidateAuthWork()
+    clearSupportExpiryTimer()
+    supportEndError = null
     writeState(emptyState(true))
+    resetConnection()
+    wsRelay?.disconnectAll()
+    if (state.delegatedSupport) {
+      const ended = await requestDelegatedSupportEnd(state).catch(() => false)
+      if (!ended) rememberLog('[eva-managed] support session remote end failed after local sign-out')
+    }
     if (state.desktop) await revokeDesktopSession(state.desktop.token).catch(() => false)
     await resetRenderer()
     return { ok: true }
