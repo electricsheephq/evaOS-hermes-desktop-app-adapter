@@ -235,6 +235,16 @@ export interface Translations {
     message: (reason: string) => string
   }
 
+  delegatedSupport: {
+    actingForCustomer: (customer: string) => string
+    assignedAgent: (agent: string) => string
+    endsIn: (countdown: string) => string
+    endSession: string
+    endingSession: string
+    unavailable: string
+    endFailed: string
+  }
+
   billingBlock: {
     titleNous: string
     titleProvider: (provider: string) => string

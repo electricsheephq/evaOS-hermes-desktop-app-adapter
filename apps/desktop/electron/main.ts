@@ -1089,6 +1089,10 @@ function registerMediaProtocol() {
 }
 
 let mainWindow = null
+// Quick Entry lives outside the main renderer. This declaration must precede
+// managed-runtime construction because stale support cleanup can run during
+// cold module initialization before the renderer window exists.
+let quickEntryLastState = null
 const backendConnectionState = createBackendConnectionState<ReturnType<typeof spawn>, any>()
 const remoteLiveness = new RemoteLivenessTracker()
 const remoteRevalidation = new RemoteRevalidationCoordinator()
@@ -4332,6 +4336,26 @@ function fetchJson(url, token, options: any = {}) {
       return
     }
 
+    let settled = false
+
+    const resolveOnce = value => {
+      if (settled) {
+        return
+      }
+
+      settled = true
+      resolve(value)
+    }
+
+    const rejectOnce = error => {
+      if (settled) {
+        return
+      }
+
+      settled = true
+      reject(error)
+    }
+
     const req = client.request(
       parsed,
       {
@@ -4350,19 +4374,19 @@ function fetchJson(url, token, options: any = {}) {
       },
       res => {
         const chunks = []
-        res.on('error', reject)
+        res.on('error', rejectOnce)
         res.on('data', chunk => chunks.push(chunk))
         res.on('end', () => {
           const text = Buffer.concat(chunks).toString('utf8')
 
           if ((res.statusCode || 500) >= 400) {
-            reject(httpStatusError(res.statusCode || 500, text || res.statusMessage))
+            rejectOnce(httpStatusError(res.statusCode || 500, text || res.statusMessage))
 
             return
           }
 
           if (!text) {
-            resolve(null)
+            resolveOnce(null)
 
             return
           }
@@ -4375,7 +4399,7 @@ function fetchJson(url, token, options: any = {}) {
           const contentType = String(res.headers['content-type'] || '')
 
           if (looksHtml || contentType.includes('text/html')) {
-            reject(
+            rejectOnce(
               new Error(
                 `Expected JSON from ${url} but got HTML (status ${res.statusCode}). ` +
                   'The endpoint is likely missing on the Hermes backend.'
@@ -4386,15 +4410,25 @@ function fetchJson(url, token, options: any = {}) {
           }
 
           try {
-            resolve(JSON.parse(text))
+            resolveOnce(JSON.parse(text))
           } catch {
-            reject(new Error(`Invalid JSON from ${url} (status ${res.statusCode}): ${text.slice(0, 200)}`))
+            rejectOnce(new Error(`Invalid JSON from ${url} (status ${res.statusCode}): ${text.slice(0, 200)}`))
           }
         })
       }
     )
 
-    req.on('error', reject)
+    const signal = options.signal
+    const abortRequest = () => req.destroy(new Error('Managed support request cancelled.'))
+    req.on('error', rejectOnce)
+    if (signal?.aborted) {
+      rejectOnce(new Error('Managed support request cancelled.'))
+      abortRequest()
+      return
+    } else {
+      signal?.addEventListener('abort', abortRequest, { once: true })
+    }
+    req.on('close', () => signal?.removeEventListener('abort', abortRequest))
     req.setTimeout(timeoutMs, () => {
       req.destroy(new Error(`Timed out connecting to Hermes backend after ${timeoutMs}ms`))
     })
@@ -6877,23 +6911,29 @@ function decryptDesktopSecret(secret) {
 }
 
 async function resetEvaRendererSessions() {
+  // Quick Entry lives outside the main renderer. Drop its last projected
+  // sessions before closing auxiliary windows so no prior employee/customer
+  // context can reopen while the main renderer is re-homed.
+  quickEntryLastState = null
   for (const window of BrowserWindow.getAllWindows()) {
     if (window !== mainWindow && !window.isDestroyed()) {
       window.close()
     }
   }
   if (!mainWindow || mainWindow.isDestroyed()) {
-    return
+    return false
   }
   const rendererSession = mainWindow.webContents.session
-  await mainWindow.webContents.executeJavaScript(buildEvaAccountRendererResetScript(), true).catch(() => undefined)
-  await Promise.allSettled([
+  await mainWindow.webContents.executeJavaScript(buildEvaAccountRendererResetScript(), true)
+  await Promise.all([
     rendererSession.clearStorageData({ storages: ['cachestorage', 'indexdb', 'serviceworkers'] }),
     rendererSession.clearCache()
   ])
-  if (!mainWindow.isDestroyed()) {
-    mainWindow.reload()
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    return false
   }
+  mainWindow.reload()
+  return true
 }
 
 const evaManagedRuntime = createEvaManagedRuntime({
@@ -6903,7 +6943,7 @@ const evaManagedRuntime = createEvaManagedRuntime({
   openExternal: url => shell.openExternal(url),
   waitForHermes,
   fetchJson,
-  fetchMedia: (url, token, requestHeaders) => {
+  fetchMedia: (url, token, requestHeaders, signal) => {
     const headers = new Headers(requestHeaders)
     headers.delete('authorization')
     headers.delete('cookie')
@@ -6913,7 +6953,8 @@ const evaManagedRuntime = createEvaManagedRuntime({
     return electronNet.fetch(url, {
       bypassCustomProtocolHandlers: true,
       headers,
-      redirect: 'error'
+      redirect: 'error',
+      signal
     })
   },
   resolveTimeoutMs: value => resolveTimeoutMs(value, DEFAULT_FETCH_TIMEOUT_MS),
@@ -9221,8 +9262,6 @@ let quickEntryWindow = null
 
 // Latest state push from the primary renderer (connection + recent sessions),
 // replayed to a quick window that spawns after the push happened.
-let quickEntryLastState = null
-
 function readQuickEntrySettings() {
   try {
     return sanitizeQuickEntrySettings(JSON.parse(fs.readFileSync(QUICK_ENTRY_CONFIG_PATH, 'utf8')))
@@ -9629,7 +9668,8 @@ function createWindow() {
   // the renderer misses are recovered by its getBootProgress() pull on mount.
   startHermes().catch(error => rememberLog(error.stack || error.message))
 
-  mainWindow.webContents.once('did-finish-load', () => {
+  mainWindow.webContents.once('did-finish-load', async () => {
+    await evaManagedRuntime.flushPendingRendererReset()
     // Zoom restore is handled by wireCommonWindowHandlers (shared with session
     // windows); no need to reapply it here.
     broadcastBootProgress()
@@ -10225,6 +10265,7 @@ ipcMain.handle('hermes:eva:status', async () => evaManagedRuntime.status())
 ipcMain.handle('hermes:eva:sign-in', async () => evaManagedRuntime.signIn())
 ipcMain.handle('hermes:eva:sign-out', async () => evaManagedRuntime.signOut())
 ipcMain.handle('hermes:eva:refresh', async () => evaManagedRuntime.refresh())
+ipcMain.handle('hermes:eva:support:end', async () => evaManagedRuntime.endSupportSession())
 
 ipcMain.handle('hermes:profile:get', async () => {
   if (!EVA_MANAGED_BUILD) {
@@ -12095,6 +12136,18 @@ function handleDeepLink(url) {
 
     if (managedLink.type === 'blueprint') {
       deliverDeepLinkPayload(managedLink.payload)
+
+      return
+    }
+
+    if (managedLink.type === 'support') {
+      // The request id is claimed in the main process with the existing
+      // employee desktop session. It is deliberately never forwarded to the
+      // renderer or included in a renderer-visible error.
+      void evaManagedRuntime.claimSupportRequest(managedLink.requestId).catch(error => {
+        const code = String(error?.code || '').match(/^[a-z][a-z0-9]*(?:[_-][a-z0-9]+)*$/)?.[0]
+        rememberLog(`[eva-support] request rejected: ${code || 'support-claim-failed'}`)
+      })
 
       return
     }

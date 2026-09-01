@@ -171,6 +171,15 @@ export const ar = defineLocale({
   remoteDisplayBanner: {
     message: reason => `العرض البرمجي نشط — تم اكتشاف شاشة بعيدة (${reason}). تم تعطيل تسريع GPU لمنع الوميض.`
   },
+  delegatedSupport: {
+    actingForCustomer: customer => `تعمل نيابة عن ${customer}`,
+    assignedAgent: agent => `الوكيل: ${agent}`,
+    endsIn: countdown => `ينتهي خلال ${countdown}`,
+    endSession: 'إنهاء جلسة الدعم',
+    endingSession: 'جارٍ إنهاء جلسة الدعم…',
+    unavailable: 'حالة جلسة الدعم غير متاحة.',
+    endFailed: 'تعذر إنهاء جلسة الدعم. حاول مرة أخرى.'
+  },
   titlebar: {
     hideSidebar: 'إخفاء الشريط الجانبي',
     showSidebar: 'إظهار الشريط الجانبي',

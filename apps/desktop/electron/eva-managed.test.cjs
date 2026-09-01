@@ -19,6 +19,7 @@ const {
   launchEvaHermesRuntime,
   makeEvaDesktopCodeVerifier,
   normalizeHermesEnrollment,
+  normalizeSupportEnrollment,
   parseEvaDesktopAuthCallback,
   pollEvaDeviceCode,
   publicEvaEnrollmentStatus,
@@ -519,6 +520,17 @@ test('managed backend preserves the approved all-profile endpoint selector', () 
   })
 })
 
+test('delegated support rejects broad endpoint profile selectors', () => {
+  assert.throws(
+    () =>
+      assertEvaManagedApiRequestAllowed(
+        { path: '/api/skills?profile=all', profile: 'research' },
+        { allowBroadProfileSelectors: false }
+      ),
+    error => error instanceof EvaBrokerError && error.statusCode === 403 && error.code === 'managed-escape'
+  )
+})
+
 test('managed backend rejects endpoint profiles that differ from the trusted routing profile', () => {
   assert.throws(
     () => assertEvaManagedApiRequestAllowed({ path: '/api/skills?profile=research', profile: 'main' }),
@@ -650,6 +662,64 @@ test('managed enrollment accepts server-selected accounts and rejects mismatched
           remote_backend: { ...payload.remote_backend, base_url: baseUrl }
         }),
       error => error instanceof EvaBrokerError && ['invalid-enrollment', 'wrong-customer'].includes(error.code)
+    )
+  }
+})
+
+test('delegated support enrollment requires a bounded assignment and presentation labels', () => {
+  const now = Date.now()
+  const payload = {
+    schema_version: 'evaos.hermes_desktop_enrollment.v1',
+    runtime: 'hermes',
+    customer_id: 'customer-one',
+    remote_backend: {
+      base_url: 'https://hermes-customer-one.ecs.electricsheephq.com',
+      session_token: 'opaque-support-session',
+      expires_at: new Date(now + 45 * 60 * 1_000).toISOString(),
+      agent_id: 'assigned-agent',
+      agent_display_name: 'Assigned agent'
+    },
+    session_kind: 'delegated_support',
+    support_session_id: 'support-session',
+    assignment_version: 'assignment-v1',
+    admin_bypass: false,
+    support_expires_at: new Date(now + 30 * 60 * 1_000).toISOString(),
+    profile: 'support',
+    presentation: {
+      customer_label: 'Customer',
+      agent_label: 'Assigned agent'
+    }
+  }
+
+  const support = normalizeSupportEnrollment(payload, { now })
+  assert.equal(support.sessionKind, 'delegated_support')
+  assert.equal(support.supportSessionId, 'support-session')
+  assert.equal(support.assignmentVersion, 'assignment-v1')
+  assert.equal(support.adminBypass, false)
+  assert.equal(support.supportCustomerLabel, 'Customer')
+  assert.equal(support.supportAgentLabel, 'Assigned agent')
+  assert.equal(support.profile, 'support')
+
+  const adminSupport = normalizeSupportEnrollment(
+    { ...payload, admin_bypass: true, assignment_version: null },
+    { now }
+  )
+  assert.equal(adminSupport.adminBypass, true)
+  assert.equal(adminSupport.assignmentVersion, null)
+
+  for (const invalid of [
+    { ...payload, session_kind: 'ordinary' },
+    { ...payload, assignment_version: '' },
+    { ...payload, assignment_version: null },
+    { ...payload, admin_bypass: true },
+    { ...payload, admin_bypass: 'false' },
+    { ...payload, support_expires_at: new Date(now + 2 * 60 * 60 * 1_000).toISOString() },
+    { ...payload, presentation: { ...payload.presentation, customer_label: '' } },
+    { ...payload, profile: 'all' }
+  ]) {
+    assert.throws(
+      () => normalizeSupportEnrollment(invalid, { now }),
+      error => error instanceof EvaBrokerError && ['invalid-support-session', 'invalid-enrollment'].includes(error.code)
     )
   }
 })

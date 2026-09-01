@@ -104,7 +104,8 @@ contextBridge.exposeInMainWorld('hermesDesktop', {
     status: () => ipcRenderer.invoke('hermes:eva:status'),
     signIn: () => ipcRenderer.invoke('hermes:eva:sign-in'),
     signOut: () => ipcRenderer.invoke('hermes:eva:sign-out'),
-    refresh: () => ipcRenderer.invoke('hermes:eva:refresh')
+    refresh: () => ipcRenderer.invoke('hermes:eva:refresh'),
+    endSupportSession: () => ipcRenderer.invoke('hermes:eva:support:end')
   },
   profile: {
     get: () => ipcRenderer.invoke('hermes:profile:get'),
