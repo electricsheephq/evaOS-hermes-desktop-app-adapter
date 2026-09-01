@@ -337,6 +337,78 @@ def _graceful_restart_via_sigusr1(pid: int, drain_timeout: float) -> bool:
     return _wait_for_pid_exit(pid, max(drain_timeout, 1.0))
 
 
+def _wait_for_managed_external_gateway_replacement(
+    previous_pid: int, timeout: float = 30.0
+) -> bool:
+    """Wait for one profile-local external-supervisor replacement.
+
+    evaOS r30 uses a flat ``HERMES_HOME`` per Linux user and a root-owned
+    systemd template outside Hermes's ordinary user-service inventory.  The
+    profile-local ``gateway.pid`` is therefore the supported observation seam:
+    it is written by the gateway itself and validated by ``get_running_pid``.
+    Require a new PID whose argv still carries ``--external-supervisor`` so a
+    stale/manual process can never satisfy the handoff.
+    """
+    from gateway.status import get_running_pid
+
+    deadline = time.monotonic() + max(timeout, 1.0)
+    while time.monotonic() < deadline:
+        replacement = get_running_pid(cleanup_stale=False)
+        if replacement is not None and replacement != previous_pid:
+            argv = _capture_gateway_argv(replacement)
+            if argv and "--external-supervisor" in argv:
+                return True
+        time.sleep(0.25)
+    return False
+
+
+def _restart_managed_external_gateway_if_applicable() -> bool:
+    """Restart the one gateway owned by a managed flat-profile process.
+
+    Returns ``False`` outside evaOS managed-flat-profile mode so upstream's
+    existing systemd/launchd/manual behavior remains unchanged.  Once managed
+    mode is detected, every ambiguity fails closed: falling through to the
+    ordinary manual restart would launch a credential-incomplete sibling
+    outside the root-owned supervisor.
+    """
+    from hermes_cli.managed_profile_scope import managed_profile_name
+
+    try:
+        owner = managed_profile_name()
+    except RuntimeError:
+        print_error("Managed gateway restart unavailable: profile authority is invalid.")
+        raise SystemExit(1)
+    if owner is None:
+        return False
+
+    from gateway.status import get_running_pid
+
+    pid = get_running_pid(cleanup_stale=False)
+    if pid is None:
+        print_error("Managed gateway restart unavailable: no profile-local gateway is running.")
+        raise SystemExit(1)
+
+    argv = _capture_gateway_argv(pid)
+    if not argv or "--external-supervisor" not in argv:
+        print_error("Managed gateway restart unavailable: supervisor identity is invalid.")
+        raise SystemExit(1)
+
+    wait_budget = _get_restart_exit_wait_budget()
+    print(
+        "⏳ Managed gateway restarting gracefully — "
+        f"waiting up to {wait_budget:.0f}s for in-flight turns and drain..."
+    )
+    if not _graceful_restart_via_sigusr1(pid, wait_budget):
+        print_error("Managed gateway restart failed before supervisor handoff.")
+        raise SystemExit(1)
+    if not _wait_for_managed_external_gateway_replacement(pid):
+        print_error("Managed gateway restart failed: replacement was not observed.")
+        raise SystemExit(1)
+
+    print("✓ Managed gateway restarted through its external supervisor")
+    return True
+
+
 def _wait_for_pid_exit(pid: int, timeout: float) -> bool:
     """Wait up to ``timeout`` seconds for ``pid`` to leave the process table.
 
@@ -8332,6 +8404,16 @@ def _gateway_command_inner(args):
                 "Use `hermes gateway restart` from a shell outside the running gateway."
             )
             sys.exit(1)
+
+        # evaOS r30 runs each profile gateway in a root-owned systemd template
+        # that is intentionally outside Hermes's ordinary user-service
+        # inventory.  In that managed flat-profile layout, hand the restart to
+        # the already-running gateway (SIGUSR1 -> exit 75) and let its external
+        # supervisor create exactly one replacement.  Never fall through to
+        # the manual stop/foreground-start path: the agent service does not own
+        # the gateway's protected messaging credentials.
+        if _restart_managed_external_gateway_if_applicable():
+            return
 
         # Try service first, fall back to killing and restarting
         service_available = False
