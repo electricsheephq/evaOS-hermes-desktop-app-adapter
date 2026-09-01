@@ -245,12 +245,12 @@ export function useSlashCommand(deps: SlashCommandDeps) {
       // `exec` commands (and unknown skill / quick commands the backend owns)
       // run on the gateway and render their text output inline. This is the only
       // path that talks to slash.exec / command.dispatch.
-      async function runExec(ctx: SlashActionCtx): Promise<void> {
+      async function runExec(ctx: SlashActionCtx): Promise<boolean> {
         const { arg, command, name } = ctx
         const resolved = await withSlashOutput(ctx)
 
         if (!resolved) {
-          return
+          return false
         }
 
         const { render, sessionId, storedSessionId } = resolved
@@ -261,7 +261,7 @@ export function useSlashCommand(deps: SlashCommandDeps) {
         if (!isDesktopSlashCommand(name)) {
           renderSlashOutput(desktopSlashUnavailableMessage(name) || `/${name} is not available in the desktop app.`)
 
-          return
+          return false
         }
 
         let slashExecError: unknown = null
@@ -374,7 +374,7 @@ export function useSlashCommand(deps: SlashCommandDeps) {
           if (dispatch) {
             await handleDispatch(dispatch)
 
-            return
+            return true
           }
 
           const output = result && typeof result === 'object' ? (result as SlashExecResponse) : null
@@ -390,7 +390,7 @@ export function useSlashCommand(deps: SlashCommandDeps) {
 
           renderSlashOutput(output?.warning ? `warning: ${output.warning}\n${body}` : body)
 
-          return
+          return true
         } catch (error) {
           // Fall back to command.dispatch for skill/send/alias directives, but
           // keep the worker error: a slash.exec worker timeout/crash is the real
@@ -406,10 +406,12 @@ export function useSlashCommand(deps: SlashCommandDeps) {
           if (!dispatch) {
             renderSlashOutput('error: invalid response: command.dispatch')
 
-            return
+            return false
           }
 
           await handleDispatch(dispatch)
+
+          return true
         } catch (err) {
           // "not a quick/plugin/skill command" just means the fallback had
           // nothing to add — the slash.exec failure (worker timeout, crash) is
@@ -420,10 +422,12 @@ export function useSlashCommand(deps: SlashCommandDeps) {
             const original = slashExecError instanceof Error ? slashExecError.message : String(slashExecError)
             renderSlashOutput(`error: /${name} failed: ${original}`)
 
-            return
+            return false
           }
 
           renderSlashOutput(`error: ${dispatchMessage}`)
+
+          return false
         }
       }
 
@@ -480,9 +484,9 @@ export function useSlashCommand(deps: SlashCommandDeps) {
           // gateway update independently; older gateways still support the
           // slash-worker route.
           if (surface.fallbackToExec !== false && isMissingRpcMethod(err)) {
-            await runExec(ctx)
+            const fallbackSucceeded = await runExec(ctx)
 
-            if (surface.rpc === 'skills.reload') {
+            if (fallbackSucceeded && surface.rpc === 'skills.reload') {
               invalidateSlashCompletions()
             }
 
@@ -1122,7 +1126,9 @@ export function useSlashCommand(deps: SlashCommandDeps) {
 
           default:
             // exec spec, or an unknown skill / quick command the backend owns.
-            return runExec(ctx)
+            await runExec(ctx)
+
+            return
         }
       }
 
