@@ -1,5 +1,6 @@
 """Tests for gateway service management helpers."""
 
+import json
 import os
 import plistlib
 import subprocess
@@ -715,14 +716,14 @@ class TestGatewayServiceDetection:
 
 
 class TestManagedExternalGatewayRestart:
-    def test_unmanaged_runtime_keeps_existing_restart_path(self, monkeypatch):
-        import hermes_cli.managed_profile_scope as managed_scope
+    def test_non_flat_runtime_keeps_existing_restart_path(self, monkeypatch):
+        import hermes_cli.profiles as profiles
 
-        monkeypatch.setattr(managed_scope, "managed_profile_name", lambda: None)
+        monkeypatch.setattr(profiles, "_flat_managed_profile", lambda: None)
         monkeypatch.setattr(
             status,
-            "get_running_pid",
-            lambda **_kwargs: (_ for _ in ()).throw(
+            "get_running_pid_identity_strict",
+            lambda *_args: (_ for _ in ()).throw(
                 AssertionError("unmanaged restart must not inspect managed PID state")
             ),
         )
@@ -732,12 +733,15 @@ class TestManagedExternalGatewayRestart:
     def test_managed_runtime_hands_off_to_exact_external_supervisor(
         self, monkeypatch, capsys
     ):
-        import hermes_cli.managed_profile_scope as managed_scope
+        import hermes_cli.profiles as profiles
 
         calls = []
-        monkeypatch.setattr(managed_scope, "managed_profile_name", lambda: "worker")
+        flat = ("worker", Path("/managed/worker"), Path("/managed"))
+        monkeypatch.setattr(profiles, "_flat_managed_profile", lambda: flat)
         monkeypatch.setattr(
-            status, "get_running_pid", lambda cleanup_stale=False: 4242
+            status,
+            "get_running_pid_identity_strict",
+            lambda _pid_path: (4242, 12.5),
         )
         monkeypatch.setattr(
             gateway_cli,
@@ -753,21 +757,49 @@ class TestManagedExternalGatewayRestart:
         monkeypatch.setattr(
             gateway_cli,
             "_wait_for_managed_external_gateway_replacement",
-            lambda pid: calls.append(("wait", pid)) or True,
+            lambda identity: calls.append(("wait", identity)) or True,
         )
 
         assert gateway_cli._restart_managed_external_gateway_if_applicable() is True
-        assert calls == [("signal", 4242, 27.0), ("wait", 4242)]
+        assert calls == [("signal", 4242, 27.0), ("wait", (4242, 12.5))]
         output = capsys.readouterr().out
         assert "external supervisor" in output
         assert "worker" not in output
 
-    def test_managed_runtime_refuses_unverified_supervisor(self, monkeypatch):
-        import hermes_cli.managed_profile_scope as managed_scope
+    def test_managed_runtime_refuses_ambiguous_strict_identity(self, monkeypatch):
+        import hermes_cli.profiles as profiles
 
-        monkeypatch.setattr(managed_scope, "managed_profile_name", lambda: "worker")
+        flat = ("worker", Path("/managed/worker"), Path("/managed"))
+        monkeypatch.setattr(profiles, "_flat_managed_profile", lambda: flat)
         monkeypatch.setattr(
-            status, "get_running_pid", lambda cleanup_stale=False: 4242
+            status,
+            "get_running_pid_identity_strict",
+            lambda _pid_path: (_ for _ in ()).throw(
+                RuntimeError("ambiguous runtime identity")
+            ),
+        )
+        monkeypatch.setattr(
+            gateway_cli,
+            "_capture_gateway_argv",
+            lambda _pid: (_ for _ in ()).throw(
+                AssertionError("ambiguous gateway must not be inspected")
+            ),
+        )
+
+        with pytest.raises(SystemExit) as exc:
+            gateway_cli._restart_managed_external_gateway_if_applicable()
+
+        assert exc.value.code == 1
+
+    def test_managed_runtime_refuses_unverified_supervisor(self, monkeypatch):
+        import hermes_cli.profiles as profiles
+
+        flat = ("worker", Path("/managed/worker"), Path("/managed"))
+        monkeypatch.setattr(profiles, "_flat_managed_profile", lambda: flat)
+        monkeypatch.setattr(
+            status,
+            "get_running_pid_identity_strict",
+            lambda _pid_path: (4242, 12.5),
         )
         monkeypatch.setattr(
             gateway_cli,
@@ -788,11 +820,14 @@ class TestManagedExternalGatewayRestart:
         assert exc.value.code == 1
 
     def test_managed_runtime_refuses_failed_handoff(self, monkeypatch):
-        import hermes_cli.managed_profile_scope as managed_scope
+        import hermes_cli.profiles as profiles
 
-        monkeypatch.setattr(managed_scope, "managed_profile_name", lambda: "worker")
+        flat = ("worker", Path("/managed/worker"), Path("/managed"))
+        monkeypatch.setattr(profiles, "_flat_managed_profile", lambda: flat)
         monkeypatch.setattr(
-            status, "get_running_pid", lambda cleanup_stale=False: 4242
+            status,
+            "get_running_pid_identity_strict",
+            lambda _pid_path: (4242, 12.5),
         )
         monkeypatch.setattr(
             gateway_cli,
@@ -816,23 +851,87 @@ class TestManagedExternalGatewayRestart:
 
         assert exc.value.code == 1
 
-    def test_replacement_wait_requires_new_externally_supervised_pid(
-        self, monkeypatch
+    def test_replacement_wait_requires_running_external_supervisor(
+        self, tmp_path, monkeypatch
     ):
-        pids = iter((4242, 5252))
+        home = tmp_path / "worker"
+        home.mkdir()
+        runtime_path = home / "gateway_state.json"
+        runtime_path.write_text(
+            json.dumps(
+                {"pid": 5252, "start_time": 22.5, "gateway_state": "starting"}
+            )
+        )
+        monkeypatch.setenv("HERMES_HOME", str(home))
+        monkeypatch.setattr(gateway_cli, "get_hermes_home", lambda: home)
         monkeypatch.setattr(
             status,
-            "get_running_pid",
-            lambda cleanup_stale=False: next(pids),
+            "get_running_pid_identity_strict",
+            lambda _pid_path: (5252, 22.5),
         )
         monkeypatch.setattr(
             gateway_cli,
             "_capture_gateway_argv",
             lambda pid: ["hermes", "gateway", "run", "--external-supervisor"],
         )
-        monkeypatch.setattr(gateway_cli.time, "sleep", lambda _seconds: None)
+        monkeypatch.setattr(
+            status,
+            "get_runtime_status_running_pid",
+            lambda runtime, expected_home=None: (
+                5252 if runtime.get("gateway_state") == "running" else None
+            ),
+        )
 
-        assert gateway_cli._wait_for_managed_external_gateway_replacement(4242)
+        def finish_startup(_seconds):
+            runtime_path.write_text(
+                json.dumps(
+                    {"pid": 5252, "start_time": 22.5, "gateway_state": "running"}
+                )
+            )
+
+        monkeypatch.setattr(gateway_cli.time, "sleep", finish_startup)
+
+        assert gateway_cli._wait_for_managed_external_gateway_replacement(
+            (4242, 12.5)
+        )
+
+    def test_replacement_wait_rejects_matching_startup_failure(
+        self, tmp_path, monkeypatch
+    ):
+        home = tmp_path / "worker"
+        home.mkdir()
+        (home / "gateway_state.json").write_text(
+            json.dumps(
+                {
+                    "pid": 5252,
+                    "start_time": 22.5,
+                    "gateway_state": "startup_failed",
+                }
+            )
+        )
+        monkeypatch.setenv("HERMES_HOME", str(home))
+        monkeypatch.setattr(gateway_cli, "get_hermes_home", lambda: home)
+        monkeypatch.setattr(
+            status,
+            "get_running_pid_identity_strict",
+            lambda _pid_path: (5252, 22.5),
+        )
+        monkeypatch.setattr(
+            gateway_cli,
+            "_capture_gateway_argv",
+            lambda pid: ["hermes", "gateway", "run", "--external-supervisor"],
+        )
+        monkeypatch.setattr(
+            status,
+            "get_runtime_status_running_pid",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                AssertionError("startup failure must not be treated as running")
+            ),
+        )
+
+        assert not gateway_cli._wait_for_managed_external_gateway_replacement(
+            (4242, 12.5)
+        )
 
     def test_restart_command_stops_before_generic_management(self, monkeypatch):
         from tools import process_registry
