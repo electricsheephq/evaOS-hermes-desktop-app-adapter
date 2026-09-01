@@ -177,6 +177,47 @@ describe('desktop slash command curation', () => {
     expect(command.surface.buildParams({ ...context, arg: 'now please' })).toEqual({ session_id: 's-1' })
   })
 
+  it('routes managed lifecycle commands to the current profile and session', () => {
+    Object.defineProperty(window, 'hermesDesktop', {
+      configurable: true,
+      value: { eva: {} },
+      writable: true
+    })
+
+    const skills = resolveDesktopCommand('/reload_skills')
+    expect(skills?.name).toBe('/reload-skills')
+    expect(skills?.surface.kind).toBe('rpc')
+    expect(isDesktopSlashSuggestion('/reload-skills')).toBe(true)
+    expect(desktopSlashDescription('/reload-skills')).toBe('Reload skills for the current profile and session')
+
+    if (skills?.surface.kind !== 'rpc') {
+      return
+    }
+
+    expect(skills.surface.rpc).toBe('skills.reload')
+    expect(
+      skills.surface.buildParams({
+        command: '/reload-skills',
+        name: 'reload-skills',
+        arg: 'other-profile',
+        sessionId: 's-1'
+      })
+    ).toEqual({ session_id: 's-1' })
+
+    expect(resolveDesktopCommand('/restart')?.surface).toEqual({ kind: 'action', action: 'restart' })
+    expect(isDesktopSlashSuggestion('/restart')).toBe(true)
+    expect(desktopSlashCommandArgumentMode('/restart')).toBe('text')
+  })
+
+  it('keeps managed lifecycle commands unavailable in an unmanaged desktop', () => {
+    expect(isDesktopSlashSuggestion('/reload-skills')).toBe(false)
+    expect(isDesktopSlashCommand('/reload-skills')).toBe(false)
+    expect(isDesktopSlashSuggestion('/restart')).toBe(false)
+    expect(isDesktopSlashCommand('/restart')).toBe(false)
+    expect(desktopSlashUnavailableMessage('/reload-skills')).toContain('terminal interface')
+    expect(desktopSlashUnavailableMessage('/restart')).toContain('terminal interface')
+  })
+
   it('keeps commands with richer CLI semantics on the slash worker', () => {
     for (const name of ['/agents', '/steer', '/stop', '/usage']) {
       expect(resolveDesktopCommand(name)?.surface).toEqual({ kind: 'exec' })

@@ -29,6 +29,8 @@ import type { SubmitTextOptions } from './utils'
 
 import { uploadComposerAttachment, usePromptActions } from '.'
 
+const { mockRunGatewayRestart } = vi.hoisted(() => ({ mockRunGatewayRestart: vi.fn() }))
+
 vi.mock('@/hermes', () => ({
   getProfiles: vi.fn(async () => ({ profiles: [] })),
   getSession: vi.fn(),
@@ -36,6 +38,15 @@ vi.mock('@/hermes', () => ({
   setApiRequestProfile: vi.fn(),
   transcribeAudio: vi.fn()
 }))
+
+vi.mock('@/store/system-actions', () => ({
+  runGatewayRestart: mockRunGatewayRestart
+}))
+
+afterEach(() => {
+  Reflect.deleteProperty(window, 'hermesDesktop')
+  mockRunGatewayRestart.mockReset()
+})
 
 // The active id the desktop holds is the *runtime* session id from
 // session.create — deliberately distinct from the stored DB id here, because
@@ -1022,6 +1033,119 @@ describe('usePromptActions exec fallback error reporting', () => {
     expect(requestGateway).toHaveBeenCalledWith('reload.mcp', expect.objectContaining({ confirm: true }), 300_000)
     expect(requestGateway.mock.calls.some(([method]) => method === 'slash.exec')).toBe(false)
     expect(renderedSeedTexts(seeds).some(text => text.includes('method not found: reload.mcp'))).toBe(true)
+  })
+
+  it('reloads skills through the current session RPC on the managed desktop', async () => {
+    Object.defineProperty(window, 'hermesDesktop', {
+      configurable: true,
+      value: { eva: {} },
+      writable: true
+    })
+
+    const seeds: Record<string, unknown>[] = []
+    const requestGateway = vi.fn(async (method: string) => {
+      if (method === 'skills.reload') {
+        return { output: 'Reloading skills... 4 skill(s) available' } as never
+      }
+
+      throw new Error(`unexpected method: ${method}`)
+    })
+
+    let handle: HarnessHandle | null = null
+    await actRender(
+      <Harness
+        onReady={h => (handle = h)}
+        onSeedState={s => seeds.push(s)}
+        refreshSessions={async () => undefined}
+        requestGateway={requestGateway}
+      />
+    )
+
+    await handle!.submitText('/reload-skills')
+
+    expect(requestGateway).toHaveBeenCalledWith('skills.reload', { session_id: RUNTIME_SESSION_ID }, undefined)
+    expect(requestGateway.mock.calls.some(([method]) => method === 'slash.exec')).toBe(false)
+    expect(renderedSeedTexts(seeds).some(text => text.includes('4 skill(s) available'))).toBe(true)
+  })
+
+  it('keeps managed skill reload unavailable on an unmanaged desktop', async () => {
+    Reflect.deleteProperty(window, 'hermesDesktop')
+
+    const seeds: Record<string, unknown>[] = []
+    const requestGateway = vi.fn(async () => ({ output: 'must not run' }) as never)
+
+    let handle: HarnessHandle | null = null
+    await actRender(
+      <Harness
+        onReady={h => (handle = h)}
+        onSeedState={s => seeds.push(s)}
+        refreshSessions={async () => undefined}
+        requestGateway={requestGateway}
+      />
+    )
+
+    await handle!.submitText('/reload-skills')
+
+    expect(requestGateway).not.toHaveBeenCalled()
+    expect(renderedSeedTexts(seeds).some(text => text.includes('terminal interface'))).toBe(true)
+  })
+
+  it('restarts only the current managed profile and renders the result', async () => {
+    Object.defineProperty(window, 'hermesDesktop', {
+      configurable: true,
+      value: { eva: {} },
+      writable: true
+    })
+
+    mockRunGatewayRestart.mockResolvedValue({ profile: 'asuka-eva02', status: 'restarted' })
+    const seeds: Record<string, unknown>[] = []
+    const requestGateway = vi.fn(async () => ({}) as never)
+
+    let handle: HarnessHandle | null = null
+    await actRender(
+      <Harness
+        onReady={h => (handle = h)}
+        onSeedState={s => seeds.push(s)}
+        refreshSessions={async () => undefined}
+        requestGateway={requestGateway}
+      />
+    )
+
+    await handle!.submitText('/restart')
+
+    expect(mockRunGatewayRestart).toHaveBeenCalledTimes(1)
+    expect(requestGateway).not.toHaveBeenCalled()
+    expect(renderedSeedTexts(seeds).some(text => text.includes('asuka-eva02'))).toBe(true)
+    expect(renderedSeedTexts(seeds).some(text => text.includes('Gateway restarted'))).toBe(true)
+  })
+
+  it('denies an explicit profile target without invoking the restart action', async () => {
+    Object.defineProperty(window, 'hermesDesktop', {
+      configurable: true,
+      value: { eva: {} },
+      writable: true
+    })
+
+    const seeds: Record<string, unknown>[] = []
+    const requestGateway = vi.fn(async () => ({}) as never)
+
+    let handle: HarnessHandle | null = null
+    await actRender(
+      <Harness
+        onReady={h => (handle = h)}
+        onSeedState={s => seeds.push(s)}
+        refreshSessions={async () => undefined}
+        requestGateway={requestGateway}
+      />
+    )
+
+    await handle!.submitText('/restart another-profile')
+
+    expect(mockRunGatewayRestart).not.toHaveBeenCalled()
+    expect(requestGateway).not.toHaveBeenCalled()
+    expect(
+      renderedSeedTexts(seeds).some(text => text.includes('no explicit profile target is supported'))
+    ).toBe(true)
   })
 
   it('still reports a real command.dispatch failure for skill/quick commands', async () => {

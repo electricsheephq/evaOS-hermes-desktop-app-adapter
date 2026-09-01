@@ -58,6 +58,7 @@ export type DesktopActionId =
   | 'new'
   | 'pet'
   | 'profile'
+  | 'restart'
   | 'skin'
   | 'title'
   | 'wake'
@@ -129,6 +130,8 @@ export interface DesktopCommandSpec {
   description?: string
   aliases?: string[]
   surface: DesktopCommandSurface
+  /** Only expose this Hermes-native surface on the managed desktop build. */
+  managedOnly?: boolean
   /**
    * Hide from the slash popover / completions while still letting it execute.
    * Used for picker commands reachable from chrome (the model picker lives on
@@ -248,6 +251,13 @@ const DESKTOP_COMMAND_SPECS: readonly DesktopCommandSpec[] = [
     argumentMode: 'options'
   },
   {
+    name: '/restart',
+    description: 'Restart the current profile gateway',
+    surface: action('restart'),
+    managedOnly: true,
+    argumentMode: 'text'
+  },
+  {
     name: '/agents',
     description: 'Show active desktop sessions and running tasks',
     aliases: ['/tasks'],
@@ -356,7 +366,14 @@ const DESKTOP_COMMAND_SPECS: readonly DesktopCommandSpec[] = [
     ),
     argumentMode: 'text'
   },
-  { name: '/reload-skills', aliases: ['/reload_skills'], surface: unavailable('advanced') }
+  {
+    name: '/reload-skills',
+    description: 'Reload skills for the current profile and session',
+    aliases: ['/reload_skills'],
+    surface: rpc('skills.reload', ctx => ({ session_id: ctx.sessionId })),
+    managedOnly: true,
+    argumentMode: 'text'
+  }
 ]
 
 // Known commands with no desktop surface (and no alias) — a flat name list
@@ -384,7 +401,6 @@ const NO_DESKTOP_SURFACE: Record<DesktopUnavailableReason, readonly string[]> = 
     '/quit',
     '/redraw',
     '/reload',
-    '/restart',
     '/sb',
     '/set-home',
     '/sethome',
@@ -475,7 +491,7 @@ export function isDesktopSlashCommand(command: string): boolean {
   const spec = resolveDesktopCommand(command)
 
   if (spec) {
-    return spec.surface.kind !== 'unavailable'
+    return spec.surface.kind !== 'unavailable' && (!spec.managedOnly || isManagedEvaosAgent())
   }
 
   return isDesktopSlashExtensionCommand(command)
@@ -497,7 +513,7 @@ export function isDesktopSlashSuggestion(command: string): boolean {
   const spec = SPEC_BY_NAME.get(normalized)
 
   if (spec) {
-    return spec.surface.kind !== 'unavailable' && !spec.hidden
+    return spec.surface.kind !== 'unavailable' && !spec.hidden && (!spec.managedOnly || isManagedEvaosAgent())
   }
 
   // Skill / quick commands the backend provides.
@@ -530,9 +546,14 @@ export function desktopSlashUnavailableMessage(command: string): string | null {
 
   const canonical = canonicalDesktopSlashCommand(command)
   const surface = SPEC_BY_NAME.get(canonical)?.surface
+  const spec = SPEC_BY_NAME.get(canonical)
 
   if (!surface) {
     return null
+  }
+
+  if (spec?.managedOnly && !isManagedEvaosAgent()) {
+    return UNAVAILABLE_MESSAGE.terminal(canonical)
   }
 
   if (surface.kind === 'unavailable') {

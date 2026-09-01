@@ -26,6 +26,7 @@ import { dismissNotification, notify, notifyError } from '@/store/notifications'
 import { setPetScale } from '@/store/pet-gallery'
 import { $petGenInput, openPetGenerate } from '@/store/pet-generate'
 import { $activeGatewayProfile, $newChatProfile, ensureGatewayProfile, normalizeProfileKey } from '@/store/profile'
+import { runGatewayRestart } from '@/store/system-actions'
 import {
   $connection,
   $sessions,
@@ -435,6 +436,15 @@ export function useSlashCommand(deps: SlashCommandDeps) {
         surface: Extract<DesktopCommandSurface, { kind: 'rpc' }>,
         ctx: SlashActionCtx
       ): Promise<void> {
+        if (!isDesktopSlashCommand(ctx.name)) {
+          const resolved = await withSlashOutput(ctx)
+          resolved?.render(
+            desktopSlashUnavailableMessage(ctx.name) || `/${ctx.name} is not available in the desktop app.`
+          )
+
+          return
+        }
+
         const resolved = await withSlashOutput(ctx)
 
         if (!resolved) {
@@ -482,6 +492,42 @@ export function useSlashCommand(deps: SlashCommandDeps) {
         },
         branch: async () => {
           await branchCurrentSession()
+        },
+        restart: async ctx => {
+          const requestedProfile = ctx.arg.trim()
+
+          if (requestedProfile) {
+            const sessionId = ctx.sessionHint || activeSessionIdRef.current
+            const message = `/${ctx.name} only restarts the current profile; no explicit profile target is supported.`
+
+            if (sessionId) {
+              appendSessionTextMessage(
+                sessionId,
+                'system',
+                ctx.recordInput ? slashStatusText(`/${ctx.name}`, message) : message
+              )
+            } else {
+              notify({ kind: 'error', message })
+            }
+
+            return
+          }
+
+          const resolved = await withSlashOutput(ctx)
+
+          if (!resolved) {
+            return
+          }
+
+          const result = await runGatewayRestart()
+          const message =
+            result.status === 'restarted'
+              ? `Gateway restarted for current profile "${result.profile}".`
+              : result.status === 'timed_out'
+                ? `Gateway restart is still in progress for current profile "${result.profile}".`
+                : `Gateway restart failed for current profile "${result.profile}".`
+
+          resolved.render(message)
         },
         // /compress (alias /compact) runs the gateway's dedicated
         // session.compress RPC — the TUI's path
@@ -1051,6 +1097,13 @@ export function useSlashCommand(deps: SlashCommandDeps) {
             return openPicker(surface.picker, ctx)
 
           case 'action':
+            if (!isDesktopSlashCommand(name)) {
+              const resolved = await withSlashOutput(ctx)
+              resolved?.render(desktopSlashUnavailableMessage(name) || `/${name} is not available in the desktop app.`)
+
+              return
+            }
+
             return actionHandlers[surface.action](ctx)
 
           case 'rpc':
