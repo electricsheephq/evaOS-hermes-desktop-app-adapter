@@ -1,3 +1,9 @@
+# evaOS Agent 2026.7.20-es.15
+
+- Restores managed `/reload-skills` and `/restart` commands while keeping gateway restart scoped to the currently assigned profile.
+- Routes the Messaging restart control through the same current-profile action and reports its target and result.
+- Retains `/reload-mcp`, cold-boot profile adoption, managed Artifacts and Archived Chats, and friendly assigned-agent labels.
+
 # evaOS Agent 2026.7.20-es.14
 
 - Shows the authorized managed agent name in Profiles while keeping the canonical profile ID for routing, storage, and mutations.

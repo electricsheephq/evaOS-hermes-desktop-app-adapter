@@ -65,6 +65,25 @@ describe('backend action helpers are profile-scoped', () => {
     }
   })
 
+  it('pins a restart and its status readback to an explicit profile', () => {
+    setApiRequestProfile('profile-selected-later')
+
+    void restartGateway('profile-at-invocation')
+    void getActionStatus('gateway-restart', 180, 'profile-at-invocation')
+
+    expect(api).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ path: '/api/gateway/restart', profile: 'profile-at-invocation' })
+    )
+    expect(api).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        path: '/api/actions/gateway-restart/status?lines=180',
+        profile: 'profile-at-invocation'
+      })
+    )
+  })
+
   // Audio endpoints (transcribe / speak / voices) write to the active
   // profile's config in the settings UI but historically called the backend
   // without a profile scope, so playback used the default profile's TTS/voice
