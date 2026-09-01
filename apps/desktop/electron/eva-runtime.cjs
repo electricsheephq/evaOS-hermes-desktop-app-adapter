@@ -66,6 +66,7 @@ function createEvaManagedRuntime(options) {
   let supportExpiryTimestamp = null
   let supportEndError = null
   let rendererResetPending = false
+  let rendererResetPromise = null
 
   function emptyState(signedOut = false) {
     return { desktop: null, runtime: null, delegatedSupport: null, signedOut }
@@ -223,7 +224,9 @@ function createEvaManagedRuntime(options) {
 
   function requestRendererReset() {
     rendererResetPending = true
-    return Promise.resolve(resetRenderer())
+    if (rendererResetPromise) return rendererResetPromise
+
+    const task = Promise.resolve(resetRenderer())
       .then(performed => {
         rendererResetPending = performed === false
         return !rendererResetPending
@@ -232,11 +235,26 @@ function createEvaManagedRuntime(options) {
         rendererResetPending = true
         return false
       })
+      .finally(() => {
+        if (rendererResetPromise === task) rendererResetPromise = null
+      })
+    rendererResetPromise = task
+    return task
   }
 
   async function flushPendingRendererReset() {
     if (!rendererResetPending) return false
     return requestRendererReset()
+  }
+
+  async function requireRendererIsolation() {
+    if (!rendererResetPending) return
+    if (await requestRendererReset()) return
+    throw new EvaBrokerError(
+      'evaOS Agent is still isolating the previous support session.',
+      503,
+      'support-renderer-reset-failed'
+    )
   }
 
   function armSupportExpiryTimer(support) {
@@ -300,7 +318,8 @@ function createEvaManagedRuntime(options) {
     })
     resetConnection()
     wsRelay?.disconnectAll()
-    if (resetRendererState) void requestRendererReset()
+    if (resetRendererState) return requestRendererReset()
+    return Promise.resolve(true)
   }
 
   function supportProfileFor(runtime, requestedProfile) {
@@ -572,6 +591,7 @@ function createEvaManagedRuntime(options) {
   }
 
   async function claimSupportRequest(requestId) {
+    await requireRendererIsolation()
     const normalizedRequestId = assertSupportRequestId(requestId)
     const desktop = await ensureDesktopSession()
     const auth = authGeneration
@@ -644,7 +664,7 @@ function createEvaManagedRuntime(options) {
       },
       { desktopSession: desktop.token }
     )
-    if (result?.ok === false) {
+    if (result?.ok !== true) {
       throw new EvaBrokerError('Electric Sheep could not end the support session.', 502, 'support-end-failed')
     }
     return true
@@ -654,6 +674,7 @@ function createEvaManagedRuntime(options) {
     const state = currentState()
     const support = state.delegatedSupport
     if (!support) return { ok: true }
+    const auth = authGeneration
 
     try {
       await requestDelegatedSupportEnd(state)
@@ -664,11 +685,26 @@ function createEvaManagedRuntime(options) {
       rememberLog('[eva-managed] support session end failed; retry required')
       return { ok: false }
     }
-    clearDelegatedSupportState(state)
+    const latest = currentState()
+    if (
+      auth !== authGeneration ||
+      latest.delegatedSupport?.supportSessionId !== support.supportSessionId
+    ) {
+      // A newer sign-out, sign-in, or support session owns local state. The
+      // stale remote completion must never restore or clear that newer state.
+      return { ok: true }
+    }
+    const isolated = await clearDelegatedSupportState(state)
+    if (!isolated) {
+      supportEndError = true
+      rememberLog('[eva-managed] support session ended but renderer isolation is still pending')
+      return { ok: false }
+    }
     return { ok: true }
   }
 
   async function ensureRuntimeEnrollment(input = {}) {
+    await requireRendererIsolation()
     const force = input.force === true
     if (runtimeEnrollmentPromise) {
       if (!force || runtimeEnrollmentPromiseForced) return runtimeEnrollmentPromise
@@ -703,9 +739,12 @@ function createEvaManagedRuntime(options) {
             const statusCode = statusCodeOf(error)
             if (statusCode !== 401 && statusCode !== 403 && error?.code !== 'support-assignment-mismatch') throw error
             // A revoked, expired, or changed assignment must not be used. The
-            // ordinary managed enrollment remains intact and is restored below.
+            // ordinary managed enrollment remains intact, but the action that
+            // arrived under delegated authority must fail rather than being
+            // redirected to that ordinary identity.
             clearDelegatedSupportState(current, { resetRendererState: true, invalidateEnrollment: false })
             assertGeneration(auth, runtime)
+            throw new EvaBrokerError('evaOS Agent support session expired.', 401, 'support-session-expired')
           }
         }
         try {

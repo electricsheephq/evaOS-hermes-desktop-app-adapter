@@ -317,6 +317,188 @@ test('failed support end keeps a retryable handle and exposes a visible failure 
   assert.equal(JSON.parse(fs.readFileSync(statePath, 'utf8')).delegated_support, null)
 })
 
+test('support end requires an explicit positive broker acknowledgement', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-support-end-ack-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeActiveEnrollment(statePath)
+  const runtime = makeManagedRuntime(statePath, {
+    brokerPost: async body => {
+      if (body.action === 'claim_internal_support_request') return supportEnrollment()
+      if (body.action === 'internal_support_session_end') return null
+      throw new Error('unexpected action')
+    }
+  })
+
+  await runtime.claimSupportRequest('request-123')
+  assert.deepEqual(await runtime.endSupportSession(), { ok: false })
+  assert.equal(runtime.status().delegatedSupportActive, true)
+  assert.equal(runtime.status().supportEndFailed, true)
+})
+
+test('support end cannot report success before renderer isolation completes', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-support-end-reset-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeActiveEnrollment(statePath)
+  let resetCalls = 0
+  let rendererCanReset = false
+  let ordinaryFetches = 0
+  const runtime = makeManagedRuntime(statePath, {
+    brokerPost: async body => {
+      if (body.action === 'claim_internal_support_request') return supportEnrollment()
+      if (body.action === 'internal_support_session_end') return { ok: true }
+      throw new Error('unexpected action')
+    },
+    fetchJson: async () => {
+      ordinaryFetches += 1
+      return { ok: true }
+    },
+    resetRenderer: async () => {
+      resetCalls += 1
+      if (resetCalls === 1) return true
+      return rendererCanReset
+    }
+  })
+
+  await runtime.claimSupportRequest('request-123')
+  assert.deepEqual(await runtime.endSupportSession(), { ok: false })
+  assert.equal(runtime.status().delegatedSupportActive, false)
+  await assert.rejects(
+    runtime.requestApi({ method: 'GET', path: '/api/sessions' }),
+    error => error instanceof EvaBrokerError && error.code === 'support-renderer-reset-failed'
+  )
+  assert.equal(ordinaryFetches, 0)
+
+  rendererCanReset = true
+  await runtime.requestApi({ method: 'GET', path: '/api/sessions' })
+  assert.equal(ordinaryFetches, 1)
+})
+
+test('a stale support-end completion cannot overwrite a newer sign-out', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-support-end-stale-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeActiveEnrollment(statePath)
+  let releaseFirstEnd
+  let endCalls = 0
+  const firstEndStarted = new Promise(resolve => {
+    releaseFirstEnd = resolve
+  })
+  let unblockFirstEnd
+  const firstEndGate = new Promise(resolve => {
+    unblockFirstEnd = resolve
+  })
+  const runtime = makeManagedRuntime(statePath, {
+    brokerPost: async body => {
+      if (body.action === 'claim_internal_support_request') return supportEnrollment()
+      if (body.action === 'internal_support_session_end') {
+        endCalls += 1
+        if (endCalls === 1) {
+          releaseFirstEnd()
+          await firstEndGate
+        }
+        return { ok: true }
+      }
+      throw new Error('unexpected action')
+    },
+    revokeDesktopSession: async () => true
+  })
+
+  await runtime.claimSupportRequest('request-123')
+  const ending = runtime.endSupportSession()
+  await firstEndStarted
+  await runtime.signOut()
+  unblockFirstEnd()
+  assert.deepEqual(await ending, { ok: true })
+
+  const persisted = JSON.parse(fs.readFileSync(statePath, 'utf8'))
+  assert.equal(persisted.signed_out, true)
+  assert.equal(persisted.desktop ?? null, null)
+  assert.equal(persisted.runtime ?? null, null)
+  assert.equal(persisted.delegated_support ?? null, null)
+})
+
+test('revoked support aborts the triggering request before ordinary enrollment', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-support-revoked-trigger-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeActiveEnrollment(statePath)
+  const first = makeManagedRuntime(statePath, {
+    brokerPost: async body => {
+      if (body.action === 'claim_internal_support_request') return supportEnrollment()
+      throw new Error('unexpected action')
+    }
+  })
+  await first.claimSupportRequest('request-123')
+  await first.close()
+
+  let ordinaryLaunches = 0
+  const resumed = makeManagedRuntime(statePath, {
+    brokerPost: async body => {
+      if (body.action === 'internal_support_session_resume') {
+        throw new EvaBrokerError('support revoked', 403, 'support-revoked')
+      }
+      throw new Error('unexpected action')
+    },
+    launchRuntime: async () => {
+      ordinaryLaunches += 1
+      throw new Error('ordinary launch must not serve the delegated request')
+    }
+  })
+
+  await assert.rejects(
+    resumed.requestApi({ method: 'GET', path: '/api/sessions' }),
+    error => error instanceof EvaBrokerError && error.code === 'support-session-expired'
+  )
+  assert.equal(ordinaryLaunches, 0)
+})
+
+test('ordinary access stays blocked until support renderer isolation succeeds', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-support-reset-gate-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeActiveEnrollment(statePath)
+  const first = makeManagedRuntime(statePath, {
+    brokerPost: async body => {
+      if (body.action === 'claim_internal_support_request') return supportEnrollment()
+      throw new Error('unexpected action')
+    }
+  })
+  await first.claimSupportRequest('request-123')
+  await first.close()
+
+  let rendererCanReset = false
+  let ordinaryFetches = 0
+  const resumed = makeManagedRuntime(statePath, {
+    brokerPost: async body => {
+      if (body.action === 'internal_support_session_resume') {
+        throw new EvaBrokerError('support revoked', 403, 'support-revoked')
+      }
+      throw new Error('unexpected action')
+    },
+    fetchJson: async () => {
+      ordinaryFetches += 1
+      return { ok: true }
+    },
+    resetRenderer: async () => rendererCanReset
+  })
+
+  await assert.rejects(
+    resumed.requestApi({ method: 'GET', path: '/api/sessions' }),
+    error => error instanceof EvaBrokerError && error.code === 'support-session-expired'
+  )
+  await assert.rejects(
+    resumed.requestApi({ method: 'GET', path: '/api/sessions' }),
+    error => error instanceof EvaBrokerError && error.code === 'support-renderer-reset-failed'
+  )
+  assert.equal(ordinaryFetches, 0)
+
+  rendererCanReset = true
+  await resumed.requestApi({ method: 'GET', path: '/api/sessions' })
+  assert.equal(ordinaryFetches, 1)
+})
+
 test('restart resumes only the same support assignment and rejects actor or replay failures before persistence', async t => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-support-resume-'))
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
@@ -379,6 +561,10 @@ test('restart resumes only the same support assignment and rejects actor or repl
     }),
     resetRenderer: async () => undefined
   })
+  await assert.rejects(
+    actorMismatch.resolveBackend(),
+    error => error instanceof EvaBrokerError && error.code === 'support-session-expired'
+  )
   const restored = await actorMismatch.resolveBackend()
   assert.equal(restored.baseUrl, 'eva-managed://customer-one')
   assert.equal(actorMismatch.status().delegatedSupportActive, false)
