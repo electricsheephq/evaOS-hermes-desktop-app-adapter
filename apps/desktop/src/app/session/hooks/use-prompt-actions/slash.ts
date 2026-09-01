@@ -482,6 +482,10 @@ export function useSlashCommand(deps: SlashCommandDeps) {
           if (surface.fallbackToExec !== false && isMissingRpcMethod(err)) {
             await runExec(ctx)
 
+            if (surface.rpc === 'skills.reload') {
+              invalidateSlashCompletions()
+            }
+
             return
           }
 

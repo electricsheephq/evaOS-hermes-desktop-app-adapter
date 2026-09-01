@@ -1078,6 +1078,48 @@ describe('usePromptActions exec fallback error reporting', () => {
     expect(renderedSeedTexts(seeds).some(text => text.includes('4 skill(s) available'))).toBe(true)
   })
 
+  it('invalidates slash completions after the legacy managed skill reload fallback', async () => {
+    Object.defineProperty(window, 'hermesDesktop', {
+      configurable: true,
+      value: { eva: {} },
+      writable: true
+    })
+
+    const seeds: Record<string, unknown>[] = []
+
+    const requestGateway = vi.fn(async (method: string) => {
+      if (method === 'skills.reload') {
+        throw new Error('method not found: skills.reload')
+      }
+
+      if (method === 'slash.exec') {
+        return { output: 'Reloading skills... 4 skill(s) available' } as never
+      }
+
+      throw new Error(`unexpected method: ${method}`)
+    })
+
+    let handle: HarnessHandle | null = null
+    await actRender(
+      <Harness
+        onReady={h => (handle = h)}
+        onSeedState={s => seeds.push(s)}
+        refreshSessions={async () => undefined}
+        requestGateway={requestGateway}
+      />
+    )
+
+    await handle!.submitText('/reload-skills')
+
+    expect(requestGateway).toHaveBeenCalledWith('skills.reload', { session_id: RUNTIME_SESSION_ID }, undefined)
+    expect(requestGateway).toHaveBeenCalledWith(
+      'slash.exec',
+      expect.objectContaining({ command: 'reload-skills', session_id: RUNTIME_SESSION_ID })
+    )
+    expect(mockInvalidateSlashCompletions).toHaveBeenCalledTimes(1)
+    expect(renderedSeedTexts(seeds).some(text => text.includes('4 skill(s) available'))).toBe(true)
+  })
+
   it('keeps managed skill reload unavailable on an unmanaged desktop', async () => {
     Reflect.deleteProperty(window, 'hermesDesktop')
 
