@@ -1,3 +1,10 @@
+# evaOS Agent 2026.7.20-es.16
+
+- Adds one-hour delegated support sessions for authorized Electric Sheep employees without impersonating customer users.
+- Binds each support session to one server-authorized client account, VM, and agent while retaining the employee as the audited actor.
+- Shows a persistent acting-for-customer banner and restores the employee context after end, revocation, or absolute expiry.
+- Keeps delegated state separate from ordinary enrollment and never places runtime credentials in the renderer or deep link.
+
 # evaOS Agent 2026.7.20-es.15
 
 - Restores managed `/reload-skills` and `/restart` commands while keeping gateway restart scoped to the currently assigned profile.

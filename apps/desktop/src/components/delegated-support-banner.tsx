@@ -14,6 +14,7 @@ function formatRemaining(expiresAt: string | null | undefined): string {
   const hours = Math.floor(totalSeconds / 3_600)
   const minutes = Math.floor((totalSeconds % 3_600) / 60)
   const seconds = totalSeconds % 60
+
   return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds
     .toString()
     .padStart(2, '0')}`
@@ -26,13 +27,18 @@ export function DelegatedSupportBanner() {
 
   const refresh = useCallback(() => {
     const readStatus = window.hermesDesktop?.eva?.status
-    if (!readStatus) return
+
+    if (!readStatus) {
+      return
+    }
+
     void readStatus().then(setStatus).catch(() => undefined)
   }, [])
 
   useEffect(() => {
     refresh()
     const timer = window.setInterval(refresh, 1_000)
+
     return () => window.clearInterval(timer)
   }, [refresh])
 
@@ -46,10 +52,14 @@ export function DelegatedSupportBanner() {
   }
 
   const endSession = async () => {
-    if (ending) return
+    if (ending) {
+      return
+    }
+
     setEnding(true)
     try {
       await window.hermesDesktop.eva.endSupportSession()
+
       refresh()
     } finally {
       setEnding(false)
