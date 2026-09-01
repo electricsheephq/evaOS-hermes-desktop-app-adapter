@@ -24,7 +24,9 @@ export function DelegatedSupportBanner() {
 
   const refresh = useCallback(() => {
     const readStatus = window.hermesDesktop?.eva?.status
-    if (!readStatus) return
+    if (!readStatus) {
+      return
+    }
     void readStatus().then(setStatus).catch(() => undefined)
   }, [])
 
@@ -44,7 +46,9 @@ export function DelegatedSupportBanner() {
   }
 
   const endSession = async () => {
-    if (ending) return
+    if (ending) {
+      return
+    }
     setEnding(true)
     try {
       await window.hermesDesktop.eva.endSupportSession()
