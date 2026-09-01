@@ -666,7 +666,7 @@ test('managed enrollment accepts server-selected accounts and rejects mismatched
   }
 })
 
-test('delegated support enrollment requires a bounded assignment and signed presentation labels', () => {
+test('delegated support enrollment requires a bounded assignment and presentation labels', () => {
   const now = Date.now()
   const payload = {
     schema_version: 'evaos.hermes_desktop_enrollment.v1',
@@ -684,10 +684,9 @@ test('delegated support enrollment requires a bounded assignment and signed pres
     assignment_version: 'assignment-v1',
     support_expires_at: new Date(now + 30 * 60 * 1_000).toISOString(),
     profile: 'support',
-    signed_presentation: {
+    presentation: {
       customer_label: 'Customer',
-      agent_label: 'Assigned agent',
-      signature: 'signed-label'
+      agent_label: 'Assigned agent'
     }
   }
 
@@ -703,7 +702,7 @@ test('delegated support enrollment requires a bounded assignment and signed pres
     { ...payload, session_kind: 'ordinary' },
     { ...payload, assignment_version: '' },
     { ...payload, support_expires_at: new Date(now + 2 * 60 * 60 * 1_000).toISOString() },
-    { ...payload, signed_presentation: { ...payload.signed_presentation, customer_label: '' } },
+    { ...payload, presentation: { ...payload.presentation, customer_label: '' } },
     { ...payload, profile: 'all' }
   ]) {
     assert.throws(

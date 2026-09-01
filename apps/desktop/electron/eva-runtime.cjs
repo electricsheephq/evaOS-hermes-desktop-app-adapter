@@ -200,10 +200,9 @@ function createEvaManagedRuntime(options) {
                 assignment_version: state.delegatedSupport.assignmentVersion,
                 support_expires_at: state.delegatedSupport.supportExpiresAt,
                 profile: state.delegatedSupport.profile,
-                signed_presentation: {
+                presentation: {
                   customer_label: state.delegatedSupport.supportCustomerLabel,
-                  agent_label: state.delegatedSupport.supportAgentLabel,
-                  signature: state.delegatedSupport.supportPresentationSignature
+                  agent_label: state.delegatedSupport.supportAgentLabel
                 }
               })
             )

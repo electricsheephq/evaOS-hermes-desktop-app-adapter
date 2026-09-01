@@ -567,26 +567,22 @@ function normalizeSupportLabel(value, label) {
 
 function normalizeSupportEnrollment(payload, options = {}) {
   const now = options.now ?? Date.now()
-  const support = payload?.support && typeof payload.support === 'object' ? payload.support : payload
   if (
     !payload ||
     typeof payload !== 'object' ||
-    (payload.session_kind ?? support.session_kind) !== EVA_SUPPORT_SESSION_KIND
+    payload.session_kind !== EVA_SUPPORT_SESSION_KIND
   ) {
     throw new EvaBrokerError('Electric Sheep returned a non-support enrollment.', 403, 'invalid-support-session')
   }
 
   const enrollment = normalizeHermesEnrollment(payload, options)
   const supportSessionId = normalizeOpaqueToken(
-    payload.support_session_id ?? support.support_session_id,
+    payload.support_session_id,
     'Electric Sheep support session'
   )
   let assignmentVersion
   try {
-    assignmentVersion = normalizeOpaqueToken(
-      payload.assignment_version ?? support.assignment_version,
-      'Electric Sheep support assignment'
-    )
+    assignmentVersion = normalizeOpaqueToken(payload.assignment_version, 'Electric Sheep support assignment')
   } catch {
     throw new EvaBrokerError('Electric Sheep returned an invalid support assignment.', 403, 'invalid-support-session')
   }
@@ -595,7 +591,7 @@ function normalizeSupportEnrollment(payload, options = {}) {
   }
 
   const supportExpiresAt = parseFutureTimestamp(
-    payload.support_expires_at ?? support.support_expires_at ?? payload.support_deadline ?? support.deadline,
+    payload.support_expires_at,
     'Electric Sheep support session',
     now
   )
@@ -603,20 +599,8 @@ function normalizeSupportEnrollment(payload, options = {}) {
     throw new EvaBrokerError('Electric Sheep returned an unsafe support deadline.', 403, 'invalid-support-session')
   }
 
-  const presentation =
-    (payload.signed_presentation && typeof payload.signed_presentation === 'object'
-      ? payload.signed_presentation
-      : null) ??
-    (payload.presentation && typeof payload.presentation === 'object' ? payload.presentation : null) ??
-    (payload.support_presentation && typeof payload.support_presentation === 'object'
-      ? payload.support_presentation
-      : null) ??
-    (support.signed_presentation && typeof support.signed_presentation === 'object'
-      ? support.signed_presentation
-      : support.presentation && typeof support.presentation === 'object'
-        ? support.presentation
-        : null)
-  if (!presentation) {
+  const presentation = payload.presentation
+  if (!presentation || typeof presentation !== 'object' || Array.isArray(presentation)) {
     throw new EvaBrokerError('Electric Sheep returned no support presentation.', 502, 'invalid-enrollment')
   }
   const supportCustomerLabel = normalizeSupportLabel(
@@ -624,17 +608,10 @@ function normalizeSupportEnrollment(payload, options = {}) {
     'support customer label'
   )
   const supportAgentLabel = normalizeSupportLabel(
-    presentation.agent_label ?? presentation.agent_display_name,
+    presentation.agent_label,
     'support agent label'
   )
-  const presentationSignature = normalizeOpaqueToken(
-    presentation.signature ??
-      presentation.signed_label ??
-      payload.presentation_signature ??
-      support.presentation_signature,
-    'Electric Sheep support presentation'
-  )
-  const rawProfile = payload.profile ?? payload.allowed_profile ?? support.profile ?? support.allowed_profile
+  const rawProfile = payload.profile
   const profile = rawProfile == null ? null : String(rawProfile).trim()
   if (profile === null || !EVA_MANAGED_PROFILE_RE.test(profile) || profile === 'all') {
     throw new EvaBrokerError('Electric Sheep returned an invalid support profile.', 403, 'invalid-support-session')
@@ -649,7 +626,6 @@ function normalizeSupportEnrollment(payload, options = {}) {
     supportDeadline: supportExpiresAt,
     supportCustomerLabel,
     supportAgentLabel,
-    supportPresentationSignature: presentationSignature,
     profile
   }
 }

@@ -136,10 +136,9 @@ function supportEnrollment(now = Date.now()) {
     assignment_version: 'assignment-v1',
     support_expires_at: new Date(now + 30 * 60 * 1_000).toISOString(),
     profile: 'support',
-    signed_presentation: {
+    presentation: {
       customer_label: 'Customer',
-      agent_label: 'Support agent',
-      signature: 'signed-label'
+      agent_label: 'Support agent'
     }
   }
 }
@@ -198,6 +197,10 @@ test('support claim separates encrypted delegated state and restores the ordinar
   assert.ok(persisted.delegated_support?.enrollment)
   assert.equal(persisted.delegated_support.enrollment.includes('opaque-support-session'), false)
   assert.equal(persisted.delegated_support.enrollment.includes('customer-one'), false)
+  assert.deepEqual(JSON.parse(unsealed(persisted.delegated_support.enrollment)).presentation, {
+    customer_label: 'Customer',
+    agent_label: 'Support agent'
+  })
   assert.deepEqual(brokerCalls[0].body, {
     action: 'claim_internal_support_request',
     request_id: 'request-123'
