@@ -26,7 +26,6 @@ import { dismissNotification, notify, notifyError } from '@/store/notifications'
 import { setPetScale } from '@/store/pet-gallery'
 import { $petGenInput, openPetGenerate } from '@/store/pet-generate'
 import { $activeGatewayProfile, $newChatProfile, ensureGatewayProfile, normalizeProfileKey } from '@/store/profile'
-import { runGatewayRestart } from '@/store/system-actions'
 import {
   $connection,
   $sessions,
@@ -39,6 +38,7 @@ import {
   setYoloActive
 } from '@/store/session'
 import { $sessionStates } from '@/store/session-states'
+import { runGatewayRestart } from '@/store/system-actions'
 import {
   applyWakeStartResult,
   applyWakeStatus,
@@ -520,6 +520,7 @@ export function useSlashCommand(deps: SlashCommandDeps) {
           }
 
           const result = await runGatewayRestart()
+
           const message =
             result.status === 'restarted'
               ? `Gateway restarted for current profile "${result.profile}".`

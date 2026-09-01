@@ -1043,6 +1043,7 @@ describe('usePromptActions exec fallback error reporting', () => {
     })
 
     const seeds: Record<string, unknown>[] = []
+
     const requestGateway = vi.fn(async (method: string) => {
       if (method === 'skills.reload') {
         return { output: 'Reloading skills... 4 skill(s) available' } as never
