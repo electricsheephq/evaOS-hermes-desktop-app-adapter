@@ -194,7 +194,8 @@ export const zh: Translations = {
     endsIn: countdown => `${countdown} 后结束`,
     endSession: '结束支持会话',
     endingSession: '正在结束支持会话…',
-    unavailable: '无法获取支持会话状态。'
+    unavailable: '无法获取支持会话状态。',
+    endFailed: '无法结束支持会话。请重试。'
   },
 
   billingBlock: {

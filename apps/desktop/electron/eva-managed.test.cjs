@@ -520,6 +520,17 @@ test('managed backend preserves the approved all-profile endpoint selector', () 
   })
 })
 
+test('delegated support rejects broad endpoint profile selectors', () => {
+  assert.throws(
+    () =>
+      assertEvaManagedApiRequestAllowed(
+        { path: '/api/skills?profile=all', profile: 'research' },
+        { allowBroadProfileSelectors: false }
+      ),
+    error => error instanceof EvaBrokerError && error.statusCode === 403 && error.code === 'managed-escape'
+  )
+})
+
 test('managed backend rejects endpoint profiles that differ from the trusted routing profile', () => {
   assert.throws(
     () => assertEvaManagedApiRequestAllowed({ path: '/api/skills?profile=research', profile: 'main' }),

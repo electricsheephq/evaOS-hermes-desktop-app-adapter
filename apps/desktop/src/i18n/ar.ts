@@ -177,7 +177,8 @@ export const ar = defineLocale({
     endsIn: countdown => `ينتهي خلال ${countdown}`,
     endSession: 'إنهاء جلسة الدعم',
     endingSession: 'جارٍ إنهاء جلسة الدعم…',
-    unavailable: 'حالة جلسة الدعم غير متاحة.'
+    unavailable: 'حالة جلسة الدعم غير متاحة.',
+    endFailed: 'تعذر إنهاء جلسة الدعم. حاول مرة أخرى.'
   },
   titlebar: {
     hideSidebar: 'إخفاء الشريط الجانبي',

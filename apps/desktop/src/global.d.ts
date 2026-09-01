@@ -342,6 +342,7 @@ export interface EvaManagedStatus {
   supportExpiresAt?: null | string
   supportDeadline?: null | string
   assignmentVersion?: null | string
+  supportEndFailed?: boolean
 }
 
 export interface DesktopMarketplaceThemeFile {

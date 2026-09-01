@@ -200,7 +200,8 @@ export const en: Translations = {
     endsIn: countdown => `Ends in ${countdown}`,
     endSession: 'End support session',
     endingSession: 'Ending support session…',
-    unavailable: 'Support session status is unavailable.'
+    unavailable: 'Support session status is unavailable.',
+    endFailed: 'Unable to end support session. Try again.'
   },
 
   billingBlock: {

@@ -201,7 +201,8 @@ export const ja = defineLocale({
     endsIn: countdown => `${countdown} 後に終了`,
     endSession: 'サポートセッションを終了',
     endingSession: 'サポートセッションを終了中…',
-    unavailable: 'サポートセッションの状態を確認できません。'
+    unavailable: 'サポートセッションの状態を確認できません。',
+    endFailed: 'サポートセッションを終了できません。もう一度お試しください。'
   },
 
   billingBlock: {

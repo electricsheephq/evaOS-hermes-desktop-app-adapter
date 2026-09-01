@@ -214,7 +214,7 @@ function buildEvaAccountRendererResetScript() {
   })()`
 }
 
-function assertEvaManagedApiRequestAllowed(request) {
+function assertEvaManagedApiRequestAllowed(request, options = {}) {
   const method = String(request?.method || 'GET').toUpperCase()
   if (!EVA_MANAGED_API_METHODS.has(method)) {
     throw new EvaBrokerError('evaOS Agent blocked an invalid managed-backend method.', 400, 'managed-policy')
@@ -266,7 +266,10 @@ function assertEvaManagedApiRequestAllowed(request) {
     if (routingProfile === null || !EVA_MANAGED_PROFILE_RE.test(endpointProfile)) {
       throw new EvaBrokerError('evaOS Agent blocked an invalid Hermes profile.', 400, 'managed-policy')
     }
-    if (endpointProfile !== routingProfile && !EVA_MANAGED_PROFILE_SELECTORS.has(endpointProfile)) {
+    if (
+      endpointProfile !== routingProfile &&
+      (options.allowBroadProfileSelectors === false || !EVA_MANAGED_PROFILE_SELECTORS.has(endpointProfile))
+    ) {
       throw new EvaBrokerError(
         'evaOS Agent connection and assignment are managed by Electric Sheep.',
         403,
@@ -836,7 +839,8 @@ function publicEvaEnrollmentStatus(state, now = Date.now()) {
     supportAgentLabel: delegatedSupportActive ? delegatedSupport.supportAgentLabel : null,
     supportExpiresAt: delegatedSupportActive ? delegatedSupport.supportExpiresAt : null,
     supportDeadline: delegatedSupportActive ? delegatedSupport.supportDeadline : null,
-    assignmentVersion: delegatedSupportActive ? delegatedSupport.assignmentVersion : null
+    assignmentVersion: delegatedSupportActive ? delegatedSupport.assignmentVersion : null,
+    supportEndFailed: delegatedSupportActive && state?.supportEndError === true
   }
 }
 

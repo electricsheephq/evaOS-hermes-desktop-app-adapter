@@ -194,7 +194,8 @@ export const zhHant = defineLocale({
     endsIn: countdown => `${countdown} 後結束`,
     endSession: '結束支援工作階段',
     endingSession: '正在結束支援工作階段…',
-    unavailable: '無法取得支援工作階段狀態。'
+    unavailable: '無法取得支援工作階段狀態。',
+    endFailed: '無法結束支援工作階段。請再試一次。'
   },
 
   billingBlock: {

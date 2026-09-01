@@ -242,6 +242,7 @@ export interface Translations {
     endSession: string
     endingSession: string
     unavailable: string
+    endFailed: string
   }
 
   billingBlock: {

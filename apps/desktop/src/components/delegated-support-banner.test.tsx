@@ -54,9 +54,30 @@ describe('DelegatedSupportBanner', () => {
     expect(banner.textContent).toMatch(/Acting for Customer/)
     expect(banner.textContent).toMatch(/Agent: Support agent/)
     expect(banner.textContent).toMatch(/Ends in 00:(?:29|30):/)
+    expect((banner as HTMLElement).style.top).toBe('34px')
     expect(screen.getAllByRole('button')).toHaveLength(1)
 
     fireEvent.click(screen.getByRole('button', { name: 'End support session' }))
     await waitFor(() => expect(endSupportSession).toHaveBeenCalledTimes(1))
+  })
+
+  it('shows a retryable end failure while retaining the end control', async () => {
+    const status = vi.fn().mockResolvedValue({ ...supportStatus(), supportEndFailed: true })
+    const endSupportSession = vi.fn().mockResolvedValue({ ok: false })
+    Object.defineProperty(window, 'hermesDesktop', {
+      configurable: true,
+      value: { eva: { status, endSupportSession } }
+    })
+
+    render(
+      <I18nProvider configClient={null} initialLocale="en">
+        <DelegatedSupportBanner />
+      </I18nProvider>
+    )
+
+    const banner = await screen.findByRole('alert')
+    expect((await screen.findByRole('status')).textContent).toContain('Unable to end support session. Try again.')
+    expect((screen.getByRole('button', { name: 'End support session' }) as HTMLButtonElement).disabled).toBe(false)
+    expect(banner).toBeTruthy()
   })
 })

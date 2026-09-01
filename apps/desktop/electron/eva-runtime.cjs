@@ -46,6 +46,8 @@ function createEvaManagedRuntime(options) {
   const revokeDesktopSession = options.revokeDesktopSession ?? revokeEvaDesktopSession
   const postBroker = options.brokerPost ?? brokerPost
   const createWsRelay = options.createWsRelay ?? createEvaWsRelay
+  const scheduleSupportExpiry = options.scheduleSupportExpiry ?? setTimeout
+  const cancelSupportExpiry = options.cancelSupportExpiry ?? clearTimeout
   const statePath = options.statePath
   const now = options.now ?? Date.now
   const loginTimeoutMs = options.loginTimeoutMs ?? EVA_MANAGED_POLICY.loginTimeoutMs
@@ -60,6 +62,9 @@ function createEvaManagedRuntime(options) {
   let runtimeSessionGeneration = 0
   let wsRelay = null
   let supportRevalidated = false
+  let supportExpiryTimer = null
+  let supportExpiryTimestamp = null
+  let supportEndError = null
 
   function emptyState(signedOut = false) {
     return { desktop: null, runtime: null, delegatedSupport: null, signedOut }
@@ -207,11 +212,50 @@ function createEvaManagedRuntime(options) {
     })
   }
 
+  function clearSupportExpiryTimer() {
+    if (supportExpiryTimer !== null) {
+      cancelSupportExpiry(supportExpiryTimer)
+      supportExpiryTimer = null
+    }
+    supportExpiryTimestamp = null
+  }
+
+  function armSupportExpiryTimer(support) {
+    const supportExpiresAt = Date.parse(String(support?.supportExpiresAt || ''))
+    if (!Number.isFinite(supportExpiresAt)) {
+      clearSupportExpiryTimer()
+      return
+    }
+    if (supportExpiryTimer !== null && supportExpiryTimestamp === supportExpiresAt) return
+
+    clearSupportExpiryTimer()
+    supportExpiryTimestamp = supportExpiresAt
+    supportExpiryTimer = scheduleSupportExpiry(() => {
+      supportExpiryTimer = null
+      supportExpiryTimestamp = null
+      const state = readState()
+      if (state.delegatedSupportNeedsClear || !state.delegatedSupport) {
+        if (state.delegatedSupportNeedsClear) clearDelegatedSupportState(state)
+        return
+      }
+      if (expiresSoon(state.delegatedSupport.supportExpiresAt, 0, now())) {
+        clearDelegatedSupportState(state)
+        return
+      }
+      armSupportExpiryTimer(state.delegatedSupport)
+    }, Math.max(0, supportExpiresAt - now()))
+    supportExpiryTimer?.unref?.()
+  }
+
   function currentState() {
     let state = readState()
     if (state.delegatedSupportNeedsClear) {
       clearDelegatedSupportState(state)
       state = { ...state, delegatedSupport: null, delegatedSupportNeedsClear: false }
+    } else if (state.delegatedSupport) {
+      armSupportExpiryTimer(state.delegatedSupport)
+    } else {
+      clearSupportExpiryTimer()
     }
     return state
   }
@@ -221,6 +265,8 @@ function createEvaManagedRuntime(options) {
     { resetRendererState = true, invalidateEnrollment = true } = {}
   ) {
     supportRevalidated = false
+    supportEndError = null
+    clearSupportExpiryTimer()
     if (invalidateEnrollment) {
       runtimeGeneration += 1
       runtimeEnrollmentPromise = null
@@ -496,6 +542,8 @@ function createEvaManagedRuntime(options) {
     assertGeneration(auth, runtime)
     writeState({ desktop, runtime: readState().runtime, delegatedSupport: resumed })
     supportRevalidated = true
+    supportEndError = null
+    armSupportExpiryTimer(resumed)
     runtimeSessionGeneration += 1
     resetConnection()
     wsRelay?.disconnectAll()
@@ -520,6 +568,8 @@ function createEvaManagedRuntime(options) {
     const support = normalizeSupportEnrollment(payload, { now: now() })
     writeState({ desktop, runtime: state.runtime, delegatedSupport: support })
     supportRevalidated = true
+    supportEndError = null
+    armSupportExpiryTimer(support)
     runtimeGeneration += 1
     runtimeSessionGeneration += 1
     runtimeEnrollmentPromise = null
@@ -529,7 +579,10 @@ function createEvaManagedRuntime(options) {
     wsRelay?.disconnectAll()
     options.focusWindow?.()
     await resetRenderer()
-    return publicEvaEnrollmentStatus({ desktop, runtime: state.runtime, delegatedSupport: support }, now())
+    return publicEvaEnrollmentStatus(
+      { desktop, runtime: state.runtime, delegatedSupport: support, supportEndError },
+      now()
+    )
   }
 
   async function endDelegatedSupport() {
@@ -537,27 +590,30 @@ function createEvaManagedRuntime(options) {
     const support = state.delegatedSupport
     if (!support) return { ok: true }
 
-    let ok = true
     try {
       const desktop = state.desktop
       if (!desktop || expiresSoon(desktop.expiresAt, 0, now())) {
         throw new EvaBrokerError('Electric Sheep desktop session expired.', 401, 'session-expired')
       }
-      await postBroker(
+      const result = await postBroker(
         {
           action: 'internal_support_session_end',
           support_session_id: support.supportSessionId
         },
         { desktopSession: desktop.token }
       )
+      if (result?.ok === false) {
+        throw new EvaBrokerError('Electric Sheep could not end the support session.', 502, 'support-end-failed')
+      }
     } catch {
-      ok = false
-    } finally {
-      // The local session is always ended, even when the broker is unavailable;
-      // retaining an unconfirmed support route would be unsafe on restart.
-      clearDelegatedSupportState(state)
+      // Keep the encrypted handle and active relay so the operator can retry.
+      // The absolute expiry timer remains the final safety boundary.
+      supportEndError = true
+      rememberLog('[eva-managed] support session end failed; retry required')
+      return { ok: false }
     }
-    return { ok }
+    clearDelegatedSupportState(state)
+    return { ok: true }
   }
 
   async function ensureRuntimeEnrollment(input = {}) {
@@ -719,7 +775,10 @@ function createEvaManagedRuntime(options) {
 
   async function signOut() {
     const state = currentState()
-    if (state.delegatedSupport) await endDelegatedSupport()
+    if (state.delegatedSupport) {
+      const ended = await endDelegatedSupport()
+      if (!ended.ok) return ended
+    }
     invalidateAuthWork()
     writeState(emptyState(true))
     if (state.desktop) await revokeDesktopSession(state.desktop.token).catch(() => false)
@@ -732,7 +791,11 @@ function createEvaManagedRuntime(options) {
     const previousRuntime = previousState.delegatedSupport ?? previousState.runtime
     const runtime = await ensureRuntimeEnrollment({ force: true })
     const state = currentState()
-    const status = publicEvaEnrollmentStatus({ ...state, runtime: state.delegatedSupport ? state.runtime : runtime })
+    const status = publicEvaEnrollmentStatus({
+      ...state,
+      runtime: state.delegatedSupport ? state.runtime : runtime,
+      supportEndError
+    })
     if (
       !previousRuntime ||
       previousRuntime.customerId !== runtime.customerId ||
@@ -743,15 +806,59 @@ function createEvaManagedRuntime(options) {
     return status
   }
 
+  function supportProfileError() {
+    return new EvaBrokerError(
+      'evaOS Agent rejected a profile outside the support assignment.',
+      403,
+      'support-profile-mismatch'
+    )
+  }
+
+  function bindSupportProfileValue(value, profile) {
+    if (Array.isArray(value)) return value.map(entry => bindSupportProfileValue(entry, profile))
+    if (!value || typeof value !== 'object' || Object.getPrototypeOf(value) !== Object.prototype) return value
+
+    return Object.fromEntries(
+      Object.entries(value).map(([key, entry]) => {
+        if (key !== 'profile') return [key, bindSupportProfileValue(entry, profile)]
+        let requested
+        try {
+          requested = normalizeEvaWsProfile(entry)
+        } catch {
+          throw supportProfileError()
+        }
+        if (requested !== null && requested !== profile) throw supportProfileError()
+        return [key, profile]
+      })
+    )
+  }
+
+  function bindSupportRequest(runtime, request) {
+    const profile = supportProfileFor(runtime, request?.profile)
+    if (runtime?.sessionKind !== 'delegated_support') {
+      return { policy: undefined, profile, request }
+    }
+
+    return {
+      policy: { allowBroadProfileSelectors: false },
+      profile,
+      request: {
+        ...request,
+        body: bindSupportProfileValue(request?.body, profile)
+      }
+    }
+  }
+
   async function requestApi(request, retry = true) {
     const runtime = await ensureRuntimeEnrollment()
-    const profile = supportProfileFor(runtime, request?.profile)
-    const allowed = assertEvaManagedApiRequestAllowed(profile ? { ...request, profile } : request)
+    const supportRequest = runtime.sessionKind === 'delegated_support'
+    const bound = bindSupportRequest(runtime, request)
+    const allowed = assertEvaManagedApiRequestAllowed(bound.profile ? { ...bound.request, profile: bound.profile } : bound.request, bound.policy)
     const timeoutMs = options.resolveTimeoutMs(request?.timeoutMs)
     try {
       return await options.fetchJson(`${runtime.baseUrl}${allowed.path}`, runtime.token, {
         method: allowed.method,
-        body: request?.body,
+        body: bound.request?.body,
         upload: request?.upload,
         timeoutMs
       })
@@ -759,11 +866,17 @@ function createEvaManagedRuntime(options) {
       if (!retry || statusCodeOf(error) !== 401) throw error
       clearRuntimeEnrollment()
       const refreshed = await ensureRuntimeEnrollment({ force: true })
-      const nextProfile = supportProfileFor(refreshed, request?.profile)
-      const next = assertEvaManagedApiRequestAllowed(nextProfile ? { ...request, profile: nextProfile } : request)
+      if (supportRequest && refreshed.sessionKind !== 'delegated_support') {
+        throw new EvaBrokerError('evaOS Agent support session expired.', 401, 'support-session-expired')
+      }
+      const nextBound = bindSupportRequest(refreshed, request)
+      const next = assertEvaManagedApiRequestAllowed(
+        nextBound.profile ? { ...nextBound.request, profile: nextBound.profile } : nextBound.request,
+        nextBound.policy
+      )
       return options.fetchJson(`${refreshed.baseUrl}${next.path}`, refreshed.token, {
         method: next.method,
-        body: request?.body,
+        body: nextBound.request?.body,
         upload: request?.upload,
         timeoutMs
       })
@@ -776,12 +889,13 @@ function createEvaManagedRuntime(options) {
     }
 
     const runtime = await ensureRuntimeEnrollment()
+    const supportRequest = runtime.sessionKind === 'delegated_support'
     const profile = supportProfileFor(runtime, request?.profile)
     const allowed = assertEvaManagedApiRequestAllowed({
       method: 'GET',
       path: request?.path,
       profile
-    })
+    }, runtime.sessionKind === 'delegated_support' ? { allowBroadProfileSelectors: false } : undefined)
     if (allowed.pathname !== '/api/files/download') {
       throw new EvaBrokerError('Managed media streaming blocked an unsupported endpoint.', 403, 'managed-policy')
     }
@@ -790,12 +904,15 @@ function createEvaManagedRuntime(options) {
     if (retry && response?.status === 401) {
       clearRuntimeEnrollment()
       const refreshed = await ensureRuntimeEnrollment({ force: true })
+      if (supportRequest && refreshed.sessionKind !== 'delegated_support') {
+        throw new EvaBrokerError('evaOS Agent support session expired.', 401, 'support-session-expired')
+      }
       const refreshedProfile = supportProfileFor(refreshed, request?.profile)
       const next = assertEvaManagedApiRequestAllowed({
         method: 'GET',
         path: request?.path,
         profile: refreshedProfile
-      })
+      }, refreshed.sessionKind === 'delegated_support' ? { allowBroadProfileSelectors: false } : undefined)
       return options.fetchMedia(`${refreshed.baseUrl}${next.path}`, refreshed.token, request?.headers)
     }
     return response
@@ -807,6 +924,15 @@ function createEvaManagedRuntime(options) {
     wsRelay = null
     await relay?.close()
     rememberLog('[eva-managed] local relay closed')
+  }
+
+  const initialState = readState()
+  if (initialState.delegatedSupportNeedsClear) {
+    clearDelegatedSupportState(initialState)
+  } else if (initialState.delegatedSupport) {
+    armSupportExpiryTimer(initialState.delegatedSupport)
+  } else {
+    clearSupportExpiryTimer()
   }
 
   return {
@@ -834,7 +960,7 @@ function createEvaManagedRuntime(options) {
     },
     signOut,
     refresh,
-    status: () => publicEvaEnrollmentStatus(currentState())
+    status: () => publicEvaEnrollmentStatus({ ...currentState(), supportEndError })
   }
 }
 
