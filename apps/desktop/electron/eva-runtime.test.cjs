@@ -119,6 +119,221 @@ function makeManagedRuntime(statePath, overrides = {}) {
   })
 }
 
+function supportEnrollment(now = Date.now()) {
+  return {
+    schema_version: 'evaos.hermes_desktop_enrollment.v1',
+    runtime: 'hermes',
+    customer_id: 'customer-one',
+    remote_backend: {
+      base_url: 'https://hermes-customer-one.ecs.electricsheephq.com',
+      session_token: 'opaque-support-session',
+      expires_at: new Date(now + 45 * 60 * 1_000).toISOString(),
+      agent_id: 'support-agent',
+      agent_display_name: 'Support agent'
+    },
+    session_kind: 'delegated_support',
+    support_session_id: 'support-session',
+    assignment_version: 'assignment-v1',
+    support_expires_at: new Date(now + 30 * 60 * 1_000).toISOString(),
+    profile: 'support',
+    signed_presentation: {
+      customer_label: 'Customer',
+      agent_label: 'Support agent',
+      signature: 'signed-label'
+    }
+  }
+}
+
+function sealed(value) {
+  return `sealed:${Buffer.from(String(value), 'utf8').toString('base64')}`
+}
+
+function unsealed(value) {
+  return Buffer.from(String(value).replace(/^sealed:/, ''), 'base64').toString('utf8')
+}
+
+function sealExistingState(statePath) {
+  const state = JSON.parse(fs.readFileSync(statePath, 'utf8'))
+  state.desktop.token = sealed(state.desktop.token)
+  state.runtime.token = sealed(state.runtime.token)
+  fs.writeFileSync(statePath, JSON.stringify(state))
+}
+
+test('support claim separates encrypted delegated state and restores the ordinary context on end', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-support-lifecycle-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeActiveEnrollment(statePath)
+  sealExistingState(statePath)
+  const brokerCalls = []
+  let resetRendererCalls = 0
+  const runtime = makeManagedRuntime(statePath, {
+    encryptSecret: sealed,
+    decryptSecret: unsealed,
+    brokerPost: async (body, options) => {
+      brokerCalls.push({ body, options })
+      if (body.action === 'claim_internal_support_request') return supportEnrollment()
+      if (body.action === 'internal_support_session_end') return { ok: true }
+      throw new Error('unexpected support action')
+    },
+    resetRenderer: async () => {
+      resetRendererCalls += 1
+    }
+  })
+
+  const claimed = await runtime.claimSupportRequest('request-123')
+  assert.equal(claimed.delegatedSupportActive, true)
+  assert.equal(claimed.customerId, null)
+  assert.equal(claimed.agentId, null)
+  assert.equal(claimed.supportCustomerLabel, 'Customer')
+  assert.equal(claimed.supportAgentLabel, 'Support agent')
+
+  const persisted = JSON.parse(fs.readFileSync(statePath, 'utf8'))
+  assert.equal(persisted.runtime.token, 'sealed:cnVudGltZS10b2tlbg==')
+  assert.ok(persisted.delegated_support?.enrollment)
+  assert.equal(persisted.delegated_support.enrollment.includes('opaque-support-session'), false)
+  assert.equal(persisted.delegated_support.enrollment.includes('customer-one'), false)
+  assert.deepEqual(brokerCalls[0].body, {
+    action: 'claim_internal_support_request',
+    request_id: 'request-123'
+  })
+  assert.equal(brokerCalls[0].options.desktopSession, 'desktop-token')
+  assert.equal(Object.hasOwn(brokerCalls[0].body, 'desktop_session'), false)
+  await assert.rejects(
+    runtime.resolveBackend({ profile: 'other-profile' }),
+    error => error instanceof EvaBrokerError && error.code === 'support-profile-mismatch'
+  )
+
+  const ended = await runtime.endSupportSession()
+  assert.deepEqual(ended, { ok: true })
+  assert.equal(runtime.status().delegatedSupportActive, false)
+  assert.equal(runtime.status().customerId, 'customer-one')
+  assert.equal(JSON.parse(fs.readFileSync(statePath, 'utf8')).delegated_support, null)
+  assert.equal(resetRendererCalls, 2)
+  assert.deepEqual(brokerCalls[1].body, {
+    action: 'internal_support_session_end',
+    support_session_id: 'support-session'
+  })
+})
+
+test('restart resumes only the same support assignment and rejects actor or replay failures before persistence', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-support-resume-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeActiveEnrollment(statePath)
+  sealExistingState(statePath)
+  let claimedPayload
+  const first = makeManagedRuntime(statePath, {
+    encryptSecret: sealed,
+    decryptSecret: unsealed,
+    brokerPost: async body => {
+      if (body.action === 'claim_internal_support_request') {
+        claimedPayload = supportEnrollment()
+        return claimedPayload
+      }
+      throw new Error('unexpected action')
+    },
+    resetRenderer: async () => undefined
+  })
+  await first.claimSupportRequest('request-123')
+  await first.close()
+
+  const resumeCalls = []
+  const second = makeManagedRuntime(statePath, {
+    encryptSecret: sealed,
+    decryptSecret: unsealed,
+    brokerPost: async (body, options) => {
+      resumeCalls.push({ body, options })
+      return claimedPayload
+    },
+    launchRuntime: async () => {
+      throw new Error('ordinary enrollment is not allowed before support resume')
+    },
+    resetRenderer: async () => undefined
+  })
+  const backend = await second.resolveBackend({ profile: 'support' })
+  assert.equal(backend.baseUrl, 'eva-managed://delegated-support')
+  assert.equal(resumeCalls.length, 1)
+  assert.deepEqual(resumeCalls[0].body, {
+    action: 'internal_support_session_resume',
+    support_session_id: 'support-session'
+  })
+  assert.equal(resumeCalls[0].options.desktopSession, 'desktop-token')
+  await second.close()
+
+  const actorMismatch = makeManagedRuntime(statePath, {
+    encryptSecret: sealed,
+    decryptSecret: unsealed,
+    brokerPost: async () => {
+      throw new EvaBrokerError('support assignment was revoked', 403, 'support_assignment_revoked')
+    },
+    launchRuntime: async () => ({
+      schemaVersion: 'evaos.hermes_desktop_enrollment.v1',
+      customerId: 'customer-one',
+      runtime: 'hermes',
+      agentId: 'main',
+      baseUrl: 'https://hermes-customer-one.ecs.electricsheephq.com',
+      token: 'ordinary-runtime',
+      expiresAt: FUTURE
+    }),
+    resetRenderer: async () => undefined
+  })
+  const restored = await actorMismatch.resolveBackend()
+  assert.equal(restored.baseUrl, 'eva-managed://customer-one')
+  assert.equal(actorMismatch.status().delegatedSupportActive, false)
+  assert.equal(JSON.parse(fs.readFileSync(statePath, 'utf8')).delegated_support, null)
+})
+
+test('expired delegated support state is cleared without harming ordinary enrollment', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-support-expiry-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeActiveEnrollment(statePath)
+  sealExistingState(statePath)
+  const expired = supportEnrollment(Date.now() - 60 * 60 * 1_000)
+  fs.writeFileSync(
+    statePath,
+    JSON.stringify({
+      ...JSON.parse(fs.readFileSync(statePath, 'utf8')),
+      delegated_support: { enrollment: sealed(JSON.stringify(expired)) }
+    })
+  )
+  const runtime = makeManagedRuntime(statePath, {
+    encryptSecret: sealed,
+    decryptSecret: unsealed,
+    resetRenderer: async () => undefined
+  })
+  const status = runtime.status()
+  assert.equal(status.delegatedSupportActive, false)
+  assert.equal(status.customerId, 'customer-one')
+  assert.equal(JSON.parse(fs.readFileSync(statePath, 'utf8')).delegated_support, null)
+})
+
+test('claim actor mismatch or replay failure leaves ordinary enrollment untouched', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-support-claim-rejected-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeActiveEnrollment(statePath)
+  sealExistingState(statePath)
+  const runtime = makeManagedRuntime(statePath, {
+    encryptSecret: sealed,
+    decryptSecret: unsealed,
+    brokerPost: async () => {
+      throw new EvaBrokerError('support claim rejected', 409, 'support_request_replayed')
+    },
+    resetRenderer: async () => undefined
+  })
+
+  await assert.rejects(
+    runtime.claimSupportRequest('request-123'),
+    error => error instanceof EvaBrokerError && error.code === 'support_request_replayed'
+  )
+  const persisted = JSON.parse(fs.readFileSync(statePath, 'utf8'))
+  assert.equal(persisted.delegated_support, undefined)
+  assert.equal(runtime.status().delegatedSupportActive, false)
+  assert.equal(runtime.status().customerId, 'customer-one')
+})
+
 test('cold launch replaces an expired runtime enrollment before connecting', async t => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-expiry-'))
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }))

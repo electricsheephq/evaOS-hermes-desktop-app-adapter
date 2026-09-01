@@ -10225,6 +10225,7 @@ ipcMain.handle('hermes:eva:status', async () => evaManagedRuntime.status())
 ipcMain.handle('hermes:eva:sign-in', async () => evaManagedRuntime.signIn())
 ipcMain.handle('hermes:eva:sign-out', async () => evaManagedRuntime.signOut())
 ipcMain.handle('hermes:eva:refresh', async () => evaManagedRuntime.refresh())
+ipcMain.handle('hermes:eva:support:end', async () => evaManagedRuntime.endSupportSession())
 
 ipcMain.handle('hermes:profile:get', async () => {
   if (!EVA_MANAGED_BUILD) {
@@ -12095,6 +12096,18 @@ function handleDeepLink(url) {
 
     if (managedLink.type === 'blueprint') {
       deliverDeepLinkPayload(managedLink.payload)
+
+      return
+    }
+
+    if (managedLink.type === 'support') {
+      // The request id is claimed in the main process with the existing
+      // employee desktop session. It is deliberately never forwarded to the
+      // renderer or included in a renderer-visible error.
+      void evaManagedRuntime.claimSupportRequest(managedLink.requestId).catch(error => {
+        const code = String(error?.code || '').match(/^[a-z][a-z0-9]*(?:[_-][a-z0-9]+)*$/)?.[0]
+        rememberLog(`[eva-support] request rejected: ${code || 'support-claim-failed'}`)
+      })
 
       return
     }

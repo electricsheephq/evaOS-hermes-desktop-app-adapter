@@ -194,6 +194,15 @@ export const en: Translations = {
       `Software rendering active — remote display detected (${reason}). GPU acceleration is disabled to prevent flickering.`
   },
 
+  delegatedSupport: {
+    actingForCustomer: customer => `Acting for ${customer}`,
+    assignedAgent: agent => `Agent: ${agent}`,
+    endsIn: countdown => `Ends in ${countdown}`,
+    endSession: 'End support session',
+    endingSession: 'Ending support session…',
+    unavailable: 'Support session status is unavailable.'
+  },
+
   billingBlock: {
     titleNous: 'Out of Nous credits',
     titleProvider: provider => `Out of credits — ${provider}`,
