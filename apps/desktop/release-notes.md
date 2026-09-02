@@ -1,3 +1,8 @@
+# evaOS Agent 2026.7.20-es.17
+
+- Repairs LaunchServices callback ownership for the canonical `/Applications/evaOS Agent.app` when the owner is missing, has vanished, or is a stale same-bundle app.
+- Fails closed for unrelated or indeterminate owners while preserving existing enrollment and presenting safe recovery guidance.
+
 # evaOS Agent 2026.7.20-es.16
 
 - Adds one-hour delegated support sessions for authorized Electric Sheep employees without impersonating customer users.
