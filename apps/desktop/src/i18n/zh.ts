@@ -856,6 +856,8 @@ export const zh: Translations = {
         refresh: '刷新已分配访问权限',
         signOut: '退出登录',
         failed: '无法加载托管访问权限。请重试或联系 Electric Sheep 支持。',
+        callbackHandlerUnavailable:
+          '另一个 evaOS Agent 副本正在处理登录链接。请仅保留“应用程序”文件夹中已安装的应用，重新打开后再试。',
         failedWithCode: code => `Electric Sheep 请求失败 [代码: ${code}]`
       },
       loading: '正在加载网关设置...',

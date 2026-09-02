@@ -702,6 +702,8 @@ export const ar = defineLocale({
         refresh: 'تحديث الوصول المعيّن',
         signOut: 'تسجيل الخروج',
         failed: 'تعذر تحميل الوصول المُدار. أعد المحاولة أو تواصل مع دعم Electric Sheep.',
+        callbackHandlerUnavailable:
+          'هناك نسخة أخرى من evaOS Agent تتعامل مع روابط تسجيل الدخول. احتفظ فقط بالتطبيق المثبّت في مجلد التطبيقات، ثم أعد فتحه وحاول مرة أخرى.',
         failedWithCode: code => `فشل طلب Electric Sheep [الرمز: ${code}]`
       },
       loading: 'جار تحميل إعدادات البوابة...',

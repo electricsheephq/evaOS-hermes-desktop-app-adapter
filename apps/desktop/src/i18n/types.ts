@@ -547,6 +547,7 @@ export interface Translations {
         refresh: string
         signOut: string
         failed: string
+        callbackHandlerUnavailable: string
         failedWithCode: (code: string) => string
       }
       loading: string

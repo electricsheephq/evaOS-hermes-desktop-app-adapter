@@ -83,6 +83,13 @@ describe('GatewaySettings', () => {
       )
     ).toBe('Connection failed')
     expect(safeManagedErrorMessage(new Error('line one\nline two'), 'Connection failed')).toBe('Connection failed')
+    expect(
+      safeManagedErrorMessage(
+        new Error('evaOS Agent cannot receive sign-in links. [code: callback-handler-mismatch]'),
+        'Connection failed',
+        code => (code.startsWith('callback-') ? 'Repair the application handler' : `Failure: ${code}`)
+      )
+    ).toBe('Repair the application handler')
   })
 
   it('labels local mode as default inheritance for a named profile', async () => {
@@ -131,6 +138,42 @@ describe('GatewaySettings', () => {
     expect(await screen.findByText('Asuka')).toBeTruthy()
     expect(screen.queryByText('canonical-customer')).toBeNull()
     expect(screen.queryByText('canonical-agent')).toBeNull()
+  })
+
+  it('shows actionable copy when another app owns managed sign-in links', async () => {
+    const signedOutStatus = {
+      agentDisplayName: null,
+      agentId: null,
+      customerId: null,
+      desktopSessionActive: false,
+      desktopSessionExpiresAt: null,
+      email: null,
+      managed: true,
+      productName: 'evaOS Agent',
+      runtimeSessionActive: false,
+      runtimeSessionExpiresAt: null,
+      signedOut: true,
+      updateChannel: 'managed-beta'
+    }
+
+    Object.defineProperty(window, 'hermesDesktop', {
+      configurable: true,
+      value: {
+        eva: {
+          status: vi.fn().mockResolvedValue(signedOutStatus),
+          signIn: vi
+            .fn()
+            .mockRejectedValue(new Error('evaOS Agent cannot receive sign-in links. [code: callback-handler-mismatch]'))
+        }
+      }
+    })
+
+    const { GatewaySettings } = await import('./gateway-settings')
+
+    render(<GatewaySettings />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Sign in to evaOS Agent' }))
+
+    expect(await screen.findByText(en.settings.gateway.managed.callbackHandlerUnavailable)).toBeTruthy()
   })
 
   it('shows and clears an SSH remote-profile mapping for a named Desktop profile', async () => {
