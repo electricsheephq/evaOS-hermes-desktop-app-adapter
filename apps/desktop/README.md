@@ -104,10 +104,12 @@ For an upgrade or rollback canary:
 4. Complete browser sign-in and confirm the managed remote WebSocket reaches
    `101`.
 
-The managed app also verifies this ownership at startup and before every
-explicit sign-in. Its regression suite retains a simulated older production
-bundle and proves that the current app either takes ownership or fails closed
-without changing an unrelated handler.
+The managed app also verifies this ownership from a fresh system process at
+startup and before every explicit sign-in. When that lookup identifies an
+older bundle with the same production identifier, the app unregisters that
+exact stale bundle before registering the canonical installation. Its
+regression suite proves that the current app either takes ownership or fails
+closed without changing an unrelated handler.
 
 ### How it works
 

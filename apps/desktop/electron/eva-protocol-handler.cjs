@@ -6,7 +6,15 @@ const { promisify } = require('node:util')
 const execFileAsync = promisify(execFile)
 const LSREGISTER_PATH =
   '/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister'
+const OSASCRIPT_PATH = '/usr/bin/osascript'
 const PLUTIL_PATH = '/usr/bin/plutil'
+const RESOLVE_PROTOCOL_HANDLER_JXA = [
+  'ObjC.import("AppKit")',
+  'const args = ObjC.deepUnwrap($.NSProcessInfo.processInfo.arguments)',
+  'const target = $.NSURL.URLWithString(args[args.length - 1])',
+  'const owner = $.NSWorkspace.sharedWorkspace.URLForApplicationToOpenURL(target)',
+  'owner ? ObjC.unwrap(owner.path) : ""'
+].join('; ')
 
 class EvaProtocolHandlerError extends Error {
   constructor(message, code) {
@@ -49,6 +57,15 @@ async function runLaunchServices(args) {
   await execFileAsync(LSREGISTER_PATH, args, { encoding: 'utf8', maxBuffer: 64 * 1024, timeout: 10_000 })
 }
 
+async function resolveProtocolHandlerAppPath(protocolUrl, execute = execFileAsync) {
+  const { stdout } = await execute(
+    OSASCRIPT_PATH,
+    ['-l', 'JavaScript', '-e', RESOLVE_PROTOCOL_HANDLER_JXA, '--', protocolUrl],
+    { encoding: 'utf8', maxBuffer: 16 * 1024, timeout: 5_000 }
+  )
+  return stdout.trim() || null
+}
+
 async function bundleExists(bundlePath) {
   try {
     await fs.promises.stat(bundlePath)
@@ -70,8 +87,7 @@ function createEvaProtocolHandlerManager(options) {
   if (
     !options?.scheme ||
     !options?.bundleIdentifier ||
-    typeof options.registerProtocol !== 'function' ||
-    typeof options.getApplicationInfoForProtocol !== 'function'
+    typeof options.registerProtocol !== 'function'
   ) {
     throw new TypeError('evaOS Agent protocol handling requires scheme, bundle identity, and Electron callbacks.')
   }
@@ -85,26 +101,18 @@ function createEvaProtocolHandlerManager(options) {
   const handlerBundleExists = options.handlerBundleExists ?? bundleExists
   const registerBundle = options.registerBundle ?? (bundlePath => runLaunchServices(['-f', bundlePath]))
   const unregisterBundle = options.unregisterBundle ?? (bundlePath => runLaunchServices(['-u', bundlePath]))
+  const resolveProtocolHandler = options.resolveProtocolHandlerAppPath ?? resolveProtocolHandlerAppPath
   const protocolUrl = `${options.scheme}://diagnostic/ping`
   let ensurePromise = null
 
   async function resolveOwnership(currentBundle) {
-    let info
+    let handlerPath
     try {
-      info = await options.getApplicationInfoForProtocol(protocolUrl)
+      handlerPath = await resolveProtocolHandler(protocolUrl)
     } catch {
-      if (typeof options.getApplicationNameForProtocol === 'function') {
-        try {
-          const handlerName = options.getApplicationNameForProtocol(protocolUrl)
-          if (!handlerName) return { handlerBundle: null, lookupFailed: false, owned: false }
-        } catch {
-          // The lookup remains indeterminate and must not authorize registration.
-        }
-      }
-
       return { handlerBundle: null, lookupFailed: true, owned: false }
     }
-    const handlerBundle = canonicalize(info?.path)
+    const handlerBundle = canonicalize(handlerPath)
     return { handlerBundle, lookupFailed: false, owned: Boolean(handlerBundle && handlerBundle === currentBundle) }
   }
 
@@ -159,6 +167,14 @@ function createEvaProtocolHandlerManager(options) {
         }
       }
 
+      if (ownership.handlerBundle) {
+        try {
+          await unregisterBundle(ownership.handlerBundle)
+        } catch {
+          throw protocolError('callback-handler-repair-failed')
+        }
+      }
+
       ownership = await attemptCurrentRegistration(currentBundle)
       if (ownership.lookupFailed) throw protocolError('callback-handler-repair-failed')
       if (ownership.owned && ownership.registrationAccepted) {
@@ -182,17 +198,7 @@ function createEvaProtocolHandlerManager(options) {
       if (remainingHandlerIdentifier !== options.bundleIdentifier) {
         throw protocolError('callback-handler-untrusted')
       }
-
-      try {
-        await unregisterBundle(ownership.handlerBundle)
-      } catch {
-        throw protocolError('callback-handler-repair-failed')
-      }
-      ownership = await attemptCurrentRegistration(currentBundle)
-      if (ownership.lookupFailed) throw protocolError('callback-handler-repair-failed')
-      if (!ownership.owned) throw protocolError('callback-handler-repair-failed')
-      if (!ownership.registrationAccepted) throw protocolError('callback-handler-registration-failed')
-      return { ok: true, repaired: true, skipped: false }
+      throw protocolError('callback-handler-repair-failed')
     })()
 
     ensurePromise = task
@@ -210,5 +216,6 @@ module.exports = {
   EvaProtocolHandlerError,
   appBundlePath,
   canonicalAppBundlePath,
-  createEvaProtocolHandlerManager
+  createEvaProtocolHandlerManager,
+  resolveProtocolHandlerAppPath
 }
