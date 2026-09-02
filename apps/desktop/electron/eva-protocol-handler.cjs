@@ -82,10 +82,19 @@ function createEvaProtocolHandlerManager(options) {
     try {
       info = await options.getApplicationInfoForProtocol(protocolUrl)
     } catch {
-      return { handlerBundle: null, owned: false }
+      if (typeof options.getApplicationNameForProtocol === 'function') {
+        try {
+          const handlerName = options.getApplicationNameForProtocol(protocolUrl)
+          if (!handlerName) return { handlerBundle: null, lookupFailed: false, owned: false }
+        } catch {
+          // The lookup remains indeterminate and must not authorize registration.
+        }
+      }
+
+      return { handlerBundle: null, lookupFailed: true, owned: false }
     }
     const handlerBundle = canonicalize(info?.path)
-    return { handlerBundle, owned: Boolean(handlerBundle && handlerBundle === currentBundle) }
+    return { handlerBundle, lookupFailed: false, owned: Boolean(handlerBundle && handlerBundle === currentBundle) }
   }
 
   async function attemptCurrentRegistration(currentBundle) {
@@ -113,19 +122,27 @@ function createEvaProtocolHandlerManager(options) {
         throw protocolError('callback-noncanonical-install')
       }
 
-      let registrationAccepted
-      try {
-        registrationAccepted = options.registerProtocol() !== false
-      } catch {
-        throw protocolError('callback-handler-registration-failed')
-      }
       let ownership = await resolveOwnership(currentBundle)
-      if (ownership.owned && registrationAccepted) return { ok: true, repaired: false, skipped: false }
+      if (ownership.lookupFailed) throw protocolError('callback-handler-repair-failed')
+      if (ownership.owned) return { ok: true, repaired: false, skipped: false }
       if (!repair) {
-        throw protocolError(registrationAccepted ? 'callback-handler-mismatch' : 'callback-handler-registration-failed')
+        throw protocolError('callback-handler-mismatch')
+      }
+
+      if (ownership.handlerBundle) {
+        let handlerIdentifier
+        try {
+          handlerIdentifier = await readIdentifier(ownership.handlerBundle)
+        } catch {
+          throw protocolError('callback-handler-untrusted')
+        }
+        if (handlerIdentifier !== options.bundleIdentifier) {
+          throw protocolError('callback-handler-untrusted')
+        }
       }
 
       ownership = await attemptCurrentRegistration(currentBundle)
+      if (ownership.lookupFailed) throw protocolError('callback-handler-repair-failed')
       if (ownership.owned && ownership.registrationAccepted) {
         return { ok: true, repaired: true, skipped: false }
       }
@@ -138,13 +155,13 @@ function createEvaProtocolHandlerManager(options) {
         throw protocolError('callback-handler-repair-failed')
       }
 
-      let handlerIdentifier
+      let remainingHandlerIdentifier
       try {
-        handlerIdentifier = await readIdentifier(ownership.handlerBundle)
+        remainingHandlerIdentifier = await readIdentifier(ownership.handlerBundle)
       } catch {
         throw protocolError('callback-handler-untrusted')
       }
-      if (handlerIdentifier !== options.bundleIdentifier) {
+      if (remainingHandlerIdentifier !== options.bundleIdentifier) {
         throw protocolError('callback-handler-untrusted')
       }
 
@@ -154,6 +171,7 @@ function createEvaProtocolHandlerManager(options) {
         throw protocolError('callback-handler-repair-failed')
       }
       ownership = await attemptCurrentRegistration(currentBundle)
+      if (ownership.lookupFailed) throw protocolError('callback-handler-repair-failed')
       if (!ownership.owned) throw protocolError('callback-handler-repair-failed')
       if (!ownership.registrationAccepted) throw protocolError('callback-handler-registration-failed')
       return { ok: true, repaired: true, skipped: false }

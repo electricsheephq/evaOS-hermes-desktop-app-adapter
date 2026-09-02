@@ -31,6 +31,7 @@ function fixture(overrides = {}) {
       calls.push(['resolve', url])
       return handlerPath ? { path: handlerPath } : null
     },
+    getApplicationNameForProtocol: () => (handlerPath ? 'evaOS Agent' : ''),
     readBundleIdentifier: async bundlePath => {
       calls.push(['read-bundle-id', bundlePath])
       return overrides.handlerIdentifier ?? BUNDLE_ID
@@ -58,11 +59,11 @@ test('current installed handler is accepted without LaunchServices repair', asyn
   const { calls, manager } = fixture()
 
   assert.deepEqual(await manager.ensureCurrentHandler(), { ok: true, repaired: false, skipped: false })
-  assert.deepEqual(calls, [['register-protocol'], ['resolve', 'evaos-agent://diagnostic/ping']])
+  assert.deepEqual(calls, [['resolve', 'evaos-agent://diagnostic/ping']])
 })
 
-test('a false protocol registration result fails closed even when the handler path looks current', async () => {
-  const { calls, manager } = fixture({ registerProtocolResult: false })
+test('a false protocol registration result fails closed while repairing a missing handler', async () => {
+  const { calls, manager } = fixture({ handlerPath: null, registerProtocolResult: false })
 
   await assert.rejects(
     manager.ensureCurrentHandler(),
@@ -74,7 +75,7 @@ test('a false protocol registration result fails closed even when the handler pa
   )
 })
 
-test('a thrown protocol registration error is normalized before handler inspection', async () => {
+test('a thrown protocol registration error is normalized during missing-handler repair', async () => {
   const manager = createEvaProtocolHandlerManager({
     scheme: 'evaos-agent',
     bundleIdentifier: BUNDLE_ID,
@@ -86,7 +87,8 @@ test('a thrown protocol registration error is normalized before handler inspecti
     registerProtocol: () => {
       throw new Error('native registration detail')
     },
-    getApplicationInfoForProtocol: async () => ({ path: CURRENT_APP })
+    getApplicationInfoForProtocol: async () => null,
+    registerBundle: async () => undefined
   })
 
   await assert.rejects(
@@ -110,7 +112,7 @@ test('missing handler is repaired by registering the current installed app', asy
   const { calls, manager } = fixture({ handlerPath: null })
 
   assert.deepEqual(await manager.ensureCurrentHandler(), { ok: true, repaired: true, skipped: false })
-  assert.deepEqual(calls.at(2), ['register-bundle', CURRENT_APP])
+  assert.deepEqual(calls.at(1), ['register-bundle', CURRENT_APP])
   assert.equal(
     calls.some(([name]) => name === 'unregister-bundle'),
     false
@@ -163,6 +165,80 @@ test('unrelated handler is never unregistered and fails closed', async () => {
     calls.some(([name]) => name === 'unregister-bundle'),
     false
   )
+  assert.equal(
+    calls.some(([name]) => name === 'register-bundle' || name === 'register-protocol'),
+    false
+  )
+  assert.deepEqual(calls.slice(0, 2), [
+    ['resolve', 'evaos-agent://diagnostic/ping'],
+    ['read-bundle-id', '/Applications/Other.app']
+  ])
+})
+
+test('an indeterminate handler lookup cannot authorize registration over an existing named handler', async () => {
+  const calls = []
+  const manager = createEvaProtocolHandlerManager({
+    scheme: 'evaos-agent',
+    bundleIdentifier: BUNDLE_ID,
+    platform: 'darwin',
+    isPackaged: true,
+    currentExecutablePath: CURRENT_EXECUTABLE,
+    expectedInstallPath: CURRENT_APP,
+    canonicalizeAppBundlePath: appBundlePath,
+    registerProtocol: () => calls.push(['register-protocol']),
+    getApplicationInfoForProtocol: async () => {
+      calls.push(['resolve'])
+      throw new Error('lookup unavailable')
+    },
+    getApplicationNameForProtocol: () => {
+      calls.push(['resolve-name'])
+      return 'Other'
+    },
+    registerBundle: async bundlePath => calls.push(['register-bundle', bundlePath])
+  })
+
+  await assert.rejects(
+    manager.ensureCurrentHandler(),
+    error => error instanceof EvaProtocolHandlerError && error.code === 'callback-handler-repair-failed'
+  )
+  assert.deepEqual(calls, [['resolve'], ['resolve-name']])
+})
+
+test('a rejected detail lookup plus an empty handler name is treated as a missing handler', async () => {
+  let handlerPath = null
+  const calls = []
+  const manager = createEvaProtocolHandlerManager({
+    scheme: 'evaos-agent',
+    bundleIdentifier: BUNDLE_ID,
+    platform: 'darwin',
+    isPackaged: true,
+    currentExecutablePath: CURRENT_EXECUTABLE,
+    expectedInstallPath: CURRENT_APP,
+    canonicalizeAppBundlePath: appBundlePath,
+    registerProtocol: () => calls.push(['register-protocol']),
+    getApplicationInfoForProtocol: async () => {
+      calls.push(['resolve'])
+      if (!handlerPath) throw new Error('no handler')
+      return { path: handlerPath }
+    },
+    getApplicationNameForProtocol: () => {
+      calls.push(['resolve-name'])
+      return ''
+    },
+    registerBundle: async bundlePath => {
+      calls.push(['register-bundle', bundlePath])
+      handlerPath = CURRENT_APP
+    }
+  })
+
+  assert.deepEqual(await manager.ensureCurrentHandler(), { ok: true, repaired: true, skipped: false })
+  assert.deepEqual(calls, [
+    ['resolve'],
+    ['resolve-name'],
+    ['register-bundle', CURRENT_APP],
+    ['register-protocol'],
+    ['resolve']
+  ])
 })
 
 test('post-repair mismatch reports failure without deleting or moving applications', async () => {
@@ -193,6 +269,7 @@ test('LaunchServices command failure is normalized and fails closed', async () =
     canonicalizeAppBundlePath: appBundlePath,
     registerProtocol: () => true,
     getApplicationInfoForProtocol: async () => ({ path: STALE_APP }),
+    readBundleIdentifier: async () => BUNDLE_ID,
     registerBundle: async () => {
       throw new Error('command detail must not escape')
     }
