@@ -298,6 +298,7 @@ test('LaunchServices command failure is normalized and fails closed', async () =
     registerProtocol: () => true,
     resolveProtocolHandlerAppPath: async () => STALE_APP,
     readBundleIdentifier: async () => BUNDLE_ID,
+    unregisterBundle: async () => {},
     registerBundle: async () => {
       throw new Error('command detail must not escape')
     }
