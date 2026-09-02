@@ -12221,8 +12221,6 @@ function getEvaDeepLinkProtocolManager() {
       bundleIdentifier: 'com.electricsheephq.evaos.agent',
       currentExecutablePath: process.execPath,
       expectedInstallPath: '/Applications/evaOS Agent.app',
-      getApplicationInfoForProtocol: url => app.getApplicationInfoForProtocol(url),
-      getApplicationNameForProtocol: url => app.getApplicationNameForProtocol(url),
       isPackaged: IS_PACKAGED,
       platform: process.platform,
       registerProtocol: registerRawDeepLinkProtocol
