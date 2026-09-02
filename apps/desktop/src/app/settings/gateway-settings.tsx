@@ -63,7 +63,13 @@ interface GatewaySettingsState {
 }
 
 const SSH_HOST_CUSTOM = '__custom__'
+
 const SAFE_MANAGED_BROKER_CODES = new Set([
+  'callback-handler-mismatch',
+  'callback-handler-registration-failed',
+  'callback-handler-repair-failed',
+  'callback-handler-untrusted',
+  'callback-noncanonical-install',
   'ambiguous_hermes_agent_binding',
   'client_agent_override_not_allowed',
   'client_customer_override_not_allowed',
@@ -197,6 +203,9 @@ function EvaManagedGatewaySettings({ embedded = false }: { embedded?: boolean } 
   const [busy, setBusy] = useState<'refresh' | 'sign-in' | 'sign-out' | null>(null)
   const [error, setError] = useState<string | null>(null)
 
+  const managedFailureForCode = (code: string) =>
+    code.startsWith('callback-') ? g.callbackHandlerUnavailable : g.failedWithCode(code)
+
   useEffect(() => {
     let cancelled = false
     void window.hermesDesktop.eva
@@ -232,7 +241,7 @@ function EvaManagedGatewaySettings({ embedded = false }: { embedded?: boolean } 
         setStatus(next)
       }
     } catch (err) {
-      setError(safeManagedErrorMessage(err, g.failed, g.failedWithCode))
+      setError(safeManagedErrorMessage(err, g.failed, managedFailureForCode))
     } finally {
       setBusy(null)
     }

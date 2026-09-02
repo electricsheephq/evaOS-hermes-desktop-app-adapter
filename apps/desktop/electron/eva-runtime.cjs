@@ -48,6 +48,7 @@ function createEvaManagedRuntime(options) {
   const createWsRelay = options.createWsRelay ?? createEvaWsRelay
   const scheduleSupportExpiry = options.scheduleSupportExpiry ?? setTimeout
   const cancelSupportExpiry = options.cancelSupportExpiry ?? clearTimeout
+  const ensureSignInCallbackReady = options.ensureSignInCallbackReady ?? (async () => undefined)
   const statePath = options.statePath
   const now = options.now ?? Date.now
   const loginTimeoutMs = options.loginTimeoutMs ?? EVA_MANAGED_POLICY.loginTimeoutMs
@@ -949,6 +950,24 @@ function createEvaManagedRuntime(options) {
 
   async function signIn() {
     await requireRendererIsolation()
+    try {
+      await ensureSignInCallbackReady()
+    } catch (error) {
+      const allowedCodes = new Set([
+        'callback-handler-mismatch',
+        'callback-handler-registration-failed',
+        'callback-handler-repair-failed',
+        'callback-handler-untrusted',
+        'callback-noncanonical-install'
+      ])
+      const code = allowedCodes.has(error?.code) ? error.code : 'callback-handler-registration-failed'
+      rememberLog(`[eva-managed] sign-in callback unavailable [code: ${code}]`)
+      throw new EvaBrokerError(
+        `evaOS Agent cannot receive sign-in links from this installation. [code: ${code}]`,
+        503,
+        code
+      )
+    }
     invalidateAuthWork()
     writeState(emptyState())
     supportRevalidated = false

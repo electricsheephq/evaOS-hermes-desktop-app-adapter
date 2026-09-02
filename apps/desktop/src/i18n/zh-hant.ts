@@ -727,6 +727,8 @@ export const zhHant = defineLocale({
         refresh: '重新整理已指派存取權',
         signOut: '登出',
         failed: '無法載入受管理存取權。請重試或聯絡 Electric Sheep 支援。',
+        callbackHandlerUnavailable:
+          '另一個 evaOS Agent 副本正在處理登入連結。請只保留「應用程式」資料夾中已安裝的 App，重新開啟後再試。',
         failedWithCode: code => `Electric Sheep 要求失敗 [代碼: ${code}]`
       },
       loading: '正在載入閘道設定...',

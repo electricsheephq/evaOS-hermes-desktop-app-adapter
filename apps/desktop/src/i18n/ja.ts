@@ -744,6 +744,8 @@ export const ja = defineLocale({
         refresh: '割り当て済みアクセスを更新',
         signOut: 'サインアウト',
         failed: 'マネージドアクセスを読み込めませんでした。再試行するか Electric Sheep サポートに連絡してください。',
+        callbackHandlerUnavailable:
+          '別の evaOS Agent がサインインリンクを処理しています。アプリケーションフォルダにはインストール済みのアプリだけを残し、再度開いてからやり直してください。',
         failedWithCode: code => `Electric Sheep リクエストに失敗しました [コード: ${code}]`
       },
       loading: 'ゲートウェイ設定を読み込み中...',

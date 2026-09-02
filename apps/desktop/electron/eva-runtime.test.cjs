@@ -1614,6 +1614,30 @@ test('PKCE sign-in keeps one verifier per attempt, rejects wrong callbacks, and 
   assert.equal(issuedVerifiers.length, 0)
 })
 
+test('managed sign-in checks callback ownership before clearing the existing enrollment', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-callback-preflight-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeActiveEnrollment(statePath)
+  let opened = 0
+  const runtime = makeManagedRuntime(statePath, {
+    ensureSignInCallbackReady: async () => {
+      throw Object.assign(new Error('wrong handler'), { code: 'callback-handler-mismatch' })
+    },
+    openExternal: async () => {
+      opened += 1
+    }
+  })
+
+  await assert.rejects(
+    runtime.signIn(),
+    error => error instanceof EvaBrokerError && error.statusCode === 503 && error.code === 'callback-handler-mismatch'
+  )
+  assert.equal(opened, 0)
+  assert.equal(runtime.status().email, 'employee@example.invalid')
+  assert.equal(runtime.status().agentDisplayName, 'Asuka')
+})
+
 test('an expired PKCE claim clears its callback state and verifier', async t => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-pkce-expiry-'))
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }))

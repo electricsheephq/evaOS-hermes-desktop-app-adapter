@@ -85,6 +85,30 @@ npm run pack         # unpacked app under release/ (no installer)
 
 Installers are built and uploaded to GitHub Releases manually. macOS/Windows signing & notarization happen automatically when the relevant credentials are present in the environment (`CSC_LINK` / `CSC_KEY_PASSWORD` / `APPLE_*` for macOS, `WIN_CSC_*` for Windows).
 
+#### evaOS Agent managed macOS releases
+
+Treat every managed release identity as immutable: use the next unused ES
+version and never replace an already published asset. The one live installation
+must be `/Applications/evaOS Agent.app`. Keep rollback builds as signed ZIP or
+DMG artifacts only; a renamed, hidden, or copied `.app` with the production
+bundle identifier can remain discoverable to LaunchServices and intercept
+`evaos-agent://` sign-in callbacks.
+
+For an upgrade or rollback canary:
+
+1. Archive the prior signed app as ZIP/DMG and remove the runnable prior `.app`
+   from discoverable locations before installing the candidate.
+2. Install and launch the exact candidate from `/Applications/evaOS Agent.app`.
+3. Verify the installed version and signature, then confirm a diagnostic
+   `evaos-agent://` URL resolves to that exact bundle.
+4. Complete browser sign-in and confirm the managed remote WebSocket reaches
+   `101`.
+
+The managed app also verifies this ownership at startup and before every
+explicit sign-in. Its regression suite retains a simulated older production
+bundle and proves that the current app either takes ownership or fails closed
+without changing an unrelated handler.
+
 ### How it works
 
 The packaged app ships the Electron shell and a native React chat surface. On

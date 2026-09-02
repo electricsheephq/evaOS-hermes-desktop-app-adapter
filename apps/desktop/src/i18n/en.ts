@@ -649,6 +649,8 @@ export const en: Translations = {
         refresh: 'Refresh assigned access',
         signOut: 'Sign out',
         failed: 'Could not load managed access. Try again or contact Electric Sheep support.',
+        callbackHandlerUnavailable:
+          'Another copy of evaOS Agent is handling sign-in links. Keep only the installed app in Applications, reopen it, and try again.',
         failedWithCode: code => `Electric Sheep request failed [code: ${code}]`
       },
       loading: 'Loading gateway settings...',

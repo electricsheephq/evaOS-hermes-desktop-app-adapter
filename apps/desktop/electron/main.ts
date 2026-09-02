@@ -99,6 +99,7 @@ const {
   resolveEvaManagedDesktopProfileFromSources
 } = require('./eva-managed.cjs')
 const { createEvaMediaGrantCodec } = require('./eva-media-grant.cjs')
+const { createEvaProtocolHandlerManager } = require('./eva-protocol-handler.cjs')
 const { createEvaManagedRuntime } = require('./eva-runtime.cjs')
 import { createEventDeduper } from './event-dedupe'
 import { findGitBash as _findGitBash } from './find-git-bash'
@@ -6940,6 +6941,7 @@ const evaManagedRuntime = createEvaManagedRuntime({
   statePath: EVA_ENROLLMENT_STATE_PATH,
   encryptSecret: encryptDesktopSecret,
   decryptSecret: decryptDesktopSecret,
+  ensureSignInCallbackReady: () => ensureEvaDeepLinkProtocolReady(),
   openExternal: url => shell.openExternal(url),
   waitForHermes,
   fetchJson,
@@ -12097,6 +12099,7 @@ ipcMain.handle('hermes:vscode-theme:search', async (_event, query) => searchMark
 // Win/Linux running-app 'second-instance' (argv), Win/Linux cold-start argv.
 // ---------------------------------------------------------------------------
 const HERMES_PROTOCOL = EVA_MANAGED_BUILD ? EVA_MANAGED_POLICY.callbackScheme : 'hermes'
+let evaDeepLinkProtocolManager = null
 let _pendingDeepLink = null
 let _rendererReadyForDeepLink = false
 
@@ -12201,18 +12204,56 @@ ipcMain.handle('hermes:deep-link-ready', () => {
   return { ok: true }
 })
 
-function registerDeepLinkProtocol() {
-  try {
-    if (process.defaultApp && process.argv.length >= 2) {
-      // Dev: register with the electron exec path + entry script so the OS can
-      // relaunch us with the URL.
-      app.setAsDefaultProtocolClient(HERMES_PROTOCOL, process.execPath, [path.resolve(process.argv[1])])
-    } else {
-      app.setAsDefaultProtocolClient(HERMES_PROTOCOL)
-    }
-  } catch (err) {
-    rememberLog(`[deeplink] protocol registration failed: ${err.message}`)
+function registerRawDeepLinkProtocol() {
+  if (process.defaultApp && process.argv.length >= 2) {
+    // Dev: register with the electron exec path + entry script so the OS can
+    // relaunch us with the URL.
+    return app.setAsDefaultProtocolClient(HERMES_PROTOCOL, process.execPath, [path.resolve(process.argv[1])])
   }
+
+  return app.setAsDefaultProtocolClient(HERMES_PROTOCOL)
+}
+
+function getEvaDeepLinkProtocolManager() {
+  if (!evaDeepLinkProtocolManager) {
+    evaDeepLinkProtocolManager = createEvaProtocolHandlerManager({
+      scheme: HERMES_PROTOCOL,
+      bundleIdentifier: 'com.electricsheephq.evaos.agent',
+      currentExecutablePath: process.execPath,
+      expectedInstallPath: '/Applications/evaOS Agent.app',
+      getApplicationInfoForProtocol: url => app.getApplicationInfoForProtocol(url),
+      getApplicationNameForProtocol: url => app.getApplicationNameForProtocol(url),
+      isPackaged: IS_PACKAGED,
+      platform: process.platform,
+      registerProtocol: registerRawDeepLinkProtocol
+    })
+  }
+
+  return evaDeepLinkProtocolManager
+}
+
+async function ensureEvaDeepLinkProtocolReady() {
+  if (!EVA_MANAGED_BUILD) {
+    registerRawDeepLinkProtocol()
+
+    return { ok: true, repaired: false, skipped: true }
+  }
+
+  const result = await getEvaDeepLinkProtocolManager().ensureCurrentHandler({ repair: true })
+
+  if (result.repaired) {
+    rememberLog(`[deeplink] repaired protocol ownership for evaOS Agent ${app.getVersion()}`)
+  }
+
+  return result
+}
+
+function registerDeepLinkProtocol() {
+  void ensureEvaDeepLinkProtocolReady().catch(err => {
+    const code = String(err?.code || 'callback-handler-registration-failed')
+
+    rememberLog(`[deeplink] protocol registration failed [code: ${code}]`)
+  })
 }
 
 // Single-instance lock: deep links on a running app (Win/Linux) arrive as a
