@@ -49,6 +49,16 @@ async function runLaunchServices(args) {
   await execFileAsync(LSREGISTER_PATH, args, { encoding: 'utf8', maxBuffer: 64 * 1024, timeout: 10_000 })
 }
 
+async function bundleExists(bundlePath) {
+  try {
+    await fs.promises.stat(bundlePath)
+    return true
+  } catch (error) {
+    if (error?.code === 'ENOENT' || error?.code === 'ENOTDIR') return false
+    throw error
+  }
+}
+
 function protocolError(code) {
   return new EvaProtocolHandlerError(
     `evaOS Agent cannot receive sign-in links from this installation. Install it in Applications, archive older copies, and try again. [code: ${code}]`,
@@ -72,6 +82,7 @@ function createEvaProtocolHandlerManager(options) {
   const expectedInstallPath = options.expectedInstallPath ?? '/Applications/evaOS Agent.app'
   const canonicalize = options.canonicalizeAppBundlePath ?? canonicalAppBundlePath
   const readIdentifier = options.readBundleIdentifier ?? readBundleIdentifier
+  const handlerBundleExists = options.handlerBundleExists ?? bundleExists
   const registerBundle = options.registerBundle ?? (bundlePath => runLaunchServices(['-f', bundlePath]))
   const unregisterBundle = options.unregisterBundle ?? (bundlePath => runLaunchServices(['-u', bundlePath]))
   const protocolUrl = `${options.scheme}://diagnostic/ping`
@@ -134,9 +145,16 @@ function createEvaProtocolHandlerManager(options) {
         try {
           handlerIdentifier = await readIdentifier(ownership.handlerBundle)
         } catch {
-          throw protocolError('callback-handler-untrusted')
+          let exists
+          try {
+            exists = await handlerBundleExists(ownership.handlerBundle)
+          } catch {
+            throw protocolError('callback-handler-untrusted')
+          }
+          if (exists !== false) throw protocolError('callback-handler-untrusted')
+          ownership = { ...ownership, handlerBundle: null }
         }
-        if (handlerIdentifier !== options.bundleIdentifier) {
+        if (ownership.handlerBundle && handlerIdentifier !== options.bundleIdentifier) {
           throw protocolError('callback-handler-untrusted')
         }
       }

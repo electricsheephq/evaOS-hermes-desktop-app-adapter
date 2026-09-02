@@ -34,7 +34,12 @@ function fixture(overrides = {}) {
     getApplicationNameForProtocol: () => (handlerPath ? 'evaOS Agent' : ''),
     readBundleIdentifier: async bundlePath => {
       calls.push(['read-bundle-id', bundlePath])
+      if (overrides.readIdentifierError) throw overrides.readIdentifierError
       return overrides.handlerIdentifier ?? BUNDLE_ID
+    },
+    handlerBundleExists: async bundlePath => {
+      calls.push(['bundle-exists', bundlePath])
+      return overrides.handlerBundleExists !== false
     },
     registerBundle: async bundlePath => {
       calls.push(['register-bundle', bundlePath])
@@ -117,6 +122,44 @@ test('missing handler is repaired by registering the current installed app', asy
     calls.some(([name]) => name === 'unregister-bundle'),
     false
   )
+})
+
+test('a vanished stale handler bundle is treated as missing and repaired', async () => {
+  const missingError = Object.assign(new Error('bundle no longer exists'), { code: 'ENOENT' })
+  const { calls, manager } = fixture({
+    handlerPath: STALE_APP,
+    readIdentifierError: missingError,
+    handlerBundleExists: false
+  })
+
+  assert.deepEqual(await manager.ensureCurrentHandler(), { ok: true, repaired: true, skipped: false })
+  assert.deepEqual(calls.slice(0, 4), [
+    ['resolve', 'evaos-agent://diagnostic/ping'],
+    ['read-bundle-id', STALE_APP],
+    ['bundle-exists', STALE_APP],
+    ['register-bundle', CURRENT_APP]
+  ])
+  assert.equal(
+    calls.some(([name]) => name === 'unregister-bundle'),
+    false
+  )
+})
+
+test('an unreadable existing handler remains untrusted and cannot authorize registration', async () => {
+  const { calls, manager } = fixture({
+    handlerPath: '/Applications/Other.app',
+    readIdentifierError: new Error('permission denied')
+  })
+
+  await assert.rejects(
+    manager.ensureCurrentHandler(),
+    error => error instanceof EvaProtocolHandlerError && error.code === 'callback-handler-untrusted'
+  )
+  assert.deepEqual(calls, [
+    ['resolve', 'evaos-agent://diagnostic/ping'],
+    ['read-bundle-id', '/Applications/Other.app'],
+    ['bundle-exists', '/Applications/Other.app']
+  ])
 })
 
 test('verified stale same-bundle handler is unregistered when force registration alone does not win', async () => {
