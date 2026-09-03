@@ -899,7 +899,7 @@ finally:
 function withRemoteUpdateMutex(command, mutexPath) {
   const script = `
 import fcntl,os,subprocess,sys
-mutex_path=sys.argv[1]
+mutex_path=os.path.expanduser(sys.argv[1])
 payload=sys.argv[2]
 parent=os.path.dirname(mutex_path)
 if parent:os.makedirs(parent,exist_ok=True)
@@ -1045,9 +1045,11 @@ function buildSpawnCommand(hermesPath, profile, opts: any = {}) {
   const subCmd = `serve --isolated --host 127.0.0.1 --port 0${tokenArg}${ownerArg}`
   const marker = expandRemotePath(`${remoteInstallRoot(opts.hermesHome || '~/.hermes')}/.hermes-update-in-progress`)
 
-  const updateMutex = expandRemotePath(
-    `${remoteInstallRoot(opts.hermesHome || '~/.hermes')}/.hermes-update-in-progress.mutex`
-  )
+  // withRemoteUpdateMutex passes this as a Python argv value, not a shell
+  // fragment. Keep it unexpanded/unquoted here; the helper expands `~` after
+  // argv parsing. Passing expandRemotePath() output double-quoted the path and
+  // created a literal quote-prefixed directory relative to the shell cwd.
+  const updateMutex = `${remoteInstallRoot(opts.hermesHome || '~/.hermes')}/.hermes-update-in-progress.mutex`
 
   // The marker probe, ownership reservation, process creation, and initial
   // lockfile publication must be one remote command. A second Desktop process

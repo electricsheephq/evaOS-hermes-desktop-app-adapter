@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 
 import {
   desktopSkinSlashCompletions,
@@ -13,6 +13,10 @@ import {
   rankSkillCommands,
   resolveDesktopCommand
 } from './desktop-slash-commands'
+
+afterEach(() => {
+  Reflect.deleteProperty(window, 'hermesDesktop')
+})
 
 describe('desktop slash command curation', () => {
   it('keeps core desktop chat commands in suggestions', () => {
@@ -32,6 +36,23 @@ describe('desktop slash command curation', () => {
     expect(isDesktopSlashSuggestion('/my-skill')).toBe(true)
     expect(isDesktopSlashSuggestion('/gif-search')).toBe(true)
     expect(isDesktopSlashCommand('/my-skill')).toBe(true)
+  })
+
+  it('denies managed billing commands without hiding user extension commands', () => {
+    Object.defineProperty(window, 'hermesDesktop', {
+      configurable: true,
+      value: { eva: {} },
+      writable: true
+    })
+
+    for (const command of ['/topup', '/subscription', '/upgrade']) {
+      expect(isDesktopSlashSuggestion(command)).toBe(false)
+      expect(isDesktopSlashCommand(command)).toBe(false)
+      expect(desktopSlashUnavailableMessage(command)).toContain('managed evaOS Agent')
+    }
+
+    expect(isDesktopSlashSuggestion('/my-billing-skill')).toBe(true)
+    expect(isDesktopSlashCommand('/my-billing-skill')).toBe(true)
   })
 
   it('hides terminal, messaging, and dedicated-UI commands from suggestions', () => {
@@ -139,6 +160,74 @@ describe('desktop slash command curation', () => {
         session_id: 's-1'
       })
     }
+  })
+
+  it('routes /reload-mcp through its confirmed current-session RPC', () => {
+    const command = resolveDesktopCommand('/reload-mcp')
+    const alias = resolveDesktopCommand('/reload_mcp')
+    expect(command?.surface.kind).toBe('rpc')
+    expect(alias?.name).toBe('/reload-mcp')
+    expect(isDesktopSlashSuggestion('/reload-mcp')).toBe(true)
+    expect(isDesktopSlashSuggestion('/reload_mcp')).toBe(false)
+    expect(desktopSlashCommandArgumentMode('/reload-mcp')).toBe('text')
+
+    if (command?.surface.kind !== 'rpc') {
+      return
+    }
+
+    expect(command.surface.rpc).toBe('reload.mcp')
+    expect(command.surface.timeoutMs).toBe(300_000)
+    expect(command.surface.fallbackToExec).toBe(false)
+    const context = { command: '/reload-mcp', name: 'reload-mcp', sessionId: 's-1' }
+    expect(command.surface.buildParams({ ...context, arg: '' })).toEqual({ session_id: 's-1' })
+    expect(command.surface.buildParams({ ...context, arg: 'now' })).toEqual({ session_id: 's-1', confirm: true })
+    expect(command.surface.buildParams({ ...context, arg: 'always' })).toEqual({
+      session_id: 's-1',
+      confirm: true,
+      always: true
+    })
+    expect(command.surface.buildParams({ ...context, arg: 'now please' })).toEqual({ session_id: 's-1' })
+  })
+
+  it('routes managed lifecycle commands to the current profile and session', () => {
+    Object.defineProperty(window, 'hermesDesktop', {
+      configurable: true,
+      value: { eva: {} },
+      writable: true
+    })
+
+    const skills = resolveDesktopCommand('/reload_skills')
+    expect(skills?.name).toBe('/reload-skills')
+    expect(skills?.surface.kind).toBe('rpc')
+    expect(isDesktopSlashSuggestion('/reload-skills')).toBe(true)
+    expect(desktopSlashDescription('/reload-skills')).toBe('Reload skills for the current profile and session')
+
+    if (skills?.surface.kind !== 'rpc') {
+      return
+    }
+
+    expect(skills.surface.rpc).toBe('skills.reload')
+    expect(
+      skills.surface.buildParams({
+        command: '/reload-skills',
+        name: 'reload-skills',
+        arg: 'other-profile',
+        sessionId: 's-1'
+      })
+    ).toEqual({ session_id: 's-1' })
+
+    expect(resolveDesktopCommand('/restart')?.surface).toEqual({ kind: 'action', action: 'restart' })
+    expect(isDesktopSlashSuggestion('/restart')).toBe(true)
+    expect(desktopSlashCommandArgumentMode('/restart')).toBe('text')
+  })
+
+  it('keeps managed lifecycle commands unavailable in an unmanaged desktop', () => {
+    expect(isDesktopSlashSuggestion('/reload-skills')).toBe(false)
+    expect(isDesktopSlashCommand('/reload-skills')).toBe(false)
+    expect(isDesktopSlashSuggestion('/restart')).toBe(false)
+    expect(isDesktopSlashCommand('/restart')).toBe(false)
+    expect(desktopSlashUnavailableMessage('/reload-skills')).toContain('terminal interface')
+    expect(desktopSlashUnavailableMessage('/restart')).toContain('terminal interface')
   })
 
   it('keeps commands with richer CLI semantics on the slash worker', () => {
@@ -275,6 +364,22 @@ describe('desktop slash command curation', () => {
         display: '/skin midnight',
         meta: 'Midnight - Deep blue'
       }
+    ])
+  })
+
+  it('shows managed theme labels in /skin suggestions while legacy ids remain resolvable', () => {
+    const completions = desktopSkinSlashCompletions(
+      [
+        { name: 'nous', label: 'Blue', description: 'Blue glass' },
+        { name: 'ember', label: 'evaOS', description: 'evaOS warm' }
+      ],
+      'nous',
+      ''
+    )
+
+    expect(completions.slice(2)).toEqual([
+      { text: '/skin Blue', display: '/skin Blue', meta: 'Blue (current) - Blue glass' },
+      { text: '/skin evaOS', display: '/skin evaOS', meta: 'evaOS - evaOS warm' }
     ])
   })
 

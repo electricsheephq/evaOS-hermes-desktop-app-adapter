@@ -1,4 +1,5 @@
 import { translateNow } from '@/i18n'
+import { isManagedEvaosAgent } from '@/i18n/managed-brand'
 import { textPart } from '@/lib/chat-messages'
 import { coerceGatewayText } from '@/lib/chat-runtime'
 import { isProviderSetupErrorMessage } from '@/lib/provider-setup-errors'
@@ -86,6 +87,10 @@ export function handleStatusEvent(ctx: GatewayEventContext): boolean {
     // place instead of stacking. Account-wide signal — shown regardless of
     // which session is focused.
     const notice = event.payload as AgentNoticePayload | undefined
+
+    if (isManagedEvaosAgent() && notice?.key?.startsWith('credits.')) {
+      return true
+    }
 
     showAgentNotice(notice)
 

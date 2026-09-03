@@ -19,6 +19,7 @@ interface HarnessProps {
   creatingSessionRef: MutableRefObject<boolean>
   currentView: string
   freshDraftReady: boolean
+  gatewayConnectionEpoch?: number
   gatewayState: string
   locationPathname: string
   resumeSession: (sessionId: string, focus: boolean, ownerRoute?: SessionProfileRoute) => Promise<unknown>
@@ -33,12 +34,19 @@ interface HarnessProps {
 }
 
 function RouteResumeHarness({
+  gatewayConnectionEpoch = 0,
   resumeFailedSessionId = null,
   resumeExhaustedSessionId = null,
   sessionResumeRequest = null,
   ...props
 }: HarnessProps) {
-  useRouteResume({ ...props, resumeExhaustedSessionId, resumeFailedSessionId, sessionResumeRequest })
+  useRouteResume({
+    ...props,
+    gatewayConnectionEpoch,
+    resumeExhaustedSessionId,
+    resumeFailedSessionId,
+    sessionResumeRequest
+  })
 
   return null
 }

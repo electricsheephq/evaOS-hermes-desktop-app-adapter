@@ -94,6 +94,7 @@ const {
   $updateOverlayOpen,
   $updateOverlayTarget,
   requestActiveUpdate,
+  openUpdatesWindow,
   resetUpdateApplyState,
   startUpdatePoller,
   stopUpdatePoller,
@@ -130,6 +131,41 @@ const setRemote = (on: boolean) =>
     logs: [],
     windowButtonPosition: null
   })
+
+describe('managed app update routing', () => {
+  afterEach(() => {
+    setConnection(null)
+    $updateOverlayOpen.set(false)
+    delete (globalThis as unknown as { window?: unknown }).window
+  })
+
+  it('opens the client updater in managed remote mode instead of the backend updater', () => {
+    ;(globalThis as unknown as { window: unknown }).window = {
+      hermesDesktop: {
+        eva: {},
+        updates: {
+          check: vi.fn().mockResolvedValue(status({ behind: 0, updateAvailable: false })),
+          onProgress: vi.fn()
+        }
+      }
+    }
+    setConnection({
+      baseUrl: 'eva-managed://customer',
+      isFullscreen: false,
+      mode: 'remote',
+      nativeOverlayWidth: 0,
+      token: '',
+      wsUrl: 'ws://127.0.0.1',
+      logs: [],
+      windowButtonPosition: null
+    })
+
+    openUpdatesWindow()
+
+    expect($updateOverlayTarget.get()).toBe('client')
+    expect($updateOverlayOpen.get()).toBe(true)
+  })
+})
 
 describe('maybeNotifyUpdateAvailable', () => {
   beforeEach(() => {
@@ -379,6 +415,21 @@ describe('requestActiveUpdate', () => {
 
     expect(applyClientMock).not.toHaveBeenCalled()
     expect($updateOverlayTarget.get()).toBe('backend')
+  })
+
+  it('applies only the Electric Sheep CLIENT update in managed remote mode', async () => {
+    setRemote(true)
+    $updateStatus.set(status({ behind: 3 }))
+    ;(globalThis as unknown as { window: { hermesDesktop: object } }).window.hermesDesktop = {
+      eva: {},
+      updates: { apply: applyClientMock, check: checkClientMock }
+    }
+
+    requestActiveUpdate()
+    await vi.waitFor(() => expect(applyClientMock).toHaveBeenCalled())
+
+    expect(updateHermesSpy).not.toHaveBeenCalled()
+    expect($updateOverlayTarget.get()).toBe('client')
   })
 
   it('always opens the overlay, so selecting the row is never a silent no-op', () => {

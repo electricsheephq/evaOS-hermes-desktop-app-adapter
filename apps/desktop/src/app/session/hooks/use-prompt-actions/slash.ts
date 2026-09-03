@@ -3,6 +3,7 @@ import { type MutableRefObject, useCallback, useRef } from 'react'
 
 import { getProfiles } from '@/hermes'
 import type { Translations } from '@/i18n'
+import { isManagedEvaosAgent } from '@/i18n/managed-brand'
 import { type ChatMessage, toChatMessages } from '@/lib/chat-messages'
 import { parseCommandDispatch, parseSlashCommand, sessionTitle } from '@/lib/chat-runtime'
 import {
@@ -15,6 +16,8 @@ import {
   resolveDesktopCommand
 } from '@/lib/desktop-slash-commands'
 import { isMissingRpcMethod } from '@/lib/gateway-rpc'
+import { sanitizeDesktopSlashOutput } from '@/lib/managed-slash-output'
+import { invalidateSlashCompletions } from '@/lib/slash-completion-cache'
 import { setSessionYolo } from '@/lib/yolo-session'
 import { openCommandPalettePage } from '@/store/command-palette'
 import { setComposerDraft } from '@/store/composer'
@@ -43,6 +46,7 @@ import {
   setYoloActive
 } from '@/store/session'
 import { $sessionStates } from '@/store/session-states'
+import { runGatewayRestart } from '@/store/system-actions'
 import {
   applyWakeStartResult,
   applyWakeStatus,
@@ -249,20 +253,23 @@ export function useSlashCommand(deps: SlashCommandDeps) {
       // `exec` commands (and unknown skill / quick commands the backend owns)
       // run on the gateway and render their text output inline. This is the only
       // path that talks to slash.exec / command.dispatch.
-      async function runExec(ctx: SlashActionCtx): Promise<void> {
+      async function runExec(ctx: SlashActionCtx): Promise<boolean> {
         const { arg, command, name } = ctx
         const resolved = await withSlashOutput(ctx)
 
         if (!resolved) {
-          return
+          return false
         }
 
-        const { render: renderSlashOutput, sessionId, storedSessionId } = resolved
+        const { render, sessionId, storedSessionId } = resolved
+
+        const renderSlashOutput = (text: string) =>
+          render(sanitizeDesktopSlashOutput(name, text, isManagedEvaosAgent()))
 
         if (!isDesktopSlashCommand(name)) {
           renderSlashOutput(desktopSlashUnavailableMessage(name) || `/${name} is not available in the desktop app.`)
 
-          return
+          return false
         }
 
         let slashExecError: unknown = null
@@ -386,7 +393,7 @@ export function useSlashCommand(deps: SlashCommandDeps) {
           if (dispatch) {
             await handleDispatch(dispatch)
 
-            return
+            return true
           }
 
           const output = result && typeof result === 'object' ? (result as SlashExecResponse) : null
@@ -402,7 +409,7 @@ export function useSlashCommand(deps: SlashCommandDeps) {
 
           renderSlashOutput(output?.warning ? `warning: ${output.warning}\n${body}` : body)
 
-          return
+          return true
         } catch (error) {
           // Fall back to command.dispatch for skill/send/alias directives, but
           // keep the worker error: a slash.exec worker timeout/crash is the real
@@ -418,10 +425,12 @@ export function useSlashCommand(deps: SlashCommandDeps) {
           if (!dispatch) {
             renderSlashOutput('error: invalid response: command.dispatch')
 
-            return
+            return false
           }
 
           await handleDispatch(dispatch)
+
+          return true
         } catch (err) {
           // "not a quick/plugin/skill command" just means the fallback had
           // nothing to add — the slash.exec failure (worker timeout, crash) is
@@ -432,10 +441,12 @@ export function useSlashCommand(deps: SlashCommandDeps) {
             const original = slashExecError instanceof Error ? slashExecError.message : String(slashExecError)
             renderSlashOutput(`error: /${name} failed: ${original}`)
 
-            return
+            return false
           }
 
           renderSlashOutput(`error: ${dispatchMessage}`)
+
+          return false
         }
       }
 
@@ -449,6 +460,15 @@ export function useSlashCommand(deps: SlashCommandDeps) {
         surface: Extract<DesktopCommandSurface, { kind: 'rpc' }>,
         ctx: SlashActionCtx
       ): Promise<void> {
+        if (!isDesktopSlashCommand(ctx.name)) {
+          const resolved = await withSlashOutput(ctx)
+          resolved?.render(
+            desktopSlashUnavailableMessage(ctx.name) || `/${ctx.name} is not available in the desktop app.`
+          )
+
+          return
+        }
+
         const resolved = await withSlashOutput(ctx)
 
         if (!resolved) {
@@ -469,6 +489,11 @@ export function useSlashCommand(deps: SlashCommandDeps) {
           // requestGateway layer keeps (30s) is too tight for RPCs that do
           // real work.
           const result = await requestGateway<unknown>(surface.rpc, params, surface.timeoutMs)
+
+          if (surface.rpc === 'skills.reload') {
+            invalidateSlashCompletions()
+          }
+
           const body = renderRpcResult(result, ctx.name)
 
           renderSlashOutput(body || `/${ctx.name}: no output`)
@@ -477,8 +502,26 @@ export function useSlashCommand(deps: SlashCommandDeps) {
           // managed runtime exposes the dedicated RPC surface. Desktop and its
           // gateway update independently; older gateways still support the
           // slash-worker route.
-          if (isMissingRpcMethod(err)) {
-            await runExec(ctx)
+          if (surface.fallbackToExec !== false && isMissingRpcMethod(err)) {
+            const fallbackSucceeded = await runExec(ctx)
+
+            if (fallbackSucceeded && surface.rpc === 'skills.reload') {
+              try {
+                // The compatibility worker is a separate process. Its reload
+                // updates the profile's skills on disk, but the live gateway's
+                // command registry is refreshed only when it builds a new
+                // catalog. Force that scan before exposing a fresh renderer
+                // cache so the next slash completion sees the reloaded skills.
+                await requestGateway<CommandsCatalogLike>('commands.catalog', { session_id: sessionId })
+                invalidateSlashCompletions()
+              } catch (catalogErr) {
+                renderSlashOutput(
+                  `error: /${ctx.name} reloaded skills but could not refresh the command catalog: ${
+                    catalogErr instanceof Error ? catalogErr.message : String(catalogErr)
+                  }`
+                )
+              }
+            }
 
             return
           }
@@ -496,6 +539,43 @@ export function useSlashCommand(deps: SlashCommandDeps) {
         },
         branch: async () => {
           await branchCurrentSession()
+        },
+        restart: async ctx => {
+          const requestedProfile = ctx.arg.trim()
+
+          if (requestedProfile) {
+            const sessionId = ctx.sessionHint || activeSessionIdRef.current
+            const message = `/${ctx.name} only restarts the current profile; no explicit profile target is supported.`
+
+            if (sessionId) {
+              appendSessionTextMessage(
+                sessionId,
+                'system',
+                ctx.recordInput ? slashStatusText(`/${ctx.name}`, message) : message
+              )
+            } else {
+              notify({ kind: 'error', message })
+            }
+
+            return
+          }
+
+          const resolved = await withSlashOutput(ctx)
+
+          if (!resolved) {
+            return
+          }
+
+          const result = await runGatewayRestart()
+
+          const message =
+            result.status === 'restarted'
+              ? `Gateway restarted for current profile "${result.profile}".`
+              : result.status === 'timed_out'
+                ? `Gateway restart is still in progress for current profile "${result.profile}".`
+                : `Gateway restart failed for current profile "${result.profile}".`
+
+          resolved.render(message)
         },
         // /compress (alias /compact) runs the gateway's dedicated
         // session.compress RPC — the TUI's path
@@ -1099,6 +1179,13 @@ export function useSlashCommand(deps: SlashCommandDeps) {
             return openPicker(surface.picker, ctx)
 
           case 'action':
+            if (!isDesktopSlashCommand(name)) {
+              const resolved = await withSlashOutput(ctx)
+              resolved?.render(desktopSlashUnavailableMessage(name) || `/${name} is not available in the desktop app.`)
+
+              return
+            }
+
             return actionHandlers[surface.action](ctx)
 
           case 'rpc':
@@ -1106,7 +1193,9 @@ export function useSlashCommand(deps: SlashCommandDeps) {
 
           default:
             // exec spec, or an unknown skill / quick command the backend owns.
-            return runExec(ctx)
+            await runExec(ctx)
+
+            return
         }
       }
 

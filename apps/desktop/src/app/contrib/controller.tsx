@@ -41,9 +41,11 @@ import { useContributions } from '@/contrib/react/use-contributions'
 import { registry } from '@/contrib/registry'
 import { discoverRuntimePlugins } from '@/contrib/runtime-loader'
 import { translateNow } from '@/i18n'
+import { isManagedEvaosAgent } from '@/i18n/managed-brand'
 import { NEW_SESSION_TITLE, sessionTitle as storedSessionTitle } from '@/lib/chat-runtime'
 import { Download, FileText, LayoutDashboard, PanelBottom, PanelTop, Terminal, Upload, Zap } from '@/lib/icons'
 import { type KeybindContribution, KEYBINDS_AREA } from '@/lib/keybinds/actions'
+import { isManagedTerminalUiVisible } from '@/lib/managed-ui-policy'
 import { TRANSCRIPT_DIRECTIVE_AREA, type TranscriptDirectiveContribution } from '@/lib/transcript-directives'
 import { setYoloEnabled } from '@/lib/yolo-session'
 import { pruneComposerPopoutZones } from '@/store/composer-popout'
@@ -115,6 +117,7 @@ import { ContribWiring, WiredPane } from './wiring'
 // ONE render identity for the workspace pane — syncWorkspaceTitle re-registers
 // the contribution (new title) and a fresh closure would remount the chat.
 const renderWorkspacePane = () => <WiredPane part="chatRoutes" />
+const terminalUiVisible = isManagedTerminalUiVisible(isManagedEvaosAgent())
 
 // Boot-hidden panes mount behind display:none (instant-toggle contract) — defer
 // them to idle so they're off the first-paint path, warm before reveal.
@@ -436,8 +439,12 @@ const QUAD_TREE = split(
 registry.registerMany([
   { id: 'default', area: 'layouts', title: 'Default', order: 0, data: DEFAULT_TREE },
   { id: 'focus', area: 'layouts', title: 'Focus', order: 10, data: FOCUS_TREE },
-  { id: 'terminal-deck', area: 'layouts', title: 'Terminal deck', order: 20, data: TERMINAL_TREE },
-  { id: 'quad', area: 'layouts', title: 'Quad', order: 30, data: QUAD_TREE }
+  ...(terminalUiVisible
+    ? [
+        { id: 'terminal-deck', area: 'layouts', title: 'Terminal deck', order: 20, data: TERMINAL_TREE },
+        { id: 'quad', area: 'layouts', title: 'Quad', order: 30, data: QUAD_TREE }
+      ]
+    : [])
 ])
 
 declareDefaultTree(DEFAULT_TREE)
@@ -610,28 +617,34 @@ bindPaneVisibility(
 )
 // ⌃` / statusbar toggle — the terminal COLLAPSES to a rail (tab stays), not
 // hides; PTYs stay alive while collapsed (see PersistentTerminal).
-bindToolPaneCollapse(
-  'terminal',
-  $terminalTakeover,
-  () => setTerminalTakeover(false),
-  () => setTerminalTakeover(true)
-)
+
+if (terminalUiVisible) {
+  bindToolPaneCollapse(
+    'terminal',
+    $terminalTakeover,
+    () => setTerminalTakeover(false),
+    () => setTerminalTakeover(true)
+  )
+}
 // ⌘K door onto the same pane the keybind and statusbar pill flip — was a
 // one-way "open" row under Go to, so it never showed on/off and couldn't hide.
 // Reads the TREE like every other pane toggle: `$terminalTakeover` stays true
 // behind a stacked sibling tab or a minimized zone, which would light the row
 // "on" for a terminal that isn't on screen.
-registry.register(
-  paletteToggle({
-    id: 'view.showTerminal',
-    label: 'Toggle terminal',
-    action: 'view.showTerminal',
-    icon: Terminal,
-    keywords: ['terminal', 'shell', 'console', 'pty'],
-    get: () => isPaneVisible('terminal'),
-    set: () => togglePaneVisible('terminal')
-  })
-)
+
+if (terminalUiVisible) {
+  registry.register(
+    paletteToggle({
+      id: 'view.showTerminal',
+      label: 'Toggle terminal',
+      action: 'view.showTerminal',
+      icon: Terminal,
+      keywords: ['terminal', 'shell', 'console', 'pty'],
+      get: () => isPaneVisible('terminal'),
+      set: () => togglePaneVisible('terminal')
+    })
+  )
+}
 
 // Logs are ⌘K-ONLY chrome: the pane contribution EXISTS only while $logsOpen
 // is on. Off (the default) keeps logs out of the registry and the tree

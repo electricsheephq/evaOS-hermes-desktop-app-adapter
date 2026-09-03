@@ -275,16 +275,40 @@ export async function ensureDefaultWorkspaceCwd(shouldPublish: () => boolean = (
     }
   }
 
-  const remembered = getRememberedWorkspaceCwd()
+  const alignRemoteWorkspace = () => {
+    const remoteRemembered = getRememberedWorkspaceCwd()
+    if (!$activeSessionId.get()) {
+      setCurrentCwdTransient(remoteRemembered)
 
+      if (!remoteRemembered) {
+        setCurrentBranch('')
+      }
+    }
+  }
+
+  // Remote workspaces belong to the assigned backend. Do not consult or
+  // sanitize local project-directory settings during managed boot: branded
+  // builds deliberately block those local filesystem IPC channels.
   if ($connection.get()?.mode === 'remote') {
-    seedLiveCwd(remembered)
+    // A connection switch can leave the previous local/backend cwd live even
+    // when this remote has never remembered a workspace. Clear that stale
+    // value so seedDefaultCwd() can adopt the remote backend default.
+    alignRemoteWorkspace()
 
     return
   }
+  const remembered = getRememberedWorkspaceCwd()
 
   if (configured) {
     const { cwd } = await sanitize(configured)
+    if (!shouldPublish()) {
+      return
+    }
+    if ($connection.get()?.mode === 'remote') {
+      alignRemoteWorkspace()
+
+      return
+    }
     seedLiveCwd(cwd)
 
     return
@@ -292,6 +316,14 @@ export async function ensureDefaultWorkspaceCwd(shouldPublish: () => boolean = (
 
   if (remembered) {
     const { cwd } = await sanitize(remembered)
+    if (!shouldPublish()) {
+      return
+    }
+    if ($connection.get()?.mode === 'remote') {
+      alignRemoteWorkspace()
+
+      return
+    }
     seedLiveCwd(cwd)
   }
 }

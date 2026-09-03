@@ -1,3 +1,4 @@
+import { isManagedEvaosAgent } from '@/i18n/managed-brand'
 import { isMissingRestEndpoint } from '@/lib/gateway-rpc'
 import { maybeBackfillLegacySessionOwners } from '@/lib/legacy-session-owner-backfill'
 import { stampRowsWithOwningConnection } from '@/lib/session-owner-stamp'
@@ -10,7 +11,15 @@ import type {
   SessionSearchResponse
 } from '@/types/hermes'
 
-import { capabilityScoped, getApiRequestConnection, hermesApi, type ProfileScope, profileScoped } from './client'
+import {
+  capabilityScoped,
+  connectionScoped,
+  getApiRequestConnection,
+  getApiRequestProfile,
+  hermesApi,
+  type ProfileScope,
+  profileScoped
+} from './client'
 
 const SESSION_LIST_REQUEST_TIMEOUT_MS = 60_000
 
@@ -106,6 +115,22 @@ export interface SessionSourceFilter {
   excludeSources?: string[]
 }
 
+function sessionListScope(profile: 'all' | (string & {})): { queryProfile: string; routingProfile: string } {
+  // A managed enrollment authorizes one concrete profile. Keep aggregate
+  // reads bound to that assignment while preserving explicit selectors so
+  // Electron can reject a mismatch before it reaches Hermes.
+  if (isManagedEvaosAgent()) {
+    const routingProfile = getApiRequestProfile() || 'default'
+
+    return {
+      queryProfile: profile === 'all' ? routingProfile : profile,
+      routingProfile
+    }
+  }
+
+  return { queryProfile: profile, routingProfile: 'default' }
+}
+
 export async function listAllProfileSessions(
   limit = 40,
   minMessages = 0,
@@ -120,11 +145,14 @@ export async function listAllProfileSessions(
     ? `&exclude_sources=${encodeURIComponent(filter.excludeSources.join(','))}`
     : ''
 
-  const result = await hermesApi<PaginatedSessions>({
-    ...profileScoped(),
+  const scope = sessionListScope(profile)
+
+  const result = await window.hermesDesktop.api<PaginatedSessions>({
+    ...connectionScoped(),
     path:
       `/api/profiles/sessions?limit=${limit}&offset=0&min_messages=${Math.max(0, minMessages)}` +
-      `&archived=${archived}&order=${order}&profile=${encodeURIComponent(profile)}${sourceParam}${excludeParam}`,
+      `&archived=${archived}&order=${order}&profile=${encodeURIComponent(scope.queryProfile)}${sourceParam}${excludeParam}`,
+    profile: scope.routingProfile,
     timeoutMs: SESSION_LIST_REQUEST_TIMEOUT_MS
   })
 

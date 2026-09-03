@@ -144,6 +144,7 @@ interface GatewayRegistryState {
   /** Debounced releases so an immediate chained turn can reuse its lease. */
   turnLeaseReleaseTimers: Map<string, ReturnType<typeof setTimeout>>
   $gateway: ReturnType<typeof atom<HermesGateway | null>>
+  $gatewayConnectionEpochs: ReturnType<typeof atom<Record<string, number>>>
   $activeProfile: ReturnType<typeof atom<string>>
 }
 
@@ -171,7 +172,11 @@ function createRegistryState(): GatewayRegistryState {
     // the split-brain where an eviction re-pointed activeKey at the primary
     // while the profile atom kept naming the evicted bot routed every
     // "loki" session.resume to the default backend (#89206 wake failures).
-    $activeProfile: atom<string>('default')
+    $activeProfile: atom<string>('default'),
+    // Monotonic connection generation per profile. Unlike $gatewayState, this
+    // cannot collapse a real closed -> connecting -> open cycle into the same
+    // final "open" value before React renders.
+    $gatewayConnectionEpochs: atom<Record<string, number>>({})
   }
 }
 
@@ -186,6 +191,8 @@ function gatewayState(): GatewayRegistryState {
   if (import.meta.hot) {
     const store = globalThis as unknown as { [STATE_KEY]?: GatewayRegistryState }
     store[STATE_KEY] ??= createRegistryState()
+    // Shape migration for a live dev realm created before this field existed.
+    store[STATE_KEY].$gatewayConnectionEpochs ??= atom<Record<string, number>>({})
 
     // Existing dev-HMR containers predate whole-turn leases.
     store[STATE_KEY].turnLeases ??= new Map()
@@ -207,6 +214,7 @@ const openedSecondaryScopes = (): Set<string> => (g.openedSecondaryScopes ??= ne
 // reload of this module hands back the SAME atom subscribers are already wired
 // to. (A fresh `atom()` per reload would orphan existing subscriptions.)
 export const $gateway = g.$gateway
+export const $gatewayConnectionEpochs = g.$gatewayConnectionEpochs
 
 // The profile the ACTIVE gateway is actually routed to. Registry-owned: the
 // only writer is applyActive(), which sets it in the same synchronous step
@@ -365,7 +373,17 @@ function reportGatewayState(profile: string, state: ConnectionState): void {
     markNativeNotifyBaseline()
   }
 
-  if (normKey(profile) === g.activeKey) {
+  const key = normKey(profile)
+
+  if (state === 'open') {
+    const epochs = g.$gatewayConnectionEpochs.get()
+    g.$gatewayConnectionEpochs.set({
+      ...epochs,
+      [key]: (epochs[key] ?? 0) + 1
+    })
+  }
+
+  if (key === g.activeKey) {
     setGatewayState(state)
   }
 }

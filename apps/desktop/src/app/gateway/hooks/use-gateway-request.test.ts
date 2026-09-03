@@ -354,7 +354,7 @@ describe('useGatewayRequest', () => {
     })
 
     expect(desktop.getConnection).toHaveBeenCalledWith('default')
-    expect(desktop.getGatewayWsUrl).toHaveBeenCalledWith('default')
+    expect(desktop.getGatewayWsUrl).toHaveBeenCalledWith('default', '/api/ws')
     expect(desktop.getConnectionFor).not.toHaveBeenCalled()
     expect(desktop.getGatewayWsUrlFor).not.toHaveBeenCalled()
   })

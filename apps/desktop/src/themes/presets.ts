@@ -705,8 +705,8 @@ export const midnightTheme: DesktopTheme = {
 
 export const emberTheme: DesktopTheme = {
   name: 'ember',
-  label: 'Ember',
-  description: 'Warm crimson and bronze — forge vibes',
+  label: 'evaOS',
+  description: 'Warm crimson and bronze — evaOS',
   colors: {
     background: '#160800',
     foreground: '#ffd8b0',

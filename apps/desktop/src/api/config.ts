@@ -210,9 +210,14 @@ export function startOAuthLogin(providerId: string, profile?: ProfileScope): Pro
   })
 }
 
-export function submitOAuthCode(providerId: string, sessionId: string, code: string): Promise<OAuthSubmitResponse> {
-  return hermesApi<OAuthSubmitResponse>({
-    ...profileScoped(),
+export function submitOAuthCode(
+  providerId: string,
+  sessionId: string,
+  code: string,
+  profile?: ProfileScope
+): Promise<OAuthSubmitResponse> {
+  return window.hermesDesktop.api<OAuthSubmitResponse>({
+    ...capabilityScoped(profile),
     path: `/api/providers/oauth/${encodeURIComponent(providerId)}/submit`,
     method: 'POST',
     body: { session_id: sessionId, code }
@@ -230,9 +235,9 @@ export function pollOAuthSession(
   })
 }
 
-export function cancelOAuthSession(sessionId: string): Promise<{ ok: boolean }> {
-  return hermesApi<{ ok: boolean }>({
-    ...profileScoped(),
+export function cancelOAuthSession(sessionId: string, profile?: ProfileScope): Promise<{ ok: boolean }> {
+  return window.hermesDesktop.api<{ ok: boolean }>({
+    ...capabilityScoped(profile),
     path: `/api/providers/oauth/sessions/${encodeURIComponent(sessionId)}`,
     method: 'DELETE'
   })

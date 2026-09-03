@@ -192,6 +192,55 @@ describe('resolveMediaPlaybackSrc', () => {
     )
   })
 
+  it('routes managed remote media through the generic main-process proxy without a renderer token', async () => {
+    const getMediaStreamUrl = vi.fn(async () => 'hermes-media://managed/signed-grant')
+    vi.stubGlobal('window', { hermesDesktop: { api: vi.fn(), getMediaStreamUrl } })
+    $connection.set({
+      mode: 'remote',
+      baseUrl: 'eva-managed://customer-one',
+      profile: 'research',
+      token: ''
+    } as never)
+
+    await expect(resolveMediaPlaybackSrc('file:///root/outputs/demo%20clip.mp4')).resolves.toBe(
+      'hermes-media://remote/%2Froot%2Foutputs%2Fdemo%20clip.mp4?profile=research'
+    )
+    expect(getMediaStreamUrl).not.toHaveBeenCalled()
+  })
+
+  it('does not depend on the legacy managed media grant bridge', async () => {
+    vi.stubGlobal('window', { hermesDesktop: { api: vi.fn() } })
+    $connection.set({
+      mode: 'remote',
+      baseUrl: 'eva-managed://customer-one',
+      profile: 'research',
+      token: ''
+    } as never)
+
+    await expect(resolveMediaPlaybackSrc('file:///root/outputs/demo.mp4')).resolves.toBe(
+      'hermes-media://remote/%2Froot%2Foutputs%2Fdemo.mp4?profile=research'
+    )
+  })
+
+  it('never invokes a failing legacy managed grant bridge', async () => {
+    const getMediaStreamUrl = vi.fn(async () => {
+      throw new Error('legacy bridge should not be called')
+    })
+
+    vi.stubGlobal('window', { hermesDesktop: { api: vi.fn(), getMediaStreamUrl } })
+    $connection.set({
+      mode: 'remote',
+      baseUrl: 'eva-managed://customer-one',
+      profile: 'research',
+      token: ''
+    } as never)
+
+    await expect(resolveMediaPlaybackSrc('file:///root/outputs/demo.mp4')).resolves.toBe(
+      'hermes-media://remote/%2Froot%2Foutputs%2Fdemo.mp4?profile=research'
+    )
+    expect(getMediaStreamUrl).not.toHaveBeenCalled()
+  })
+
   it('uses the Electron streaming protocol for local desktop video', async () => {
     vi.stubGlobal('window', { hermesDesktop: { api: vi.fn() } })
     $connection.set({ mode: 'local' } as never)

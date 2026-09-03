@@ -496,6 +496,44 @@ describe('renderRpcResult', () => {
     })
   })
 
+  describe('reload.mcp', () => {
+    it('renders the backend confirmation warning instead of raw JSON', () => {
+      expect(
+        renderRpcResult(
+          {
+            status: 'confirm_required',
+            message: 'Reloading invalidates the prompt cache. Run /reload-mcp now to continue.'
+          },
+          'reload-mcp'
+        )
+      ).toBe('Reloading invalidates the prompt cache. Run /reload-mcp now to continue.')
+    })
+
+    it('renders a concise completion message instead of raw JSON', () => {
+      expect(renderRpcResult({ status: 'reloaded', loaded_rev: 'rev-a' }, 'reload-mcp')).toBe(
+        'MCP servers reloaded and tools refreshed for this session.'
+      )
+    })
+
+    it('renders the supported underscore alias without exposing the raw envelope', () => {
+      expect(renderRpcResult({ status: 'reloaded', loaded_rev: 'rev-a' }, 'reload_mcp')).toBe(
+        'MCP servers reloaded and tools refreshed for this session.'
+      )
+      expect(
+        renderRpcResult({ status: 'confirm_required', message: 'Confirm MCP reload.' }, 'reload_mcp')
+      ).toBe('Confirm MCP reload.')
+    })
+
+    it('renders case-insensitive command spellings without exposing the raw envelope', () => {
+      expect(renderRpcResult({ status: 'reloaded', loaded_rev: 'rev-a' }, 'RELOAD-MCP')).toBe(
+        'MCP servers reloaded and tools refreshed for this session.'
+      )
+      expect(
+        renderRpcResult({ status: 'confirm_required', message: 'Confirm MCP reload.' }, 'RELOAD_MCP')
+      ).toBe('Confirm MCP reload.')
+    })
+  })
+
   describe('process.stop', () => {
     it('reports the numeric number of stopped processes', () => {
       expect(renderRpcResult({ killed: 2 }, 'stop')).toBe('Stopped 2 background processes.')

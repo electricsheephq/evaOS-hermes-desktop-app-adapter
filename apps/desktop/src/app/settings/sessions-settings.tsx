@@ -11,6 +11,7 @@ import {
   setSessionArchived
 } from '@/hermes'
 import { useI18n } from '@/i18n'
+import { isManagedEvaosAgent } from '@/i18n/managed-brand'
 import { sessionTitle } from '@/lib/chat-runtime'
 import { pathLeaf } from '@/lib/display-path'
 import { triggerHaptic } from '@/lib/haptics'
@@ -31,6 +32,7 @@ const ARCHIVED_FETCH_LIMIT = 200
 
 export function SessionsSettings() {
   const { t } = useI18n()
+  const managedEva = isManagedEvaosAgent()
   const s = t.settings.sessions
   const [sessions, setLocalSessions] = useState<SessionInfo[]>([])
   const [loading, setLoading] = useState(true)
@@ -117,7 +119,7 @@ export function SessionsSettings() {
 
   return (
     <SettingsContent>
-      <DefaultProjectDirSetting />
+      {!managedEva && <DefaultProjectDirSetting />}
 
       <AutoArchiveSetting />
 

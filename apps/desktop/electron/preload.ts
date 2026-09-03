@@ -213,6 +213,13 @@ contextBridge.exposeInMainWorld('hermesDesktop', {
     discover: org => ipcRenderer.invoke('hermes:cloud:discover', org),
     agentSignIn: dashboardUrl => ipcRenderer.invoke('hermes:cloud:agent-sign-in', dashboardUrl)
   },
+  eva: {
+    status: () => ipcRenderer.invoke('hermes:eva:status'),
+    signIn: () => ipcRenderer.invoke('hermes:eva:sign-in'),
+    signOut: () => ipcRenderer.invoke('hermes:eva:sign-out'),
+    refresh: () => ipcRenderer.invoke('hermes:eva:refresh'),
+    endSupportSession: () => ipcRenderer.invoke('hermes:eva:support:end')
+  },
   profile: {
     get: () => ipcRenderer.invoke('hermes:profile:get'),
     remember: name => ipcRenderer.invoke('hermes:profile:remember', name),
@@ -224,6 +231,7 @@ contextBridge.exposeInMainWorld('hermesDesktop', {
   readWindowBelow: () => ipcRenderer.invoke('hermes:window:readBelow'),
   readFileDataUrl: filePath => ipcRenderer.invoke('hermes:readFileDataUrl', filePath),
   readFileDataUrlForAttach: filePath => ipcRenderer.invoke('hermes:readFileDataUrlForAttach', filePath),
+  getMediaStreamUrl: (filePath, profile) => ipcRenderer.invoke('hermes:media:stream-url', filePath, profile),
   dataUrlReadMax: {
     get: () => ipcRenderer.invoke('hermes:data-url-read-max:get'),
     set: maxMb => ipcRenderer.invoke('hermes:data-url-read-max:set', maxMb)

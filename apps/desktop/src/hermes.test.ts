@@ -73,12 +73,69 @@ describe('Hermes REST helpers', () => {
     )
   })
 
-  it('uses a longer timeout for the all-profile session list', async () => {
+  it('routes the all-profile endpoint through the primary backend independently of its selector', async () => {
+    setApiRequestProfile('work')
     await listAllProfileSessions(50, 1)
 
     expect(api).toHaveBeenCalledWith(
       expect.objectContaining({
         path: '/api/profiles/sessions?limit=50&offset=0&min_messages=1&archived=exclude&order=recent&profile=all',
+        profile: 'default',
+        timeoutMs: 60_000
+      })
+    )
+  })
+
+  it('scopes managed aggregate session reads to the boot-adopted concrete profile', async () => {
+    setApiRequestProfile('assigned-profile')
+    Object.defineProperty(window, 'hermesDesktop', {
+      configurable: true,
+      value: { api, eva: {} }
+    })
+
+    await listAllProfileSessions(50, 1)
+
+    expect(api).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path: '/api/profiles/sessions?limit=50&offset=0&min_messages=1&archived=exclude&order=recent&profile=assigned-profile',
+        profile: 'assigned-profile',
+        timeoutMs: 60_000
+      })
+    )
+  })
+
+  it('uses the safe primary fallback until boot adopts a concrete managed scope', async () => {
+    Object.defineProperty(window, 'hermesDesktop', {
+      configurable: true,
+      value: { api, eva: {} }
+    })
+
+    await listAllProfileSessions(50, 1)
+
+    expect(api).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path: '/api/profiles/sessions?limit=50&offset=0&min_messages=1&archived=exclude&order=recent&profile=default',
+        profile: 'default',
+        timeoutMs: 60_000
+      })
+    )
+  })
+
+  it('keeps explicit managed selectors routed through the enrolled profile for local denial', async () => {
+    setApiRequestProfile('assigned-profile')
+    Object.defineProperty(window, 'hermesDesktop', {
+      configurable: true,
+      value: { api, eva: {} }
+    })
+
+    await listAllProfileSessions(50, 1, 'exclude', 'recent', 'unauthorized-profile')
+
+    expect(api).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path:
+          '/api/profiles/sessions?limit=50&offset=0&min_messages=1&archived=exclude&order=recent' +
+          '&profile=unauthorized-profile',
+        profile: 'assigned-profile',
         timeoutMs: 60_000
       })
     )

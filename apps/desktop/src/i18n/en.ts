@@ -45,6 +45,16 @@ export const en: Translations = {
     off: 'Off'
   },
 
+  quickEntry: {
+    inputLabel: 'Quick Entry',
+    askPlaceholder: 'Ask Hermes…',
+    disconnectedPlaceholder: 'Not connected — open Hermes to reconnect',
+    sendTo: 'Send to',
+    targetLabel: 'Target session',
+    currentChat: 'Current chat',
+    newSession: 'New session'
+  },
+
   fileMenu: {
     revealFinder: 'Reveal in Finder',
     revealExplorer: 'Reveal in File Explorer',
@@ -118,6 +128,9 @@ export const en: Translations = {
       signInIncompleteTitle: 'Sign-in incomplete',
       signInIncompleteMessage: 'The login window closed before authentication finished.',
       signInFailed: 'Sign-in failed',
+      managedAssignmentHint:
+        'Your business assignment is selected by Electric Sheep. Sign in again if access was changed or revoked.',
+      managedSignInFailed: 'Could not sign in to managed access. Try again.',
       signInToRemoteGateway: 'Sign in to remote gateway',
       signInWithProvider: provider => `Sign in with ${provider}`,
       identityProvider: 'your identity provider'
@@ -201,6 +214,16 @@ export const en: Translations = {
   remoteDisplayBanner: {
     message: reason =>
       `Software rendering active — remote display detected (${reason}). GPU acceleration is disabled to prevent flickering.`
+  },
+
+  delegatedSupport: {
+    actingForCustomer: customer => `Acting for ${customer}`,
+    assignedAgent: agent => `Agent: ${agent}`,
+    endsIn: countdown => `Ends in ${countdown}`,
+    endSession: 'End support session',
+    endingSession: 'Ending support session…',
+    unavailable: 'Support session status is unavailable.',
+    endFailed: 'Unable to end support session. Try again.'
   },
 
   billingBlock: {
@@ -690,7 +713,18 @@ export const en: Translations = {
       justNow: 'just now',
       minAgo: count => `${count} min ago`,
       hoursAgo: count => `${count} hours ago`,
-      daysAgo: count => `${count} days ago`
+      daysAgo: count => `${count} days ago`,
+      managed: {
+        businessTitle: 'Managed business beta',
+        businessDescription:
+          'Your account, assigned agent, access policy, and software updates are managed by Electric Sheep.',
+        updateChannelTitle: 'Update channel',
+        updateChannelDescription: channel => `${channel} · Signed updates from Electric Sheep`,
+        attributionTitle: 'Open-source attribution',
+        attributionDescription: 'Built on Hermes Agent by Nous Research, used under the MIT License.',
+        distributionTitle: 'Distribution',
+        distributionDescription: 'Signed Apple Silicon managed business beta. This is not a public release.'
+      }
     },
     config: {
       none: 'None',
@@ -832,6 +866,25 @@ export const en: Translations = {
       scopeNotRestored: (profile: string, error: string) => `Profile “${profile}” not restored: ${error}`
     },
     gateway: {
+      managed: {
+        loading: 'Loading managed evaOS Agent access…',
+        title: 'Managed by Electric Sheep',
+        description:
+          'evaOS Agent connects only to the agent assigned by your business administrator. Local backends, custom gateway URLs, raw session tokens, and external gateway overrides are disabled.',
+        accountTitle: 'Electric Sheep account',
+        notSignedIn: 'Not signed in',
+        businessTitle: 'Business',
+        assignedAfterSignIn: 'Assigned after sign-in',
+        agentTitle: 'Assigned agent',
+        updateChannelTitle: 'Update channel',
+        signIn: 'Sign in to evaOS Agent',
+        refresh: 'Refresh assigned access',
+        signOut: 'Sign out',
+        failed: 'Could not load managed access. Try again or contact Electric Sheep support.',
+        callbackHandlerUnavailable:
+          'Another copy of evaOS Agent is handling sign-in links. Keep only the installed app in Applications, reopen it, and try again.',
+        failedWithCode: code => `Electric Sheep request failed [code: ${code}]`
+      },
       loading: 'Loading gateway settings...',
       unavailableTitle: 'Gateway settings unavailable',
       unavailableDesc: 'The desktop IPC bridge does not expose gateway settings.',
@@ -1114,6 +1167,10 @@ export const en: Translations = {
       collapse: 'Collapse',
       connectAnother: 'Connect another provider',
       otherProviders: 'Other providers',
+      reauthenticate: 'Reauthenticate',
+      managedUnavailable: 'Unavailable',
+      managedUnavailableDescription:
+        'This provider requires a local CLI sign-in and cannot configure your assigned managed agent.',
       disconnect: 'Disconnect',
       disconnectInTerminal: 'Disconnect (runs the removal command in the terminal)',
       removeConfirm: provider => `Remove ${provider}?`,
@@ -1198,6 +1255,8 @@ export const en: Translations = {
       nousAuthDoneTitle: 'Nous Portal connected',
       nousAuthDoneMessage: 'Your subscription backends are now active.',
       nousAuthFailed: 'Nous Portal sign-in did not complete',
+      managedUnavailableTitle: 'Provider unavailable',
+      managedUnavailableMessage: provider => `${provider} is not available for your managed agent.`,
       noApiKeyRequired: 'No API key required.',
       postSetupHint: step =>
         `This backend needs a one-time install (${step}). Runs on this machine — may take a few minutes.`,
@@ -2725,6 +2784,9 @@ export const en: Translations = {
     chooseLater: "I'll choose a provider later",
     recommended: 'Recommended',
     connected: 'Connected',
+    managedUnavailable: 'Unavailable',
+    managedUnavailableDescription:
+      'This provider requires a local CLI sign-in and cannot configure your assigned managed agent.',
     featuredPitch: 'One subscription, 300+ frontier models — the recommended way to run Hermes',
     fireworksPitch: 'Direct model API — Fireworks-hosted frontier models',
     openRouterPitch: 'One key, hundreds of models — a solid default',

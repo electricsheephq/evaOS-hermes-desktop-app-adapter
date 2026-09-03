@@ -1884,7 +1884,7 @@ export function ChatSidebar({
           </div>
         )}
 
-        {!showSessionSections && <SidebarBlankState onNewProject={openProjectCreate} />}
+        {!showSessionSections ? <SidebarBlankState onNewProject={openProjectCreate} /> : null}
 
         <div className="shrink-0 px-0.5 pb-1 pt-0.5">
           <ProfileRail />

@@ -1,8 +1,16 @@
+import { type GatewayWsUrlResult, resolveGatewayWsUrl } from '@hermes/shared'
+
 import type { HermesConnection } from '@/global'
 import { reconnectBackoffDelayMs } from '@/lib/reconnect-backoff'
 import { RECONNECT_ATTEMPT_TIMEOUT_MS, withTimeout } from '@/lib/with-timeout'
 
-import { getApiRequestConnection, getApiRequestProfile, hermesApi, profileScoped } from './client'
+import {
+  getApiRequestConnection,
+  getApiRequestProfile,
+  hermesApi,
+  profileScoped,
+  subscribeApiRequestProfile
+} from './client'
 
 /** Resolve the ACTIVE backend's connection descriptor, (connectionId,
  *  profile)-scoped — mirroring how store/profile resolves $connection: a
@@ -92,30 +100,98 @@ export async function pluginRest<T>(pluginId: string, path: string, opts: Plugin
  *  keep their polling fallback — every consumer must have one anyway, since a
  *  socket can drop). Auto-reconnects with backoff until disposed. */
 export function pluginSocket(pluginId: string, path: string, onMessage: (data: unknown) => void): () => void {
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(pluginId)) {
+    throw new Error(`pluginSocket: invalid plugin id "${pluginId}"`)
+  }
+
   const suffix = pluginPathSuffix('pluginSocket', path)
+  const endpointPath = `/api/plugins/${pluginId}${suffix}`
 
   let socket: null | WebSocket = null
+  let reconnectTimer: null | number = null
   let disposed = false
   let attempt = 0
+  let generation = 0
 
-  const connect = async () => {
-    const connection = await activeConnection().catch(() => null)
+  const clearReconnectTimer = () => {
+    if (reconnectTimer !== null) {
+      window.clearTimeout(reconnectTimer)
+      reconnectTimer = null
+    }
+  }
 
-    // No bridge / OAuth cookie auth (WS tickets are single-use, core-managed):
-    // stay on the polling fallback rather than half-working.
-    if (disposed || !connection || connection.authMode === 'oauth') {
+  const scheduleReconnect = (immediate = false) => {
+    if (disposed || reconnectTimer !== null) {
       return
     }
 
-    const base = connection.baseUrl.replace(/^http/, 'ws')
-    const join = suffix.includes('?') ? '&' : '?'
-    socket = new WebSocket(
-      `${base}/api/plugins/${pluginId}${suffix}${join}token=${encodeURIComponent(connection.token)}`
-    )
+    const delay = immediate
+      ? 0
+      : reconnectBackoffDelayMs(attempt, {
+          baseDelayMs: 500,
+          capMs: 30_000
+        })
 
-    socket.onmessage = event => {
-      attempt = 0
+    if (!immediate) {
+      attempt += 1
+    }
 
+    reconnectTimer = window.setTimeout(() => {
+      reconnectTimer = null
+      void connect()
+    }, delay)
+  }
+
+  const connect = async () => {
+    const connectingGeneration = generation
+    const desktop = window.hermesDesktop
+    const profile = getApiRequestProfile()
+    const connection = await activeConnection().catch(() => null)
+
+    if (disposed || connectingGeneration !== generation) {
+      return
+    }
+
+    if (!desktop || !connection) {
+      scheduleReconnect()
+
+      return
+    }
+
+    // Managed tickets are single-use and bound to this exact plugin endpoint;
+    // unmanaged connections share the canonical URL/ticket resolver.
+    let wsUrl: null | string = null
+
+    if (connection.baseUrl.startsWith('eva-managed://')) {
+      const result: GatewayWsUrlResult | string | null = await desktop
+        .getGatewayWsUrl(profile, endpointPath)
+        .catch(() => null)
+
+      wsUrl = typeof result === 'string' ? result : result?.ok ? result.wsUrl : null
+    } else {
+      wsUrl = await resolveGatewayWsUrl(desktop, connection, endpointPath).catch(() => null)
+    }
+
+    if (disposed || connectingGeneration !== generation) {
+      return
+    }
+
+    if (!wsUrl) {
+      scheduleReconnect()
+
+      return
+    }
+
+    const nextSocket = new WebSocket(wsUrl)
+    socket = nextSocket
+
+    nextSocket.onopen = () => {
+      if (socket === nextSocket) {
+        attempt = 0
+      }
+    }
+
+    nextSocket.onmessage = event => {
       try {
         onMessage(JSON.parse(String(event.data)))
       } catch {
@@ -123,24 +199,35 @@ export function pluginSocket(pluginId: string, path: string, onMessage: (data: u
       }
     }
 
-    socket.onclose = () => {
-      socket = null
-
-      if (!disposed) {
-        // Full-jitter exponential backoff: same rationale as the gateway
-        // socket reconnect loops — an immediate-retry loop across many
-        // desktop clients floods the gateway with connection attempts
-        // during a restart.
-        window.setTimeout(() => void connect(), reconnectBackoffDelayMs(attempt, { baseDelayMs: 500, capMs: 30_000 }))
-        attempt += 1
+    nextSocket.onclose = () => {
+      if (socket !== nextSocket) {
+        return
       }
+
+      socket = null
+      scheduleReconnect()
     }
   }
+
+  const unsubscribeProfile = subscribeApiRequestProfile(() => {
+    generation += 1
+    attempt = 0
+    clearReconnectTimer()
+    const previous = socket
+    socket = null
+    previous?.close()
+    scheduleReconnect(true)
+  })
 
   void connect()
 
   return () => {
     disposed = true
-    socket?.close()
+    generation += 1
+    unsubscribeProfile()
+    clearReconnectTimer()
+    const previous = socket
+    socket = null
+    previous?.close()
   }
 }

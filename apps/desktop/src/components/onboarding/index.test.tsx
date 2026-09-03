@@ -25,6 +25,7 @@ const ctx: OnboardingContext = { requestGateway: async () => undefined as never 
 
 afterEach(() => {
   cleanup()
+  Reflect.deleteProperty(window, 'hermesDesktop')
 
   try {
     window.localStorage.clear()

@@ -8,7 +8,9 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { getElevenLabsVoices, getHermesConfigSchema, saveHermesConfig } from '@/hermes'
 import { useI18n } from '@/i18n'
+import { isManagedEvaosAgent } from '@/i18n/managed-brand'
 import { triggerHaptic } from '@/lib/haptics'
+import { isManagedConfigFieldVisible } from '@/lib/managed-ui-policy'
 import { confirm } from '@/store/confirm'
 import {
   $dataUrlReadMaxMb,
@@ -88,6 +90,7 @@ function ConfigSettingsInner({
 }: ConfigSettingsProps & { scopeProfile: string | undefined }) {
   const { t } = useI18n()
   const c = t.settings.config
+  const managedEva = isManagedEvaosAgent()
   const keepAwake = useStore($keepAwake)
   const disableF12 = useStore($disableF12)
   // The editable draft is local (debounced autosave watches it), but it's seeded
@@ -247,7 +250,9 @@ function ConfigSettingsInner({
     return sectionFieldEntries(schema, config)
   }, [schema, config])
 
-  const fields = sectionFields.get(activeSectionId) ?? []
+  const fields = (sectionFields.get(activeSectionId) ?? []).filter(([key]) =>
+    isManagedConfigFieldVisible(key, managedEva)
+  )
 
   // Deep-link target from the command palette (?field=<key>): scroll the row
   // into view and flash it, then drop the param so it doesn't re-fire.
@@ -256,6 +261,20 @@ function ConfigSettingsInner({
 
   useEffect(() => {
     if (!targetField || !config || !schema) {
+      return
+    }
+
+    if (!isManagedConfigFieldVisible(targetField, managedEva)) {
+      setSearchParams(
+        previous => {
+          const next = new URLSearchParams(previous)
+          next.delete('field')
+
+          return next
+        },
+        { replace: true }
+      )
+
       return
     }
 
@@ -287,7 +306,7 @@ function ConfigSettingsInner({
     )
 
     return () => window.clearTimeout(timeout)
-  }, [config, schema, setSearchParams, targetField])
+  }, [config, managedEva, schema, setSearchParams, targetField])
 
   function handleImport(e: ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]

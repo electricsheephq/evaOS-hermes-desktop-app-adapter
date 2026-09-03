@@ -45,6 +45,16 @@ export const zhHant = defineLocale({
     off: '關閉'
   },
 
+  quickEntry: {
+    inputLabel: '快速輸入',
+    askPlaceholder: '詢問 Hermes…',
+    disconnectedPlaceholder: '未連線 — 開啟 Hermes 以重新連線',
+    sendTo: '傳送至',
+    targetLabel: '目標工作階段',
+    currentChat: '目前聊天',
+    newSession: '新工作階段'
+  },
+
   fileMenu: {
     revealFinder: '在 Finder 中顯示',
     revealExplorer: '在檔案總管中顯示',
@@ -115,6 +125,8 @@ export const zhHant = defineLocale({
       signInIncompleteTitle: '登入未完成',
       signInIncompleteMessage: '登入視窗在驗證完成前關閉。',
       signInFailed: '登入失敗',
+      managedAssignmentHint: '你的企業指派由 Electric Sheep 選定。如果存取權已變更或撤銷，請重新登入。',
+      managedSignInFailed: '無法登入受管理存取權。請重試。',
       signInToRemoteGateway: '登入遠端閘道',
       signInWithProvider: provider => `使用 ${provider} 登入`,
       identityProvider: '您的身分提供方'
@@ -195,6 +207,16 @@ export const zhHant = defineLocale({
 
   remoteDisplayBanner: {
     message: reason => `軟體繪圖已啟用 — 偵測到遠端顯示（${reason}）。為防止畫面閃爍，已停用 GPU 加速。`
+  },
+
+  delegatedSupport: {
+    actingForCustomer: customer => `目前代表 ${customer} 操作`,
+    assignedAgent: agent => `代理程式：${agent}`,
+    endsIn: countdown => `${countdown} 後結束`,
+    endSession: '結束支援工作階段',
+    endingSession: '正在結束支援工作階段…',
+    unavailable: '無法取得支援工作階段狀態。',
+    endFailed: '無法結束支援工作階段。請再試一次。'
   },
 
   billingBlock: {
@@ -719,7 +741,17 @@ export const zhHant = defineLocale({
       justNow: '剛剛',
       minAgo: count => `${count} 分鐘前`,
       hoursAgo: count => `${count} 小時前`,
-      daysAgo: count => `${count} 天前`
+      daysAgo: count => `${count} 天前`,
+      managed: {
+        businessTitle: '受管理商務測試版',
+        businessDescription: '你的帳戶、指派的代理、存取政策和軟體更新均由 Electric Sheep 管理。',
+        updateChannelTitle: '更新頻道',
+        updateChannelDescription: channel => `${channel} · Electric Sheep 簽署更新`,
+        attributionTitle: '開源歸屬',
+        attributionDescription: '基於 Hermes Agent by Nous Research，並依 MIT License 使用。',
+        distributionTitle: '發佈',
+        distributionDescription: '已簽署的 Apple Silicon 受管理商務測試版，並非公開發行版。'
+      }
     },
     config: {
       none: '無',
@@ -770,6 +802,25 @@ export const zhHant = defineLocale({
       clear: '清除'
     },
     gateway: {
+      managed: {
+        loading: '正在載入受管理 evaOS Agent 存取權…',
+        title: '由 Electric Sheep 管理',
+        description:
+          'evaOS Agent 僅連線到企業管理員指派的代理。本機後端、自訂閘道 URL、原始工作階段權杖和外部閘道覆寫均已停用。',
+        accountTitle: 'Electric Sheep 帳戶',
+        notSignedIn: '尚未登入',
+        businessTitle: '企業',
+        assignedAfterSignIn: '登入後指派',
+        agentTitle: '已指派代理',
+        updateChannelTitle: '更新頻道',
+        signIn: '登入 evaOS Agent',
+        refresh: '重新整理已指派存取權',
+        signOut: '登出',
+        failed: '無法載入受管理存取權。請重試或聯絡 Electric Sheep 支援。',
+        callbackHandlerUnavailable:
+          '另一個 evaOS Agent 副本正在處理登入連結。請只保留「應用程式」資料夾中已安裝的 App，重新開啟後再試。',
+        failedWithCode: code => `Electric Sheep 要求失敗 [代碼: ${code}]`
+      },
       loading: '正在載入閘道設定...',
       unavailableTitle: '閘道設定不可用',
       unavailableDesc: '桌面 IPC 橋接器未公開閘道設定。',
@@ -983,6 +1034,9 @@ export const zhHant = defineLocale({
       collapse: '收合',
       connectAnother: '連結其他提供方',
       otherProviders: '其他提供方',
+      reauthenticate: '重新驗證',
+      managedUnavailable: '無法使用',
+      managedUnavailableDescription: '此提供方需要本機 CLI 登入，無法設定指派給你的受管理代理。',
       removeConfirm: provider => `移除 ${provider}？`,
       removeKeyManaged: provider => `${provider} 由 API 金鑰設定。請從 API Keys 中移除。`,
       removedTitle: '帳號已移除',
@@ -1059,6 +1113,8 @@ export const zhHant = defineLocale({
       nousAuthDoneTitle: '已連接 Nous Portal',
       nousAuthDoneMessage: '訂閱後端現已啟用。',
       nousAuthFailed: 'Nous Portal 登入未完成',
+      managedUnavailableTitle: '提供方無法使用',
+      managedUnavailableMessage: provider => `${provider} 無法用於你的受管理代理。`,
       noApiKeyRequired: '不需要 API 金鑰。',
       postSetupHint: step => `此後端需要一次性安裝 (${step})。將在此機器上執行，可能需要幾分鐘。`,
       postSetupInstalledHint: '已安裝。僅在出現問題時才需要重新執行安裝。',
@@ -2287,6 +2343,8 @@ export const zhHant = defineLocale({
     chooseLater: '稍後再選擇提供方',
     recommended: '建議',
     connected: '已連線',
+    managedUnavailable: '無法使用',
+    managedUnavailableDescription: '此提供方需要本機 CLI 登入，無法設定指派給你的受管理代理。',
     featuredPitch: '一個訂閱，300+ 前沿模型 — 執行 Hermes 的建議方式',
     fireworksPitch: '直接模型 API — Fireworks 託管的前沿模型',
     openRouterPitch: '一個金鑰，數百個模型 — 穩定的預設選擇',

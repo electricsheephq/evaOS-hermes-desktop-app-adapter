@@ -17,6 +17,7 @@ import { graftRefreshedTailOntoBackfill } from '@/app/chat/transcript-backfill'
 import { formatRefValue } from '@/components/assistant-ui/directive-text'
 import { BootFailureOverlay } from '@/components/boot-failure-overlay'
 import { ConfirmHost } from '@/components/confirm-host'
+import { DelegatedSupportBanner } from '@/components/delegated-support-banner'
 import { DesktopInstallOverlay } from '@/components/desktop-install-overlay'
 import { FindBar } from '@/components/find-bar'
 import { GatewayConnectingOverlay } from '@/components/gateway-connecting-overlay'
@@ -34,6 +35,7 @@ import { RemoteDisplayBanner } from '@/components/remote-display-banner'
 import { SendDiagnosticsHost } from '@/components/send-diagnostics-dialog'
 import { emitGatewayEvent } from '@/contrib/events'
 import { getLatestSessionMessages } from '@/hermes'
+import { isManagedEvaosAgent } from '@/i18n/managed-brand'
 import { type ChatMessage, chatMessageText, preserveLocalAssistantErrors, toChatMessages } from '@/lib/chat-messages'
 import { isMessagingSource } from '@/lib/session-source'
 import { latestSessionTodos } from '@/lib/todos'
@@ -44,6 +46,7 @@ import { $desktopBoot } from '@/store/boot'
 import { requestVoiceConversationStart } from '@/store/composer'
 import { $activeConnectionId } from '@/store/connections'
 import { $cronReviewRequest, setCronFocusJobId } from '@/store/cron'
+import { $gatewayConnectionEpochs } from '@/store/gateway'
 import { $pinnedSessionIds, pinSession, restoreWorktree, unpinSession } from '@/store/layout'
 import { notify, notifyError } from '@/store/notifications'
 import { $previewTarget } from '@/store/preview'
@@ -187,8 +190,10 @@ export function ContribWiring({ children }: { children: ReactNode }) {
   const actionsRef = useRef<WiringActions | null>(null)
 
   const gatewayState = useStore($gatewayState)
+  const gatewayConnectionEpochs = useStore($gatewayConnectionEpochs)
   const activeSessionId = useStore($activeSessionId)
   const billingSettingsRequest = useStore($billingSettingsRequest)
+  const managedEva = isManagedEvaosAgent()
   const cronReviewRequest = useStore($cronReviewRequest)
   const currentCwd = useStore($currentCwd)
 
@@ -200,10 +205,10 @@ export function ContribWiring({ children }: { children: ReactNode }) {
 
     billingSettingsSeenRef.current = billingSettingsRequest
 
-    if (billingSettingsRequest > 0) {
+    if (billingSettingsRequest > 0 && !managedEva) {
       navigate(`${SETTINGS_ROUTE}?tab=billing`)
     }
-  }, [billingSettingsRequest, navigate])
+  }, [billingSettingsRequest, managedEva, navigate])
 
   // eslint-disable-next-line no-restricted-syntax -- one-shot request-seen sentinel, not an atom mirror
   useEffect(() => {
@@ -226,6 +231,7 @@ export function ContribWiring({ children }: { children: ReactNode }) {
   const sessions = useStore($sessions)
   const activeConnectionId = useStore($activeConnectionId)
   const activeGatewayProfile = useStore($activeGatewayProfile)
+  const gatewayConnectionEpoch = gatewayConnectionEpochs[normalizeProfileKey(activeGatewayProfile)] ?? 0
   const profileScope = useStore($profileScope)
   const boot = useStore($desktopBoot)
 
@@ -717,6 +723,7 @@ export function ContribWiring({ children }: { children: ReactNode }) {
     creatingSessionRef,
     currentView,
     freshDraftReady,
+    gatewayConnectionEpoch,
     gatewayState,
     locationPathname: location.pathname,
     resumeSession,
@@ -1047,7 +1054,7 @@ export function ContribWiring({ children }: { children: ReactNode }) {
     [actions, currentView]
   )
 
-  const terminalNode = useMemo(() => <TerminalSurface />, [])
+  const terminalNode = useMemo(() => (managedEva ? null : <TerminalSurface />), [managedEva])
 
   const statusbarNode = useMemo(
     () => (
@@ -1142,6 +1149,7 @@ export function ContribWiring({ children }: { children: ReactNode }) {
       </div>
 
       {/* The full real overlay set (mirrors DesktopController's `overlays`). */}
+      <DelegatedSupportBanner />
       <RemoteDisplayBanner />
       {!isAuxiliaryWindow() && <DesktopInstallOverlay />}
       {!isAuxiliaryWindow() && (

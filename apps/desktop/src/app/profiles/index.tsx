@@ -13,7 +13,7 @@ import { AlertTriangle, Save } from '@/lib/icons'
 import { resolveProfileColor } from '@/lib/profile-color'
 import { normalize } from '@/lib/text'
 import { notify, notifyError } from '@/store/notifications'
-import { $profileColors, profileLabel, refreshProfiles } from '@/store/profile'
+import { $profileColors, refreshProfiles } from '@/store/profile'
 
 import { useRefreshHotkey } from '../hooks/use-refresh-hotkey'
 import {
@@ -39,6 +39,21 @@ interface ProfilesViewProps {
   onClose: () => void
 }
 
+interface ManagedProfilePresentation {
+  agentDisplayName?: null | string
+  profileName: null | string
+}
+
+export function resolveManagedProfileDisplayName(
+  profileName: string,
+  presentation: ManagedProfilePresentation | null
+): string {
+  const canonicalProfileName = presentation?.profileName?.trim()
+  const displayName = presentation?.agentDisplayName?.trim()
+
+  return canonicalProfileName && displayName && profileName === canonicalProfileName ? displayName : profileName
+}
+
 export function ProfilesView({ onClose }: ProfilesViewProps) {
   const { t } = useI18n()
   const p = t.profiles
@@ -48,10 +63,59 @@ export function ProfilesView({ onClose }: ProfilesViewProps) {
   const [createOpen, setCreateOpen] = useState(false)
   const [pendingRename, setPendingRename] = useState<null | ProfileInfo>(null)
   const [pendingDelete, setPendingDelete] = useState<null | ProfileInfo>(null)
+  const [managedPresentation, setManagedPresentation] = useState<ManagedProfilePresentation | null>(null)
+  const refreshInFlight = useRef(false)
 
   const refresh = useCallback(async () => {
+    if (refreshInFlight.current) {
+      return
+    }
+
+    refreshInFlight.current = true
+
     try {
+      // Both managed reads can refresh enrollment after a 401. Keep them
+      // serialized, and coalesce overlapping view refreshes, so one recovery
+      // cannot clear or invalidate the other's forced enrollment.
       const list = await refreshProfiles()
+
+      const activeProfileResult = window.hermesDesktop?.profile?.get
+        ? await window.hermesDesktop.profile
+            .get()
+            .then(value => ({ ok: true as const, value }))
+            .catch(() => ({ ok: false as const }))
+        : { ok: false as const }
+
+      // profile.get() may refresh managed enrollment on a 401. Resolve it
+      // before reading the matching display metadata so the two values cannot
+      // come from different enrollment generations.
+      let nextManagedPresentation: ManagedProfilePresentation | null | undefined
+
+      if (activeProfileResult.ok) {
+        const statusResult = window.hermesDesktop?.eva?.status
+          ? await window.hermesDesktop.eva
+              .status()
+              .then(value => ({ ok: true as const, value }))
+              .catch(() => ({ ok: false as const }))
+          : { ok: false as const }
+
+        if (statusResult.ok) {
+          const profileName =
+            typeof activeProfileResult.value?.profile === 'string'
+              ? activeProfileResult.value.profile.trim()
+              : ''
+
+          nextManagedPresentation =
+            statusResult.value?.managed && profileName
+              ? { agentDisplayName: statusResult.value.agentDisplayName, profileName }
+              : null
+        }
+      }
+
+      if (nextManagedPresentation !== undefined) {
+        setManagedPresentation(nextManagedPresentation)
+      }
+
       setProfiles(list)
       setSelectedName(current => {
         if (current && list.some(p => p.name === current)) {
@@ -62,6 +126,8 @@ export function ProfilesView({ onClose }: ProfilesViewProps) {
       })
     } catch (err) {
       notifyError(err, p.failedLoad)
+    } finally {
+      refreshInFlight.current = false
     }
   }, [p])
 
@@ -86,10 +152,16 @@ export function ProfilesView({ onClose }: ProfilesViewProps) {
       return profiles ?? []
     }
 
-    return profiles.filter(
-      profile => profile.name.toLowerCase().includes(q) || (profile.model ?? '').toLowerCase().includes(q)
-    )
-  }, [profiles, query])
+    return profiles.filter(profile => {
+      const displayName = resolveManagedProfileDisplayName(profile.name, managedPresentation)
+
+      return (
+        profile.name.toLowerCase().includes(q) ||
+        displayName.toLowerCase().includes(q) ||
+        (profile.model ?? '').toLowerCase().includes(q)
+      )
+    })
+  }, [managedPresentation, profiles, query])
 
   // The shared Create/Rename dialogs own the createProfile / renameProfile /
   // updateProfileSoul calls; the panel just selects the resulting profile and
@@ -130,6 +202,7 @@ export function ProfilesView({ onClose }: ProfilesViewProps) {
               {visibleProfiles.map(profile => (
                 <ProfileRow
                   active={selected?.name === profile.name}
+                  displayName={resolveManagedProfileDisplayName(profile.name, managedPresentation)}
                   key={profile.name}
                   menuItems={
                     profile.is_default
@@ -154,7 +227,11 @@ export function ProfilesView({ onClose }: ProfilesViewProps) {
             </PanelList>
 
             {selected ? (
-              <ProfileDetail key={selected.name} profile={selected} />
+              <ProfileDetail
+                displayName={resolveManagedProfileDisplayName(selected.name, managedPresentation)}
+                key={selected.name}
+                profile={selected}
+              />
             ) : (
               <PanelEmpty description={p.selectPrompt} icon="account" />
             )}
@@ -192,11 +269,13 @@ export function ProfilesView({ onClose }: ProfilesViewProps) {
 
 function ProfileRow({
   active,
+  displayName,
   menuItems,
   onSelect,
   profile
 }: {
   active: boolean
+  displayName: string
   menuItems: PanelMenuItem[]
   onSelect: () => void
   profile: ProfileInfo
@@ -211,19 +290,19 @@ function ProfileRow({
           aria-hidden="true"
           color={resolveProfileColor(profile.name, colors)}
           isDefault={profile.is_default}
-          name={profile.name}
+          name={displayName}
         />
       }
       menuItems={menuItems}
-      menuLabel={profileLabel(profile)}
+      menuLabel={displayName}
       onSelect={onSelect}
       rowKey={profile.name}
-      title={profileLabel(profile)}
+      title={displayName}
     />
   )
 }
 
-function ProfileDetail({ profile }: { profile: ProfileInfo }) {
+function ProfileDetail({ displayName, profile }: { displayName: string; profile: ProfileInfo }) {
   const { t } = useI18n()
   const p = t.profiles
 
@@ -232,7 +311,7 @@ function ProfileDetail({ profile }: { profile: ProfileInfo }) {
       <header className="space-y-3">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
-            <h3 className="text-[0.95rem] font-semibold tracking-tight text-foreground">{profileLabel(profile)}</h3>
+            <h3 className="text-[0.95rem] font-semibold tracking-tight text-foreground">{displayName}</h3>
             {profile.is_default && <PanelPill tone="good">{p.defaultBadge}</PanelPill>}
             {profile.has_env && <PanelPill tone="muted">.env</PanelPill>}
           </div>

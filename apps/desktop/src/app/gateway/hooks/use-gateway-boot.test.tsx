@@ -1,9 +1,10 @@
 import { act, cleanup, render } from '@testing-library/react'
+import { MemoryRouter, useLocation, useNavigate } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { DesktopConnectionsRegistry } from '@/global'
 import { createClientSessionState } from '@/lib/chat-runtime'
-import { $desktopBoot } from '@/store/boot'
+import { $desktopBoot, applyDesktopBootProgress } from '@/store/boot'
 import {
   $connectionsRegistry,
   _resetConnectionsForTests,
@@ -65,7 +66,17 @@ vi.mock(import('@/store/notifications'), async importOriginal => ({
 
 type Listener = (ev: unknown) => void
 let connectionApplied: null | (() => void) = null
+let currentLocation = ''
+let navigateRoute: ReturnType<typeof useNavigate> | null = null
 let powerResume: null | (() => void) = null
+
+function LocationProbe() {
+  const location = useLocation()
+  navigateRoute = useNavigate()
+  currentLocation = `${location.pathname}${location.search}`
+
+  return null
+}
 
 describe('primaryRuntimeConnectionId', () => {
   it('uses the registry identity when the primary connection has one', () => {
@@ -164,6 +175,10 @@ class FakeWebSocket {
     // 'silent': swallow — a healthy socket answers, a half-open one never does.
   }
 
+  message(frame: unknown) {
+    this.emit('message', { data: JSON.stringify(frame) })
+  }
+
   private emit(type: string, ev: unknown) {
     for (const fn of this.listeners[type] ?? []) {
       fn(ev)
@@ -242,25 +257,44 @@ function fakeDesktop() {
   }
 }
 
-function Harness({
-  beforeConnectionSwitch = () => undefined,
-  refreshHermesConfig = async () => undefined,
-  refreshSessions
-}: {
+type HarnessProps = {
   beforeConnectionSwitch?: () => void
+  handleGatewayEvent?: (event: { profile?: string }) => void
+  onGatewayReady?: (gateway: unknown) => void
   refreshHermesConfig?: (force?: boolean, shouldPublish?: () => boolean) => Promise<void>
   refreshSessions?: (shouldPublish?: () => boolean) => Promise<void>
-} = {}) {
+}
+
+function GatewayBootHarness({
+  beforeConnectionSwitch = () => undefined,
+  handleGatewayEvent = () => undefined,
+  onGatewayReady = () => undefined,
+  refreshHermesConfig = async () => undefined,
+  refreshSessions
+}: HarnessProps = {}) {
   useGatewayBoot({
     beforeConnectionSwitch,
-    handleGatewayEvent: () => undefined,
+    handleGatewayEvent,
     onConnectionReady: () => undefined,
-    onGatewayReady: () => undefined,
+    onGatewayReady,
     refreshHermesConfig,
     refreshSessions: refreshSessions ?? (async () => undefined)
   })
 
   return null
+}
+
+function Harness(props: HarnessProps = {}) {
+  return (
+    <MemoryRouter>
+      <GatewayBootHarness {...props} />
+      <LocationProbe />
+    </MemoryRouter>
+  )
+}
+
+function renderHarness() {
+  return render(<Harness />)
 }
 
 const originalWebSocket = globalThis.WebSocket
@@ -287,10 +321,13 @@ beforeEach(() => {
   FakeWebSocket.instances = []
   FakeWebSocket.pingMode = 'pong'
   connectionApplied = null
+  currentLocation = ''
+  navigateRoute = null
   powerResume = null
   vi.mocked(notifyError).mockReset()
   ;(globalThis as { WebSocket: unknown }).WebSocket = FakeWebSocket
   ;(window as { hermesDesktop?: unknown }).hermesDesktop = fakeDesktop()
+  $activeGatewayProfile.set('default')
   $gatewayState.set('idle')
   $busy.set(false)
   $awaitingResponse.set(false)
@@ -357,6 +394,193 @@ async function advanceBackoff() {
 }
 
 describe('useGatewayBoot remote reconnect loop (real hook, fake socket)', () => {
+  it('adopts the backend-authoritative managed profile before session refresh', async () => {
+    const desktop = fakeDesktop()
+    desktop.profile.get = vi.fn(async () => ({ profile: 'asuka-eva02' }))
+    const refreshSessions = vi.fn(async () => undefined)
+
+    ;(window as unknown as { hermesDesktop: unknown }).hermesDesktop = { ...desktop, eva: {} }
+
+    render(<Harness refreshSessions={refreshSessions} />)
+    await flushAsync()
+
+    expect($activeGatewayProfile.get()).toBe('asuka-eva02')
+    expect(refreshSessions).toHaveBeenCalled()
+    expect($desktopBoot.get().error).toBeNull()
+  })
+
+  it('tags primary gateway events with the profile adopted during managed boot', async () => {
+    const desktop = fakeDesktop()
+    desktop.profile.get = vi.fn(async () => ({ profile: 'asuka-eva02' }))
+    const events: Array<{ profile?: string }> = []
+
+    ;(window as unknown as { hermesDesktop: unknown }).hermesDesktop = { ...desktop, eva: {} }
+
+    render(<Harness handleGatewayEvent={event => events.push(event)} />)
+    await flushAsync()
+
+    FakeWebSocket.instances[0]?.message({
+      jsonrpc: '2.0',
+      method: 'event',
+      params: { type: 'session.updated', session_id: 's-1' }
+    })
+
+    expect(events).toContainEqual(expect.objectContaining({ profile: 'asuka-eva02' }))
+  })
+
+  it('does not connect the managed gateway before the authoritative profile resolves', async () => {
+    const desktop = fakeDesktop()
+    let resolveProfile: ((value: { profile: string }) => void) | undefined
+    const profile = new Promise<{ profile: string }>(resolve => {
+      resolveProfile = resolve
+    })
+    desktop.profile.get = vi.fn(() => profile)
+    const events: Array<{ profile?: string }> = []
+
+    ;(window as unknown as { hermesDesktop: unknown }).hermesDesktop = { ...desktop, eva: {} }
+
+    render(<Harness handleGatewayEvent={event => events.push(event)} />)
+    await flushAsync()
+
+    expect(FakeWebSocket.instances).toHaveLength(0)
+    expect(events).toEqual([])
+
+    resolveProfile?.({ profile: 'asuka-eva02' })
+    await flushAsync()
+
+    FakeWebSocket.instances[0]?.message({
+      jsonrpc: '2.0',
+      method: 'event',
+      params: { type: 'session.updated', session_id: 's-1' }
+    })
+
+    expect(events).toContainEqual(expect.objectContaining({ profile: 'asuka-eva02' }))
+  })
+
+  it('fails closed when a managed boot cannot verify its assigned profile', async () => {
+    const desktop = fakeDesktop()
+    desktop.profile.get = vi.fn(async () => {
+      throw new Error('assigned profile unavailable')
+    })
+    ;(window as unknown as { hermesDesktop: unknown }).hermesDesktop = { ...desktop, eva: {} }
+    $activeGatewayProfile.set('previous-profile')
+    const gateways: unknown[] = []
+
+    render(<Harness onGatewayReady={gateway => gateways.push(gateway)} />)
+    await flushAsync()
+
+    expect($activeGatewayProfile.get()).toBe('default')
+    expect($desktopBoot.get().error).toBe('assigned profile unavailable')
+    expect($desktopBoot.get().visible).toBe(true)
+    expect(FakeWebSocket.instances).toHaveLength(0)
+    expect(gateways.at(-1)).toBeNull()
+  })
+
+  it('keeps non-managed event scope aligned when profile lookup falls back to default', async () => {
+    const desktop = fakeDesktop()
+    desktop.profile.get = vi.fn(async () => {
+      throw new Error('profile preference unavailable')
+    })
+    ;(window as unknown as { hermesDesktop: unknown }).hermesDesktop = desktop
+    $activeGatewayProfile.set('previous-profile')
+    const events: Array<{ profile?: string }> = []
+
+    render(<Harness handleGatewayEvent={event => events.push(event)} />)
+    await flushAsync()
+
+    FakeWebSocket.instances[0]?.message({
+      jsonrpc: '2.0',
+      method: 'event',
+      params: { type: 'session.updated', session_id: 's-default' }
+    })
+
+    expect($activeGatewayProfile.get()).toBe('default')
+    expect(events).toContainEqual(expect.objectContaining({ profile: 'default' }))
+  })
+
+  it('redirects managed sign-in-required boot to Gateway settings without a generic boot failure', async () => {
+    const desktop = fakeDesktop()
+    desktop.getConnection = vi.fn(async () => {
+      throw new Error('Sign in to evaOS Agent from Settings.')
+    })
+    ;(window as unknown as { hermesDesktop: unknown }).hermesDesktop = { ...desktop, eva: {} }
+
+    renderHarness()
+    await flushAsync()
+
+    expect($desktopBoot.get().phase).toBe('renderer.enrollment')
+    expect($desktopBoot.get().running).toBe(false)
+    expect($desktopBoot.get().error).toBeNull()
+    expect($sessionsLoading.get()).toBe(false)
+    expect(currentLocation).toBe('/settings?tab=gateway')
+  })
+
+  it('fails managed initial connection when an internal promise exceeds the outer deadline', async () => {
+    const desktop = fakeDesktop()
+    desktop.getConnection = vi.fn(() => new Promise(() => undefined))
+    ;(window as { hermesDesktop?: unknown }).hermesDesktop = { ...desktop, eva: {} }
+
+    renderHarness()
+    await flushAsync()
+
+    expect($desktopBoot.get().error).toBeNull()
+    expect($desktopBoot.get().running).toBe(true)
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(90_000)
+    })
+
+    expect($desktopBoot.get().error).toBe('Lost connection to the gateway')
+    expect($desktopBoot.get().running).toBe(false)
+    expect($desktopBoot.get().visible).toBe(true)
+
+    applyDesktopBootProgress({
+      error: null,
+      fakeMode: false,
+      message: 'Late managed startup result',
+      phase: 'eva.ready',
+      progress: 100,
+      running: true,
+      timestamp: Date.now()
+    })
+
+    expect($desktopBoot.get().error).toBe('Lost connection to the gateway')
+    expect($desktopBoot.get().running).toBe(false)
+    expect($desktopBoot.get().visible).toBe(true)
+  })
+
+  it('keeps the upstream bounded deadline for a slow local startup', async () => {
+    const desktop = fakeDesktop()
+    desktop.getConnection = vi.fn(() => new Promise(() => undefined))
+    ;(window as { hermesDesktop?: unknown }).hermesDesktop = desktop
+
+    renderHarness()
+    await flushAsync()
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(45_000)
+    })
+
+    expect($desktopBoot.get().error).toBe('Timed out connecting to Hermes backend')
+    expect($desktopBoot.get().running).toBe(false)
+  })
+
+  it('keeps the live gateway mounted when declarative router navigation changes navigate identity', async () => {
+    renderHarness()
+    await flushAsync()
+    expect(FakeWebSocket.instances).toHaveLength(1)
+    expect(FakeWebSocket.instances[0].readyState).toBe(FakeWebSocket.OPEN)
+
+    await act(async () => {
+      navigateRoute?.('/settings')
+      await vi.advanceTimersByTimeAsync(0)
+    })
+
+    expect(currentLocation).toBe('/settings')
+    expect(FakeWebSocket.instances).toHaveLength(1)
+    expect(FakeWebSocket.instances[0].readyState).toBe(FakeWebSocket.OPEN)
+  })
+
   it('INITIAL boot against a dead VPS: getConnection hangs (waitForHermes) → app sits in the connecting combo, then fails', async () => {
     // The report's actual path: a fresh launch pointed at an unreachable VPS.
     // startHermes()'s remote branch awaits waitForHermes() for 45s before it
@@ -374,7 +598,7 @@ describe('useGatewayBoot remote reconnect loop (real hook, fake socket)', () => 
     )
     ;(window as { hermesDesktop?: unknown }).hermesDesktop = desktop
 
-    render(<Harness />)
+    renderHarness()
     await flushAsync()
 
     // getConnection is still pending — the dead-VPS wait. No socket was ever

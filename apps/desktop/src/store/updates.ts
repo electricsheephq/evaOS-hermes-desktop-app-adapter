@@ -249,7 +249,7 @@ export function maybeNotifyUpdateAvailable(status: DesktopUpdateStatus | null) {
 }
 
 export function openUpdatesWindow(): void {
-  openUpdateOverlayFor(isRemoteMode() ? 'backend' : 'client')
+  openUpdateOverlayFor(isManagedEva() ? 'client' : isRemoteMode() ? 'backend' : 'client')
 }
 
 /**
@@ -272,7 +272,7 @@ export function startActiveUpdate(): void {
     return
   }
 
-  const target: UpdateTarget = isRemoteMode() ? 'backend' : 'client'
+  const target: UpdateTarget = isManagedEva() ? 'client' : isRemoteMode() ? 'backend' : 'client'
   $updateOverlayTarget.set(target)
   $updateOverlayOpen.set(true)
   void (target === 'backend' ? applyBackendUpdate() : applyUpdates())
@@ -304,7 +304,7 @@ export function requestActiveUpdate(): void {
     }
   }
 
-  const target: UpdateTarget = isRemoteMode() ? 'backend' : 'client'
+  const target: UpdateTarget = isManagedEva() ? 'client' : isRemoteMode() ? 'backend' : 'client'
   const status = target === 'backend' ? $backendUpdateStatus.get() : $updateStatus.get()
 
   if ((status?.behind ?? 0) > 0 || status?.updateAvailable) {
@@ -348,6 +348,10 @@ function isRemoteMode(): boolean {
   return $connection.get()?.mode === 'remote'
 }
 
+function isManagedEva(): boolean {
+  return typeof window !== 'undefined' && Boolean(window.hermesDesktop?.eva)
+}
+
 function mapBackendCheck(res: BackendUpdateCheckResponse): DesktopUpdateStatus {
   const behind = res.behind ?? 0
 
@@ -364,6 +368,18 @@ function mapBackendCheck(res: BackendUpdateCheckResponse): DesktopUpdateStatus {
 }
 
 export async function checkBackendUpdates(): Promise<DesktopUpdateStatus | null> {
+  if (isManagedEva()) {
+    const status: DesktopUpdateStatus = {
+      supported: false,
+      message: 'Backend updates are managed by Electric Sheep.',
+      fetchedAt: Date.now()
+    }
+
+    $backendUpdateStatus.set(status)
+
+    return status
+  }
+
   if (!isRemoteMode() || $backendUpdateChecking.get()) {
     return $backendUpdateStatus.get()
   }
@@ -835,6 +851,10 @@ export const $updateEverything = atom<UpdateEverythingState>({ running: false })
  *  "Update everything" affordance so single-machine installs keep the
  *  one-button experience. */
 export function hasMultipleUpdateTargets(): boolean {
+  if (isManagedEva()) {
+    return false
+  }
+
   return isRemoteMode() || ($connectionsRegistry.get()?.connections.length ?? 0) > 1
 }
 
@@ -967,7 +987,11 @@ export function startUpdatePoller(): void {
 
   pollerStarted = true
   void checkUpdates()
-  void checkBackendUpdates()
+
+  if (!isManagedEva()) {
+    void checkBackendUpdates()
+  }
+
   void refreshDesktopVersion()
   bridge.onProgress(ingestProgress)
 
@@ -981,7 +1005,7 @@ export function startUpdatePoller(): void {
 
     lastConnectionMode = conn?.mode
 
-    if (conn?.mode === 'remote') {
+    if (conn?.mode === 'remote' && !isManagedEva()) {
       void checkBackendUpdates()
     }
   })
@@ -990,7 +1014,10 @@ export function startUpdatePoller(): void {
   backgroundTimer = setInterval(
     () => {
       void checkUpdates()
-      void checkBackendUpdates()
+
+      if (!isManagedEva()) {
+        void checkBackendUpdates()
+      }
     },
     30 * 60 * 1000
   )
@@ -1018,6 +1045,10 @@ function onFocus() {
 
   lastFocusAt = now
   void checkUpdates()
-  void checkBackendUpdates()
+
+  if (!isManagedEva()) {
+    void checkBackendUpdates()
+  }
+
   void refreshDesktopVersion()
 }

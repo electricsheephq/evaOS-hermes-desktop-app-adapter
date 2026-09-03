@@ -153,7 +153,11 @@ function resolveTimeoutMs(timeoutMs, fallbackMs = DEFAULT_FETCH_TIMEOUT_MS) {
   return fallback
 }
 
-function encryptDesktopSecret(value, safeStorageApi, options: { allowPlainText?: boolean } = {}) {
+function encryptDesktopSecret(
+  value,
+  safeStorageApi,
+  options: boolean | { allowPlainText?: boolean; managed?: boolean } = {}
+) {
   const raw = String(value || '')
 
   if (!raw) {
@@ -163,7 +167,9 @@ function encryptDesktopSecret(value, safeStorageApi, options: { allowPlainText?:
   // Opt-in escape hatch for keyring-less Linux (e.g. Hyprland/Sway with no
   // GNOME Keyring or KWallet): the renderer sets this once the user confirms
   // the plain-text storage prompt in Settings → Gateway.
-  const allowPlainText = options?.allowPlainText === true
+  const normalizedOptions = typeof options === 'boolean' ? { managed: options } : options
+  const allowPlainText = normalizedOptions?.allowPlainText === true
+  const managed = normalizedOptions?.managed === true
 
   let encryptionAvailable = false
 
@@ -174,6 +180,13 @@ function encryptDesktopSecret(value, safeStorageApi, options: { allowPlainText?:
   }
 
   if (!encryptionAvailable) {
+    if (managed) {
+      throw new Error(
+        'Secure storage is unavailable for evaOS Agent managed access. ' +
+          'Enable OS keychain access and try again, or contact Electric Sheep support.'
+      )
+    }
+
     // Only downgrade to plain text when the user has explicitly opted in;
     // decryptDesktopSecret returns the raw value for any non-'safeStorage'
     // encoding, so this round-trips without any decrypt-side change.
@@ -196,6 +209,14 @@ function encryptDesktopSecret(value, safeStorageApi, options: { allowPlainText?:
     }
   } catch (error) {
     const detail = error instanceof Error && error.message ? ` (${error.message})` : ''
+
+    if (managed) {
+      throw new Error(
+        `Failed to encrypt evaOS Agent managed access for secure storage${detail}. ` +
+          'Enable OS keychain access and try again, or contact Electric Sheep support.'
+      )
+    }
+
     throw new Error(
       `Failed to encrypt the remote gateway token for secure storage${detail}. ` +
         'Set HERMES_DESKTOP_REMOTE_URL and HERMES_DESKTOP_REMOTE_TOKEN in your environment as a fallback.'

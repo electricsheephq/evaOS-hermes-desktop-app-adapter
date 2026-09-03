@@ -6,6 +6,7 @@ import type * as ReactRouterDom from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type * as HermesApi from '@/hermes'
+import { en } from '@/i18n/en'
 import { queryClient } from '@/lib/query-client'
 
 const getSkills = vi.fn()
@@ -64,14 +65,14 @@ function toolset(overrides: Record<string, unknown> = {}) {
   }
 }
 
-async function renderSkills() {
+async function renderSkills(tab: 'skills' | 'toolsets' = 'toolsets') {
   const { SkillsView } = await import('./index')
   let result: ReturnType<typeof render>
   await act(async () => {
     result = render(
       // SkillsView reads skills/toolsets via useQuery, so it needs a provider.
       <QueryClientProvider client={queryClient}>
-        <MemoryRouter initialEntries={['/skills?tab=toolsets']}>
+        <MemoryRouter initialEntries={[`/skills?tab=${tab}`]}>
           <SkillsView />
         </MemoryRouter>
       </QueryClientProvider>
@@ -100,6 +101,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup()
   vi.clearAllMocks()
+  Reflect.deleteProperty(window, 'hermesDesktop')
   // Shared singleton client — drop cached skills/toolsets so each test refetches.
   queryClient.clear()
 })
@@ -432,5 +434,36 @@ describe('SkillsView toolset management', { timeout: 60_000 }, () => {
     } finally {
       delete (window as { hermesDesktop?: unknown }).hermesDesktop
     }
+  })
+})
+
+describe('evaOS managed upstream capabilities', () => {
+  it('keeps upstream Hub, MCP, toggles, and configuration controls available', async () => {
+    Object.defineProperty(window, 'hermesDesktop', {
+      configurable: true,
+      value: { eva: {} }
+    })
+    getSkills.mockResolvedValue([
+      {
+        name: 'electric-sheep-demo',
+        description: 'Approved demo capability',
+        category: 'managed',
+        enabled: true
+      }
+    ])
+
+    await renderSkills()
+
+    expect((await screen.findAllByText('Web Search')).length).toBeGreaterThan(0)
+    expect(screen.getByRole('switch', { name: en.skills.toggleToolset('Web Search', false) })).toBeTruthy()
+    expect(screen.getByText('MCP')).toBeTruthy()
+    await waitFor(() => expect(getToolsetConfig).toHaveBeenCalledWith('web', 'default'))
+
+    // v2026.8.27 embeds the Hub beneath the installed Skills list rather than
+    // exposing a separate top-level "Browse Hub" tab.
+    cleanup()
+    queryClient.clear()
+    await renderSkills('skills')
+    await waitFor(() => expect(window.document.querySelector('iframe')).toBeTruthy())
   })
 })

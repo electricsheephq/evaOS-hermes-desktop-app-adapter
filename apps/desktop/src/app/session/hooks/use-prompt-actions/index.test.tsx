@@ -35,12 +35,28 @@ import type { SubmitTextOptions } from './utils'
 
 import { uploadComposerAttachment, usePromptActions } from '.'
 
+const { mockInvalidateSlashCompletions, mockRunGatewayRestart } = vi.hoisted(() => ({
+  mockInvalidateSlashCompletions: vi.fn(),
+  mockRunGatewayRestart: vi.fn()
+}))
+
 // Suites in this file reuse the same stored-id constants. The module-level
 // single-flight resume map (and drift-recovery cache) would otherwise leak a
 // never-settling in-flight promise from one test into the next.
 beforeEach(() => {
   clearSingleFlightSessionResumeState()
+  mockInvalidateSlashCompletions.mockReset()
+  mockRunGatewayRestart.mockReset()
+  mockRunGatewayRestart.mockResolvedValue({ profile: 'default', status: 'restarted' })
 })
+
+vi.mock('@/lib/slash-completion-cache', () => ({
+  invalidateSlashCompletions: mockInvalidateSlashCompletions
+}))
+
+vi.mock('@/store/system-actions', () => ({
+  runGatewayRestart: mockRunGatewayRestart
+}))
 
 vi.mock('@/hermes', () => ({
   getProfiles: vi.fn(async () => ({ profiles: [] })),
@@ -1078,6 +1094,242 @@ describe('usePromptActions exec fallback error reporting', () => {
     expect(requestGateway).toHaveBeenCalledWith('session.status', expect.anything(), undefined)
     expect(requestGateway).toHaveBeenCalledWith('slash.exec', expect.objectContaining({ command: 'status' }))
     expect(renderedSeedTexts(seeds).some(text => text.includes('session status from slash worker'))).toBe(true)
+  })
+
+  it('does not bypass reload.mcp confirmation when the dedicated RPC is unavailable', async () => {
+    const seeds: Record<string, unknown>[] = []
+
+    const requestGateway = vi.fn(async (method: string) => {
+      if (method === 'reload.mcp') {
+        throw new Error('method not found: reload.mcp')
+      }
+
+      throw new Error(`unexpected method: ${method}`)
+    })
+
+    let handle: HarnessHandle | null = null
+    await actRender(
+      <Harness
+        onReady={h => (handle = h)}
+        onSeedState={s => seeds.push(s)}
+        refreshSessions={async () => undefined}
+        requestGateway={requestGateway}
+      />
+    )
+
+    await handle!.submitText('/reload-mcp now')
+
+    expect(requestGateway).toHaveBeenCalledWith('reload.mcp', expect.objectContaining({ confirm: true }), 300_000)
+    expect(requestGateway.mock.calls.some(([method]) => method === 'slash.exec')).toBe(false)
+    expect(renderedSeedTexts(seeds).some(text => text.includes('method not found: reload.mcp'))).toBe(true)
+  })
+
+  it('reloads skills through the current session RPC on the managed desktop', async () => {
+    Object.defineProperty(window, 'hermesDesktop', {
+      configurable: true,
+      value: { eva: {} },
+      writable: true
+    })
+
+    const seeds: Record<string, unknown>[] = []
+
+    const requestGateway = vi.fn(async (method: string) => {
+      if (method === 'skills.reload') {
+        return { output: 'Reloading skills... 4 skill(s) available' } as never
+      }
+
+      throw new Error(`unexpected method: ${method}`)
+    })
+
+    let handle: HarnessHandle | null = null
+    await actRender(
+      <Harness
+        onReady={h => (handle = h)}
+        onSeedState={s => seeds.push(s)}
+        refreshSessions={async () => undefined}
+        requestGateway={requestGateway}
+      />
+    )
+
+    await handle!.submitText('/reload-skills')
+
+    expect(requestGateway).toHaveBeenCalledWith('skills.reload', { session_id: RUNTIME_SESSION_ID }, undefined)
+    expect(requestGateway.mock.calls.some(([method]) => method === 'slash.exec')).toBe(false)
+    expect(mockInvalidateSlashCompletions).toHaveBeenCalledTimes(1)
+    expect(renderedSeedTexts(seeds).some(text => text.includes('4 skill(s) available'))).toBe(true)
+  })
+
+  it('invalidates slash completions after the legacy managed skill reload fallback', async () => {
+    Object.defineProperty(window, 'hermesDesktop', {
+      configurable: true,
+      value: { eva: {} },
+      writable: true
+    })
+
+    const seeds: Record<string, unknown>[] = []
+
+    const requestGateway = vi.fn(async (method: string) => {
+      if (method === 'skills.reload') {
+        throw new Error('method not found: skills.reload')
+      }
+
+      if (method === 'slash.exec') {
+        return { output: 'Reloading skills... 4 skill(s) available' } as never
+      }
+
+      if (method === 'commands.catalog') {
+        return { pairs: [['/new-skill', 'Newly loaded skill']] } as never
+      }
+
+      throw new Error(`unexpected method: ${method}`)
+    })
+
+    let handle: HarnessHandle | null = null
+    await actRender(
+      <Harness
+        onReady={h => (handle = h)}
+        onSeedState={s => seeds.push(s)}
+        refreshSessions={async () => undefined}
+        requestGateway={requestGateway}
+      />
+    )
+
+    await handle!.submitText('/reload-skills')
+
+    expect(requestGateway).toHaveBeenCalledWith('skills.reload', { session_id: RUNTIME_SESSION_ID }, undefined)
+    expect(requestGateway).toHaveBeenCalledWith(
+      'slash.exec',
+      expect.objectContaining({ command: 'reload-skills', session_id: RUNTIME_SESSION_ID })
+    )
+    expect(requestGateway).toHaveBeenCalledWith('commands.catalog', { session_id: RUNTIME_SESSION_ID })
+    expect(requestGateway.mock.invocationCallOrder[1]).toBeLessThan(requestGateway.mock.invocationCallOrder[2])
+    expect(mockInvalidateSlashCompletions).toHaveBeenCalledTimes(1)
+    expect(renderedSeedTexts(seeds).some(text => text.includes('4 skill(s) available'))).toBe(true)
+  })
+
+  it('does not invalidate slash completions when the legacy managed skill reload fallback fails', async () => {
+    Object.defineProperty(window, 'hermesDesktop', {
+      configurable: true,
+      value: { eva: {} },
+      writable: true
+    })
+
+    const seeds: Record<string, unknown>[] = []
+
+    const requestGateway = vi.fn(async (method: string) => {
+      if (method === 'skills.reload') {
+        throw new Error('method not found: skills.reload')
+      }
+
+      if (method === 'slash.exec') {
+        throw new Error('legacy skill reload failed')
+      }
+
+      if (method === 'command.dispatch') {
+        throw new Error('not a quick/plugin/skill command')
+      }
+
+      throw new Error(`unexpected method: ${method}`)
+    })
+
+    let handle: HarnessHandle | null = null
+    await actRender(
+      <Harness
+        onReady={h => (handle = h)}
+        onSeedState={s => seeds.push(s)}
+        refreshSessions={async () => undefined}
+        requestGateway={requestGateway}
+      />
+    )
+
+    await handle!.submitText('/reload-skills')
+
+    expect(requestGateway).toHaveBeenCalledWith('skills.reload', { session_id: RUNTIME_SESSION_ID }, undefined)
+    expect(requestGateway).toHaveBeenCalledWith(
+      'slash.exec',
+      expect.objectContaining({ command: 'reload-skills', session_id: RUNTIME_SESSION_ID })
+    )
+    expect(requestGateway.mock.calls.some(([method]) => method === 'commands.catalog')).toBe(false)
+    expect(mockInvalidateSlashCompletions).not.toHaveBeenCalled()
+    expect(renderedSeedTexts(seeds).some(text => text.includes('legacy skill reload failed'))).toBe(true)
+  })
+
+  it('keeps managed skill reload unavailable on an unmanaged desktop', async () => {
+    Reflect.deleteProperty(window, 'hermesDesktop')
+
+    const seeds: Record<string, unknown>[] = []
+    const requestGateway = vi.fn(async () => ({ output: 'must not run' }) as never)
+
+    let handle: HarnessHandle | null = null
+    await actRender(
+      <Harness
+        onReady={h => (handle = h)}
+        onSeedState={s => seeds.push(s)}
+        refreshSessions={async () => undefined}
+        requestGateway={requestGateway}
+      />
+    )
+
+    await handle!.submitText('/reload-skills')
+
+    expect(requestGateway).not.toHaveBeenCalled()
+    expect(renderedSeedTexts(seeds).some(text => text.includes('terminal interface'))).toBe(true)
+  })
+
+  it('restarts only the current managed profile and renders the result', async () => {
+    Object.defineProperty(window, 'hermesDesktop', {
+      configurable: true,
+      value: { eva: {} },
+      writable: true
+    })
+
+    mockRunGatewayRestart.mockResolvedValue({ profile: 'asuka-eva02', status: 'restarted' })
+    const seeds: Record<string, unknown>[] = []
+    const requestGateway = vi.fn(async () => ({}) as never)
+
+    let handle: HarnessHandle | null = null
+    await actRender(
+      <Harness
+        onReady={h => (handle = h)}
+        onSeedState={s => seeds.push(s)}
+        refreshSessions={async () => undefined}
+        requestGateway={requestGateway}
+      />
+    )
+
+    await handle!.submitText('/restart')
+
+    expect(mockRunGatewayRestart).toHaveBeenCalledTimes(1)
+    expect(requestGateway).not.toHaveBeenCalled()
+    expect(renderedSeedTexts(seeds).some(text => text.includes('asuka-eva02'))).toBe(true)
+    expect(renderedSeedTexts(seeds).some(text => text.includes('Gateway restarted'))).toBe(true)
+  })
+
+  it('denies an explicit profile target without invoking the restart action', async () => {
+    Object.defineProperty(window, 'hermesDesktop', {
+      configurable: true,
+      value: { eva: {} },
+      writable: true
+    })
+
+    const seeds: Record<string, unknown>[] = []
+    const requestGateway = vi.fn(async () => ({}) as never)
+
+    let handle: HarnessHandle | null = null
+    await actRender(
+      <Harness
+        onReady={h => (handle = h)}
+        onSeedState={s => seeds.push(s)}
+        refreshSessions={async () => undefined}
+        requestGateway={requestGateway}
+      />
+    )
+
+    await handle!.submitText('/restart another-profile')
+
+    expect(mockRunGatewayRestart).not.toHaveBeenCalled()
+    expect(requestGateway).not.toHaveBeenCalled()
+    expect(renderedSeedTexts(seeds).some(text => text.includes('no explicit profile target is supported'))).toBe(true)
   })
 
   it('still reports a real command.dispatch failure for skill/quick commands', async () => {
