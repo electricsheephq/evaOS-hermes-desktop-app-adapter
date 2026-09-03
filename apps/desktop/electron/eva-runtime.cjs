@@ -71,7 +71,13 @@ function createEvaManagedRuntime(options) {
   const supportRequestControllers = new Set()
 
   function emptyState(signedOut = false) {
-    return { desktop: null, runtime: null, delegatedSupport: null, signedOut }
+    return {
+      desktop: null,
+      runtime: null,
+      delegatedSupport: null,
+      desktopCredentialUnreadable: false,
+      signedOut
+    }
   }
 
   function readState() {
@@ -84,14 +90,33 @@ function createEvaManagedRuntime(options) {
     if (!parsed || parsed.schema_version !== EVA_MANAGED_POLICY.schemaVersion) return emptyState()
 
     let desktop = null
+    const persistedDesktopToken = parsed.desktop?.token
+    const desktopCredentialPresent =
+      (typeof persistedDesktopToken === 'string' && persistedDesktopToken.length > 0) ||
+      (persistedDesktopToken &&
+        typeof persistedDesktopToken === 'object' &&
+        typeof persistedDesktopToken.value === 'string' &&
+        persistedDesktopToken.value.length > 0)
+    let desktopCredentialUnreadable = false
+    let decryptedDesktopToken = ''
     try {
-      desktop = normalizeDesktopSession({
-        desktop_session: options.decryptSecret(parsed.desktop?.token),
-        desktop_session_expires_at: parsed.desktop?.expires_at,
-        email: parsed.desktop?.email
-      })
+      decryptedDesktopToken = options.decryptSecret(persistedDesktopToken)
+      if (desktopCredentialPresent && !decryptedDesktopToken) {
+        desktopCredentialUnreadable = true
+      }
     } catch {
-      desktop = null
+      desktopCredentialUnreadable = Boolean(desktopCredentialPresent)
+    }
+    if (!desktopCredentialUnreadable) {
+      try {
+        desktop = normalizeDesktopSession({
+          desktop_session: decryptedDesktopToken,
+          desktop_session_expires_at: parsed.desktop?.expires_at,
+          email: parsed.desktop?.email
+        })
+      } catch {
+        desktop = null
+      }
     }
 
     let runtime = null
@@ -119,7 +144,9 @@ function createEvaManagedRuntime(options) {
     }
 
     let delegatedSupport = null
-    let delegatedSupportNeedsClear = Boolean(parsed.delegated_support?.enrollment && !desktop)
+    let delegatedSupportNeedsClear = Boolean(
+      parsed.delegated_support?.enrollment && !desktop && !desktopCredentialUnreadable
+    )
     if (desktop && parsed.delegated_support?.enrollment) {
       try {
         const serialized = options.decryptSecret(parsed.delegated_support.enrollment)
@@ -138,6 +165,7 @@ function createEvaManagedRuntime(options) {
       runtime,
       delegatedSupport,
       delegatedSupportNeedsClear,
+      desktopCredentialUnreadable,
       rendererCleanupPending: parsed.renderer_cleanup_pending === true,
       signedOut: parsed.signed_out === true
     }
@@ -589,6 +617,13 @@ function createEvaManagedRuntime(options) {
   async function ensureDesktopSession() {
     const state = currentState()
     if (state.desktop && !expiresSoon(state.desktop.expiresAt, 0)) return state.desktop
+    if (state.desktopCredentialUnreadable) {
+      throw new EvaBrokerError(
+        'evaOS Agent could not read managed access from secure storage. Unlock secure storage and try again, or sign in again from Settings.',
+        503,
+        'managed-enrollment-unreadable'
+      )
+    }
     return requireSignIn()
   }
 

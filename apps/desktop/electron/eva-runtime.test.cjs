@@ -77,6 +77,56 @@ test('cold launch re-enrolls an unexpired ES12 state that has no display label',
   assert.equal(runtime.status().agentDisplayName, 'Asuka')
 })
 
+test('cold launch preserves encrypted enrollment when secure storage cannot decrypt it', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-secure-storage-unreadable-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeActiveEnrollment(statePath)
+  const persistedBeforeLaunch = fs.readFileSync(statePath, 'utf8')
+  let launches = 0
+  const runtime = makeManagedRuntime(statePath, {
+    // The production safeStorage wrapper converts a keychain/decryption
+    // failure into an empty string before the managed runtime sees it.
+    decryptSecret: () => '',
+    launchRuntime: async () => {
+      launches += 1
+      throw new Error('runtime launch must not run without a readable desktop credential')
+    }
+  })
+
+  await assert.rejects(
+    runtime.resolveBackend(),
+    error =>
+      error instanceof EvaBrokerError &&
+      error.statusCode === 503 &&
+      error.code === 'managed-enrollment-unreadable'
+  )
+
+  assert.equal(launches, 0)
+  assert.equal(fs.readFileSync(statePath, 'utf8'), persistedBeforeLaunch)
+})
+
+test('cold launch still requires sign-in for an expired readable desktop credential', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-expired-desktop-session-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeActiveEnrollment(statePath)
+  const expired = JSON.parse(fs.readFileSync(statePath, 'utf8'))
+  expired.desktop.expires_at = EXPIRED
+  fs.writeFileSync(statePath, JSON.stringify(expired))
+
+  const runtime = makeManagedRuntime(statePath)
+
+  await assert.rejects(
+    runtime.resolveBackend(),
+    error => error instanceof EvaBrokerError && error.code === 'sign-in-required'
+  )
+
+  const persisted = JSON.parse(fs.readFileSync(statePath, 'utf8'))
+  assert.equal(persisted.signed_out, true)
+  assert.equal(persisted.desktop ?? null, null)
+})
+
 function writeActiveEnrollment(statePath) {
   fs.writeFileSync(
     statePath,
