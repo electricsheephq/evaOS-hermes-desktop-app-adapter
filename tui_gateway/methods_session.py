@@ -33,6 +33,9 @@ def _(rid, params: dict) -> dict:
         explicit_cwd = False
     resolved_cwd = _completion_cwd(params)
     source = _resolve_session_source(str(params.get("source") or "").strip() or None)
+    desktop_ui_protocol = _negotiate_desktop_ui_protocol(
+        source, params.get("desktop_ui_protocol")
+    )
     _enable_gateway_prompts()
 
     # ``profile`` (app-global remote mode): a new chat started under a non-launch
@@ -104,6 +107,7 @@ def _(rid, params: dict) -> dict:
             "session_key": key,
             "show_reasoning": _load_show_reasoning(),
             "source": source,
+            "desktop_ui_protocol": desktop_ui_protocol,
             "slash_worker": None,
             "tool_progress_mode": _load_tool_progress_mode(),
             "tool_started_at": {},
@@ -387,6 +391,19 @@ def _(rid, params: dict) -> dict:
     # route in parallel. Suppress the duplicate WebSocket transcript only when
     # the caller explicitly requests it; other clients keep upstream behavior.
     omit_messages = is_truthy_value(params.get("omit_messages", False))
+    explicit_source = str(params.get("source") or "").strip()
+    source = _resolve_session_source(explicit_source or None)
+    requested_desktop_ui_protocol = params.get("desktop_ui_protocol")
+
+    def _resume_desktop_ui_protocol(session: dict | None = None) -> int:
+        attach_source = explicit_source or str(
+            (session or {}).get("source") or ""
+        ).strip() or source
+        return _negotiate_desktop_ui_protocol(
+            attach_source, requested_desktop_ui_protocol
+        )
+
+    desktop_ui_protocol = _resume_desktop_ui_protocol()
 
     # In a profile scope this opens a DEDICATED handle we own until the agent
     # takes it (see the ownership transfer at _init_session below); every path
@@ -456,6 +473,7 @@ def _(rid, params: dict) -> dict:
                         with contextlib.suppress(Exception):
                             db.close()
                     live["last_active"] = time.time()
+                    live["desktop_ui_protocol"] = _resume_desktop_ui_protocol(live)
                     # This resume reattaches the live record. A lazy session
                     # (no state.db row yet — every fresh Bot Chat) that was
                     # sentinel-parked by a WS drop MUST be rebound here, or it
@@ -629,6 +647,7 @@ def _(rid, params: dict) -> dict:
                     return _err(rid, 4007, "session no longer live; retry resume")
                 if session.get("_client_gone_interrupt_requested"):
                     return _err(rid, 4009, "session disconnect interrupt settling")
+                session["desktop_ui_protocol"] = _resume_desktop_ui_protocol(session)
                 # This resume reattaches the live record: cancel any pending
                 # ws-orphan reap timer armed while the client was detached
                 # (storm killer — _live_session_payload's rebind also cancels,
@@ -680,6 +699,7 @@ def _(rid, params: dict) -> dict:
                 close_on_disconnect=is_truthy_value(params.get("close_on_disconnect", False)),
                 profile_home=profile_home,
                 lazy=True,
+                desktop_ui_protocol=desktop_ui_protocol,
             )
             if (live := _claim_or_reuse_live(sid, target, record, lease)) is not None:
                 return _reuse_live_response(*live)
@@ -748,6 +768,7 @@ def _(rid, params: dict) -> dict:
                 profile_home=profile_home,
                 model_override=overrides.get("model_override"),
                 resume_runtime_overrides=overrides or None,
+                desktop_ui_protocol=desktop_ui_protocol,
             )
             record["resume_history_ready"] = threading.Event()
             record["resume_hydrating"] = True
@@ -844,6 +865,7 @@ def _(rid, params: dict) -> dict:
                 profile_home=profile_home,
                 model_override=overrides.get("model_override"),
                 resume_runtime_overrides=overrides or None,
+                desktop_ui_protocol=desktop_ui_protocol,
             )
             if (live := _claim_or_reuse_live(sid, target, record, lease)) is not None:
                 return _reuse_live_response(*live)
@@ -929,6 +951,7 @@ def _(rid, params: dict) -> dict:
                     session_id=target,
                     session_db=db,
                     platform_override=source,
+                    desktop_ui_protocol_override=desktop_ui_protocol,
                     **stored_runtime_overrides,
                 )
             finally:
@@ -978,6 +1001,7 @@ def _(rid, params: dict) -> dict:
                         cwd=profile_resume_cwd,
                         session_db=db,
                         source=source,
+                        desktop_ui_protocol=desktop_ui_protocol,
                     )
                     # Ownership TRANSFER — the registered session's agent now
                     # holds this handle for its whole life, and _init_session
@@ -1228,6 +1252,11 @@ def _(rid, params: dict) -> dict:
     if err:
         return err
     assert session is not None
+
+    attach_source = str(params.get("source") or session.get("source") or "").strip()
+    session["desktop_ui_protocol"] = _negotiate_desktop_ui_protocol(
+        attach_source, params.get("desktop_ui_protocol")
+    )
 
     return _ok(
         rid,
@@ -3273,6 +3302,9 @@ def _(rid, params: dict) -> dict:
                     session_id=new_key,
                     session_db=branch_db,
                     platform_override=source,
+                    desktop_ui_protocol_override=session.get(
+                        "desktop_ui_protocol"
+                    ),
                 )
             finally:
                 _clear_session_context(tokens)
@@ -3286,6 +3318,7 @@ def _(rid, params: dict) -> dict:
                 session_db=branch_db,
                 source=source,
                 profile_home=parent_home,
+                desktop_ui_protocol=session.get("desktop_ui_protocol"),
             )
             # Ownership TRANSFER — the branched session's agent holds this
             # handle for its whole life and closes it on teardown. Drop is

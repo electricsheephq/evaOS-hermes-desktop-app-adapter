@@ -21,8 +21,8 @@ Rides the same ``preview.act`` bridge as ``drive_preview`` rather than opening
 a second channel — the renderer already resolves ``@e`` refs and owns the
 overlay, so this is one more verb on a wire that exists.
 
-Lives in the ``desktop_ui`` toolset, which the GUI gateway enables only for
-desktop-sourced sessions.
+Lives in the negotiated ``desktop_ui_v2`` toolset, which the GUI gateway
+enables only for protocol-2 desktop sessions.
 """
 
 import json
@@ -138,7 +138,7 @@ ANNOTATE_PREVIEW_SCHEMA = {
 
 registry.register(
     name="annotate_preview",
-    toolset="desktop_ui",
+    toolset="desktop_ui_v2",
     schema=ANNOTATE_PREVIEW_SCHEMA,
     handler=lambda args, **kw: annotate_preview_tool(
         action=args.get("action", "add"),

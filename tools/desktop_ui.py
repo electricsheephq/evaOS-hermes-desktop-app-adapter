@@ -16,12 +16,31 @@ from gateway.session_context import get_session_env
 
 # (sid, event, payload) sink, installed by the desktop gateway.
 _emit: Optional[Callable[[str, str, dict], None]] = None
+# (sid, event) -> structured JSON error or None. The gateway owns negotiation;
+# tools merely consult this resolver immediately before touching the renderer.
+_protocol_error: Optional[Callable[[str, str], Optional[str]]] = None
 
 
 def set_emitter(fn: Optional[Callable[[str, str, dict], None]]) -> None:
     """Install (or clear) the renderer-event sink. Called by the desktop gateway."""
     global _emit
     _emit = fn
+
+
+def set_protocol_resolver(
+    fn: Optional[Callable[[str, str], Optional[str]]],
+) -> None:
+    """Install (or clear) the session-scoped Desktop protocol guard."""
+    global _protocol_error
+    _protocol_error = fn
+
+
+def protocol_error(event: str) -> Optional[str]:
+    """Return a structured capability error for the current session, if any."""
+    resolver = _protocol_error
+    if resolver is None:
+        return None
+    return resolver(get_session_env("HERMES_UI_SESSION_ID", ""), event)
 
 
 def available() -> bool:
@@ -36,5 +55,9 @@ def emit(event: str, payload: dict) -> bool:
     fn = _emit
     if fn is None:
         return False
-    fn(get_session_env("HERMES_UI_SESSION_ID", ""), event, payload)
+    sid = get_session_env("HERMES_UI_SESSION_ID", "")
+    resolver = _protocol_error
+    if resolver is not None and resolver(sid, event) is not None:
+        return False
+    fn(sid, event, payload)
     return True

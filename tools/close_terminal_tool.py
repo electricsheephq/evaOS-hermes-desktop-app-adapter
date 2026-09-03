@@ -14,6 +14,7 @@ enables only for desktop-sourced sessions, so it never appears outside the GUI.
 
 import json
 
+from tools import desktop_ui
 from tools.process_registry import process_registry
 from tools.registry import registry, tool_error
 
@@ -23,6 +24,9 @@ def close_terminal_tool(process_id: str) -> str:
     pid = (process_id or "").strip()
     if not pid:
         return tool_error("process_id is required (the background process whose tab to close).")
+
+    if error := desktop_ui.protocol_error("terminal.close"):
+        return error
 
     return json.dumps(process_registry.request_close_terminal(pid), ensure_ascii=False)
 

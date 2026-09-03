@@ -23,8 +23,8 @@ engine into the pane's webview and answers ``preview.act.respond`` with the
 outcome plus whatever moved. This module is just schema + a thin dispatcher
 over the platform-injected callback.
 
-Lives in the ``desktop_ui`` toolset, which the GUI gateway enables only for
-desktop-sourced sessions.
+Lives in the negotiated ``desktop_ui_v2`` toolset, which the GUI gateway
+enables only for protocol-2 desktop sessions.
 """
 
 import json
@@ -215,7 +215,7 @@ ACT_PREVIEW_SCHEMA = {
 
 registry.register(
     name="drive_preview",
-    toolset="desktop_ui",
+    toolset="desktop_ui_v2",
     schema=ACT_PREVIEW_SCHEMA,
     handler=lambda args, **kw: drive_preview_tool(
         action=args.get("action", ""),

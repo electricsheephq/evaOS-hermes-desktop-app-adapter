@@ -9,8 +9,8 @@ existing REST endpoints (catalog install, enable, OAuth), and answers with
 ``mcp.setup.respond`` once the flow settles. This module is just schema + a
 thin dispatcher over the platform-injected callback.
 
-Lives in the ``desktop_ui`` toolset, which the GUI gateway enables only for
-desktop-sourced sessions — on every other surface the agent falls back to
+Lives in the negotiated ``desktop_ui_v2`` toolset, which the GUI gateway
+enables only for protocol-2 desktop sessions — on every other surface the agent falls back to
 ``hermes mcp install <name>`` in the terminal.
 """
 
@@ -122,7 +122,7 @@ SETUP_MCP_SCHEMA = {
 
 registry.register(
     name="setup_mcp",
-    toolset="desktop_ui",
+    toolset="desktop_ui_v2",
     schema=SETUP_MCP_SCHEMA,
     handler=lambda args, **kw: setup_mcp_tool(
         server=args.get("server", ""),

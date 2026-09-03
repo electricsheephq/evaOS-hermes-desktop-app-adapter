@@ -50,7 +50,12 @@ def open_preview_tool(url: str, label: str = "") -> str:
     if not ok:
         return tool_error("The preview pane is only available in the Hermes desktop app.")
 
-    return json.dumps({"success": True, "url": target, "label": label}, ensure_ascii=False)
+    # This bridge is intentionally fire-and-forget for upstream alignment.
+    # Success proves dispatch to the renderer, not that navigation rendered.
+    return json.dumps(
+        {"success": True, "status": "dispatched", "url": target, "label": label},
+        ensure_ascii=False,
+    )
 
 
 OPEN_PREVIEW_SCHEMA = {
@@ -62,7 +67,8 @@ OPEN_PREVIEW_SCHEMA = {
         "localhost:3000\". Accepts a web URL (a bare domain like www.cnn.com is fine), "
         "a localhost dev-server URL, or a file path (HTML renders live; other files "
         "show their contents). The pane opens for the current window only. To close "
-        "the pane or a tab, use close_preview."
+        "the pane or a tab, use close_preview. A successful result means the "
+        "request was dispatched; use read_preview to prove the page rendered."
     ),
     "parameters": {
         "type": "object",

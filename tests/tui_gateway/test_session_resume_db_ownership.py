@@ -206,10 +206,16 @@ def test_resume_closes_profile_db_on_deferred_cold_resume(profile_dbs, monkeypat
     monkeypatch.setattr("hermes_state.SessionDB", _factory)
     monkeypatch.setattr(server, "_stored_session_runtime_overrides", lambda _found: {})
 
-    resp = _resume(session_id="s1", profile="work")
+    resp = _resume(
+        session_id="s1",
+        profile="work",
+        source="desktop",
+        desktop_ui_protocol=2,
+    )
 
     assert resp["result"]["session_key"] == "s1"
     assert resp["result"]["status"] == "idle"
+    assert server._sessions[resp["result"]["session_id"]]["desktop_ui_protocol"] == 2
     assert profile_dbs[0].closed == 1
 
 

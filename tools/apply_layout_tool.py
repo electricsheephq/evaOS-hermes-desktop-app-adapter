@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Apply a layout preset in the Hermes desktop GUI.
 
-Lives in the ``desktop_ui`` toolset (like ``focus_pane``), which the GUI
-gateway enables only for desktop-sourced sessions. Emits ``layout.apply``
+Lives in the negotiated ``desktop_ui_v2`` toolset, which the GUI gateway
+enables only for protocol-2 desktop sessions. Emits ``layout.apply``
 through the shared ``desktop_ui`` bridge; the renderer resolves the preset id
 against its layouts registry (core presets, plugin presets, and user-saved
 presets are all the same list) and applies the tree through the exact code
@@ -30,6 +30,9 @@ def apply_layout_tool(preset: str) -> str:
     name = (preset or "").strip()
     if not name:
         return tool_error("preset is required — a layout preset id, e.g. 'default' or 'focus'.")
+
+    if error := desktop_ui.protocol_error("layout.apply"):
+        return error
 
     try:
         ok = desktop_ui.emit("layout.apply", {"preset": name})
@@ -67,7 +70,7 @@ APPLY_LAYOUT_SCHEMA = {
 
 registry.register(
     name="apply_layout",
-    toolset="desktop_ui",
+    toolset="desktop_ui_v2",
     schema=APPLY_LAYOUT_SCHEMA,
     handler=lambda args, **kw: apply_layout_tool(preset=args.get("preset", "")),
     emoji="🧱",

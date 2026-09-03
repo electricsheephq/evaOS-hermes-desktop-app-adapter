@@ -18,8 +18,8 @@ into the preview's webview when needed) and answers ``tour.respond`` with the
 outcome, so the agent knows whether the selector matched. This module is just
 schema + a thin dispatcher over the platform-injected callback.
 
-Lives in the ``desktop_ui`` toolset, which the GUI gateway enables only for
-desktop-sourced sessions.
+Lives in the negotiated ``desktop_ui_v2`` toolset, which the GUI gateway
+enables only for protocol-2 desktop sessions.
 """
 
 import json
@@ -185,7 +185,7 @@ TOUR_SCHEMA = {
 
 registry.register(
     name="tour",
-    toolset="desktop_ui",
+    toolset="desktop_ui_v2",
     schema=TOUR_SCHEMA,
     handler=lambda args, **kw: tour_tool(
         action=args.get("action", ""),

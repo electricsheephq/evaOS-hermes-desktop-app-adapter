@@ -2960,6 +2960,9 @@ def _start_agent_build(sid: str, session: dict) -> None:
                 if resume_sid := current.get("resume_session_id"):
                     kw["session_id"] = resume_sid
                 kw["platform_override"] = _session_source(current)
+                kw["desktop_ui_protocol_override"] = current.get(
+                    "desktop_ui_protocol"
+                )
                 resume_overrides = current.get("resume_runtime_overrides")
                 if isinstance(resume_overrides, dict) and resume_overrides:
                     # Cold deferred resume: restore the full persisted runtime
@@ -5444,7 +5447,30 @@ def _load_tool_progress_mode() -> str:
     return mode if mode in {"off", "new", "all", "verbose"} else "all"
 
 
-def _gui_surface_toolsets(platform: str) -> set[str]:
+DESKTOP_UI_PROTOCOL_LEGACY = 1
+DESKTOP_UI_PROTOCOL_CURRENT = 2
+
+
+def _negotiate_desktop_ui_protocol(platform: str, requested=None) -> int:
+    """Resolve a client-declared Desktop UI protocol without granting access.
+
+    The session source remains the authorization boundary. A missing or invalid
+    marker from a Desktop client is the legacy protocol; non-Desktop clients
+    always negotiate zero. Future integer values clamp to the highest protocol
+    this runtime understands so a newer client remains backward compatible.
+    """
+    if platform != "desktop":
+        return 0
+    if isinstance(requested, bool) or not isinstance(requested, int):
+        return DESKTOP_UI_PROTOCOL_LEGACY
+    if requested < DESKTOP_UI_PROTOCOL_CURRENT:
+        return DESKTOP_UI_PROTOCOL_LEGACY
+    return DESKTOP_UI_PROTOCOL_CURRENT
+
+
+def _gui_surface_toolsets(
+    platform: str, desktop_ui_protocol=None
+) -> set[str]:
     """Toolsets that exist because of the CLIENT on the other end, not the host.
 
     Both entries are deliberately off ``_HERMES_CORE_TOOLS`` — every other
@@ -5462,10 +5488,17 @@ def _gui_surface_toolsets(platform: str) -> set[str]:
     surfaces = {"project"}
     if platform == "desktop":
         surfaces.add("desktop_ui")
+        if (
+            _negotiate_desktop_ui_protocol(platform, desktop_ui_protocol)
+            >= DESKTOP_UI_PROTOCOL_CURRENT
+        ):
+            surfaces.add("desktop_ui_v2")
     return surfaces
 
 
-def _load_enabled_toolsets(platform: str | None = None) -> list[str] | None:
+def _load_enabled_toolsets(
+    platform: str | None = None, desktop_ui_protocol=None
+) -> list[str] | None:
     session_platform = platform or _resolve_session_platform()
     explicit = [
         item.strip()
@@ -5491,7 +5524,14 @@ def _load_enabled_toolsets(platform: str | None = None) -> list[str] | None:
                 # coding posture returns before the fallback path that normally
                 # adds them — without this the desktop loses its pane/project
                 # tools exactly when sitting in a repo (see below).
-                return sorted({*selection, *_gui_surface_toolsets(session_platform)})
+                return sorted(
+                    {
+                        *selection,
+                        *_gui_surface_toolsets(
+                            session_platform, desktop_ui_protocol
+                        ),
+                    }
+                )
         except Exception:
             pass
 
@@ -5608,7 +5648,10 @@ def _load_enabled_toolsets(platform: str | None = None) -> list[str] | None:
         # surface them. This resolver runs ONLY in the desktop/TUI gateway, so
         # folding them in here is the gate that exposes them on exactly the
         # surface that can answer them.
-        return sorted(enabled | _gui_surface_toolsets(session_platform))
+        return sorted(
+            enabled
+            | _gui_surface_toolsets(session_platform, desktop_ui_protocol)
+        )
     except Exception:
         if fallback_notice is not None:
             print(
@@ -7464,6 +7507,134 @@ def _mirror_subagent_to_child(event_type: str, payload: dict) -> None:
             _child_mirrors.pop(child_key, None)
 
 
+_DESKTOP_UI_EVENT_REQUIREMENTS = {
+    "terminal.close": (1, "close_terminal"),
+    "preview.open": (1, "open_preview"),
+    "pane.reveal": (1, "focus_pane"),
+    "message.reaction": (1, "react_to_message"),
+    "preview.close": (2, "close_preview"),
+    "layout.apply": (2, "apply_layout"),
+}
+
+
+def _desktop_ui_protocol_for_session(sid: str) -> int:
+    """Return the negotiated UI level for an existing live session."""
+    with _sessions_lock:
+        session = _sessions.get(sid)
+        if not isinstance(session, dict):
+            return 0
+        source = str(session.get("source") or "").strip()
+        requested = session.get("desktop_ui_protocol")
+    return _negotiate_desktop_ui_protocol(source, requested)
+
+
+def _desktop_ui_session_ref(sid: str) -> str:
+    """Stable redacted correlation id; never log a raw session identifier."""
+    return hashlib.sha256(str(sid or "").encode("utf-8")).hexdigest()[:12]
+
+
+def _log_desktop_ui_lifecycle(
+    sid: str,
+    tool_name: str,
+    outcome: str,
+    *,
+    required_protocol: int,
+    negotiated_protocol: int,
+    latency_ms: int = 0,
+) -> None:
+    logger.debug(
+        "desktop-ui lifecycle tool=%s outcome=%s required_protocol=%d "
+        "negotiated_protocol=%d session_ref=%s latency_ms=%d",
+        tool_name,
+        outcome,
+        required_protocol,
+        negotiated_protocol,
+        _desktop_ui_session_ref(sid),
+        max(0, int(latency_ms)),
+    )
+
+
+def _desktop_ui_protocol_error(
+    sid: str, tool_name: str, required_protocol: int
+) -> str | None:
+    negotiated = _desktop_ui_protocol_for_session(sid)
+    if negotiated >= required_protocol:
+        return None
+
+    _log_desktop_ui_lifecycle(
+        sid,
+        tool_name,
+        "protocol_blocked",
+        required_protocol=required_protocol,
+        negotiated_protocol=negotiated,
+    )
+    if negotiated == 0:
+        message = (
+            f"{tool_name} is only available to the Desktop client that owns "
+            "this session."
+        )
+        code = "desktop_ui_unavailable"
+    else:
+        message = (
+            f"This Desktop client needs an update before it can use {tool_name}."
+        )
+        code = "desktop_ui_protocol_upgrade_required"
+    return json.dumps(
+        {
+            "error": message,
+            "code": code,
+            "required_protocol": required_protocol,
+            "negotiated_protocol": negotiated,
+        },
+        ensure_ascii=False,
+    )
+
+
+def _desktop_ui_request(
+    sid: str,
+    tool_name: str,
+    required_protocol: int,
+    request,
+) -> str:
+    """Run one blocking renderer request only after the session-level guard."""
+    if error := _desktop_ui_protocol_error(sid, tool_name, required_protocol):
+        return error
+
+    started = time.monotonic()
+    try:
+        result = request()
+    except Exception:
+        _log_desktop_ui_lifecycle(
+            sid,
+            tool_name,
+            "error",
+            required_protocol=required_protocol,
+            negotiated_protocol=_desktop_ui_protocol_for_session(sid),
+            latency_ms=int((time.monotonic() - started) * 1000),
+        )
+        raise
+
+    expired = not result or (
+        tool_name == "tour" and result == _TOUR_BRIDGE_UNAVAILABLE
+    )
+    _log_desktop_ui_lifecycle(
+        sid,
+        tool_name,
+        "expired" if expired else "responded",
+        required_protocol=required_protocol,
+        negotiated_protocol=_desktop_ui_protocol_for_session(sid),
+        latency_ms=int((time.monotonic() - started) * 1000),
+    )
+    return result
+
+
+def _desktop_ui_emitter_protocol_error(sid: str, event: str) -> str | None:
+    required, tool_name = _DESKTOP_UI_EVENT_REQUIREMENTS.get(
+        event, (DESKTOP_UI_PROTOCOL_CURRENT, event)
+    )
+    return _desktop_ui_protocol_error(sid, tool_name, required)
+
+
 def _agent_cbs(sid: str) -> dict:
     callbacks = {
         "tool_start_callback": lambda tc_id, name, args: _on_tool_start(
@@ -7512,21 +7683,31 @@ def _agent_cbs(sid: str) -> dict:
         ),
         # read_terminal tool (desktop GUI): same blocking bridge as clarify — the
         # renderer answers terminal.read.respond with the serialized buffer.
-        "read_terminal_callback": lambda start=None, count=None: _block(
-            "terminal.read.request",
+        "read_terminal_callback": lambda start=None, count=None: _desktop_ui_request(
             sid,
-            {k: v for k, v in (("start", start), ("count", count)) if v is not None},
-            timeout=30,
+            "read_terminal",
+            1,
+            lambda: _block(
+                "terminal.read.request",
+                sid,
+                {k: v for k, v in (("start", start), ("count", count)) if v is not None},
+                timeout=30,
+            ),
         ),
         # read_preview tool (desktop GUI): the renderer serializes the active
         # preview tab (a Browser webview's readable text, a file's identity)
         # and answers preview.read.respond. Longer timeout than the terminal
         # read — a URL tab extracts text from a live page.
-        "read_preview_callback": lambda start=None, count=None: _block(
-            "preview.read.request",
+        "read_preview_callback": lambda start=None, count=None: _desktop_ui_request(
             sid,
-            {k: v for k, v in (("start", start), ("count", count)) if v is not None},
-            timeout=45,
+            "read_preview",
+            2,
+            lambda: _block(
+                "preview.read.request",
+                sid,
+                {k: v for k, v in (("start", start), ("count", count)) if v is not None},
+                timeout=45,
+            ),
         ),
         # drive_preview tool (desktop GUI): the renderer injects the interaction
         # engine into the preview pane's webview (or drives the pane's history)
@@ -7536,21 +7717,31 @@ def _agent_cbs(sid: str) -> dict:
         # annotate_preview rides this same callback: it resolves a target
         # through the same engine and differs only in the verb it sends, so it
         # needs a tool of its own but not a channel of its own.
-        "drive_preview_callback": lambda payload: _block(
-            "preview.act.request",
+        "drive_preview_callback": lambda payload: _desktop_ui_request(
             sid,
-            dict(payload),
-            timeout=45,
+            "drive_preview",
+            2,
+            lambda: _block(
+                "preview.act.request",
+                sid,
+                dict(payload),
+                timeout=45,
+            ),
         ),
         # read_window_below tool (desktop GUI): the renderer asks its main
         # process (which owns native window enumeration) which OS window sits
         # directly underneath the Hermes window, and answers
         # window.read.respond with the serialized metadata.
-        "read_window_below_callback": lambda: _block(
-            "window.read.request",
+        "read_window_below_callback": lambda: _desktop_ui_request(
             sid,
-            {},
-            timeout=30,
+            "read_window_below",
+            2,
+            lambda: _block(
+                "window.read.request",
+                sid,
+                {},
+                timeout=30,
+            ),
         ),
         # setup_mcp tool (desktop GUI): the renderer shows an inline consent
         # card and walks the user through install/enable/OAuth via the REST
@@ -7558,17 +7749,27 @@ def _agent_cbs(sid: str) -> dict:
         # Long timeout on purpose — the flow can include typing an API key or
         # a browser OAuth round-trip. Same lifecycle as clarify: on timeout
         # the tool returns "unanswered" and a late answer is tolerated.
-        "setup_mcp_callback": lambda server, action, reason: _block(
-            "mcp.setup.request",
+        "setup_mcp_callback": lambda server, action, reason: _desktop_ui_request(
             sid,
-            {"server": server, "action": action, "reason": reason},
-            timeout=600,
+            "setup_mcp",
+            2,
+            lambda: _block(
+                "mcp.setup.request",
+                sid,
+                {"server": server, "action": action, "reason": reason},
+                timeout=600,
+            ),
         ),
         # tour tool (desktop GUI): the renderer drives driver.js — highlighting
         # elements in the app's own DOM or injecting the engine into the
         # preview pane's webview — and answers tour.respond with the outcome
         # (did the selector match, which step is active).
-        "tour_callback": lambda payload: _tour_request(sid, payload),
+        "tour_callback": lambda payload: _desktop_ui_request(
+            sid,
+            "tour",
+            2,
+            lambda: _tour_request(sid, payload),
+        ),
     }
 
     # Interim assistant commentary (text alongside tool calls, or the attempted
@@ -8187,6 +8388,7 @@ def _make_agent(
     reasoning_config_override: dict | None = None,
     service_tier_override: str | None = None,
     platform_override: str | None = None,
+    desktop_ui_protocol_override=None,
 ):
     # AC-4 test seam: dead unless explicitly armed by the isolated certify
     # harness. Both inline and compute-host paths construct through _make_agent,
@@ -8342,7 +8544,10 @@ def _make_agent(
             if service_tier_override is not None
             else _load_service_tier()
         ),
-        enabled_toolsets=_load_enabled_toolsets(_resolve_agent_platform(platform_override)),
+        enabled_toolsets=_load_enabled_toolsets(
+            _resolve_agent_platform(platform_override),
+            desktop_ui_protocol_override,
+        ),
         # OpenRouter provider-routing prefs (config.yaml `provider_routing`).
         # Mirrors the messaging gateway + CLI so the desktop/TUI honors the same
         # routing instead of letting OpenRouter pick providers at random.
@@ -8375,8 +8580,10 @@ def _init_session(
     session_db=None,
     source: str | None = None,
     profile_home: str | None = None,
+    desktop_ui_protocol=None,
 ):
     now = time.time()
+    resolved_source = _resolve_session_source(source)
     with _sessions_lock:
         _sessions[sid] = {
             "agent": agent,
@@ -8394,7 +8601,10 @@ def _init_session(
             "cols": cols,
             "slash_worker": None,
             "show_reasoning": _load_show_reasoning(),
-            "source": _resolve_session_source(source),
+            "source": resolved_source,
+            "desktop_ui_protocol": _negotiate_desktop_ui_protocol(
+                resolved_source, desktop_ui_protocol
+            ),
             "tool_progress_mode": _load_tool_progress_mode(),
             "edit_snapshots": {},
             "tool_started_at": {},
@@ -9782,6 +9992,7 @@ def _deferred_session_record(
     lazy: bool = False,
     model_override=None,
     resume_runtime_overrides: dict | None = None,
+    desktop_ui_protocol=None,
 ) -> dict:
     """A live-session record whose AIAgent is built later (lazy watch / cold
     resume) — _init_session's shape minus the agent."""
@@ -9816,6 +10027,9 @@ def _deferred_session_record(
         "show_reasoning": _load_show_reasoning(),
         "slash_worker": None,
         "source": source,
+        "desktop_ui_protocol": _negotiate_desktop_ui_protocol(
+            source, desktop_ui_protocol
+        ),
         "tool_progress_mode": _load_tool_progress_mode(),
         "tool_started_at": {},
         "transport": current_transport() or _stdio_transport,
@@ -11713,7 +11927,21 @@ def _wire_desktop_ui() -> None:
     except Exception:
         return
 
-    desktop_ui.set_emitter(lambda sid, event, payload: _emit(event, sid, payload))
+    def _desktop_emit(sid: str, event: str, payload: dict) -> None:
+        _emit(event, sid, payload)
+        required, tool_name = _DESKTOP_UI_EVENT_REQUIREMENTS.get(
+            event, (DESKTOP_UI_PROTOCOL_CURRENT, event)
+        )
+        _log_desktop_ui_lifecycle(
+            sid,
+            tool_name,
+            "dispatched",
+            required_protocol=required,
+            negotiated_protocol=_desktop_ui_protocol_for_session(sid),
+        )
+
+    desktop_ui.set_protocol_resolver(_desktop_ui_emitter_protocol_error)
+    desktop_ui.set_emitter(_desktop_emit)
     _desktop_ui_wired = True
 
 

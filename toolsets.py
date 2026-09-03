@@ -241,8 +241,9 @@ TOOLSETS = {
     },
 
     # Affordances that only exist because a GUI renderer is on the other end of
-    # the connection: read/close the embedded terminal pane, open/read/close the
-    # in-app browser, focus a pane, tapback a message.
+    # the connection. ``desktop_ui`` is the legacy protocol-1 surface shipped by
+    # every supported Desktop client. Newer responders live in
+    # ``desktop_ui_v2`` and are negotiated per session by tui_gateway/server.py.
     #
     # Enabled by the GUI gateway for a session whose SOURCE is the desktop app
     # (tui_gateway/server.py::_load_enabled_toolsets), NOT by a process env var.
@@ -250,13 +251,20 @@ TOOLSETS = {
     # backend — so "was this process spawned by Electron?" is the wrong
     # question and silently strips these tools from every remote gateway.
     "desktop_ui": {
-        "description": "Desktop GUI affordances — in-app terminal/browser panes, pane focus, reactions (GUI sessions only)",
+        "description": "Desktop GUI protocol 1 — terminal read/close, preview open, pane focus, reactions",
         "tools": [
             "read_terminal", "close_terminal",
-            "open_preview", "close_preview", "read_preview", "drive_preview", "annotate_preview",
-            "read_window_below",
+            "open_preview",
             "focus_pane", "react_to_message",
-            "setup_mcp", "tour",
+        ],
+        "includes": []
+    },
+
+    "desktop_ui_v2": {
+        "description": "Desktop GUI protocol 2 — preview read/drive plus newer renderer actions",
+        "tools": [
+            "close_preview", "read_preview", "drive_preview", "annotate_preview",
+            "read_window_below", "setup_mcp", "tour", "apply_layout",
         ],
         "includes": []
     },

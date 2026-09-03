@@ -58,6 +58,32 @@ def test_resume_by_stored_key_reattaches(live_lazy_session):
     assert "error" not in out, out
     assert out["result"]["session_id"] == sid
     assert out["result"]["stored_session_id"] == record["session_key"]
+    assert record["desktop_ui_protocol"] == 1
+
+
+def test_resume_rebinds_protocol_on_each_attach(live_lazy_session):
+    _sid, record = live_lazy_session
+    base = {
+        "profile": "ops",
+        "session_id": record["session_key"],
+        "omit_messages": True,
+    }
+
+    out = _resume(
+        {**base, "source": "desktop", "desktop_ui_protocol": 2}
+    )
+    assert "error" not in out, out
+    assert record["desktop_ui_protocol"] == 2
+
+    # A legacy Desktop reconnect omits the marker and safely rebinds to v1.
+    out = _resume({**base, "source": "desktop"})
+    assert "error" not in out, out
+    assert record["desktop_ui_protocol"] == 1
+
+    # The marker cannot grant GUI access to a non-Desktop client.
+    out = _resume({**base, "source": "tui", "desktop_ui_protocol": 2})
+    assert "error" not in out, out
+    assert record["desktop_ui_protocol"] == 0
 
 
 def test_resume_by_pending_title_reattaches(live_lazy_session):

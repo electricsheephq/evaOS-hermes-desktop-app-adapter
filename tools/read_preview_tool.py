@@ -8,8 +8,8 @@ bridge — the same one ``read_terminal`` uses: tui_gateway emits
 answers with ``preview.read.respond``. This module is just schema + a thin
 dispatcher over the platform-injected callback.
 
-Lives in the ``desktop_ui`` toolset, which the GUI gateway enables only for
-desktop-sourced sessions.
+Lives in the negotiated ``desktop_ui_v2`` toolset, which the GUI gateway
+enables only for protocol-2 desktop sessions.
 """
 
 import json
@@ -83,7 +83,7 @@ READ_PREVIEW_SCHEMA = {
 
 registry.register(
     name="read_preview",
-    toolset="desktop_ui",
+    toolset="desktop_ui_v2",
     schema=READ_PREVIEW_SCHEMA,
     handler=lambda args, **kw: read_preview_tool(
         start=args.get("start"),

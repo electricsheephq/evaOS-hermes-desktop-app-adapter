@@ -11,8 +11,10 @@ from tools.registry import registry
 @pytest.fixture(autouse=True)
 def _reset_emitter():
     desktop_ui.set_emitter(None)
+    desktop_ui.set_protocol_resolver(None)
     yield
     desktop_ui.set_emitter(None)
+    desktop_ui.set_protocol_resolver(None)
 
 
 def test_lives_in_the_gui_surface_toolset(monkeypatch):

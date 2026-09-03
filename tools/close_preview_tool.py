@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Close the Hermes desktop GUI's preview pane, or one of its tabs.
 
-Lives in the ``desktop_ui`` toolset (same as ``open_preview``), which the GUI
-gateway enables only for a session whose source is the desktop app. Emits
+Lives in the negotiated ``desktop_ui_v2`` toolset, which the GUI gateway
+enables only for a protocol-2 session whose source is the desktop app. Emits
 ``preview.close`` through the shared ``desktop_ui`` bridge; the renderer drops
 the matching tab — or the whole pane when no url is given — for the window
 that asked and never steals a background session's view.
@@ -18,6 +18,9 @@ from tools.registry import registry, tool_error
 def close_preview_tool(url: str = "") -> str:
     """Ask the desktop GUI to close the preview pane, or the tab for ``url``."""
     target = _normalize_target(url or "")
+
+    if error := desktop_ui.protocol_error("preview.close"):
+        return error
 
     try:
         ok = desktop_ui.emit("preview.close", {"url": target})
@@ -57,7 +60,7 @@ CLOSE_PREVIEW_SCHEMA = {
 
 registry.register(
     name="close_preview",
-    toolset="desktop_ui",
+    toolset="desktop_ui_v2",
     schema=CLOSE_PREVIEW_SCHEMA,
     handler=lambda args, **kw: close_preview_tool(url=args.get("url") or ""),
     emoji="🖼️",

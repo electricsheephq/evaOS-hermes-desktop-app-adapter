@@ -12,8 +12,10 @@ from tools.registry import registry
 def _reset_emitter():
     """Each test controls the emitter; never leak one across tests."""
     desktop_ui.set_emitter(None)
+    desktop_ui.set_protocol_resolver(None)
     yield
     desktop_ui.set_emitter(None)
+    desktop_ui.set_protocol_resolver(None)
 
 
 def test_lives_in_the_gui_surface_toolset(monkeypatch):
@@ -33,3 +35,16 @@ def test_emitter_failure_is_reported():
 
     desktop_ui.set_emitter(_boom)
     assert "no window" in json.loads(op.open_preview_tool("https://x.example"))["error"]
+
+
+def test_success_is_explicitly_dispatch_only():
+    desktop_ui.set_emitter(lambda _sid, _event, _payload: None)
+
+    out = json.loads(op.open_preview_tool("https://example.com"))
+
+    assert out == {
+        "success": True,
+        "status": "dispatched",
+        "url": "https://example.com",
+        "label": "",
+    }
