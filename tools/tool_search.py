@@ -9,7 +9,8 @@ for the full rationale):
 
 * Core tools defined in ``toolsets._HERMES_CORE_TOOLS`` are *never* deferred.
   Always-load means always-load. No exceptions.
-* Session-gated GUI toolsets (``desktop_ui``, ``project``) are also never
+* Session-gated GUI toolsets (``desktop_ui``, ``desktop_ui_v2``, ``project``)
+  are also never
   deferred. They stay off the core list so CLI and messaging never pay for
   their schemas, but once a session enables them they stay in the
   model-facing array. Tool Search is for MCP/plugin catalog bloat, not for
@@ -231,7 +232,7 @@ def _core_tool_names() -> frozenset[str]:
 
 # Session-gated GUI toolsets. Off ``_HERMES_CORE_TOOLS`` so non-GUI clients
 # never pay their schema; once a session enables them they stay direct.
-_DIRECT_SURFACE_TOOLSETS = frozenset({"desktop_ui", "project"})
+_DIRECT_SURFACE_TOOLSETS = frozenset({"desktop_ui", "desktop_ui_v2", "project"})
 
 
 def is_deferrable_tool_name(name: str) -> bool:
