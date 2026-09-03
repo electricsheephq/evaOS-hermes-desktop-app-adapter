@@ -261,7 +261,7 @@ export function handleDesktopBridgeEvent(ctx: GatewayEventContext): boolean {
     // keyed by ChatMessage identity.
     const reactedRowId = payload?.row_id
 
-    if (typeof reactedRowId === 'number') {
+    if (ownsActiveSurface && typeof reactedRowId === 'number') {
       const nextReactions = Array.isArray(payload?.reactions) ? payload.reactions : []
       const reactedRole = payload?.role === 'assistant' ? 'assistant' : 'user'
 

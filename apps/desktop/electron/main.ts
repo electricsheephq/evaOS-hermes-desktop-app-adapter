@@ -282,7 +282,10 @@ import { LEGACY_OAUTH_PARTITION, resolveOauthPartition } from './oauth-partition
 import { createParentStartMarkerResolver, parentWatchdogEnv } from './parent-process-identity'
 import { registerPetOverlayIpc } from './pet-overlay-ipc'
 import {
+  assertEvaManagedConnectionId,
+  buildEvaManagedProfileRoutes,
   buildRegistryProfileRoutes,
+  EVA_MANAGED_CONNECTION_ID,
   isLocalEnumerationFailure,
   localRouteFallbackProfiles,
   undialedSshRouteSeeds
@@ -14462,7 +14465,10 @@ ipcMain.handle('hermes:connection', async (_event, profile) => {
   // normalization so every spelling of the primary coalesces onto one dial.
   const profileKey = profile && String(profile).trim() ? String(profile).trim() : primaryProfileKey()
   const connection = await backendDialClaims.run(backendScopeKey(null, profileKey), () => ensureBackend(profile))
-  const connectionId = resolvedConnectionId(readDesktopConnectionsRegistry(), connection)
+
+  const connectionId = EVA_MANAGED_BUILD
+    ? EVA_MANAGED_CONNECTION_ID
+    : resolvedConnectionId(readDesktopConnectionsRegistry(), connection)
 
   return connectionId ? { ...connection, connectionId } : connection
 })
@@ -14472,8 +14478,16 @@ ipcMain.handle('hermes:connection', async (_event, profile) => {
 // forces a genuinely-local child when the v1 global mode is remote (the
 // registry 'local' entry always means this machine).
 ipcMain.handle('hermes:connection:for', async (_event, payload) => {
-  assertEvaManagedLocalMutationAllowed(EVA_MANAGED_BUILD, 'Registry connections')
   const { connectionId, profile } = payload && typeof payload === 'object' ? (payload as any) : ({} as any)
+
+  if (EVA_MANAGED_BUILD) {
+    const id = assertEvaManagedConnectionId(connectionId)
+    const profileKey = profile && String(profile).trim() ? String(profile).trim() : primaryProfileKey()
+    const connection = await backendDialClaims.run(backendScopeKey(id, profileKey), () => ensureBackend(profile))
+
+    return { ...connection, connectionId: id, registryScoped: true }
+  }
+
   const registry = readDesktopConnectionsRegistry()
   const id = String(connectionId || '').trim() || registry.primary
   // Same single-owner claim as 'hermes:connection', keyed by the composite
@@ -14892,6 +14906,10 @@ ipcMain.handle('hermes:plugin-profile-routes', async (_event, rawProfileNames) =
         .filter(Boolean)
         .slice(0, 256)
     : []
+
+  if (EVA_MANAGED_BUILD) {
+    return buildEvaManagedProfileRoutes(fallbackProfileNames, primaryProfileKey())
+  }
 
   const registry = readDesktopConnectionsRegistry()
   const enumerations = await enumerateRegistryAgentSources(registry)
@@ -15438,7 +15456,11 @@ const registryGatewayWsUrlHandler = createRegistryGatewayWsUrlHandler({
 })
 
 ipcMain.handle('hermes:gateway:ws-url-for', async (_event, payload) => {
-  assertEvaManagedLocalMutationAllowed(EVA_MANAGED_BUILD, 'Registry connections')
+  if (EVA_MANAGED_BUILD) {
+    assertEvaManagedConnectionId(payload?.connectionId)
+
+    return gatewayWsUrlIpcResult(() => freshGatewayWsUrl(payload?.profile))
+  }
 
   return gatewayWsUrlIpcResult(() => registryGatewayWsUrlHandler(payload))
 })

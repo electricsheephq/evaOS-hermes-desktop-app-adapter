@@ -1,5 +1,9 @@
 import crypto from 'node:crypto'
 
+/** Opaque renderer-side identity for the one enrollment-bound evaOS runtime.
+ * It is routing metadata, never an authorization token. */
+export const EVA_MANAGED_CONNECTION_ID = 'eva-managed-runtime'
+
 export interface ProfileRouteConfig {
   cloudOrg: string
   mode: 'cloud' | 'local' | 'remote' | 'ssh'
@@ -111,6 +115,43 @@ export function undialedSshRouteSeeds(
 
 function normalizeProfile(name: null | string | undefined): string {
   return String(name ?? '').trim() || 'default'
+}
+
+/** Build credential-free plugin routes for a managed Desktop without touching
+ * the workstation registry. Every profile remains bound to the same enrolled
+ * runtime; the managed broker performs the actual profile authorization. */
+export function buildEvaManagedProfileRoutes(
+  profileNames: readonly string[],
+  primaryProfile: string
+): OpaqueProfileRoute[] {
+  const profiles: string[] = []
+  const seen = new Set<string>()
+
+  for (const raw of [primaryProfile, ...profileNames]) {
+    const profile = normalizeProfile(raw)
+
+    if (!seen.has(profile)) {
+      seen.add(profile)
+      profiles.push(profile)
+    }
+  }
+
+  return profiles.map(profile => ({
+    connectionId: EVA_MANAGED_CONNECTION_ID,
+    mode: 'remote',
+    profile,
+    targetProfile: profile
+  }))
+}
+
+/** Managed plugins may request only the synthetic enrolled-runtime route.
+ * Generic registry ids stay unavailable in evaOS Agent. */
+export function assertEvaManagedConnectionId(value: unknown): typeof EVA_MANAGED_CONNECTION_ID {
+  if (value !== EVA_MANAGED_CONNECTION_ID) {
+    throw new Error('evaOS Agent rejected a plugin request outside the managed runtime route.')
+  }
+
+  return EVA_MANAGED_CONNECTION_ID
 }
 
 function normalizeRemoteUrl(raw: string): string {

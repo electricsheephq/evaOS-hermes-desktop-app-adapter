@@ -4,7 +4,9 @@
 - Declares Desktop UI protocol 2 on session create, resume, and activate so matched runtimes expose only the UI tools this client can answer.
 - Preserves managed Electric Sheep authentication, assigned-agent routing, callback ownership, delegated access, relay, updater, and distribution controls.
 - Keeps managed REST, media, downloads, and WebSocket responses on the enrolled assignment while preventing background sessions from reading or driving the visible Desktop surface.
+- Routes bundled Bot Mode profile requests only through the enrolled managed runtime, including reconnects, while keeping background reactions and capability announcements out of the foreground session.
 - Restores fail-closed local filesystem, Git, terminal, and secure-storage boundaries for managed installations, including account-switch cleanup for cached transcript and in-flight turn data.
+- Clears pull-request recovery metadata with the rest of the account-scoped renderer state during managed sign-out or assignment changes.
 - Preserves an existing encrypted managed enrollment when secure storage cannot decrypt it at startup, returning a retryable local error instead of silently replacing it with signed-out state.
 - Keeps managed SSH updates serialized at the configured mutex path without creating quote-prefixed paths in the checkout.
 - This is an unpublished developer candidate; it is not a signed or notarized release.

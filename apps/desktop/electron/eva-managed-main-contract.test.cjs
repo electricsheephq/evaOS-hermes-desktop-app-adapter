@@ -27,12 +27,16 @@ test('managed main-process wiring survives an upstream Desktop recut', () => {
   for (const channel of ['hermes:connection:for', 'hermes:gateway:ws-url-for']) {
     assertSourceMatch(
       new RegExp(
-        `ipcMain\\.handle\\('${channel}'[\\s\\S]{0,220}` +
-          "assertEvaManagedLocalMutationAllowed\\(EVA_MANAGED_BUILD, 'Registry connections'"
+        `ipcMain\\.handle\\('${channel}'[\\s\\S]{0,300}` +
+          'if \\(EVA_MANAGED_BUILD\\)[\\s\\S]{0,180}assertEvaManagedConnectionId\\('
       ),
-      `${channel} must reject renderer-selected registry routes in managed mode`
+      `${channel} must accept only the opaque enrolled-runtime route in managed mode`
     )
   }
+  assertSourceMatch(
+    /ipcMain\.handle\('hermes:plugin-profile-routes',[\s\S]{0,500}if \(EVA_MANAGED_BUILD\)\s*{\s*return buildEvaManagedProfileRoutes\(/,
+    'managed plugin route inventory must bypass the workstation connection registry'
+  )
   assertSourceMatch(
     /ipcMain\.handle\('hermes:window:openInTerminal',[\s\S]{0,220}assertEvaManagedLocalTerminalAllowed\(EVA_MANAGED_BUILD\)/,
     'managed mode must reject external terminal launches before resolving a local runtime'

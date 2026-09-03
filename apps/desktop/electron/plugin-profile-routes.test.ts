@@ -1,8 +1,11 @@
 import { describe, expect, it, vi } from 'vitest'
 
 import {
+  assertEvaManagedConnectionId,
+  buildEvaManagedProfileRoutes,
   buildOpaqueProfileRoutes,
   buildRegistryProfileRoutes,
+  EVA_MANAGED_CONNECTION_ID,
   isLocalEnumerationFailure,
   localRouteFallbackProfiles,
   type ProfileRouteConfig,
@@ -23,6 +26,32 @@ function config(overrides: Partial<ProfileRouteConfig> = {}): ProfileRouteConfig
     ...overrides
   }
 }
+
+describe('managed plugin profile routes', () => {
+  it('routes every managed profile through one opaque assigned-runtime identity', () => {
+    expect(buildEvaManagedProfileRoutes(['research', 'default', 'research', ''], 'default')).toEqual([
+      {
+        connectionId: EVA_MANAGED_CONNECTION_ID,
+        mode: 'remote',
+        profile: 'default',
+        targetProfile: 'default'
+      },
+      {
+        connectionId: EVA_MANAGED_CONNECTION_ID,
+        mode: 'remote',
+        profile: 'research',
+        targetProfile: 'research'
+      }
+    ])
+  })
+
+  it('accepts only the exact managed route identity', () => {
+    expect(assertEvaManagedConnectionId(EVA_MANAGED_CONNECTION_ID)).toBe(EVA_MANAGED_CONNECTION_ID)
+    expect(() => assertEvaManagedConnectionId('local')).toThrow(/managed runtime route/i)
+    expect(() => assertEvaManagedConnectionId(` ${EVA_MANAGED_CONNECTION_ID} `)).toThrow(/managed runtime route/i)
+    expect(() => assertEvaManagedConnectionId('')).toThrow(/managed runtime route/i)
+  })
+})
 
 describe('buildOpaqueProfileRoutes', () => {
   it('groups SSH aliases by their effective route without exposing endpoint data', async () => {

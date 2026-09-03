@@ -26,7 +26,10 @@ export function handleLifecycleEvent(ctx: GatewayEventContext): boolean {
     ingestBackendSkin((payload as { skin?: HermesSkin } | undefined)?.skin, { apply: false })
     // Backends with the change watcher broadcast pet/cron/sessions change
     // events; consumers demote their legacy polls to slow backstops.
-    setChangeEventsAvailable(Boolean((payload as { change_events?: boolean } | undefined)?.change_events))
+
+    if (fromActiveSource()) {
+      setChangeEventsAvailable(Boolean((payload as { change_events?: boolean } | undefined)?.change_events))
+    }
 
     return true
   }

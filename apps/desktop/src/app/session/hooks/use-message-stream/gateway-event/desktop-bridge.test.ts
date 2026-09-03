@@ -3,8 +3,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const mocks = vi.hoisted(() => ({
   readActivePreview: vi.fn(async () => ({ text: 'foreground preview' })),
   readActiveTerminal: vi.fn(() => ({ text: 'foreground terminal' })),
+  recordAgentReaction: vi.fn(),
   revealDesktopPane: vi.fn(),
-  requestGatewayForAgent: vi.fn(async () => ({}))
+  requestGatewayForAgent: vi.fn(async () => ({})),
+  setMessages: vi.fn()
 }))
 
 vi.mock('@/app/chat/right-rail/preview-reader', () => ({ readActivePreview: mocks.readActivePreview }))
@@ -13,8 +15,8 @@ vi.mock('@/app/right-sidebar/terminal/buffer', () => ({ readActiveTerminal: mock
 vi.mock('@/app/right-sidebar/terminal/terminals', () => ({ closeAgentTerminalByProc: vi.fn() }))
 vi.mock('@/store/gateway', () => ({ requestGatewayForAgent: mocks.requestGatewayForAgent }))
 vi.mock('@/store/pane-focus', () => ({ applyDesktopLayoutPreset: vi.fn(), revealDesktopPane: mocks.revealDesktopPane }))
-vi.mock('@/store/reactions-local', () => ({ recordAgentReaction: vi.fn() }))
-vi.mock('@/store/session', () => ({ setMessages: vi.fn() }))
+vi.mock('@/store/reactions-local', () => ({ recordAgentReaction: mocks.recordAgentReaction }))
+vi.mock('@/store/session', () => ({ setMessages: mocks.setMessages }))
 
 import { handleDesktopBridgeEvent } from './desktop-bridge'
 import type { GatewayEventContext } from './types'
@@ -107,5 +109,30 @@ describe('desktop bridge source and foreground isolation', () => {
       'window.read.respond',
       { request_id: 'request-1', text: '' }
     )
+  })
+
+  it('does not paint a background reaction into the foreground transcript', () => {
+    const ctx = context('message.reaction', false)
+    ctx.payload = {
+      reactions: [{ at: 1, author: 'agent', emoji: 'eyes' }],
+      role: 'assistant',
+      row_id: 42
+    } as GatewayEventContext['payload']
+
+    expect(handleDesktopBridgeEvent(ctx)).toBe(true)
+    expect(mocks.setMessages).not.toHaveBeenCalled()
+    expect(mocks.recordAgentReaction).not.toHaveBeenCalled()
+  })
+
+  it('still publishes a reaction owned by the active surface', () => {
+    const ctx = context('message.reaction', true)
+    ctx.payload = {
+      reactions: [{ at: 1, author: 'agent', emoji: 'thumbs_up' }],
+      role: 'assistant',
+      row_id: 7
+    } as GatewayEventContext['payload']
+
+    expect(handleDesktopBridgeEvent(ctx)).toBe(true)
+    expect(mocks.setMessages).toHaveBeenCalledOnce()
   })
 })
