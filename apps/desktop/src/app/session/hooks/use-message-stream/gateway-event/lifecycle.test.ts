@@ -19,6 +19,8 @@ vi.mock('@/themes/backend-sync', () => ({ ingestBackendSkin: mocks.ingestBackend
 import { handleLifecycleEvent } from './lifecycle'
 import type { GatewayEventContext } from './types'
 
+const SKIN = { id: 'test-skin' }
+
 function context(fromActive: boolean, changeEvents: boolean): GatewayEventContext {
   return {
     deps: {},
@@ -27,7 +29,7 @@ function context(fromActive: boolean, changeEvents: boolean): GatewayEventContex
     fromActiveSource: () => fromActive,
     isActiveEvent: false,
     occurredAt: 0,
-    payload: { change_events: changeEvents },
+    payload: { change_events: changeEvents, skin: SKIN },
     sessionId: null
   } as unknown as GatewayEventContext
 }
@@ -40,10 +42,12 @@ describe('gateway lifecycle source isolation', () => {
   it('does not replace the active capability flag from a background gateway', () => {
     expect(handleLifecycleEvent(context(false, true))).toBe(true)
     expect(mocks.setChangeEventsAvailable).not.toHaveBeenCalled()
+    expect(mocks.ingestBackendSkin).not.toHaveBeenCalled()
   })
 
   it('updates the capability flag for the active gateway', () => {
     expect(handleLifecycleEvent(context(true, true))).toBe(true)
     expect(mocks.setChangeEventsAvailable).toHaveBeenCalledWith(true)
+    expect(mocks.ingestBackendSkin).toHaveBeenCalledWith(SKIN, { apply: false })
   })
 })

@@ -2,10 +2,19 @@ import { QueryClient } from '@tanstack/react-query'
 import { act, cleanup } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+const onboardingMocks = vi.hoisted(() => ({
+  requestDesktopOnboardingForCredentialWarning: vi.fn()
+}))
+
+vi.mock('@/store/onboarding', () => ({
+  requestDesktopOnboardingForCredentialWarning: onboardingMocks.requestDesktopOnboardingForCredentialWarning
+}))
+
 import { isTargetSessionBusy } from '@/app/session/hooks/use-prompt-actions/utils'
 import type { ClientSessionState } from '@/app/types'
 import { createClientSessionState } from '@/lib/chat-runtime'
 import { modelOptionsQueryKey } from '@/lib/model-options'
+import { $activeGatewayProfile } from '@/store/profile'
 import { setCurrentModel, setCurrentProvider } from '@/store/session'
 
 import { type MessageStreamHarness, renderMessageStream } from './test-harness'
@@ -45,8 +54,10 @@ beforeEach(() => {
   refreshSessions = vi.fn<() => Promise<void>>(async () => undefined)
   hydrateFromStoredSession = vi.fn<() => Promise<void>>(async () => undefined)
   queryClient = new QueryClient()
+  $activeGatewayProfile.set(ACTIVE_PROFILE)
   setCurrentModel('')
   setCurrentProvider('')
+  onboardingMocks.requestDesktopOnboardingForCredentialWarning.mockClear()
 })
 
 afterEach(() => {
@@ -117,6 +128,56 @@ describe('session.info model-options invalidation gating', () => {
     sessionInfo(ACTIVE_SID, { model: 'm2', provider: 'p1', running: true })
 
     expect(invalidate).toHaveBeenCalledWith({ queryKey: modelOptionsQueryKey(ACTIVE_PROFILE, ACTIVE_SID) })
+  })
+})
+
+describe('session.info credential-warning source isolation', () => {
+  const warning = "No API key configured for provider 'openrouter'. First message will fail."
+
+  it('does not replace the foreground warning from a background session', () => {
+    mountStream()
+
+    act(() =>
+      stream.handleEvent({
+        payload: { credential_warning: warning },
+        profile: ACTIVE_PROFILE,
+        session_id: 'session-background',
+        type: 'session.info'
+      })
+    )
+
+    expect(onboardingMocks.requestDesktopOnboardingForCredentialWarning).not.toHaveBeenCalled()
+  })
+
+  it('does not replace the foreground warning from a background gateway', () => {
+    mountStream()
+
+    act(() =>
+      stream.handleEvent({
+        payload: { credential_warning: warning },
+        profile: 'background-profile',
+        session_id: ACTIVE_SID,
+        type: 'session.info'
+      })
+    )
+
+    expect(onboardingMocks.requestDesktopOnboardingForCredentialWarning).not.toHaveBeenCalled()
+  })
+
+  it('updates the warning from the active session and gateway', () => {
+    mountStream()
+
+    act(() =>
+      stream.handleEvent({
+        payload: { credential_warning: warning },
+        profile: ACTIVE_PROFILE,
+        session_id: ACTIVE_SID,
+        type: 'session.info'
+      })
+    )
+
+    expect(onboardingMocks.requestDesktopOnboardingForCredentialWarning).toHaveBeenCalledOnce()
+    expect(onboardingMocks.requestDesktopOnboardingForCredentialWarning).toHaveBeenCalledWith(warning)
   })
 })
 

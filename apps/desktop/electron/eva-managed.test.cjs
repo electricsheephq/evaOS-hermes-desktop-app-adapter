@@ -572,6 +572,10 @@ test('account reset clears renderer account state while preserving global prefer
     ['hermes.desktop.inflightTurnJournal.v2:session-secret', '{"prompt":"private"}'],
     ['hermes:composer-drafts:v3', '{"session-secret":"draft"}'],
     [
+      'hermes.plugin.hermes-bots.group-chats',
+      '{"room-private":{"log":["private"],"members":[{"name":"private"}],"sessions":{"private":"session"}}}'
+    ],
+    [
       'hermes.desktop.layoutTree.v2',
       JSON.stringify({
         type: 'group',
@@ -611,6 +615,7 @@ test('account reset clears renderer account state while preserving global prefer
   assert.equal(values.has('hermes.transcript-tail.v2:index'), false)
   assert.equal(values.has('hermes.desktop.inflightTurnJournal.v2:session-secret'), false)
   assert.equal(values.has('hermes:composer-drafts:v3'), false)
+  assert.equal(values.has('hermes.plugin.hermes-bots.group-chats'), false)
   assert.equal(values.has('hermes.desktop.layoutTree.v2'), false)
   assert.equal(values.has('hermes.desktop.userPlacedPanes.v1'), false)
   assert.equal(values.get('hermes.desktop.layoutPresets.v2'), globalLayoutPresets)

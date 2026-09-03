@@ -380,7 +380,13 @@ export function handleSessionInfoEvent(ctx: GatewayEventContext): boolean {
       setCurrentUsage(current => ({ ...current, ...payload.usage }))
     }
 
-    requestDesktopOnboardingForCredentialWarning(payload?.credential_warning)
+    // This is one global submit-time slot, so only the foreground session on
+    // the active gateway may set or clear it. Background Bot Mode sessions
+    // and stale source sockets still update their own session state above,
+    // but cannot divert the next foreground send into onboarding.
+    if (apply && fromActiveSource()) {
+      requestDesktopOnboardingForCredentialWarning(payload?.credential_warning)
+    }
 
     if (apply) {
       reportInstallMethodWarning(payload?.install_warning)
