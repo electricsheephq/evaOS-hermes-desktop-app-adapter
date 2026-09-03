@@ -3,7 +3,6 @@ import { type MutableRefObject, useCallback, useRef } from 'react'
 
 import { getProfiles } from '@/hermes'
 import type { Translations } from '@/i18n'
-import { isManagedEvaosAgent } from '@/i18n/managed-brand'
 import { type ChatMessage, toChatMessages } from '@/lib/chat-messages'
 import { parseCommandDispatch, parseSlashCommand, sessionTitle } from '@/lib/chat-runtime'
 import {
@@ -16,8 +15,6 @@ import {
   resolveDesktopCommand
 } from '@/lib/desktop-slash-commands'
 import { isMissingRpcMethod } from '@/lib/gateway-rpc'
-import { sanitizeDesktopSlashOutput } from '@/lib/managed-slash-output'
-import { invalidateSlashCompletions } from '@/lib/slash-completion-cache'
 import { setSessionYolo } from '@/lib/yolo-session'
 import { openCommandPalettePage } from '@/store/command-palette'
 import { setComposerDraft } from '@/store/composer'
@@ -26,12 +23,19 @@ import { applyGoalStatusText } from '@/store/goals'
 import { dismissNotification, notify, notifyError } from '@/store/notifications'
 import { setPetScale } from '@/store/pet-gallery'
 import { $petGenInput, openPetGenerate } from '@/store/pet-generate'
-import { $activeGatewayProfile, $newChatProfile, ensureGatewayProfile, normalizeProfileKey } from '@/store/profile'
+import {
+  $activeGatewayProfile,
+  $newChatProfile,
+  captureNewChatSource,
+  ensureGatewayProfile,
+  normalizeProfileKey
+} from '@/store/profile'
 import {
   $connection,
   $sessions,
   $yoloActive,
   resolveComposerSessionKey,
+  setActiveSessionId,
   setCurrentUsage,
   setModelPickerOpen,
   setSessionPickerOpen,
@@ -39,7 +43,6 @@ import {
   setYoloActive
 } from '@/store/session'
 import { $sessionStates } from '@/store/session-states'
-import { runGatewayRestart } from '@/store/system-actions'
 import {
   applyWakeStartResult,
   applyWakeStatus,
@@ -66,7 +69,8 @@ import {
   renderCommandsCatalog,
   renderRpcResult,
   slashStatusText,
-  type SubmitTextOptions
+  type SubmitTextOptions,
+  withSessionNotFoundResume
 } from './utils'
 
 // Manual compression is LLM-bound and routinely outlives the desktop's 30s
@@ -245,23 +249,20 @@ export function useSlashCommand(deps: SlashCommandDeps) {
       // `exec` commands (and unknown skill / quick commands the backend owns)
       // run on the gateway and render their text output inline. This is the only
       // path that talks to slash.exec / command.dispatch.
-      async function runExec(ctx: SlashActionCtx): Promise<boolean> {
+      async function runExec(ctx: SlashActionCtx): Promise<void> {
         const { arg, command, name } = ctx
         const resolved = await withSlashOutput(ctx)
 
         if (!resolved) {
-          return false
+          return
         }
 
-        const { render, sessionId, storedSessionId } = resolved
-
-        const renderSlashOutput = (text: string) =>
-          render(sanitizeDesktopSlashOutput(name, text, isManagedEvaosAgent()))
+        const { render: renderSlashOutput, sessionId, storedSessionId } = resolved
 
         if (!isDesktopSlashCommand(name)) {
           renderSlashOutput(desktopSlashUnavailableMessage(name) || `/${name} is not available in the desktop app.`)
 
-          return false
+          return
         }
 
         let slashExecError: unknown = null
@@ -270,6 +271,17 @@ export function useSlashCommand(deps: SlashCommandDeps) {
           dispatch: NonNullable<ReturnType<typeof parseCommandDispatch>>
         ): Promise<void> => {
           if (dispatch.type === 'exec' || dispatch.type === 'plugin') {
+            // `/goal clear|pause|resume|status` can come back as a TYPED exec
+            // dispatch (command.dispatch routing) instead of the plain-output
+            // shape handled below. This branch used to render and return
+            // without touching the goal store, so "✓ Goal cleared." printed
+            // while the stale "Goal paused" card kept showing until the chat
+            // was reopened (#80348). Mirror the output into the store exactly
+            // like the plain-output path does.
+            if (name === 'goal' && dispatch.output) {
+              applyGoalStatusText(sessionId, dispatch.output)
+            }
+
             renderSlashOutput(dispatch.output ?? '(no output)')
 
             return
@@ -374,7 +386,7 @@ export function useSlashCommand(deps: SlashCommandDeps) {
           if (dispatch) {
             await handleDispatch(dispatch)
 
-            return true
+            return
           }
 
           const output = result && typeof result === 'object' ? (result as SlashExecResponse) : null
@@ -390,7 +402,7 @@ export function useSlashCommand(deps: SlashCommandDeps) {
 
           renderSlashOutput(output?.warning ? `warning: ${output.warning}\n${body}` : body)
 
-          return true
+          return
         } catch (error) {
           // Fall back to command.dispatch for skill/send/alias directives, but
           // keep the worker error: a slash.exec worker timeout/crash is the real
@@ -406,12 +418,10 @@ export function useSlashCommand(deps: SlashCommandDeps) {
           if (!dispatch) {
             renderSlashOutput('error: invalid response: command.dispatch')
 
-            return false
+            return
           }
 
           await handleDispatch(dispatch)
-
-          return true
         } catch (err) {
           // "not a quick/plugin/skill command" just means the fallback had
           // nothing to add — the slash.exec failure (worker timeout, crash) is
@@ -422,12 +432,10 @@ export function useSlashCommand(deps: SlashCommandDeps) {
             const original = slashExecError instanceof Error ? slashExecError.message : String(slashExecError)
             renderSlashOutput(`error: /${name} failed: ${original}`)
 
-            return false
+            return
           }
 
           renderSlashOutput(`error: ${dispatchMessage}`)
-
-          return false
         }
       }
 
@@ -441,15 +449,6 @@ export function useSlashCommand(deps: SlashCommandDeps) {
         surface: Extract<DesktopCommandSurface, { kind: 'rpc' }>,
         ctx: SlashActionCtx
       ): Promise<void> {
-        if (!isDesktopSlashCommand(ctx.name)) {
-          const resolved = await withSlashOutput(ctx)
-          resolved?.render(
-            desktopSlashUnavailableMessage(ctx.name) || `/${ctx.name} is not available in the desktop app.`
-          )
-
-          return
-        }
-
         const resolved = await withSlashOutput(ctx)
 
         if (!resolved) {
@@ -470,11 +469,6 @@ export function useSlashCommand(deps: SlashCommandDeps) {
           // requestGateway layer keeps (30s) is too tight for RPCs that do
           // real work.
           const result = await requestGateway<unknown>(surface.rpc, params, surface.timeoutMs)
-
-          if (surface.rpc === 'skills.reload') {
-            invalidateSlashCompletions()
-          }
-
           const body = renderRpcResult(result, ctx.name)
 
           renderSlashOutput(body || `/${ctx.name}: no output`)
@@ -483,26 +477,8 @@ export function useSlashCommand(deps: SlashCommandDeps) {
           // managed runtime exposes the dedicated RPC surface. Desktop and its
           // gateway update independently; older gateways still support the
           // slash-worker route.
-          if (surface.fallbackToExec !== false && isMissingRpcMethod(err)) {
-            const fallbackSucceeded = await runExec(ctx)
-
-            if (fallbackSucceeded && surface.rpc === 'skills.reload') {
-              try {
-                // The compatibility worker is a separate process. Its reload
-                // updates the profile's skills on disk, but the live gateway's
-                // command registry is refreshed only when it builds a new
-                // catalog. Force that scan before exposing a fresh renderer
-                // cache so the next slash completion sees the reloaded skills.
-                await requestGateway<CommandsCatalogLike>('commands.catalog', { session_id: sessionId })
-                invalidateSlashCompletions()
-              } catch (catalogErr) {
-                renderSlashOutput(
-                  `error: /${ctx.name} reloaded skills but could not refresh the command catalog: ${
-                    catalogErr instanceof Error ? catalogErr.message : String(catalogErr)
-                  }`
-                )
-              }
-            }
+          if (isMissingRpcMethod(err)) {
+            await runExec(ctx)
 
             return
           }
@@ -520,43 +496,6 @@ export function useSlashCommand(deps: SlashCommandDeps) {
         },
         branch: async () => {
           await branchCurrentSession()
-        },
-        restart: async ctx => {
-          const requestedProfile = ctx.arg.trim()
-
-          if (requestedProfile) {
-            const sessionId = ctx.sessionHint || activeSessionIdRef.current
-            const message = `/${ctx.name} only restarts the current profile; no explicit profile target is supported.`
-
-            if (sessionId) {
-              appendSessionTextMessage(
-                sessionId,
-                'system',
-                ctx.recordInput ? slashStatusText(`/${ctx.name}`, message) : message
-              )
-            } else {
-              notify({ kind: 'error', message })
-            }
-
-            return
-          }
-
-          const resolved = await withSlashOutput(ctx)
-
-          if (!resolved) {
-            return
-          }
-
-          const result = await runGatewayRestart()
-
-          const message =
-            result.status === 'restarted'
-              ? `Gateway restarted for current profile "${result.profile}".`
-              : result.status === 'timed_out'
-                ? `Gateway restart is still in progress for current profile "${result.profile}".`
-                : `Gateway restart failed for current profile "${result.profile}".`
-
-          resolved.render(message)
         },
         // /compress (alias /compact) runs the gateway's dedicated
         // session.compress RPC — the TUI's path
@@ -579,7 +518,8 @@ export function useSlashCommand(deps: SlashCommandDeps) {
             return
           }
 
-          const { render: renderSlashOutput, sessionId, storedSessionId } = resolved
+          const { render: renderSlashOutput, sessionId: initialSessionId, storedSessionId } = resolved
+          let sessionId = initialSessionId
           const focusTopic = ctx.arg.trim()
           const noticeId = `session-compress:${sessionId}`
 
@@ -598,14 +538,40 @@ export function useSlashCommand(deps: SlashCommandDeps) {
           })
 
           try {
-            const result = await requestGateway<SessionCompressResponse>(
-              'session.compress',
+            // Same stale-runtime recovery as prompt.submit: after sleep/wake a
+            // dead id 404s session.compress while plain chat still works, so
+            // /compress reported "session not found" on a healthy session.
+            // NOT alsoTimeout — compress is legitimately LLM-slow and a
+            // timeout here must not be retried as a dead session.
+            const { result, sessionId: liveSessionId } = await withSessionNotFoundResume(
+              sessionId,
+              storedSessionId,
+              liveId =>
+                requestGateway<SessionCompressResponse>(
+                  'session.compress',
+                  {
+                    session_id: liveId,
+                    ...(focusTopic ? { focus_topic: focusTopic } : {})
+                  },
+                  SESSION_COMPRESS_TIMEOUT_MS
+                ),
               {
-                session_id: sessionId,
-                ...(focusTopic ? { focus_topic: focusTopic } : {})
-              },
-              SESSION_COMPRESS_TIMEOUT_MS
+                requestGateway,
+                onRecovered: recoveredId => {
+                  // Move the in-flight claim onto the live id so the coalesce
+                  // guard releases the right key in `finally`.
+                  compressInFlightRef.current.delete(sessionId)
+                  compressInFlightRef.current.add(recoveredId)
+
+                  if (activeSessionIdRef.current === initialSessionId) {
+                    activeSessionIdRef.current = recoveredId
+                    setActiveSessionId(recoveredId)
+                  }
+                }
+              }
             )
+
+            sessionId = liveSessionId
 
             // Replace the transcript with the post-compress history so the
             // summarized bubbles actually disappear. `messages` is the same
@@ -739,7 +705,11 @@ export function useSlashCommand(deps: SlashCommandDeps) {
           }
 
           const status = async (): Promise<WakeStatusResponse> => {
-            const current = await requestGateway<WakeStatusResponse>('wake.status', {})
+            const current = await requestGateway<WakeStatusResponse>('wake.status', {
+              client_capture: true,
+              surface: 'gui'
+            })
+
             applyWakeStatus(current)
 
             return current
@@ -757,7 +727,7 @@ export function useSlashCommand(deps: SlashCommandDeps) {
             if (action === 'on') {
               const started = await requestGateway<WakeStartResponse>(
                 'wake.start',
-                { persist: true, surface: 'gui' },
+                { persist: true, surface: 'gui', client_capture: true },
                 WAKE_START_TIMEOUT_MS
               )
 
@@ -838,6 +808,9 @@ export function useSlashCommand(deps: SlashCommandDeps) {
 
             $newChatProfile.set(key)
             await ensureGatewayProfile(key)
+            // Capture the source the swap landed on (null on the v1 profile path)
+            // so the draft's owner matches the socket that will mint it.
+            captureNewChatSource()
             notify({ kind: 'success', message: copy.newChatsProfile(match.name) })
           } catch (err) {
             notifyError(err, copy.setProfileFailed)
@@ -1126,13 +1099,6 @@ export function useSlashCommand(deps: SlashCommandDeps) {
             return openPicker(surface.picker, ctx)
 
           case 'action':
-            if (!isDesktopSlashCommand(name)) {
-              const resolved = await withSlashOutput(ctx)
-              resolved?.render(desktopSlashUnavailableMessage(name) || `/${name} is not available in the desktop app.`)
-
-              return
-            }
-
             return actionHandlers[surface.action](ctx)
 
           case 'rpc':
@@ -1140,9 +1106,7 @@ export function useSlashCommand(deps: SlashCommandDeps) {
 
           default:
             // exec spec, or an unknown skill / quick command the backend owns.
-            await runExec(ctx)
-
-            return
+            return runExec(ctx)
         }
       }
 

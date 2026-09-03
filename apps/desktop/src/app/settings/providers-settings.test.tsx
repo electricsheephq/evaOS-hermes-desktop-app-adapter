@@ -2,6 +2,8 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { atom } from 'nanostores'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { ConfirmHost } from '@/components/confirm-host'
+import { $confirmRequest } from '@/store/confirm'
 import type { EnvVarInfo, OAuthProvider } from '@/types/hermes'
 
 const listOAuthProviders = vi.fn()
@@ -64,54 +66,33 @@ beforeEach(() => {
   listOAuthProviders.mockResolvedValue({
     providers: [provider('nous', true), provider('minimax-oauth', false)]
   })
-  vi.spyOn(window, 'confirm').mockReturnValue(true)
 })
 
 afterEach(() => {
   cleanup()
-  Reflect.deleteProperty(window, 'hermesDesktop')
+  $confirmRequest.set(null)
   vi.restoreAllMocks()
   vi.clearAllMocks()
 })
 
+// Removal goes through confirm() from @/store/confirm, so the host has to be
+// mounted for the prompt to render — same as in the real app shell.
 async function renderProvidersSettings() {
   const { ProvidersSettings } = await import('./providers-settings')
   let result: ReturnType<typeof render>
   await act(async () => {
-    result = render(<ProvidersSettings onClose={vi.fn()} onViewChange={vi.fn()} view="accounts" />)
+    result = render(
+      <>
+        <ProvidersSettings onClose={vi.fn()} onViewChange={vi.fn()} view="accounts" />
+        <ConfirmHost />
+      </>
+    )
   })
 
   return result!
 }
 
 describe('ProvidersSettings', () => {
-  it('keeps managed Accounts allow-by-default while hiding only promotional rows', async () => {
-    Object.defineProperty(window, 'hermesDesktop', {
-      configurable: true,
-      value: { eva: {} },
-      writable: true
-    })
-    listOAuthProviders.mockResolvedValue({
-      providers: [provider('nous', true), provider('openai-codex', true), provider('minimax-oauth', false)]
-    })
-
-    await renderProvidersSettings()
-
-    expect(screen.queryByText('Electric Sheep account')).toBeNull()
-    expect(screen.queryByText('Nous Portal')).toBeNull()
-    expect(screen.queryByText('Fireworks AI')).toBeNull()
-    expect(await screen.findByText('OpenAI OAuth (ChatGPT)')).toBeTruthy()
-    expect(screen.getByRole('button', { name: 'Reauthenticate' })).toBeTruthy()
-    expect(screen.getByRole('button', { name: 'Remove OpenAI OAuth (ChatGPT)' })).toBeTruthy()
-    expect(screen.getByRole('button', { name: 'Have an API key instead?' })).toBeTruthy()
-
-    fireEvent.click(screen.getByRole('button', { name: 'Reauthenticate' }))
-    expect(startManualProviderOAuth).toHaveBeenCalledWith('openai-codex')
-
-    fireEvent.click(screen.getByRole('button', { name: 'Connect another provider' }))
-    expect(await screen.findByText('MiniMax')).toBeTruthy()
-  })
-
   it('disconnects a connected provider account and refreshes the accounts list', async () => {
     await renderProvidersSettings()
 
@@ -120,8 +101,30 @@ describe('ProvidersSettings', () => {
       fireEvent.click(remove)
     })
 
+    // Removal is confirmed first — nothing has been disconnected yet.
+    expect(await screen.findByRole('dialog')).toBeTruthy()
+    expect(disconnectOAuthProvider).not.toHaveBeenCalled()
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Disconnect' }))
+    })
+
     await waitFor(() => expect(disconnectOAuthProvider).toHaveBeenCalledWith('nous'))
     expect(listOAuthProviders).toHaveBeenCalledTimes(2)
+  })
+
+  it('leaves the account connected when the removal prompt is dismissed', async () => {
+    await renderProvidersSettings()
+
+    await act(async () => {
+      fireEvent.click(await screen.findByRole('button', { name: 'Remove Nous Portal' }))
+    })
+
+    await act(async () => {
+      fireEvent.click(await screen.findByRole('button', { name: 'Cancel' }))
+    })
+
+    expect(disconnectOAuthProvider).not.toHaveBeenCalled()
   })
 
   it('keeps provider selection separate from account removal', async () => {
@@ -153,31 +156,6 @@ describe('ProvidersSettings', () => {
     expect(await screen.findByText('Qwen Code')).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'Remove Qwen Code' })).toBeNull()
     expect(screen.getByText(/managed by its own CLI/)).toBeTruthy()
-  })
-
-  it('keeps local-CLI providers visible but explicitly unavailable for managed accounts', async () => {
-    Object.defineProperty(window, 'hermesDesktop', {
-      configurable: true,
-      value: { eva: {} },
-      writable: true
-    })
-    listOAuthProviders.mockResolvedValue({
-      providers: [
-        provider('qwen-oauth', false, {
-          cli_command: 'hermes auth add qwen-oauth',
-          flow: 'external',
-          name: 'Qwen (via Qwen CLI)'
-        })
-      ]
-    })
-
-    await renderProvidersSettings()
-
-    fireEvent.click(screen.getByRole('button', { name: 'Other providers' }))
-    expect(await screen.findByText('Qwen Code')).toBeTruthy()
-    expect(screen.getByText('Unavailable')).toBeTruthy()
-    expect((screen.getByRole('button', { name: /Qwen Code/ }) as HTMLButtonElement).disabled).toBe(true)
-    expect(startManualProviderOAuth).not.toHaveBeenCalled()
   })
 
   it('renders a Keys card for a backend-tagged provider with no PROVIDER_GROUPS prefix', async () => {

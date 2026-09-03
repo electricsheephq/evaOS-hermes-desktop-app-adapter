@@ -3,9 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { fieldCopyForSchemaKey } from '@/app/settings/field-copy'
 
 import { TRANSLATIONS } from './catalog'
-import { en } from './en'
-import { createManagedTranslations } from './managed-brand'
-import { setRuntimeI18nLocale, translateFrom, translateNow } from './runtime'
+import { setRuntimeI18nLocale, translateNow } from './runtime'
 import { zh } from './zh'
 
 describe('desktop i18n runtime translator', () => {
@@ -30,46 +28,6 @@ describe('desktop i18n runtime translator', () => {
     expect(translateNow('notifications.updateReadyMessage', 2)).toBe('2 new changes available.')
   })
 
-  it('does not rewrite runtime values while applying managed static branding', () => {
-    const managed = createManagedTranslations(en)
-
-    expect(translateFrom(() => managed, 'en', 'settings.gateway.connectedTo', ['Hermes-plugin', '1.0'])).toBe(
-      'Connected to Hermes-plugin · evaOS Agent 1.0'
-    )
-  })
-
-  it('uses managed branding for module-level runtime lookups in every supported customer locale', () => {
-    const originalDesktop = window.hermesDesktop
-
-    ;(window as unknown as { hermesDesktop: { eva: object } }).hermesDesktop = { eva: {} }
-
-    try {
-      const expectedReady = {
-        en: 'evaOS Agent is ready',
-        ja: 'evaOS Agent の準備ができました',
-        zh: 'evaOS Agent 桌面版已就绪',
-        'zh-hant': 'evaOS Agent 已就緒',
-        ar: 'evaOS Agent جاهز'
-      } as const
-
-      for (const [locale, expected] of Object.entries(expectedReady)) {
-        setRuntimeI18nLocale(locale as keyof typeof expectedReady)
-        expect(translateNow('boot.ready')).toBe(expected)
-      }
-
-      setRuntimeI18nLocale('zh')
-      expect(translateNow('settings.gateway.connectedTo', 'Hermes-plugin', '1.0')).toBe(
-        '已连接到 Hermes-plugin · evaOS Agent 1.0'
-      )
-    } finally {
-      if (originalDesktop) {
-        window.hermesDesktop = originalDesktop
-      } else {
-        Reflect.deleteProperty(window, 'hermesDesktop')
-      }
-    }
-  })
-
   it('translates migrated overlap keys for newly supported locales', () => {
     setRuntimeI18nLocale('ja')
     expect(translateNow('common.save')).toBe('保存')
@@ -86,6 +44,12 @@ describe('desktop i18n runtime translator', () => {
     setRuntimeI18nLocale('zh-hant')
     expect(translateNow('settings.appearance.title')).toBe('外觀')
     expect(translateNow('settings.nav.providerApiKeys')).toBe('API 金鑰')
+
+    setRuntimeI18nLocale('ar')
+    expect(translateNow('settings.appearance.reasoningCollapsedTitle')).toBe('طي التفكير افتراضيًا')
+    expect(translateNow('settings.appearance.reasoningCollapsedDesc')).toBe(
+      'أبقِ التفكير المتدفق متاحًا دون توسيعه حتى تفتحه.'
+    )
   })
 
   it('keeps translated settings field copy addressable from schema keys', () => {

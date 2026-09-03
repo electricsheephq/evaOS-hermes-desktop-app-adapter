@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest'
 
-import { BUILTIN_THEME_LIST, BUILTIN_THEMES, DEFAULT_TYPOGRAPHY, EMOJI_FALLBACK } from './presets'
+import {
+  BUILTIN_THEME_LIST,
+  BUILTIN_THEMES,
+  DEFAULT_SKIN_NAME,
+  DEFAULT_TYPOGRAPHY,
+  EMOJI_FALLBACK,
+  nousAltTheme
+} from './presets'
 
 // #40364: none of the UI text/mono fonts carry emoji glyphs, so every font
 // stack must end with a color-emoji fallback or emoji render as tofu on
@@ -32,9 +39,14 @@ describe('theme typography emoji fallback (#40364)', () => {
   })
 })
 
-describe('managed theme display aliases', () => {
-  it('keeps stable stored ids behind the Blue and evaOS labels', () => {
-    expect(BUILTIN_THEMES.nous).toMatchObject({ name: 'nous', label: 'Blue' })
-    expect(BUILTIN_THEMES.ember).toMatchObject({ name: 'ember', label: 'evaOS' })
+// The pre-GitHub Nous palette stays available as nous-alt; the default name
+// still means GitHub chrome + brand blue.
+describe('nous-alt is the retired Nous, not the default', () => {
+  it('is registered under its own name and leaves nous as the default', () => {
+    expect(DEFAULT_SKIN_NAME).toBe('nous')
+    expect(BUILTIN_THEMES['nous-alt']).toBe(nousAltTheme)
+    expect(BUILTIN_THEMES.nous).not.toBe(nousAltTheme)
+    expect(nousAltTheme.darkColors?.background).toBe('#0D2F86')
+    expect(BUILTIN_THEMES.nous.darkColors?.background).not.toBe(nousAltTheme.darkColors?.background)
   })
 })

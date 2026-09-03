@@ -5,24 +5,19 @@ import { Button } from '@/components/ui/button'
 import { Codicon } from '@/components/ui/codicon'
 import { Tip } from '@/components/ui/tooltip'
 import { useI18n } from '@/i18n'
-import { isManagedEvaosAgent } from '@/i18n/managed-brand'
-import {
-  $billingBlock,
-  billingBlockPresentation,
-  billingCtaLabel,
-  billingRecoveryAvailable,
-  clearBillingBlock,
-  runBillingRecovery
-} from '@/store/billing-block'
+import { $billingBlock, billingCtaLabel, clearBillingBlock, runBillingRecovery } from '@/store/billing-block'
+
+function firstLine(text: string): string {
+  return (text || '').split('\n')[0]?.trim() ?? ''
+}
 
 /**
  * Persistent, in-stack billing wall for THIS session. Rendered as a shared
  * {@link StatusRow} — same chrome as its status-stack siblings, so it reads as
  * one piece with the composer card (no bordered alert-in-a-card). It never
- * disables the composer. In the upstream app it offers recovery: Nous opens
- * Settings → Billing in-app and other providers deep-link out. Managed evaOS
- * Agent has no in-app Billing surface, so only a provider-owned external URL is
- * actionable there. The sticky toast is the loud surface; this is the calm
+ * disables the composer — slash commands (`/topup`, `/model`, `/login`) stay
+ * usable — it only offers recovery: Nous opens Settings → Billing in-app, other
+ * providers deep-link out. The sticky toast is the loud surface; this is the calm
  * reminder that outlives it.
  */
 export function BillingBanner({ sessionId }: { sessionId: null | string }) {
@@ -35,25 +30,23 @@ export function BillingBanner({ sessionId }: { sessionId: null | string }) {
 
   const { block } = active
   const copy = t.billingBlock
-  const { message, title } = billingBlockPresentation(block, isManagedEvaosAgent(), copy)
-  const canRecover = billingRecoveryAvailable(block)
+  const title = block.is_nous ? copy.titleNous : copy.titleProvider(block.provider_label)
+  const message = firstLine(block.message) || copy.fallbackMessage
 
   return (
     <StatusRow
       leading={<Codicon aria-hidden className="text-destructive/85" name="credit-card" size="0.8rem" />}
       trailing={
         <>
-          {canRecover ? (
-            <Button
-              className="text-foreground/90 hover:text-foreground"
-              onClick={() => runBillingRecovery(block)}
-              size="micro"
-              type="button"
-              variant="text"
-            >
-              {billingCtaLabel(block, copy)}
-            </Button>
-          ) : null}
+          <Button
+            className="text-foreground/90 hover:text-foreground"
+            onClick={() => runBillingRecovery(block)}
+            size="micro"
+            type="button"
+            variant="text"
+          >
+            {billingCtaLabel(block, copy)}
+          </Button>
           <Tip label={copy.dismiss}>
             <Button
               aria-label={copy.dismiss}

@@ -7,7 +7,6 @@ import { Input } from '@/components/ui/input'
 import { Progress } from '@/components/ui/progress'
 import { getGlobalModelOptions } from '@/hermes'
 import { useI18n } from '@/i18n'
-import { isManagedEvaosAgent } from '@/i18n/managed-brand'
 import { Check, ChevronDown, ChevronLeft, KeyRound, Loader2 } from '@/lib/icons'
 import { isProviderSetupErrorMessage } from '@/lib/provider-setup-errors'
 import { cn } from '@/lib/utils'
@@ -33,7 +32,6 @@ import { DocsLink, FlowPanel, Status } from './flow'
 import {
   FeaturedProviderRow,
   FireworksProviderRow,
-  managedOAuthProviders,
   OpenRouterProviderRow,
   ProviderRow,
   sortProviders
@@ -42,9 +40,7 @@ import {
 export {
   FeaturedProviderRow,
   FireworksProviderRow,
-  isManagedLocalCliProviderUnavailable,
   KeyProviderRow,
-  managedOAuthProviders,
   OpenRouterProviderRow,
   ProviderRow,
   providerTitle,
@@ -105,7 +101,7 @@ const API_KEY_OPTIONS: ApiKeyOption[] = [
     id: 'local',
     name: 'Local / custom endpoint',
     envKey: 'OPENAI_BASE_URL',
-    docsUrl: 'https://www.electricsheephq.com',
+    docsUrl: 'https://github.com/NousResearch/hermes-agent#bring-your-own-endpoint',
     placeholder: 'http://127.0.0.1:8000/v1'
   }
 ]
@@ -183,22 +179,7 @@ function useApiKeyCatalog(): ApiKeyOption[] {
 // → surface-out (520ms, held back by [transition-delay:660ms]). Finalize after.
 const ONBOARDING_EXIT_MS = 1180
 
-export function DesktopOnboardingOverlay(props: DesktopOnboardingOverlayProps) {
-  const onboarding = useStore($desktopOnboarding)
-
-  // Managed evaOS Agent authenticates through Electric Sheep and connects to the
-  // administrator-bound remote agent, so unmanaged first-run setup must not
-  // cover enrollment. A manual provider flow is different: Settings already
-  // selected the broker-assigned runtime/profile and intentionally opens this
-  // shared overlay to connect or reauthenticate that runtime's provider.
-  if (isManagedEvaosAgent() && !onboarding.manual) {
-    return null
-  }
-
-  return <DesktopProviderOnboardingOverlay {...props} />
-}
-
-function DesktopProviderOnboardingOverlay({
+export function DesktopOnboardingOverlay({
   enabled,
   onCompleted,
   profile,
@@ -327,6 +308,10 @@ function DesktopProviderOnboardingOverlay({
         bare && leaving ? '[transition-delay:660ms]' : '',
         leaving ? 'pointer-events-none opacity-0' : 'opacity-100'
       )}
+      // Masks the whole app until onboarding finishes — must stay filled under
+      // window glass or the shell shows through. Contract:
+      // `[data-glass-opaque]` in styles.css.
+      data-glass-opaque=""
     >
       <div
         className={cn(
@@ -442,7 +427,6 @@ const persistShowAll = (value: boolean) => {
 export function Picker({ ctx }: { ctx: OnboardingContext }) {
   const { t } = useI18n()
   const { localEndpoint, manual, mode, providers } = useStore($desktopOnboarding)
-  const managedEva = isManagedEvaosAgent()
   const [showAll, setShowAll] = useState(readShowAll)
   // Which key-form option to preselect when we flip to 'apikey' mode. The
   // OpenRouter row selects its key; the generic link lands on the first option.
@@ -485,27 +469,24 @@ export function Picker({ ctx }: { ctx: OnboardingContext }) {
   }
 
   const select = (p: OAuthProvider) => void startProviderOAuth(p, ctx)
-  const featured = managedEva ? null : (ordered.find(p => p.id === FEATURED_ID) ?? null)
-
-  const rest = managedEva
-    ? managedOAuthProviders(ordered, true)
-    : featured
-      ? ordered.filter(p => p.id !== FEATURED_ID)
-      : ordered
-
-  // Collapse the secondary providers behind a disclosure only when Nous
-  // Portal is present to anchor the choice — otherwise show the full list.
-  const collapsible = Boolean(featured) && rest.length > 0
+  const featured = ordered.find(p => p.id === FEATURED_ID) ?? null
+  const rest = featured ? ordered.filter(p => p.id !== FEATURED_ID) : ordered
+  // Collapse the secondary providers behind a disclosure whenever Nous Portal
+  // is present to anchor the choice — otherwise show the full list. The
+  // Fireworks/OpenRouter key rows always live behind the disclosure, so the
+  // toggle is warranted even when there are no other OAuth providers.
+  const collapsible = Boolean(featured)
   const showRest = !collapsible || showAll
 
   return (
     <div className="grid gap-2">
       <div className="grid max-h-[60dvh] gap-2 overflow-y-auto p-1">
         {featured ? <FeaturedProviderRow onSelect={select} provider={featured} /> : null}
-        {/* Slot #2 in unmanaged mode, matching CANONICAL_PROVIDERS (Nous → Fireworks). */}
-        {managedEva ? null : <FireworksProviderRow onClick={() => openKeyForm('FIREWORKS_API_KEY')} />}
         {showRest ? (
           <>
+            {/* Fireworks leads the expanded list, matching CANONICAL_PROVIDERS
+                (Nous → Fireworks), but stays hidden until the user opens it. */}
+            <FireworksProviderRow onClick={() => openKeyForm('FIREWORKS_API_KEY')} />
             {rest.map(p => (
               <ProviderRow key={p.id} onSelect={select} provider={p} />
             ))}
@@ -685,7 +666,7 @@ export function ApiKeyForm({
           autoFocus
           className="font-mono"
           onChange={e => setValue(e.target.value)}
-          onKeyDown={e => e.key === 'Enter' && void submit()}
+          onKeyDown={e => e.key === 'Enter' && !e.nativeEvent.isComposing && void submit()}
           placeholder={
             currentRedacted ??
             (alreadySet ? t.onboarding.replaceCurrent : option.placeholder || t.onboarding.pasteApiKey)
@@ -698,7 +679,7 @@ export function ApiKeyForm({
             autoComplete="off"
             className="font-mono"
             onChange={e => setLocalKey(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && void submit()}
+            onKeyDown={e => e.key === 'Enter' && !e.nativeEvent.isComposing && void submit()}
             placeholder={t.onboarding.localApiKeyPlaceholder}
             type="password"
             value={localKey}

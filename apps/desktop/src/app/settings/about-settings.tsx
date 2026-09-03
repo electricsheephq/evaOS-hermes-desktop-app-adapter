@@ -4,10 +4,8 @@ import { useEffect, useState } from 'react'
 import { BrandMark } from '@/components/brand-mark'
 import { Button } from '@/components/ui/button'
 import { Codicon } from '@/components/ui/codicon'
-import type { EvaManagedStatus } from '@/global'
 import { type Translations, useI18n } from '@/i18n'
-import { isManagedEvaosAgent } from '@/i18n/managed-brand'
-import { CheckCircle2, ExternalLink, Loader2, RefreshCw } from '@/lib/icons'
+import { AlertTriangle, CheckCircle2, ExternalLink, Loader2, RefreshCw } from '@/lib/icons'
 import { cn } from '@/lib/utils'
 import {
   $desktopVersion,
@@ -24,6 +22,7 @@ import { ListRow, SectionHeading, SettingsContent } from './primitives'
 import { UninstallSection } from './uninstall-section'
 
 const RELEASE_NOTES_URL = 'https://github.com/NousResearch/hermes-agent/releases'
+const INSTALLER_URL = 'https://hermes-agent.nousresearch.com/'
 
 function relativeTime(ms: number | undefined, a: Translations['settings']['about']) {
   if (!ms) {
@@ -47,66 +46,7 @@ function relativeTime(ms: number | undefined, a: Translations['settings']['about
   return a.daysAgo(Math.round(diff / 86_400_000))
 }
 
-function ManagedAboutSettings() {
-  const { t } = useI18n()
-  const a = t.settings.about
-  const version = useStore($desktopVersion)
-  const [managedStatus, setManagedStatus] = useState<EvaManagedStatus | null>(null)
-
-  useEffect(() => {
-    let active = true
-    const status = window.hermesDesktop?.eva?.status
-
-    void refreshDesktopVersion()
-
-    if (status) {
-      void status()
-        .then(next => {
-          if (active) {
-            setManagedStatus(next)
-          }
-        })
-        .catch(() => undefined)
-    }
-
-    return () => {
-      active = false
-    }
-  }, [])
-
-  return (
-    <SettingsContent>
-      <div className="flex flex-col items-center gap-3 pt-6 pb-2 text-center">
-        <BrandMark className="size-20 rounded-2xl" />
-        <div>
-          <h2 className="text-lg font-semibold tracking-tight">evaOS Agent</h2>
-          <p className="mt-1 text-xs text-muted-foreground">
-            {version?.appVersion ? a.version(version.appVersion) : a.versionUnavailable}
-          </p>
-        </div>
-      </div>
-
-      <div className="mx-auto mt-4 w-full max-w-2xl overflow-hidden rounded-xl border border-border/70">
-        <ListRow description={a.managed.businessDescription} title={a.managed.businessTitle} />
-        <ListRow
-          description={a.managed.updateChannelDescription(managedStatus?.updateChannel ?? 'managed')}
-          title={a.managed.updateChannelTitle}
-        />
-        <ListRow description={a.managed.attributionDescription} title={a.managed.attributionTitle} />
-        <ListRow description={a.managed.distributionDescription} title={a.managed.distributionTitle} />
-      </div>
-
-      <div className="mx-auto mt-4 flex w-full max-w-2xl justify-center">
-        <Button onClick={() => openUpdatesWindow()} size="sm" variant="textStrong">
-          <RefreshCw className="size-3" />
-          {a.checkNow}
-        </Button>
-      </div>
-    </SettingsContent>
-  )
-}
-
-function UnmanagedAboutSettings() {
+export function AboutSettings() {
   const { t } = useI18n()
   const a = t.settings.about
   const version = useStore($desktopVersion)
@@ -124,6 +64,9 @@ function UnmanagedAboutSettings() {
   }, [])
 
   const behind = status?.behind ?? 0
+  // behind is null when the exact count is unknowable (shallow clone): the
+  // backend flags that case via updateAvailable instead of a number.
+  const updateAvailable = behind > 0 || Boolean(status?.updateAvailable)
   const supported = status?.supported !== false
   const applying = apply.applying || apply.stage === 'restart'
 
@@ -145,8 +88,8 @@ function UnmanagedAboutSettings() {
   } else if (applying) {
     statusLine = a.installing
     statusTone = 'available'
-  } else if (behind > 0) {
-    statusLine = a.updateReady(behind)
+  } else if (updateAvailable) {
+    statusLine = behind > 0 ? a.updateReady(behind) : a.updateReadyUnknown
     statusTone = 'available'
   } else if (status) {
     statusLine = a.onLatest
@@ -164,6 +107,31 @@ function UnmanagedAboutSettings() {
             {version?.appVersion ? a.version(version.appVersion) : a.versionUnavailable}
           </p>
         </div>
+        {version?.bundleOutOfSync && (
+          <div className="mx-auto w-full max-w-2xl rounded-xl border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-left text-sm">
+            <div className="flex items-start gap-2">
+              <AlertTriangle className="mt-0.5 size-4 shrink-0 text-amber-600 dark:text-amber-400" />
+              <div className="min-w-0">
+                <p className="font-medium">{a.bundleOutOfSync}</p>
+                <p className="mt-1 text-xs text-muted-foreground">{a.bundleOutOfSyncDesc}</p>
+                <Button asChild className="mt-2" size="sm" variant="textStrong">
+                  <a
+                    href={INSTALLER_URL}
+                    onClick={event => {
+                      event.preventDefault()
+                      void window.hermesDesktop?.openExternal?.(INSTALLER_URL)
+                    }}
+                    rel="noreferrer"
+                    target="_blank"
+                  >
+                    <ExternalLink className="size-3" />
+                    {a.bundleOutOfSyncAction}
+                  </a>
+                </Button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
       <div className="mx-auto mt-4 w-full max-w-2xl">
@@ -203,7 +171,7 @@ function UnmanagedAboutSettings() {
               {checking ? a.checking : a.checkNow}
             </Button>
 
-            {behind > 0 && supported && !applying && (
+            {updateAvailable && supported && !applying && (
               <>
                 <Button onClick={() => startActiveUpdate()} size="sm">
                   {a.updateNow}
@@ -241,8 +209,4 @@ function UnmanagedAboutSettings() {
       </div>
     </SettingsContent>
   )
-}
-
-export function AboutSettings() {
-  return isManagedEvaosAgent() ? <ManagedAboutSettings /> : <UnmanagedAboutSettings />
 }

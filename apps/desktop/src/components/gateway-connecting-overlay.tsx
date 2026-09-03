@@ -2,6 +2,7 @@ import { useStore } from '@nanostores/react'
 import { useEffect, useRef, useState } from 'react'
 
 import { DecodeText } from '@/components/ui/decode-text'
+import { prefersReducedMotion } from '@/hooks/use-media-query'
 import { cn } from '@/lib/utils'
 import { $desktopBoot } from '@/store/boot'
 import { $gatewaySwitching } from '@/store/gateway-switch'
@@ -33,10 +34,6 @@ function forcedPreview(): boolean {
   } catch {
     return false
   }
-}
-
-function prefersReducedMotion(): boolean {
-  return typeof window !== 'undefined' && Boolean(window.matchMedia?.('(prefers-reduced-motion: reduce)').matches)
 }
 
 export function GatewayConnectingOverlay() {
@@ -120,19 +117,6 @@ export function GatewayConnectingOverlay() {
     }
   }, [phase, previewing])
 
-  // Managed Eva intentionally stops boot before a gateway exists when there is
-  // no Electric Sheep session yet. The router opens Settings → Gateway for the
-  // device-code flow; do not leave the initial connecting scrim over that
-  // enrollment surface.
-  const managedEnrollmentPending =
-    boot.phase === 'renderer.enrollment' ||
-    boot.phase === 'eva.sign-in-required' ||
-    boot.phase === 'eva.sign-in'
-
-  if (managedEnrollmentPending && !previewing) {
-    return null
-  }
-
   // Boot failed — BootFailureOverlay owns the screen; don't linger behind it.
   if (boot.error && !previewing) {
     return null
@@ -157,6 +141,10 @@ export function GatewayConnectingOverlay() {
         'fixed inset-0 z-(--z-connecting) grid place-items-center bg-(--ui-chat-surface-background) transition-opacity duration-500 ease-out',
         overlayHidden ? 'pointer-events-none opacity-0' : 'opacity-100'
       )}
+      // Masks the whole app while booting — must stay filled under window
+      // glass or the shell shows through. Contract: `[data-glass-opaque]`
+      // in styles.css.
+      data-glass-opaque=""
     >
       <DecodeText
         active={phase === 'live' && (previewing || connecting)}

@@ -11,7 +11,6 @@ import { HighlightMatches } from '@/components/ui/highlight-matches'
 import { Switch } from '@/components/ui/switch'
 import type { HermesGateway } from '@/hermes'
 import { useI18n } from '@/i18n'
-import { isManagedEvaosAgent, managedProviderDisplayValue } from '@/i18n/managed-brand'
 import { Search } from '@/lib/icons'
 import { modelOptionsQueryKey, requestModelOptions } from '@/lib/model-options'
 import { displayModelName, modelDisplayParts } from '@/lib/model-status-label'
@@ -47,7 +46,6 @@ export function ModelVisibilityDialog({
 }: ModelVisibilityDialogProps) {
   const { t } = useI18n()
   const copy = t.modelVisibility
-  const managedEva = isManagedEvaosAgent()
   const [search, setSearch] = useState('')
   const stored = useStore($visibleModels)
   const collapsedProviders = useStore($collapsedProviders)
@@ -76,14 +74,11 @@ export function ModelVisibilityDialog({
   const q = normalize(search)
 
   const matches = (provider: ModelOptionProvider, model: string) =>
-    !q ||
-    `${model} ${managedProviderDisplayValue(provider.slug, provider.name, managedEva)} ${provider.slug} ${displayModelName(model)}`
-      .toLowerCase()
-      .includes(q)
+    !q || `${model} ${provider.name} ${provider.slug} ${displayModelName(model)}`.toLowerCase().includes(q)
 
   return (
     <Dialog onOpenChange={onOpenChange} open={open}>
-      <DialogContent className="max-w-xs gap-0 overflow-hidden p-0">
+      <DialogContent bodyClassName="gap-0 overflow-hidden p-0" className="max-w-xs">
         <DialogHeader className="px-3 pb-1 pt-3">
           <DialogTitle className="text-[0.8125rem]">{copy.title}</DialogTitle>
         </DialogHeader>
@@ -132,10 +127,7 @@ export function ModelVisibilityDialog({
                       type="button"
                     >
                       <span className="min-w-0 truncate">
-                        <HighlightMatches
-                          query={search}
-                          text={managedProviderDisplayValue(provider.slug, provider.name, managedEva)}
-                        />
+                        <HighlightMatches query={search} text={provider.name} />
                       </span>
                       <DisclosureCaret
                         className="shrink-0 opacity-0 transition group-hover/label:opacity-100"

@@ -1,12 +1,11 @@
 import { RowButton } from '@/components/ui/row-button'
 import { useI18n } from '@/i18n'
-import { isManagedEvaosAgent, managedProviderDisplayValue } from '@/i18n/managed-brand'
 import { Check, ChevronRight, Terminal } from '@/lib/icons'
 import type { OAuthProvider } from '@/types/hermes'
 
 const PROVIDER_DISPLAY: Record<string, { order: number; title: string }> = {
   nous: { order: 0, title: 'Nous Portal' },
-  'openai-codex': { order: 1, title: 'OpenAI OAuth (ChatGPT)' },
+  'openai-codex': { order: 1, title: 'ChatGPT or Codex Subscription' },
   'minimax-oauth': { order: 2, title: 'MiniMax' },
   'qwen-oauth': { order: 3, title: 'Qwen Code' },
   'xai-oauth': { order: 4, title: 'xAI Grok' },
@@ -18,17 +17,7 @@ const PROVIDER_DISPLAY: Record<string, { order: number; title: string }> = {
 
 const assetPath = (path: string) => `${import.meta.env.BASE_URL}${path.replace(/^\/+/, '')}`
 
-export const providerTitle = (p: OAuthProvider) =>
-  managedProviderDisplayValue(p.id, PROVIDER_DISPLAY[p.id]?.title ?? p.name)
-
-export const managedOAuthProviders = (providers: OAuthProvider[], managed = isManagedEvaosAgent()) =>
-  managed ? providers.filter(provider => provider.id !== 'nous') : providers
-
-export const isManagedLocalCliProviderUnavailable = (
-  provider: OAuthProvider,
-  managed = isManagedEvaosAgent()
-): boolean => managed && provider.flow === 'external'
-
+export const providerTitle = (p: OAuthProvider) => PROVIDER_DISPLAY[p.id]?.title ?? p.name
 const orderOf = (p: OAuthProvider) => PROVIDER_DISPLAY[p.id]?.order ?? 99
 
 export const sortProviders = (providers: OAuthProvider[]) =>
@@ -87,7 +76,7 @@ function ConnectedTag() {
 const PROVIDER_ROW_CLASS =
   'group flex w-full items-center justify-between gap-3 rounded-[6px] px-3 py-2.5 text-left transition-colors hover:bg-(--ui-control-hover-background)'
 
-/** Quick-key row for API-key providers (Fireworks #2 after Nous, OpenRouter further down). */
+/** Quick-key row for API-key providers (Fireworks leads the expanded list after Nous, OpenRouter further down). */
 export function KeyProviderRow({ onClick, pitch, title }: { onClick: () => void; pitch: string; title: string }) {
   return (
     <RowButton className={PROVIDER_ROW_CLASS} onClick={onClick}>
@@ -121,16 +110,10 @@ export function ProviderRow({
 }) {
   const { t } = useI18n()
   const loggedIn = provider.status?.logged_in
-  const unavailable = isManagedLocalCliProviderUnavailable(provider)
   const Trail = provider.flow === 'external' ? Terminal : ChevronRight
 
   return (
-    <RowButton
-      className={PROVIDER_ROW_CLASS}
-      disabled={unavailable}
-      onClick={() => onSelect(provider)}
-      title={unavailable ? t.onboarding.managedUnavailableDescription : undefined}
-    >
+    <RowButton className={PROVIDER_ROW_CLASS} onClick={() => onSelect(provider)}>
       <div className="min-w-0">
         <div className="flex items-center gap-2">
           <span className="text-[length:var(--conversation-text-font-size)] font-semibold">
@@ -138,15 +121,9 @@ export function ProviderRow({
           </span>
           {loggedIn ? <ConnectedTag /> : null}
         </div>
-        <p className="mt-1 text-xs leading-5 text-muted-foreground">
-          {unavailable ? t.onboarding.managedUnavailableDescription : t.onboarding.flowSubtitles[provider.flow]}
-        </p>
+        <p className="mt-1 text-xs leading-5 text-muted-foreground">{t.onboarding.flowSubtitles[provider.flow]}</p>
       </div>
-      {unavailable ? (
-        <span className="shrink-0 text-xs font-medium text-muted-foreground">{t.onboarding.managedUnavailable}</span>
-      ) : (
-        <Trail className="size-4 text-muted-foreground transition group-hover:text-foreground" />
-      )}
+      <Trail className="size-4 text-muted-foreground transition group-hover:text-foreground" />
     </RowButton>
   )
 }

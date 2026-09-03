@@ -27,24 +27,12 @@ import * as path from 'node:path'
 
 import { _electron, type ElectronApplication, type Page } from '@playwright/test'
 
-import { type MockServerOptions, startMockServer } from './mock-server'
+import { startMockServer, type MockServerOptions } from './mock-server'
 import { installErrorBannerGuard } from './test'
 
 const DESKTOP_ROOT = path.resolve(import.meta.dirname, '..')
 const REPO_ROOT = path.resolve(DESKTOP_ROOT, '..', '..')
 const RELEASE_ROOT = path.join(DESKTOP_ROOT, 'release')
-
-const DESKTOP_PACKAGE = JSON.parse(
-  fs.readFileSync(path.join(DESKTOP_ROOT, 'package.json'), 'utf8'),
-) as {
-  build?: { appId?: string; executableName?: string; productName?: string }
-  productName?: string
-}
-
-export const IS_MANAGED_EVAOS_AGENT =
-  DESKTOP_PACKAGE.build?.appId === 'com.electricsheephq.evaos.agent'
-export const DESKTOP_PRODUCT_NAME = DESKTOP_PACKAGE.build?.productName ?? DESKTOP_PACKAGE.productName ?? 'Hermes'
-export const DESKTOP_EXECUTABLE_NAME = DESKTOP_PACKAGE.build?.executableName ?? DESKTOP_PRODUCT_NAME
 
 // ─── Credential stripping (matches launch.spec.ts) ──────────────────────
 
@@ -430,35 +418,6 @@ export interface NoProviderFixture {
   cleanup: () => Promise<void>
 }
 
-export interface ManagedSignedOutFixture {
-  app: ElectronApplication
-  page: Page
-  sandbox: Sandbox
-  cleanup: () => Promise<void>
-}
-
-/**
- * Launch the managed product without enrollment.
- *
- * The managed build must render Electric Sheep sign-in without starting or
- * falling back to the upstream local-backend fixture.
- */
-export async function setupManagedSignedOut(): Promise<ManagedSignedOutFixture> {
-  const sandbox = createSandbox('managed-signed-out')
-  const env = buildAppEnv(sandbox)
-  const { app, page } = await launchDesktop(env)
-
-  return {
-    app,
-    page,
-    sandbox,
-    cleanup: async () => {
-      await app.close().catch(() => undefined)
-      sandbox.cleanup()
-    },
-  }
-}
-
 /**
  * Launch the app with no provider configured. The onboarding overlay should
  * appear because there's no inference provider in config.yaml.
@@ -550,23 +509,16 @@ providers:
  */
 function resolvePackagedBinaryPath(): string {
   if (process.platform === 'win32') {
-    return path.join(RELEASE_ROOT, 'win-unpacked', `${DESKTOP_EXECUTABLE_NAME}.exe`)
+    return path.join(RELEASE_ROOT, 'win-unpacked', 'Hermes.exe')
   }
 
   if (process.platform === 'darwin') {
     const arch = process.arch === 'arm64' ? 'arm64' : 'x64'
 
-    return path.join(
-      RELEASE_ROOT,
-      `mac-${arch}`,
-      `${DESKTOP_PRODUCT_NAME}.app`,
-      'Contents',
-      'MacOS',
-      DESKTOP_EXECUTABLE_NAME
-    )
+    return path.join(RELEASE_ROOT, `mac-${arch}`, 'Hermes.app', 'Contents', 'MacOS', 'Hermes')
   }
 
-  return path.join(RELEASE_ROOT, 'linux-unpacked', DESKTOP_EXECUTABLE_NAME)
+  return path.join(RELEASE_ROOT, 'linux-unpacked', 'hermes')
 }
 
 export const PACKAGED_BINARY_PATH = resolvePackagedBinaryPath()
@@ -702,10 +654,10 @@ export async function waitForAppReady(fixture: MockBackendFixture | NoProviderFi
 
   // On Electron 40.x, ready-to-show may never fire (electron/electron#51972)
   // and the window stays hidden even though the DOM is rendered. The main
-  // process has a TEST_WORKER_INDEX-gated fallback that force-shows the
-  // window, but the DOM can be ready before that fires. Poll until the
-  // window is actually visible so interactions (click, screenshot) don't
-  // hit a hidden surface.
+  // process reveals it anyway — immediately under TEST_WORKER_INDEX, and via
+  // wireWindowReveal's post-load fallback in production — but the DOM can be
+  // ready before that lands. Poll until the window is actually visible so
+  // interactions (click, screenshot) don't hit a hidden surface.
   if (app) {
     const deadline = Date.now() + timeoutMs
 

@@ -44,10 +44,6 @@ export function ContextMenu({
   // extend this menu through the same registry as every other surface.
   const attachmentProviders = useComposerAttachmentProviders()
 
-  const localAttachmentsAvailable = Boolean(
-    onPasteClipboardImage || onPickFiles || onPickFolders || onPickImages
-  )
-
   return (
     <>
       <DropdownMenu>
@@ -69,29 +65,25 @@ export function ContextMenu({
           </DropdownMenuTrigger>
         </Tip>
         <DropdownMenuContent align="start" className={cn('w-60', composerPanelCard)} side="top" sideOffset={6}>
-          {localAttachmentsAvailable ? (
-            <>
-              <DropdownMenuLabel className="px-2 pb-0.5 pt-0.5 text-[0.625rem] font-semibold uppercase tracking-wider text-(--ui-text-tertiary)">
-                {c.attachLabel}
-              </DropdownMenuLabel>
-              <ContextMenuItem disabled={!onPickFiles} icon={FileText} onSelect={onPickFiles}>
-                {c.files}
-              </ContextMenuItem>
-              <ContextMenuItem disabled={!onPickFolders} icon={FolderOpen} onSelect={onPickFolders}>
-                {c.folder}
-              </ContextMenuItem>
-              <ContextMenuItem disabled={!onPickImages} icon={ImageIcon} onSelect={onPickImages}>
-                {c.images}
-              </ContextMenuItem>
-              <ContextMenuItem
-                disabled={!onPasteClipboardImage}
-                icon={Clipboard}
-                onSelect={onPasteClipboardImage ? () => void onPasteClipboardImage() : undefined}
-              >
-                {c.pasteImage}
-              </ContextMenuItem>
-            </>
-          ) : null}
+          <DropdownMenuLabel className="px-2 pb-0.5 pt-0.5 text-[0.625rem] font-semibold uppercase tracking-wider text-(--ui-text-tertiary)">
+            {c.attachLabel}
+          </DropdownMenuLabel>
+          <ContextMenuItem disabled={!onPickFiles} icon={FileText} onSelect={onPickFiles}>
+            {c.files}
+          </ContextMenuItem>
+          <ContextMenuItem disabled={!onPickFolders} icon={FolderOpen} onSelect={onPickFolders}>
+            {c.folder}
+          </ContextMenuItem>
+          <ContextMenuItem disabled={!onPickImages} icon={ImageIcon} onSelect={onPickImages}>
+            {c.images}
+          </ContextMenuItem>
+          <ContextMenuItem
+            disabled={!onPasteClipboardImage}
+            icon={Clipboard}
+            onSelect={onPasteClipboardImage ? () => void onPasteClipboardImage() : undefined}
+          >
+            {c.pasteImage}
+          </ContextMenuItem>
           <ContextMenuItem icon={Link} onSelect={onOpenUrlDialog}>
             {c.url}
           </ContextMenuItem>
@@ -135,7 +127,7 @@ function PromptSnippetsDialog({ onInsertText, onOpenChange, open }: PromptSnippe
 
   return (
     <Dialog onOpenChange={onOpenChange} open={open}>
-      <DialogContent className="max-w-md gap-3">
+      <DialogContent className="max-w-md">
         <DialogHeader>
           <DialogTitle>{c.snippetsTitle}</DialogTitle>
           <DialogDescription>{c.snippetsDesc}</DialogDescription>

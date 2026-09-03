@@ -49,28 +49,6 @@ function resolveApiKeyPath(rawValue) {
   }
 }
 
-export function resolveNotarizationConfig(env = process.env) {
-  const profile = String(env.APPLE_NOTARY_PROFILE || '').trim()
-  if (profile) {
-    return { kind: 'profile', profile }
-  }
-
-  const keyId = String(env.APPLE_API_KEY_ID || '').trim()
-  const issuer = String(env.APPLE_API_ISSUER || '').trim()
-  const apiKey = String(env.APPLE_API_KEY || '').trim()
-  if (apiKey && keyId && issuer) {
-    return { apiKey, issuer, keyId, kind: 'api-key' }
-  }
-
-  if (env.EVAOS_MANAGED_RELEASE === '1') {
-    throw new Error(
-      'Managed release notarization requires APPLE_NOTARY_PROFILE or the complete APPLE_API_KEY, APPLE_API_KEY_ID, and APPLE_API_ISSUER set.'
-    )
-  }
-
-  return null
-}
-
 export default async function notarize(context) {
   const { electronPlatformName, appOutDir, packager } = context
   if (electronPlatformName !== 'darwin') return
@@ -81,18 +59,11 @@ export default async function notarize(context) {
     throw new Error(`Cannot notarize missing app bundle: ${appPath}`)
   }
 
-  const notarization = resolveNotarizationConfig()
-  if (!notarization) {
-    console.log(
-      'Skipping notarization for a non-release build: no complete Apple notarization credentials are configured.'
-    )
-    return
-  }
-
-  if (notarization.kind === 'profile') {
+  const profile = String(process.env.APPLE_NOTARY_PROFILE || '').trim()
+  if (profile) {
     const zipPath = path.join(appOutDir, `${appName}.zip`)
     await run('ditto', ['-c', '-k', '--sequesterRsrc', '--keepParent', appPath, zipPath])
-    await run('xcrun', ['notarytool', 'submit', zipPath, '--keychain-profile', notarization.profile, '--wait'])
+    await run('xcrun', ['notarytool', 'submit', zipPath, '--keychain-profile', profile, '--wait'])
     await run('xcrun', ['stapler', 'staple', '-v', appPath])
     try {
       fs.rmSync(zipPath, { force: true })
@@ -102,22 +73,21 @@ export default async function notarize(context) {
     return
   }
 
-  const { keyPath, cleanup } = resolveApiKeyPath(notarization.apiKey)
+  const keyId = String(process.env.APPLE_API_KEY_ID || '').trim()
+  const issuer = String(process.env.APPLE_API_ISSUER || '').trim()
+  const rawApiKey = process.env.APPLE_API_KEY
+  if (!rawApiKey || !keyId || !issuer) {
+    console.log(
+      'Skipping notarization: APPLE_API_KEY, APPLE_API_KEY_ID, and APPLE_API_ISSUER are not fully configured.'
+    )
+    return
+  }
+
+  const { keyPath, cleanup } = resolveApiKeyPath(rawApiKey)
   const zipPath = path.join(appOutDir, `${appName}.zip`)
   try {
     await run('ditto', ['-c', '-k', '--sequesterRsrc', '--keepParent', appPath, zipPath])
-    await run('xcrun', [
-      'notarytool',
-      'submit',
-      zipPath,
-      '--key',
-      keyPath,
-      '--key-id',
-      notarization.keyId,
-      '--issuer',
-      notarization.issuer,
-      '--wait'
-    ])
+    await run('xcrun', ['notarytool', 'submit', zipPath, '--key', keyPath, '--key-id', keyId, '--issuer', issuer, '--wait'])
     await run('xcrun', ['stapler', 'staple', '-v', appPath])
   } finally {
     try {

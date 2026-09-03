@@ -1,7 +1,3 @@
-import { isManagedEvaosAgent } from '@/i18n/managed-brand'
-
-import { isManagedBillingSlashCommand } from './managed-ui-policy'
-
 export interface CommandsCatalogSection {
   name: string
   pairs: [string, string][]
@@ -58,7 +54,6 @@ export type DesktopActionId =
   | 'new'
   | 'pet'
   | 'profile'
-  | 'restart'
   | 'skin'
   | 'title'
   | 'wake'
@@ -68,7 +63,7 @@ export type DesktopActionId =
 export type DesktopPickerId = 'model' | 'session'
 
 /** Why a known Hermes command has no desktop UI surface. */
-export type DesktopUnavailableReason = 'advanced' | 'messaging' | 'settings' | 'terminal'
+export type DesktopUnavailableReason = 'advanced' | 'composer-voice' | 'messaging' | 'settings' | 'terminal'
 
 /**
  * How the desktop fulfils a command. This is the single discriminator the
@@ -95,7 +90,6 @@ export type DesktopCommandSurface =
       kind: 'rpc'
       rpc: string
       timeoutMs?: number
-      fallbackToExec?: boolean
       buildParams: (ctx: SlashCommandBuildCtx) => Record<string, unknown>
     }
   | { kind: 'exec' }
@@ -130,8 +124,6 @@ export interface DesktopCommandSpec {
   description?: string
   aliases?: string[]
   surface: DesktopCommandSurface
-  /** Only expose this Hermes-native surface on the managed desktop build. */
-  managedOnly?: boolean
   /**
    * Hide from the slash popover / completions while still letting it execute.
    * Used for picker commands reachable from chrome (the model picker lives on
@@ -159,15 +151,8 @@ const unavailable = (reason: DesktopUnavailableReason): DesktopCommandSurface =>
 const rpc = (
   rpcName: string,
   buildParams: (ctx: SlashCommandBuildCtx) => Record<string, unknown>,
-  timeoutMs?: number,
-  fallbackToExec = true
-): DesktopCommandSurface => ({
-  kind: 'rpc',
-  rpc: rpcName,
-  timeoutMs,
-  ...(fallbackToExec ? {} : { fallbackToExec: false }),
-  buildParams
-})
+  timeoutMs?: number
+): DesktopCommandSurface => ({ kind: 'rpc', rpc: rpcName, timeoutMs, buildParams })
 
 /**
  * THE source of truth for desktop slash commands. Everything below — execution
@@ -196,7 +181,7 @@ const DESKTOP_COMMAND_SPECS: readonly DesktopCommandSpec[] = [
     surface: action('handoff'),
     argumentMode: 'options'
   },
-  { name: '/profile', description: 'Switch the active evaOS Agent profile', surface: action('profile') },
+  { name: '/profile', description: 'Switch the active Hermes profile', surface: action('profile') },
   {
     name: '/skin',
     description: 'Switch desktop theme or cycle to the next one',
@@ -251,13 +236,6 @@ const DESKTOP_COMMAND_SPECS: readonly DesktopCommandSpec[] = [
     argumentMode: 'options'
   },
   {
-    name: '/restart',
-    description: 'Restart the current profile gateway',
-    surface: action('restart'),
-    managedOnly: true,
-    argumentMode: 'text'
-  },
-  {
     name: '/agents',
     description: 'Show active desktop sessions and running tasks',
     aliases: ['/tasks'],
@@ -285,6 +263,13 @@ const DESKTOP_COMMAND_SPECS: readonly DesktopCommandSpec[] = [
   {
     name: '/goal',
     description: 'Manage the standing goal for this session',
+    surface: exec(),
+    argumentMode: 'mixed'
+  },
+  {
+    name: '/loop',
+    description: 'Re-run a prompt on a recurring interval in this session',
+    aliases: ['/proactive'],
     surface: exec(),
     argumentMode: 'mixed'
   },
@@ -340,40 +325,11 @@ const DESKTOP_COMMAND_SPECS: readonly DesktopCommandSpec[] = [
   },
   { name: '/undo', description: 'Remove the last user/assistant exchange', surface: exec() },
   { name: '/usage', description: 'Show token usage for this session', surface: exec() },
-  { name: '/version', description: 'Show evaOS Agent version', surface: exec() },
+  { name: '/version', description: 'Show Hermes Agent version', surface: exec() },
 
-  {
-    name: '/reload-mcp',
-    description: 'Reload MCP servers and refresh tools for this session',
-    aliases: ['/reload_mcp'],
-    surface: rpc(
-      'reload.mcp',
-      ctx => {
-        const choice = ctx.arg.trim().toLowerCase()
-
-        if (choice === 'always') {
-          return { session_id: ctx.sessionId, confirm: true, always: true }
-        }
-
-        if (['now', 'approve', 'once', 'yes'].includes(choice)) {
-          return { session_id: ctx.sessionId, confirm: true }
-        }
-
-        return { session_id: ctx.sessionId }
-      },
-      300_000,
-      false
-    ),
-    argumentMode: 'text'
-  },
-  {
-    name: '/reload-skills',
-    description: 'Reload skills for the current profile and session',
-    aliases: ['/reload_skills'],
-    surface: rpc('skills.reload', ctx => ({ session_id: ctx.sessionId })),
-    managedOnly: true,
-    argumentMode: 'text'
-  }
+  // No desktop surface, but carry an alias (underscore spelling variants).
+  { name: '/reload-mcp', aliases: ['/reload_mcp'], surface: unavailable('advanced') },
+  { name: '/reload-skills', aliases: ['/reload_skills'], surface: unavailable('advanced') }
 ]
 
 // Known commands with no desktop surface (and no alias) — a flat name list
@@ -401,6 +357,7 @@ const NO_DESKTOP_SURFACE: Record<DesktopUnavailableReason, readonly string[]> = 
     '/quit',
     '/redraw',
     '/reload',
+    '/restart',
     '/sb',
     '/set-home',
     '/sethome',
@@ -413,7 +370,12 @@ const NO_DESKTOP_SURFACE: Record<DesktopUnavailableReason, readonly string[]> = 
   ],
   messaging: ['/approve', '/deny'],
   settings: ['/skills', '/pets'],
-  advanced: ['/curator', '/fast', '/insights', '/kanban', '/reasoning', '/voice']
+  advanced: ['/curator', '/fast', '/insights', '/kanban', '/reasoning'],
+  // /voice arms SERVER-side capture (voice.record → PortAudio on the backend
+  // host) — meaningless on desktop, which has its own composer-native voice
+  // conversation (mic menu / Ctrl+B) with client-side capture and playback.
+  // Point the user at the button instead of a generic "advanced" shrug.
+  'composer-voice': ['/voice']
 }
 
 const ALL_SPECS: readonly DesktopCommandSpec[] = [
@@ -432,6 +394,8 @@ const ALIAS_TO_CANONICAL = new Map<string, string>(
 const UNAVAILABLE_MESSAGE: Record<DesktopUnavailableReason, (command: string) => string> = {
   advanced: command =>
     `${command} is not shown in the desktop slash palette. Use the relevant desktop control or terminal interface instead.`,
+  'composer-voice': () =>
+    'Voice chat lives in the composer here: click the microphone button and choose "Start voice chat" (or press Ctrl+B).',
   messaging: command => `${command} is only used from messaging platforms.`,
   settings: command => `${command} is managed from the desktop sidebar.`,
   terminal: command => `${command} is only available in the terminal interface.`
@@ -484,14 +448,10 @@ export function isDesktopSlashExtensionCommand(command: string): boolean {
 
 /** Gates execution: true unless the command is a known no-desktop-surface command. */
 export function isDesktopSlashCommand(command: string): boolean {
-  if (isManagedBillingSlashCommand(command, isManagedEvaosAgent())) {
-    return false
-  }
-
   const spec = resolveDesktopCommand(command)
 
   if (spec) {
-    return spec.surface.kind !== 'unavailable' && (!spec.managedOnly || isManagedEvaosAgent())
+    return spec.surface.kind !== 'unavailable'
   }
 
   return isDesktopSlashExtensionCommand(command)
@@ -499,10 +459,6 @@ export function isDesktopSlashCommand(command: string): boolean {
 
 /** Gates discovery in the popover/completions. */
 export function isDesktopSlashSuggestion(command: string): boolean {
-  if (isManagedBillingSlashCommand(command, isManagedEvaosAgent())) {
-    return false
-  }
-
   const normalized = normalizeCommand(command)
 
   // Aliases stay hidden so the popover isn't cluttered with duplicates.
@@ -513,7 +469,7 @@ export function isDesktopSlashSuggestion(command: string): boolean {
   const spec = SPEC_BY_NAME.get(normalized)
 
   if (spec) {
-    return spec.surface.kind !== 'unavailable' && !spec.hidden && (!spec.managedOnly || isManagedEvaosAgent())
+    return spec.surface.kind !== 'unavailable' && !spec.hidden
   }
 
   // Skill / quick commands the backend provides.
@@ -540,20 +496,11 @@ export function isModelPickerCommand(command: string): boolean {
 }
 
 export function desktopSlashUnavailableMessage(command: string): string | null {
-  if (isManagedBillingSlashCommand(command, isManagedEvaosAgent())) {
-    return `${normalizeCommand(command)} is not available in managed evaOS Agent.`
-  }
-
   const canonical = canonicalDesktopSlashCommand(command)
   const surface = SPEC_BY_NAME.get(canonical)?.surface
-  const spec = SPEC_BY_NAME.get(canonical)
 
   if (!surface) {
     return null
-  }
-
-  if (spec?.managedOnly && !isManagedEvaosAgent()) {
-    return UNAVAILABLE_MESSAGE.terminal(canonical)
   }
 
   if (surface.kind === 'unavailable') {
@@ -593,15 +540,11 @@ export function desktopSkinSlashCompletions(
       display: '/skin next',
       meta: 'Cycle to the next desktop theme'
     },
-    ...themes.map(theme => {
-      const commandName = theme.name === 'nous' || theme.name === 'ember' ? theme.label : theme.name
-
-      return {
-        text: `/skin ${commandName}`,
-        display: `/skin ${commandName}`,
-        meta: `${theme.label}${theme.name === activeThemeName ? ' (current)' : ''} - ${theme.description}`
-      }
-    })
+    ...themes.map(theme => ({
+      text: `/skin ${theme.name}`,
+      display: `/skin ${theme.name}`,
+      meta: `${theme.label}${theme.name === activeThemeName ? ' (current)' : ''} - ${theme.description}`
+    }))
   ]
 
   if (!prefix) {

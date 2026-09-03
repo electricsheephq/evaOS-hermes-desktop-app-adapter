@@ -9,7 +9,6 @@ import { normalize } from '@/lib/text'
 import type { ModelOptionProvider, ModelPricing } from '@/types/hermes'
 
 import type { HermesGateway } from '../hermes'
-import { isManagedEvaosAgent, managedProviderDisplayValue } from '../i18n/managed-brand'
 import { cn } from '../lib/utils'
 import { startManualOnboarding } from '../store/onboarding'
 
@@ -51,7 +50,6 @@ export function ModelPickerDialog({
 }: ModelPickerDialogProps) {
   const { t } = useI18n()
   const copy = t.modelPicker
-  const managedEva = isManagedEvaosAgent()
   // Own the search term so we can filter manually. cmdk's built-in
   // shouldFilter reorders items by its fuzzy-match score (≈alphabetical with
   // an empty query), which destroys the backend's curated order. We disable
@@ -96,7 +94,10 @@ export function ModelPickerDialog({
 
   return (
     <Dialog onOpenChange={onOpenChange} open={open}>
-      <DialogContent className={cn('max-h-[85vh] max-w-2xl gap-0 overflow-hidden p-0', contentClassName)}>
+      <DialogContent
+        bodyClassName="gap-0 overflow-hidden p-0"
+        className={cn('max-h-[85vh] max-w-2xl', contentClassName)}
+      >
         <DialogHeader className="border-b border-border px-4 py-3">
           <DialogTitle>{copy.title}</DialogTitle>
           <DialogDescription className="font-mono text-xs leading-relaxed">
@@ -114,7 +115,6 @@ export function ModelPickerDialog({
               currentProvider={optionsProvider || currentProvider}
               error={error}
               loading={loading}
-              managed={managedEva}
               onSelectModel={selectModel}
               providers={providers}
               search={search}
@@ -138,7 +138,6 @@ export function ModelPickerDialog({
 function ModelResults({
   loading,
   error,
-  managed,
   providers,
   currentModel,
   currentProvider,
@@ -147,7 +146,6 @@ function ModelResults({
 }: {
   loading: boolean
   error: string | null
-  managed: boolean
   providers: ModelOptionProvider[]
   currentModel: string
   currentProvider: string
@@ -180,7 +178,7 @@ function ModelResults({
   const matches = (provider: ModelOptionProvider, model: string) =>
     !q ||
     modelSearchText(model).toLowerCase().includes(q) ||
-    managedProviderDisplayValue(provider.slug, provider.name, managed).toLowerCase().includes(q) ||
+    provider.name.toLowerCase().includes(q) ||
     provider.slug.toLowerCase().includes(q)
 
   // Only configured providers (those with curated models) are selectable
@@ -201,7 +199,7 @@ function ModelResults({
         const unavailable = new Set(provider.unavailable_models ?? [])
 
         return (
-          <CommandGroup heading={<ProviderHeading managed={managed} provider={provider} />} key={provider.slug}>
+          <CommandGroup heading={<ProviderHeading provider={provider} />} key={provider.slug}>
             {provider.warning && (
               <div className="px-2 pb-2">
                 <InlineNotice className="px-2.5 py-1.5 text-xs" kind="warning">
@@ -265,13 +263,25 @@ function ModelPrice({ price, isCurrent }: { price?: ModelPricing; isCurrent: boo
 
   if (price.free) {
     return (
-      <span
-        className={cn(
-          'shrink-0 rounded-sm px-1 py-0.5 text-[0.62rem] font-semibold uppercase tracking-wide',
-          isCurrent ? 'bg-primary-foreground/20' : 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400'
-        )}
-      >
-        {copy.free}
+      <span className="shrink-0 inline-flex items-center gap-1.5">
+        {typeof price.discount_percent === 'number' ? (
+          <span
+            className={cn(
+              'rounded-sm px-1 py-0.5 text-[0.62rem] font-semibold',
+              isCurrent ? 'bg-primary-foreground/20' : 'bg-amber-500/15 text-amber-700 dark:text-amber-400'
+            )}
+          >
+            -{price.discount_percent}%
+          </span>
+        ) : null}
+        <span
+          className={cn(
+            'shrink-0 rounded-sm px-1 py-0.5 text-[0.62rem] font-semibold uppercase tracking-wide',
+            isCurrent ? 'bg-primary-foreground/20' : 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400'
+          )}
+        >
+          {copy.free}
+        </span>
       </span>
     )
   }
@@ -325,7 +335,7 @@ function LoadingResults() {
   )
 }
 
-function ProviderHeading({ managed, provider }: { managed: boolean; provider: ModelOptionProvider }) {
+function ProviderHeading({ provider }: { provider: ModelOptionProvider }) {
   const { t } = useI18n()
   const copy = t.modelPicker
 
@@ -343,7 +353,7 @@ function ProviderHeading({ managed, provider }: { managed: boolean; provider: Mo
 
   return (
     <span className="flex min-w-0 items-center gap-2">
-      <span className="truncate">{managedProviderDisplayValue(provider.slug, provider.name, managed)}</span>
+      <span className="truncate">{provider.name}</span>
       <span className="font-mono text-xs font-normal normal-case tracking-normal text-muted-foreground">
         {provider.slug} · {provider.total_models ?? provider.models?.length ?? 0}
       </span>

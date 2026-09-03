@@ -14,17 +14,11 @@
 import { expect, test } from './test'
 
 import {
-  IS_MANAGED_EVAOS_AGENT,
   type MockBackendFixture,
   setupMockBackend,
   waitForAppReady,
 } from './fixtures'
 import { expectVisualSnapshot } from './visual-snapshot'
-
-test.skip(
-  IS_MANAGED_EVAOS_AGENT,
-  'The managed product is remote-only; its signed-out boot contract is covered by managed-boot.spec.ts.',
-)
 
 let fixture: MockBackendFixture | null = null
 
@@ -54,6 +48,25 @@ test.describe('dev-mode boot with mock backend', () => {
       state: 'attached',
       timeout: 30_000,
     })
+  })
+
+  // A preload that throws never reaches contextBridge, so the renderer boots
+  // into "Desktop IPC bridge is unavailable" and every test below it dies on a
+  // 120s never-became-ready timeout instead. Checking the bridge by name makes
+  // that failure legible. The sandbox lets preload require only electron,
+  // events, timers and url — adding any other node builtin lands here.
+  test('the preload bridge reaches the renderer', async () => {
+    const bridge = await fixture!.page.evaluate(() => {
+      const desktop = (window as unknown as { hermesDesktop?: Record<string, unknown> }).hermesDesktop
+
+      return {
+        present: typeof desktop,
+        glassSupported: typeof desktop?.glassSupported,
+        translucencySupported: typeof desktop?.translucencySupported
+      }
+    })
+
+    expect(bridge).toEqual({ present: 'object', glassSupported: 'boolean', translucencySupported: 'boolean' })
   })
 
   test('backend boots and app becomes ready', async () => {
