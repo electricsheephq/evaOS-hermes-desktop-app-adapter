@@ -422,8 +422,6 @@ def _flat_managed_profile() -> tuple[str, Path, Path] | None:
             return None
 
         name = home.name
-        if name == "default":
-            return None
         validate_profile_name(name)
         if _effective_service_user() != f"hermes-{name}":
             return None
@@ -472,9 +470,9 @@ def profile_matches_home(name: str, home: "Path | None" = None) -> bool:
     try:
         canon = normalize_profile_name(name)
         flat = _flat_managed_profile()
-        # ``default`` remains a physical alias for unprefixed artifact paths,
-        # but it is never a routable identity in a managed flat process.
-        if flat is not None and canon == "default":
+        # A named flat service keeps ``default`` as an artifact alias; only
+        # a flat service whose own canonical leaf is ``default`` may route it.
+        if flat is not None and canon == "default" and flat[0] != "default":
             return False
         target = get_profile_dir(canon)
     except Exception:
@@ -1193,6 +1191,8 @@ def profiles_to_serve(
       profile under ``profiles/``, each paired with its own HERMES_HOME. When
       ``profile_allowlist`` is provided, only selected named profiles are
       included; the default profile is always served.
+    - an exact PCS flat-managed process returns only its bound profile for
+      either value of ``multiplex``; its process boundary cannot be widened.
 
     Intentionally lightweight (a directory scan + name validation only): no
     per-profile config reads, gateway-running probes, or skill counts like
@@ -1201,6 +1201,13 @@ def profiles_to_serve(
     The returned ``hermes_home`` is the path to pass to
     ``set_hermes_home_override`` when scoping a turn to that profile.
     """
+    flat = _flat_managed_profile()
+    if flat is not None:
+        # A PCS flat process is already isolated to one profile.  Keep this
+        # owner-only even when a stale/overbroad multiplex flag is present;
+        # otherwise the nested profiles directory can re-open sibling routes.
+        return [(flat[0], flat[1])]
+
     active = get_active_profile_name() or "default"
     if not multiplex:
         return [(active, get_profile_dir(active))]

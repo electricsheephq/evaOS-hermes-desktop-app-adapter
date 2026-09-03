@@ -22,17 +22,27 @@ class ManagedProfileScopeError(PermissionError):
 def managed_profile_name() -> str | None:
     """Return the process-owned profile, or ``None`` outside managed r30.
 
-    Managed r30 never serves the default or a custom Hermes home.  Treating
-    either as a usable authority would make an invalid deployment fail open.
+    Managed r30 serves the profile identity bound to its Hermes home.  A
+    custom home is still invalid because it has no profile identity; the
+    literal ``default`` identity is valid when the managed binding proves it.
     """
 
     if not os.getenv("HERMES_SHARED_AUTH_FILE", "").strip():
         return None
 
-    from hermes_cli.profiles import get_active_profile_name, profile_matches_home
+    from hermes_cli.profiles import (
+        _flat_managed_profile,
+        get_active_profile_name,
+        profile_matches_home,
+    )
 
     name = (get_active_profile_name() or "").strip()
-    if name in {"", "default", "custom"} or not profile_matches_home(name):
+    flat = _flat_managed_profile()
+    if (
+        name in {"", "custom"}
+        or (name == "default" and (flat is None or flat[0] != "default"))
+        or not profile_matches_home(name)
+    ):
         raise RuntimeError("managed gateway is not bound to a named profile")
     return name
 

@@ -97,6 +97,34 @@ class TestCollectProfileGatewayTopology:
         assert topo["profiles"] == ["main"]
         assert topo["gateway_mode"] == "single"
 
+    def test_flat_managed_default_reports_literal_owner(self, tmp_path, monkeypatch):
+        import gateway.status as status_mod
+        import hermes_cli.profiles as profiles_mod
+        from hermes_cli import managed_profile_scope
+
+        home = tmp_path / "default"
+        monkeypatch.setattr(
+            managed_profile_scope,
+            "managed_profile_name",
+            lambda: "default",
+        )
+        monkeypatch.setattr(web_server, "get_hermes_home", lambda: home)
+        monkeypatch.setattr(
+            profiles_mod,
+            "profiles_to_serve",
+            lambda _multiplex: (_ for _ in ()).throw(
+                AssertionError("managed process must not enumerate siblings")
+            ),
+        )
+        monkeypatch.setattr(profiles_mod, "_check_gateway_running", lambda _home: True)
+        monkeypatch.setattr(status_mod, "read_runtime_status", lambda _path=None: None)
+
+        topo = _collect_profile_gateway_topology()
+
+        assert topo["profiles"] == ["default"]
+        assert topo["gateway_mode"] == "single"
+        assert topo["gateways"] == [{"profile": "default", "ports": {}}]
+
     def test_no_gateways_running(self, tmp_path, monkeypatch):
         homes = [("default", tmp_path / "d"), ("coder", tmp_path / "c")]
         _patch_topology(monkeypatch, homes, running=set(), runtimes={})
