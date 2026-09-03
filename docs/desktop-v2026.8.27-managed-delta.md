@@ -44,6 +44,8 @@ This is not a linear commit replay, so a mechanical `git range-diff` would misst
 - Managed backend creation, REST calls, media streams, and saved-file downloads stay on the enrollment runtime; renderer replies return through the event's owning connection/profile rather than the ambient gateway.
 - Background sessions receive empty or denied read/drive responses without inspecting the foreground terminal, Preview pane, or native window.
 - Managed callback ownership, pending renderer-isolation flush, account-scoped transcript/in-flight cache cleanup, and managed About identity are retained across the upstream reconstruction.
+- Managed account reset also clears persisted session-owner routes and bundled Bot Mode state so a later account cannot hydrate the prior account's session or room metadata.
+- The union Bot Mode roster publishes only one opaque assigned-runtime source in managed builds and never reads or probes workstation connection-registry entries.
 - Extracted filesystem, Git, terminal, project-directory, and connection-setting IPC keeps the prior managed fail-closed boundary.
 - Managed enrollment credentials require OS-backed secure storage; Electron's Linux `basic_text` backend is not treated as secure.
 - The canonical Desktop check once again runs the managed contract suite, and the imported build keeps its required `electron-updater` and root `agent-browser` packages.
@@ -81,5 +83,6 @@ This candidate must not be tagged, published, or placed in an updater feed by th
 - No Hermes r30 runtime deployment or VM mutation.
 - No dashboard, ws-proxy, Supabase, Browserbase, Mac Access, or authentication-contract change.
 - No Linux GUI, VNC/noVNC, or VM-local loopback proxy. The latter is tracked separately in [#243](https://github.com/electricsheephq/evaOS-hermes-desktop-app-adapter/issues/243).
+- No managed profile-archive import/export claim. The exact-upstream flow assumes the app and backend share one filesystem; remote managed transfer needs a separate authenticated upload/download contract.
 - No move to upstream v2026.8.31 or later.
 - No signed distribution, updater publication, fleet rollout, or Karlen contact.

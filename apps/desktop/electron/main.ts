@@ -283,6 +283,7 @@ import { createParentStartMarkerResolver, parentWatchdogEnv } from './parent-pro
 import { registerPetOverlayIpc } from './pet-overlay-ipc'
 import {
   assertEvaManagedConnectionId,
+  buildEvaManagedAgentRoster,
   buildEvaManagedProfileRoutes,
   buildRegistryProfileRoutes,
   EVA_MANAGED_CONNECTION_ID,
@@ -15424,6 +15425,10 @@ async function enumerateRegistryAgentSources(registry = readDesktopConnectionsRe
 }
 
 ipcMain.handle('hermes:agents:roster', async () => {
+  if (EVA_MANAGED_BUILD) {
+    return buildEvaManagedAgentRoster(primaryProfileKey())
+  }
+
   const registry = readDesktopConnectionsRegistry()
   const enumerations = await enumerateRegistryAgentSources(registry)
 

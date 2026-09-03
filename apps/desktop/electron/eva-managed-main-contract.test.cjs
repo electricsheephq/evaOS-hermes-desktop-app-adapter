@@ -38,6 +38,10 @@ test('managed main-process wiring survives an upstream Desktop recut', () => {
     'managed plugin route inventory must bypass the workstation connection registry'
   )
   assertSourceMatch(
+    /ipcMain\.handle\('hermes:agents:roster',[\s\S]{0,220}if \(EVA_MANAGED_BUILD\)\s*{\s*return buildEvaManagedAgentRoster\(/,
+    'managed union roster must bypass the workstation connection registry'
+  )
+  assertSourceMatch(
     /ipcMain\.handle\('hermes:window:openInTerminal',[\s\S]{0,220}assertEvaManagedLocalTerminalAllowed\(EVA_MANAGED_BUILD\)/,
     'managed mode must reject external terminal launches before resolving a local runtime'
   )

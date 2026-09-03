@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 import {
   assertEvaManagedConnectionId,
+  buildEvaManagedAgentRoster,
   buildEvaManagedProfileRoutes,
   buildOpaqueProfileRoutes,
   buildRegistryProfileRoutes,
@@ -28,6 +29,34 @@ function config(overrides: Partial<ProfileRouteConfig> = {}): ProfileRouteConfig
 }
 
 describe('managed plugin profile routes', () => {
+  it('publishes one opaque assigned-runtime roster without workstation sources', () => {
+    expect(buildEvaManagedAgentRoster(' research ')).toEqual({
+      agents: [
+        {
+          connectionId: EVA_MANAGED_CONNECTION_ID,
+          connectionKind: 'remote',
+          connectionLabel: 'Assigned runtime',
+          handle: 'research',
+          profile: 'research',
+          targetProfile: 'research'
+        }
+      ],
+      primaryConnectionId: EVA_MANAGED_CONNECTION_ID,
+      sources: [
+        {
+          connectionId: EVA_MANAGED_CONNECTION_ID,
+          kind: 'remote',
+          label: 'Assigned runtime',
+          reachable: true
+        }
+      ]
+    })
+
+    expect(buildEvaManagedAgentRoster('')).toMatchObject({
+      agents: [{ connectionId: EVA_MANAGED_CONNECTION_ID, handle: 'default', profile: 'default' }]
+    })
+  })
+
   it('routes every managed profile through one opaque assigned-runtime identity', () => {
     expect(buildEvaManagedProfileRoutes(['research', 'default', 'research', ''], 'default')).toEqual([
       {

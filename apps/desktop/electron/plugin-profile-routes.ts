@@ -144,6 +144,36 @@ export function buildEvaManagedProfileRoutes(
   }))
 }
 
+/** Managed Desktop has exactly one source: the opaque enrollment-bound
+ * runtime. Keep the union-roster IPC on that identity so Bot Mode never reads
+ * or probes workstation connection-registry entries left by another build. */
+export function buildEvaManagedAgentRoster(primaryProfile: string) {
+  const profile = normalizeProfile(primaryProfile)
+  const label = 'Assigned runtime'
+
+  return {
+    agents: [
+      {
+        connectionId: EVA_MANAGED_CONNECTION_ID,
+        connectionKind: 'remote' as const,
+        connectionLabel: label,
+        handle: profile,
+        profile,
+        targetProfile: profile
+      }
+    ],
+    primaryConnectionId: EVA_MANAGED_CONNECTION_ID,
+    sources: [
+      {
+        connectionId: EVA_MANAGED_CONNECTION_ID,
+        kind: 'remote' as const,
+        label,
+        reachable: true
+      }
+    ]
+  }
+}
+
 /** Managed plugins may request only the synthetic enrolled-runtime route.
  * Generic registry ids stay unavailable in evaOS Agent. */
 export function assertEvaManagedConnectionId(value: unknown): typeof EVA_MANAGED_CONNECTION_ID {
