@@ -131,6 +131,9 @@ const EVA_ACCOUNT_SCOPED_RENDERER_STORAGE_PREFIXES = Object.freeze([
   'hermes.desktop.inflightTurnJournal.',
   'hermes.desktop.lastRoute.',
   'hermes.desktop.lastSessionId.',
+  'hermes.desktop.pinnedSessions.remote.',
+  'hermes.desktop.sessionOrder.manual.remote.',
+  'hermes.desktop.sessionOrder.remote.',
   'hermes.desktop.workspace-cwd.remote.',
   'hermes.transcript-tail.'
 ])

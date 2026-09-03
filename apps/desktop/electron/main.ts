@@ -14472,6 +14472,7 @@ ipcMain.handle('hermes:connection', async (_event, profile) => {
 // forces a genuinely-local child when the v1 global mode is remote (the
 // registry 'local' entry always means this machine).
 ipcMain.handle('hermes:connection:for', async (_event, payload) => {
+  assertEvaManagedLocalMutationAllowed(EVA_MANAGED_BUILD, 'Registry connections')
   const { connectionId, profile } = payload && typeof payload === 'object' ? (payload as any) : ({} as any)
   const registry = readDesktopConnectionsRegistry()
   const id = String(connectionId || '').trim() || registry.primary
@@ -14662,6 +14663,8 @@ ipcMain.handle('hermes:window:openBrowser', async (_event, tabId) => {
 // never ensureRuntime(), which would kick off a first-run install from a menu
 // click; an unresolved runtime is reported instead.
 ipcMain.handle('hermes:window:openInTerminal', async (_event, sessionId, opts) => {
+  assertEvaManagedLocalTerminalAllowed(EVA_MANAGED_BUILD)
+
   if (typeof sessionId !== 'string' || !sessionId.trim()) {
     return { ok: false, error: 'invalid-session-id' }
   }
@@ -15435,6 +15438,8 @@ const registryGatewayWsUrlHandler = createRegistryGatewayWsUrlHandler({
 })
 
 ipcMain.handle('hermes:gateway:ws-url-for', async (_event, payload) => {
+  assertEvaManagedLocalMutationAllowed(EVA_MANAGED_BUILD, 'Registry connections')
+
   return gatewayWsUrlIpcResult(() => registryGatewayWsUrlHandler(payload))
 })
 

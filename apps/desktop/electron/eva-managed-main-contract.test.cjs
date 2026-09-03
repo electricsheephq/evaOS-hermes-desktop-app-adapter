@@ -24,6 +24,19 @@ test('managed main-process wiring survives an upstream Desktop recut', () => {
     /ipcMain\.handle\('hermes:api',[\s\S]{0,250}if \(EVA_MANAGED_BUILD\)\s*{\s*return evaManagedRuntime\.requestApi\(request\)/,
     'managed REST must stay possession-bound to the enrollment runtime'
   )
+  for (const channel of ['hermes:connection:for', 'hermes:gateway:ws-url-for']) {
+    assertSourceMatch(
+      new RegExp(
+        `ipcMain\\.handle\\('${channel}'[\\s\\S]{0,220}` +
+          "assertEvaManagedLocalMutationAllowed\\(EVA_MANAGED_BUILD, 'Registry connections'"
+      ),
+      `${channel} must reject renderer-selected registry routes in managed mode`
+    )
+  }
+  assertSourceMatch(
+    /ipcMain\.handle\('hermes:window:openInTerminal',[\s\S]{0,220}assertEvaManagedLocalTerminalAllowed\(EVA_MANAGED_BUILD\)/,
+    'managed mode must reject external terminal launches before resolving a local runtime'
+  )
   for (const channel of ['status', 'sign-in', 'sign-out', 'refresh']) {
     assertSourceMatch(new RegExp(`ipcMain\\.handle\\('hermes:eva:${channel}'`), `missing hermes:eva:${channel} handler`)
   }
