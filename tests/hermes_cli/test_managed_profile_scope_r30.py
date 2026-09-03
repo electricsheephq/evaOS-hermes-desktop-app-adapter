@@ -41,6 +41,26 @@ def flat_managed_profile_env(tmp_path, monkeypatch):
     return root, profile_home
 
 
+@pytest.fixture
+def flat_managed_default_profile_env(tmp_path, monkeypatch):
+    root = tmp_path / ".hermes"
+    profile_home = root / "default"
+    profile_home.mkdir(parents=True)
+    shared_auth = root / "shared-auth" / "auth.json"
+    shared_auth.parent.mkdir()
+    shared_auth.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setenv("HERMES_HOME", str(profile_home))
+    monkeypatch.setenv("HERMES_SHARED_AUTH_FILE", str(shared_auth))
+
+    pwd = pytest.importorskip("pwd")
+    monkeypatch.setattr(os, "geteuid", lambda: 4242)
+    monkeypatch.setattr(
+        pwd, "getpwuid", lambda _uid: SimpleNamespace(pw_name="hermes-default")
+    )
+    return root, profile_home
+
+
 def test_managed_profile_scope_is_bound_to_process_home(managed_profile_env):
     from hermes_cli.managed_profile_scope import (
         ManagedProfileScopeError,
@@ -85,6 +105,90 @@ def test_flat_managed_profile_scope_resolves_its_own_home_and_denies_siblings(
         require_managed_profile("sibling")
     with pytest.raises(ManagedProfileScopeError, match="not authorized"):
         require_managed_profile("default")
+
+
+def test_flat_managed_default_is_literal_owner_and_denies_siblings(
+    flat_managed_default_profile_env,
+):
+    from gateway.platforms.api_server import _prefix_names_served_profile
+    from hermes_cli import profiles
+    from hermes_cli.managed_profile_scope import (
+        ManagedProfileScopeError,
+        managed_profile_name,
+        require_managed_profile,
+    )
+
+    _root, profile_home = flat_managed_default_profile_env
+    assert managed_profile_name() == "default"
+    assert profiles.get_active_profile_name() == "default"
+    assert profiles.get_profile_dir("default") == profile_home
+    assert profiles.resolve_profile_env("default") == str(profile_home)
+    assert profiles.profile_matches_home("default") is True
+    assert profiles.profile_matches_home("sibling") is False
+    assert profiles.list_profile_names() == ["default"]
+    listed = profiles.list_profiles()
+    assert [(item.name, item.path, item.is_default) for item in listed] == [
+        ("default", profile_home, True)
+    ]
+    assert _prefix_names_served_profile("default") is True
+    assert require_managed_profile(None) == "default"
+    assert require_managed_profile("current") == "default"
+    assert require_managed_profile("default") == "default"
+    for selector in ("main", "sibling"):
+        with pytest.raises(ManagedProfileScopeError, match="not authorized"):
+            require_managed_profile(selector)
+
+
+def test_flat_managed_default_session_create_reports_default_without_nested_redirect(
+    flat_managed_default_profile_env, monkeypatch
+):
+    from tui_gateway import server
+
+    _root, profile_home = flat_managed_default_profile_env
+    monkeypatch.setattr(server, "_hermes_home", profile_home)
+    monkeypatch.setattr(server, "_schedule_agent_build", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        server, "_schedule_session_cap_enforcement", lambda *args, **kwargs: None
+    )
+    monkeypatch.setattr(server, "_completion_cwd", lambda params=None: str(profile_home))
+
+    response = server._methods["session.create"](
+        "flat-default-session", {"profile": "default", "cols": 80}
+    )
+    assert "result" in response, response
+    assert response["result"]["info"]["profile_name"] == "default"
+    sid = response["result"]["session_id"]
+    try:
+        assert server._sessions[sid]["profile_home"] is None
+        assert server._profile_home("default") is None
+    finally:
+        with server._sessions_lock:
+            server._sessions.pop(sid, None)
+
+
+def test_flat_managed_default_multiplex_stays_owner_only_with_nested_sibling(
+    flat_managed_default_profile_env,
+):
+    from gateway.platforms.api_server import APIServerAdapter, _PROFILE_REJECTED
+    from hermes_cli import profiles
+
+    _root, profile_home = flat_managed_default_profile_env
+    sibling = profile_home.parent / "profiles" / "sibling"
+    sibling.mkdir(parents=True)
+
+    assert profiles.profiles_to_serve(multiplex=True) == [
+        ("default", profile_home)
+    ]
+
+    adapter = object.__new__(APIServerAdapter)
+    adapter.gateway_runner = SimpleNamespace(
+        config=SimpleNamespace(
+            multiplex_profiles=True,
+            multiplex_profile_allowlist=None,
+        )
+    )
+    request = SimpleNamespace(match_info={"profile": "sibling"})
+    assert adapter._resolve_request_profile(request) is _PROFILE_REJECTED
 
 
 def test_flat_managed_profile_resolves_and_lists_only_current_identity(
