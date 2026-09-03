@@ -12,6 +12,7 @@ import { readDirForIpc } from './fs-read-dir'
 import { gitRootForIpc } from './git-root'
 
 export interface FsIpcDeps {
+  assertLocalAccessAllowed: (operation: string) => void
   hermesHome: string
   readActiveDesktopProfile: () => null | string
   expandUserPath: (value: string) => string
@@ -21,6 +22,7 @@ export interface FsIpcDeps {
 }
 
 export function registerFsIpc({
+  assertLocalAccessAllowed,
   hermesHome,
   readActiveDesktopProfile,
   expandUserPath,
@@ -28,12 +30,22 @@ export function registerFsIpc({
   directoryExists,
   resolveGitBinary
 }: FsIpcDeps) {
-  ipcMain.handle('hermes:fs:readDir', async (_event, dirPath) => readDirForIpc(dirPath))
+  ipcMain.handle('hermes:fs:readDir', async (_event, dirPath) => {
+    assertLocalAccessAllowed('Reading local directories')
 
-  ipcMain.handle('hermes:fs:gitRoot', async (_event, startPath) => gitRootForIpc(startPath))
+    return readDirForIpc(dirPath)
+  })
+
+  ipcMain.handle('hermes:fs:gitRoot', async (_event, startPath) => {
+    assertLocalAccessAllowed('Inspecting local Git repositories')
+
+    return gitRootForIpc(startPath)
+  })
 
   // Reveal a path in the OS file manager (Finder / Explorer / Files).
   ipcMain.handle('hermes:fs:reveal', async (_event, targetPath) => {
+    assertLocalAccessAllowed('Revealing local files')
+
     const target = String(targetPath || '').trim()
 
     if (!target) {
@@ -55,6 +67,8 @@ export function registerFsIpc({
   // which often doesn't exist on first use. `shell.openPath` returns '' on
   // success or an error string; both mkdir + openPath failures are surfaced.
   ipcMain.handle('hermes:fs:openDir', async (_event, dirPath) => {
+    assertLocalAccessAllowed('Opening or creating a local directory')
+
     const dir = String(dirPath || '').trim()
 
     if (!dir) {
@@ -79,6 +93,8 @@ export function registerFsIpc({
   // on-disk plugin door silently breaks (#66899). Electron owns this resolution
   // so it stays valid in every connection mode. Created on demand, like openDir.
   async function localPluginsRoot(dirName: string): Promise<string> {
+    assertLocalAccessAllowed('Opening local application data directories')
+
     // Profile-aware: a named Desktop profile gets its own plugin root under
     // profiles/<name>/, matching the profile-scoped hermes_home the backend
     // reported before this resolver existed. 'default'/unset pins the global root.
@@ -112,6 +128,8 @@ export function registerFsIpc({
   ipcMain.handle('hermes:fs:agentPluginsRoot', async () => localPluginsRoot('plugins'))
 
   ipcMain.handle('hermes:plugin:probe', async (_event, payload) => {
+    assertLocalAccessAllowed('Inspecting local plugin repositories')
+
     const identifier = String(payload?.identifier || payload?.repo || '').trim()
 
     if (!identifier) {
@@ -137,6 +155,8 @@ export function registerFsIpc({
   // base name; the destination is resolved in the SAME parent dir so a rename can
   // never move the item elsewhere or traverse out. Rejects on a name collision.
   ipcMain.handle('hermes:fs:rename', async (_event, targetPath, newName) => {
+    assertLocalAccessAllowed('Renaming local files')
+
     const src = String(targetPath || '').trim()
     const name = String(newName || '').trim()
 
@@ -164,6 +184,8 @@ export function registerFsIpc({
   // this never creates directory trees or escapes the allowed roots, and content
   // is size-capped so it can't be abused as a bulk-write primitive.
   ipcMain.handle('hermes:fs:writeText', async (_event, filePath, content) => {
+    assertLocalAccessAllowed('Writing local files')
+
     const raw = String(filePath || '').trim()
 
     if (!raw) {
@@ -190,6 +212,8 @@ export function registerFsIpc({
   // Move a file/folder to the OS trash (recoverable) — the VS Code "Delete"
   // default. `shell.trashItem` routes to Finder/Explorer/Files trash per platform.
   ipcMain.handle('hermes:fs:trash', async (_event, targetPath) => {
+    assertLocalAccessAllowed('Trashing local files')
+
     const target = String(targetPath || '').trim()
 
     if (!target) {

@@ -4,7 +4,7 @@ import { readActiveTerminal } from '@/app/right-sidebar/terminal/buffer'
 import { closeAgentTerminalByProc } from '@/app/right-sidebar/terminal/terminals'
 import type { PreviewActAction } from '@/lib/preview-act/act-in-page'
 import type { TourAction, TourStep } from '@/lib/tour'
-import { $gateway } from '@/store/gateway'
+import { requestGatewayForAgent } from '@/store/gateway'
 import { applyDesktopLayoutPreset, revealDesktopPane } from '@/store/pane-focus'
 import { recordAgentReaction } from '@/store/reactions-local'
 import { setMessages } from '@/store/session'
@@ -45,6 +45,14 @@ const loadPreviewEngine = () => {
 export function handleDesktopBridgeEvent(ctx: GatewayEventContext): boolean {
   const { event, payload, isActiveEvent } = ctx
 
+  const respondToSource = (method: string, params: Record<string, unknown>) =>
+    requestGatewayForAgent(
+      event.connectionId ?? null,
+      event.profile || ctx.deps.activeGatewayProfile,
+      method,
+      params
+    ).catch(() => undefined)
+
   if (event.type === 'terminal.read.request') {
     // read_terminal tool: serialize the renderer's xterm buffer and answer
     // immediately (Python blocks on the respond). Empty text = no live pane.
@@ -53,9 +61,9 @@ export function handleDesktopBridgeEvent(ctx: GatewayEventContext): boolean {
     if (requestId) {
       const start = typeof payload?.start === 'number' ? payload.start : undefined
       const count = typeof payload?.count === 'number' ? payload.count : undefined
-      const result = readActiveTerminal({ start, count })
+      const result = isActiveEvent ? readActiveTerminal({ start, count }) : null
 
-      void $gateway.get()?.request('terminal.read.respond', {
+      void respondToSource('terminal.read.respond', {
         request_id: requestId,
         text: result ? JSON.stringify(result) : ''
       })
@@ -73,12 +81,16 @@ export function handleDesktopBridgeEvent(ctx: GatewayEventContext): boolean {
       const start = typeof payload?.start === 'number' ? payload.start : undefined
       const count = typeof payload?.count === 'number' ? payload.count : undefined
 
-      void readActivePreview({ count, start }).then(result => {
-        void $gateway.get()?.request('preview.read.respond', {
-          request_id: requestId,
-          text: result ? JSON.stringify(result) : ''
+      if (!isActiveEvent) {
+        void respondToSource('preview.read.respond', { request_id: requestId, text: '' })
+      } else {
+        void readActivePreview({ count, start }).then(result => {
+          void respondToSource('preview.read.respond', {
+            request_id: requestId,
+            text: result ? JSON.stringify(result) : ''
+          })
         })
-      })
+      }
     }
 
     return true
@@ -94,7 +106,7 @@ export function handleDesktopBridgeEvent(ctx: GatewayEventContext): boolean {
 
     if (requestId) {
       const answer = (result: unknown) =>
-        $gateway.get()?.request('preview.act.respond', {
+        respondToSource('preview.act.respond', {
           request_id: requestId,
           text: result ? JSON.stringify(result) : ''
         })
@@ -138,7 +150,7 @@ export function handleDesktopBridgeEvent(ctx: GatewayEventContext): boolean {
       const read = window.hermesDesktop?.readWindowBelow
 
       const answer = (result: unknown) =>
-        $gateway.get()?.request('window.read.respond', {
+        respondToSource('window.read.respond', {
           request_id: requestId,
           text: result ? JSON.stringify(result) : ''
         })
@@ -146,7 +158,7 @@ export function handleDesktopBridgeEvent(ctx: GatewayEventContext): boolean {
       // .catch: ipcRenderer.invoke rejects on an older shell without the
       // handler or a main-side throw — without an empty answer the tool
       // would stall its full 30s timeout.
-      void Promise.resolve(read ? read() : null).then(answer, () => answer(null))
+      void Promise.resolve(isActiveEvent && read ? read() : null).then(answer, () => answer(null))
     }
 
     return true
@@ -178,7 +190,7 @@ export function handleDesktopBridgeEvent(ctx: GatewayEventContext): boolean {
 
     if (requestId) {
       const answer = (result: unknown) =>
-        $gateway.get()?.request('tour.respond', {
+        respondToSource('tour.respond', {
           request_id: requestId,
           text: result ? JSON.stringify(result) : ''
         })

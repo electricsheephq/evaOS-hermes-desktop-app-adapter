@@ -3,7 +3,7 @@ import { useEffect, useRef } from 'react'
 import { closeActiveTab } from '@/app/chat/close-tab'
 import { commandFocusedPreview } from '@/app/chat/right-rail/preview-nav'
 import { openSession } from '@/app/open-session'
-import { resolveDeepLinkAction } from '@/lib/deeplink-routes'
+import { formatBlueprintCommand, resolveDeepLinkAction } from '@/lib/deeplink-routes'
 import { pathFromHermesDeepLink, resolveHermesOpenPath } from '@/lib/hermes-open-target'
 import { storedSessionIdForNotification } from '@/lib/session-ids'
 import { requestMcpInstallFromDeepLink } from '@/store/mcp-deeplink-install'
@@ -256,15 +256,8 @@ export function useDesktopIntegrations({
       const action = resolveDeepLinkAction(payload)
 
       if (action.type === 'composer-blueprint') {
-        const slots = Object.entries(action.params || {})
-          .map(([k, v]) => {
-            const sval = /\s/.test(v) ? `"${v.replace(/"/g, '\\"')}"` : v
+        const command = formatBlueprintCommand(action.name, action.params || {})
 
-            return `${k}=${sval}`
-          })
-          .join(' ')
-
-        const command = `/blueprint ${action.name}${slots ? ' ' + slots : ''}`
         requestComposerInsert(command, { mode: 'block', target: 'main' })
         requestComposerFocus('main')
 

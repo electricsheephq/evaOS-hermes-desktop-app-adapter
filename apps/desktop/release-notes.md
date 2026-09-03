@@ -3,6 +3,8 @@
 - Aligns the Desktop UI with the exact Hermes r30 upstream base, including Preview read/drive, Bot Mode, tours, MCP setup, and related renderer behavior.
 - Declares Desktop UI protocol 2 on session create, resume, and activate so matched runtimes expose only the UI tools this client can answer.
 - Preserves managed Electric Sheep authentication, assigned-agent routing, callback ownership, delegated access, relay, updater, and distribution controls.
+- Keeps managed REST, media, downloads, and WebSocket responses on the enrolled assignment while preventing background sessions from reading or driving the visible Desktop surface.
+- Restores fail-closed local filesystem, Git, terminal, and secure-storage boundaries for managed installations, including account-switch cleanup for cached transcript and in-flight turn data.
 - Keeps managed SSH updates serialized at the configured mutex path without creating quote-prefixed paths in the checkout.
 - This is an unpublished developer candidate; it is not a signed or notarized release.
 

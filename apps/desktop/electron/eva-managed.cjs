@@ -128,9 +128,11 @@ const EVA_ACCOUNT_SCOPED_RENDERER_STORAGE_KEYS = Object.freeze([
   'hermes-desktop-profile-themes-v1'
 ])
 const EVA_ACCOUNT_SCOPED_RENDERER_STORAGE_PREFIXES = Object.freeze([
+  'hermes.desktop.inflightTurnJournal.',
   'hermes.desktop.lastRoute.',
   'hermes.desktop.lastSessionId.',
-  'hermes.desktop.workspace-cwd.remote.'
+  'hermes.desktop.workspace-cwd.remote.',
+  'hermes.transcript-tail.'
 ])
 
 class EvaBrokerError extends Error {

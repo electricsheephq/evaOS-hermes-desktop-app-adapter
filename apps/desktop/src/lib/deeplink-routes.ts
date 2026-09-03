@@ -21,6 +21,19 @@ function truthyParam(value: string | undefined, defaultValue = false): boolean {
   return normalized === '1' || normalized === 'true' || normalized === 'yes'
 }
 
+export function formatBlueprintCommand(name: string, params: Record<string, string>): string {
+  const slots = Object.entries(params)
+    .map(([key, value]) => {
+      const escaped = value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
+      const rendered = /[\s"\\]/.test(value) ? `"${escaped}"` : escaped
+
+      return `${key}=${rendered}`
+    })
+    .join(' ')
+
+  return `/blueprint ${name}${slots ? ` ${slots}` : ''}`
+}
+
 export function resolveDeepLinkAction(payload: DeepLinkPayload | null | undefined): DeepLinkAction {
   if (!payload?.kind) {
     return { type: 'ignore' }

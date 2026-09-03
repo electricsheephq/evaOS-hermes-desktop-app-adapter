@@ -178,6 +178,23 @@ test('encryptDesktopSecret gives managed users only branded secure-storage recov
   }
 })
 
+test('encryptDesktopSecret rejects Electron basic_text for managed secrets', () => {
+  const error = captureThrown(() =>
+    encryptDesktopSecret(
+      'token',
+      {
+        encryptString: value => Buffer.from(value),
+        getSelectedStorageBackend: () => 'basic_text',
+        isEncryptionAvailable: () => true
+      },
+      { managed: true }
+    )
+  )
+
+  assert.match(error.message, /secure storage/i)
+  assert.match(error.message, /evaOS Agent/)
+})
+
 test('encryptDesktopSecret preserves unmanaged environment fallback recovery', () => {
   const unavailable = captureThrown(() =>
     encryptDesktopSecret('token', { isEncryptionAvailable: () => false, encryptString: () => Buffer.alloc(0) }, false)

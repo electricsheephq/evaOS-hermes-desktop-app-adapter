@@ -562,6 +562,9 @@ test('account reset clears renderer account state while preserving global prefer
   const values = new Map([
     ['hermes.desktop.lastSessionId.research', 'session-secret'],
     ['hermes.desktop.workspace-cwd.remote.eva-managed%3A%2F%2Fcustomer.default', '/srv/customer'],
+    ['hermes.transcript-tail.v2:session-secret', '{"messages":[{"role":"user","content":"private"}]}'],
+    ['hermes.transcript-tail.v2:index', '["session-secret"]'],
+    ['hermes.desktop.inflightTurnJournal.v2:session-secret', '{"prompt":"private"}'],
     ['hermes:composer-drafts:v3', '{"session-secret":"draft"}'],
     [
       'hermes.desktop.layoutTree.v2',
@@ -594,6 +597,9 @@ test('account reset clears renderer account state while preserving global prefer
 
   assert.equal(values.has('hermes.desktop.lastSessionId.research'), false)
   assert.equal(values.has('hermes.desktop.workspace-cwd.remote.eva-managed%3A%2F%2Fcustomer.default'), false)
+  assert.equal(values.has('hermes.transcript-tail.v2:session-secret'), false)
+  assert.equal(values.has('hermes.transcript-tail.v2:index'), false)
+  assert.equal(values.has('hermes.desktop.inflightTurnJournal.v2:session-secret'), false)
   assert.equal(values.has('hermes:composer-drafts:v3'), false)
   assert.equal(values.has('hermes.desktop.layoutTree.v2'), false)
   assert.equal(values.has('hermes.desktop.userPlacedPanes.v1'), false)

@@ -179,7 +179,18 @@ function encryptDesktopSecret(
     encryptionAvailable = false
   }
 
-  if (!encryptionAvailable) {
+  let storageBackend = ''
+
+  try {
+    storageBackend = String(safeStorageApi?.getSelectedStorageBackend?.() || '')
+  } catch {
+    storageBackend = ''
+  }
+
+  // Electron's Linux `basic_text` backend uses a public hard-coded password.
+  // It is an explicit usability fallback for unmanaged Desktop, not secure
+  // storage for possession-bearing managed enrollment credentials.
+  if (!encryptionAvailable || (managed && storageBackend === 'basic_text')) {
     if (managed) {
       throw new Error(
         'Secure storage is unavailable for evaOS Agent managed access. ' +

@@ -1,5 +1,5 @@
 import { useStore } from '@nanostores/react'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { requestComposerSubmit } from '@/app/chat/composer/focus'
 import { useSessionView } from '@/app/chat/session-view'
@@ -283,6 +283,7 @@ function InlineHtmlFrame({
   // document THIS mount injected, so two previews in one transcript (or a
   // hostile page inventing messages) can't move each other's frames.
   const token = useMemo(() => Math.random().toString(36).slice(2), [])
+  const frameRef = useRef<HTMLIFrameElement>(null)
 
   // Resolve against THIS session's cwd (the file was written by its agent).
   const resolved = localPreviewTarget(file, cwd || undefined)
@@ -322,6 +323,13 @@ function InlineHtmlFrame({
     let lastIntentAt = 0
 
     const onMessage = (event: MessageEvent) => {
+      // sandbox="allow-scripts" gives srcdoc an opaque `null` origin. Bind
+      // the capability token to this exact frame as well, so another opaque
+      // frame in the app cannot replay a captured or guessed message.
+      if (event.origin !== 'null' || event.source !== frameRef.current?.contentWindow) {
+        return
+      }
+
       const intent = intentFromMessage(event.data, token)
 
       if (intent !== null) {
@@ -403,6 +411,7 @@ function InlineHtmlFrame({
           <iframe
             className="absolute inset-0 size-full border-0 bg-transparent"
             loading="lazy"
+            ref={frameRef}
             sandbox="allow-scripts"
             srcDoc={framedDoc}
             style={{ colorScheme: isDark ? 'dark' : 'light' }}

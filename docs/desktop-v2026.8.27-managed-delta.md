@@ -41,9 +41,16 @@ This is not a linear commit replay, so a mechanical `git range-diff` would misst
 ## Candidate-only compatibility corrections
 
 - `desktop_ui_protocol: 2` is added only to Desktop `session.create`, `session.resume`, and `session.activate` requests. It is capability metadata, not authorization.
+- Managed backend creation, REST calls, media streams, and saved-file downloads stay on the enrollment runtime; renderer replies return through the event's owning connection/profile rather than the ambient gateway.
+- Background sessions receive empty or denied read/drive responses without inspecting the foreground terminal, Preview pane, or native window.
+- Managed callback ownership, pending renderer-isolation flush, account-scoped transcript/in-flight cache cleanup, and managed About identity are retained across the upstream reconstruction.
+- Extracted filesystem, Git, terminal, project-directory, and connection-setting IPC keeps the prior managed fail-closed boundary.
+- Managed enrollment credentials require OS-backed secure storage; Electron's Linux `basic_text` backend is not treated as secure.
+- The canonical Desktop check once again runs the managed contract suite, and the imported build keeps its required `electron-updater` and root `agent-browser` packages.
 - Primary managed gateway recovery forces a fresh connection when a request discovers a closed socket.
 - Managed SSH update locking now passes the configured mutex path as one shell argument and expands `~` inside the remote Python helper. This prevents quote-prefixed test or repository paths while preserving serialization.
 - An upstream SSH redaction test now uses reserved documentation addresses and a synthetic credential string rather than realistic incident-shaped sample data.
+- Blueprint deep-link values escape both quotes and backslashes before becoming a reviewable composer command; inline sandbox messages are accepted only from the exact opaque-origin frame; gateway errors use a fixed log format.
 
 ## Intentional supersessions
 
@@ -54,14 +61,14 @@ This is not a linear commit replay, so a mechanical `git range-diff` would misst
 
 ## Validation recorded for this candidate
 
-- Renderer/UI Vitest: 631 files and 6,186 tests passed.
-- Electron Vitest: 136 files passed and 2 skipped; 1,944 tests passed and 6 skipped.
-- Managed Node contracts: 147 tests passed.
+- At the initial reconstruction head, Renderer/UI Vitest passed 631 files and 6,186 tests; Electron Vitest passed 136 files and 1,944 tests, with the documented platform skips.
+- On the parity-correction delta, 149 managed Node contracts, 86 focused Electron boundary tests, three Desktop GUI-session isolation tests, four deep-link route tests, and all nine root JS-package tests passed locally.
 - Remote lifecycle contract: 91 tests passed.
-- TypeScript checks passed for renderer, Electron, and shared configurations.
+- TypeScript checks passed for renderer, Electron, end-to-end, and root JS configurations.
+- The production Desktop renderer/Electron bundle and native-dependency staging completed successfully under Homebrew Node 26.
 - ESLint completed with zero errors; inherited warnings remain non-blocking.
 
-GitHub Actions and exact-head semantic review remain required before the branch is frozen for the local installed canary.
+GitHub Actions, CodeQL dispositions, and exact-head semantic review remain required before the branch is frozen for the local installed canary.
 
 ## Rollout and rollback boundary
 
