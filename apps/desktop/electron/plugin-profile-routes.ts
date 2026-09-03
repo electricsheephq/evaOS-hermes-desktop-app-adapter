@@ -4,6 +4,37 @@ import crypto from 'node:crypto'
  * It is routing metadata, never an authorization token. */
 export const EVA_MANAGED_CONNECTION_ID = 'eva-managed-runtime'
 
+export interface EvaManagedActiveRoute {
+  connectionId: typeof EVA_MANAGED_CONNECTION_ID
+  profile: string | undefined
+  registryScoped: true
+}
+
+/** Accept only the renderer's opaque enrolled-runtime route in a managed app.
+ * The upstream renderer publishes this channel one-way, so invalid workstation
+ * registry ids are rejected by returning null rather than throwing across IPC.
+ * `registryScoped` is forced on; a renderer cannot opt back into legacy config
+ * resolution with a false flag. */
+export function normalizeEvaManagedActiveRoute(value: unknown): EvaManagedActiveRoute | null {
+  if (!value || typeof value !== 'object') {
+    return null
+  }
+
+  const input = value as Record<string, unknown>
+
+  if (input.connectionId !== EVA_MANAGED_CONNECTION_ID) {
+    return null
+  }
+
+  const profile = typeof input.profile === 'string' && input.profile.trim() ? input.profile.trim() : undefined
+
+  return {
+    connectionId: EVA_MANAGED_CONNECTION_ID,
+    profile,
+    registryScoped: true
+  }
+}
+
 /** Renderer-safe connection inventory for evaOS Agent. Managed builds have
  * one enrollment-bound remote source and must never enumerate a workstation
  * registry left by another Desktop build or account. */

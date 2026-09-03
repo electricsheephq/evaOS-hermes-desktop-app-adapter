@@ -10,6 +10,7 @@ import {
   EVA_MANAGED_CONNECTION_ID,
   isLocalEnumerationFailure,
   localRouteFallbackProfiles,
+  normalizeEvaManagedActiveRoute,
   type ProfileRouteConfig,
   registryGatewayWsUrl,
   undialedSshRouteSeeds
@@ -30,6 +31,22 @@ function config(overrides: Partial<ProfileRouteConfig> = {}): ProfileRouteConfig
 }
 
 describe('managed plugin profile routes', () => {
+  it('accepts only the opaque managed active route and forces registry scope', () => {
+    expect(
+      normalizeEvaManagedActiveRoute({
+        connectionId: EVA_MANAGED_CONNECTION_ID,
+        profile: ' research ',
+        registryScoped: false
+      })
+    ).toEqual({
+      connectionId: EVA_MANAGED_CONNECTION_ID,
+      profile: 'research',
+      registryScoped: true
+    })
+    expect(normalizeEvaManagedActiveRoute({ connectionId: 'saved-workstation-ssh', registryScoped: true })).toBeNull()
+    expect(normalizeEvaManagedActiveRoute(null)).toBeNull()
+  })
+
   it('publishes one credential-free assigned-runtime connection without workstation sources', () => {
     expect(buildEvaManagedConnectionsRegistry()).toEqual({
       connections: [

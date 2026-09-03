@@ -118,6 +118,8 @@ const EVA_ACCOUNT_SCOPED_RENDERER_STORAGE_KEYS = Object.freeze([
   'hermes.desktop.sessionTiles.v1',
   'hermes.desktop.sessionTiles.v2',
   'hermes.desktop.sidebarMessagingOpen',
+  'hermes.desktop.sidebarProfileFilter',
+  'hermes.desktop.sidebarProjectFilter',
   'hermes.desktop.terminals.v1',
   'hermes.desktop.toolDisclosure.v1',
   'hermes.desktop.unreadFinishedSessions',

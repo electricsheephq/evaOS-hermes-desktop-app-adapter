@@ -34,6 +34,14 @@ test('managed main-process wiring survives an upstream Desktop recut', () => {
     )
   }
   assertSourceMatch(
+    /ipcMain\.on\('hermes:connection:active-route',[\s\S]{0,300}EVA_MANAGED_BUILD\s*\?\s*normalizeEvaManagedActiveRoute\(route\)[\s\S]{0,160}windowConnectionRoutes\.set\(id, safeRoute\)/,
+    'managed active routes must reject workstation connection identities before storage'
+  )
+  assertSourceMatch(
+    /async function reachablePreviewUrl\(webContentsId: number, rawUrl: string\)[\s\S]{0,220}if \(EVA_MANAGED_BUILD\)[\s\S]{0,400}resetPreviewReach\(webContentsId\)[\s\S]{0,100}return rawUrl/,
+    'managed URL previews must never borrow a workstation SSH tunnel'
+  )
+  assertSourceMatch(
     /ipcMain\.handle\('hermes:plugin-profile-routes',[\s\S]{0,500}if \(EVA_MANAGED_BUILD\)\s*{\s*return buildEvaManagedProfileRoutes\(/,
     'managed plugin route inventory must bypass the workstation connection registry'
   )

@@ -5,8 +5,9 @@
 - Preserves managed Electric Sheep authentication, assigned-agent routing, callback ownership, delegated access, relay, updater, and distribution controls.
 - Keeps managed REST, media, downloads, and WebSocket responses on the enrolled assignment while preventing background sessions from reading or driving the visible Desktop surface.
 - Routes bundled Bot Mode profile requests, connection inventory, and MCP setup actions only through the enrolled managed runtime, including reconnects, while keeping background reactions and capability announcements out of the foreground session.
+- Keeps active Preview routes on the opaque enrolled runtime, never borrows saved workstation SSH credentials, and routes approvals plus background process controls through the session that owns them.
 - Restores fail-closed local filesystem, Git, terminal, and secure-storage boundaries for managed installations, including account-switch cleanup for cached transcript and in-flight turn data.
-- Clears pull-request recovery, session-owner, and unread-session metadata with the rest of the account-scoped renderer state during managed sign-out or assignment changes.
+- Clears pull-request recovery, session-owner, unread-session, and sidebar-filter metadata with the rest of the account-scoped renderer state during managed sign-out or assignment changes.
 - Preserves an existing encrypted managed enrollment when secure storage cannot decrypt it at startup, returning a retryable local error instead of silently replacing it with signed-out state.
 - Keeps managed SSH updates serialized at the configured mutex path without creating quote-prefixed paths in the checkout.
 - This is an unpublished developer candidate; it is not a signed or notarized release.

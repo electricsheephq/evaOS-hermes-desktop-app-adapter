@@ -10,7 +10,7 @@ import { $goalsBySession, type GoalStatus } from './goals'
 import { dispatchNativeNotification } from './native-notifications'
 import { notifyError } from './notifications'
 import { $sessions, lineageAliases } from './session'
-import { $sessionStates } from './session-states'
+import { $sessionStates, knownOwnerForSession, requestForOwnedSession } from './session-states'
 import { $subagentsBySession, type SubagentProgress } from './subagents'
 import { $todosBySession } from './todos'
 
@@ -386,7 +386,20 @@ export function reconcileBackgroundProcesses(sid: string, procs: GatewayProcessE
  *  screen, so treating 4001 as transient meant re-sending the same dead id
  *  forever: one runtime id accumulated 18,614 gateway rejections in a single day
  *  (#94219 fallout). Latch the id here and skip it until something rebinds it. */
-const goneSessions = new Set<string>()
+const goneSessionScopes = new Map<string, string>()
+
+/** One runtime id may exist on several independently routed gateways. A 4001
+ * from owner A must never suppress owner B's healthy process poll when the id
+ * collides or is rebound. */
+function backgroundPollingGuardKey(sid: string): string {
+  const owner = knownOwnerForSession(sid)
+
+  if (owner && typeof owner === 'object') {
+    return JSON.stringify([owner.connectionId, owner.profile, owner.targetProfile ?? null, sid])
+  }
+
+  return JSON.stringify([null, typeof owner === 'string' ? owner : null, null, sid])
+}
 
 /** Gateway JSON-RPC code for "session not found" (tui_gateway _sess_nowait). */
 const GATEWAY_SESSION_NOT_FOUND_CODE = 4001
@@ -414,31 +427,41 @@ export function isSessionGoneForBackgroundPolling(error: unknown): boolean {
  *  it (so polling resumes), or with no argument to reset everything (tests). */
 export function resetBackgroundPollingGuard(sid?: string): void {
   if (sid) {
-    goneSessions.delete(sid)
+    for (const [scope, scopedSid] of goneSessionScopes) {
+      if (scopedSid === sid) {
+        goneSessionScopes.delete(scope)
+      }
+    }
 
     return
   }
 
-  goneSessions.clear()
+  goneSessionScopes.clear()
 }
 
 /** Pull the session's live process snapshot from the gateway. */
 export async function refreshBackgroundProcesses(sid: string): Promise<void> {
   const gateway = $gateway.get()
+  const guardKey = backgroundPollingGuardKey(sid)
 
-  if (!sid || !gateway || goneSessions.has(sid)) {
+  if (!sid || !gateway || goneSessionScopes.has(guardKey)) {
     return
   }
 
   try {
-    const result = await gateway.request<{ processes?: GatewayProcessEntry[] }>('process.list', { session_id: sid })
+    const result = await requestForOwnedSession<{ processes?: GatewayProcessEntry[] }>(
+      sid,
+      gateway.request.bind(gateway) as typeof gateway.request,
+      'process.list',
+      { session_id: sid }
+    )
 
     reconcileBackgroundProcesses(sid, result?.processes ?? [])
   } catch (error) {
     // A gone session never comes back under this runtime id: stop polling it,
     // or the 5s timer hammers the gateway with 4001s for the window's lifetime.
     if (isSessionGoneForBackgroundPolling(error)) {
-      goneSessions.add(sid)
+      goneSessionScopes.set(guardKey, sid)
 
       return
     }
@@ -468,8 +491,17 @@ export function dismissBackgroundProcess(sid: string, id: string) {
  *  row while the process lived on, stranding rogue tasks. On failure the row
  *  stays so the user can retry / see it didn't die. */
 export async function stopBackgroundProcess(sid: string, id: string): Promise<void> {
+  const gateway = $gateway.get()
+
+  if (!gateway) {
+    return
+  }
+
   try {
-    await $gateway.get()?.request('process.kill', { process_id: id, session_id: sid })
+    await requestForOwnedSession(sid, gateway.request.bind(gateway) as typeof gateway.request, 'process.kill', {
+      process_id: id,
+      session_id: sid
+    })
     dismissBackgroundProcess(sid, id)
   } catch (err) {
     notifyError(err, 'Could not stop the process')
@@ -498,7 +530,12 @@ export function resetSessionBackground(sid: string) {
     dismissed.add(item.id)
 
     if (item.state === 'running') {
-      void gateway?.request('process.kill', { process_id: item.id, session_id: sid }).catch(() => undefined)
+      if (gateway) {
+        void requestForOwnedSession(sid, gateway.request.bind(gateway) as typeof gateway.request, 'process.kill', {
+          process_id: item.id,
+          session_id: sid
+        }).catch(() => undefined)
+      }
     }
   }
 

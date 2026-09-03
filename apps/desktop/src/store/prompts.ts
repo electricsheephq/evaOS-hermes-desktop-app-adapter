@@ -2,6 +2,7 @@ import { atom, computed, type ReadableAtom } from 'nanostores'
 
 import { $clarifyRequest, $clarifyRequests } from './clarify'
 import { $activeSessionId } from './session'
+import { requestForOwnedSession } from './session-states'
 
 // Blocking interactive prompts the gateway raises mid-turn. Each maps to a
 // `*.request` event the Python side emits while it blocks the agent thread
@@ -84,6 +85,16 @@ interface ApprovalGateway {
   request: (method: string, params: Record<string, unknown>) => Promise<unknown>
 }
 
+type OwnedApprovalRequest = <R>(
+  method: string,
+  params?: Record<string, unknown>,
+  timeoutMs?: number,
+  signal?: AbortSignal
+) => Promise<R>
+
+const bindApprovalRequest = (gateway: ApprovalGateway): OwnedApprovalRequest =>
+  gateway.request.bind(gateway) as unknown as OwnedApprovalRequest
+
 interface PendingApprovalPayload {
   allow_permanent?: boolean
   choices?: unknown
@@ -119,7 +130,7 @@ export async function receiveApprovalRequest(gateway: ApprovalGateway | null, re
   setApprovalRequest(request)
 
   if (gateway && request.requestId && request.sessionId) {
-    await gateway.request('approval.received', {
+    await requestForOwnedSession(request.sessionId, bindApprovalRequest(gateway), 'approval.received', {
       request_id: request.requestId,
       session_id: request.sessionId
     })
@@ -131,9 +142,12 @@ export async function replayPendingApproval(gateway: ApprovalGateway | null, ses
     return
   }
 
-  const rawResult = await gateway.request('approval.pending', {
-    session_id: sessionId
-  })
+  const rawResult = await requestForOwnedSession<{ approvals?: PendingApprovalPayload[] }>(
+    sessionId,
+    bindApprovalRequest(gateway),
+    'approval.pending',
+    { session_id: sessionId }
+  )
 
   const result =
     rawResult && typeof rawResult === 'object' ? (rawResult as { approvals?: PendingApprovalPayload[] }) : {}

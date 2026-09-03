@@ -7,9 +7,29 @@ import {
   isSessionGoneForBackgroundPolling,
   reconcileBackgroundProcesses,
   refreshBackgroundProcesses,
-  resetBackgroundPollingGuard
+  resetBackgroundPollingGuard,
+  resetSessionBackground,
+  stopBackgroundProcess
 } from './composer-status'
 import { $gateway } from './gateway'
+import { $profiles } from './profile'
+import { _resetSessionOwnerHintsForTests, setSessionOwnerHint } from './session'
+
+const gatewayMocks = vi.hoisted(() => ({
+  requestGatewayForAgent: vi.fn(
+    async (
+      _connectionId: string,
+      _profile: string,
+      _method: string,
+      _params?: Record<string, unknown>
+    ): Promise<unknown> => ({ processes: [] })
+  )
+}))
+
+vi.mock('@/store/gateway', async importActual => ({
+  ...(await importActual<Record<string, unknown>>()),
+  requestGatewayForAgent: gatewayMocks.requestGatewayForAgent
+}))
 
 const SID = 'sess-1'
 
@@ -314,5 +334,81 @@ describe('refreshBackgroundProcesses dead-session guard hardenings', () => {
     await refreshBackgroundProcesses('sess-2')
 
     expect(request).toHaveBeenCalledTimes(4)
+  })
+})
+
+describe('background process owner isolation', () => {
+  beforeEach(() => {
+    $backgroundStatusBySession.set({})
+    $profiles.set([{ name: 'foreground' }, { name: 'background' }] as never)
+    _resetSessionOwnerHintsForTests({ storage: true })
+    resetBackgroundPollingGuard()
+    vi.clearAllMocks()
+  })
+
+  afterEach(() => {
+    $backgroundStatusBySession.set({})
+    $gateway.set(null as never)
+    $profiles.set([])
+    _resetSessionOwnerHintsForTests({ storage: true })
+    resetBackgroundPollingGuard()
+    vi.clearAllMocks()
+  })
+
+  it('routes process list, explicit kill, and rewind cleanup through the session owner', async () => {
+    const owner = { connectionId: 'conn-background', profile: 'background' }
+    const ambient = vi.fn(async () => ({ processes: [] }))
+
+    setSessionOwnerHint(SID, owner)
+    $gateway.set({ request: ambient } as never)
+    gatewayMocks.requestGatewayForAgent.mockImplementation(async (_connectionId, _profile, method) =>
+      method === 'process.list' ? { processes: [running('proc-1')] } : { ok: true }
+    )
+
+    await refreshBackgroundProcesses(SID)
+    await stopBackgroundProcess(SID, 'proc-1')
+    reconcileBackgroundProcesses(SID, [running('proc-2')])
+    resetSessionBackground(SID)
+
+    await vi.waitFor(() => expect(gatewayMocks.requestGatewayForAgent).toHaveBeenCalledTimes(3))
+    expect(gatewayMocks.requestGatewayForAgent.mock.calls).toEqual([
+      [owner.connectionId, owner.profile, 'process.list', { session_id: SID }],
+      [owner.connectionId, owner.profile, 'process.kill', { process_id: 'proc-1', session_id: SID }],
+      [owner.connectionId, owner.profile, 'process.kill', { process_id: 'proc-2', session_id: SID }]
+    ])
+    expect(ambient).not.toHaveBeenCalled()
+  })
+
+  it('does not carry a gone-session latch across owners that reuse one runtime id', async () => {
+    const ownerA = { connectionId: 'conn-a', profile: 'background' }
+    const ownerB = { connectionId: 'conn-b', profile: 'background' }
+    const ambient = vi.fn(async () => ({ processes: [] }))
+
+    $gateway.set({ request: ambient } as never)
+    gatewayMocks.requestGatewayForAgent.mockImplementation(async connectionId => {
+      if (connectionId === ownerA.connectionId) {
+        throw new JsonRpcGatewayError('session not found', { code: 4001 })
+      }
+
+      return { processes: [] }
+    })
+
+    setSessionOwnerHint(SID, ownerA)
+    await refreshBackgroundProcesses(SID)
+    await refreshBackgroundProcesses(SID)
+    expect(gatewayMocks.requestGatewayForAgent).toHaveBeenCalledTimes(1)
+
+    _resetSessionOwnerHintsForTests()
+    setSessionOwnerHint(SID, ownerB)
+    await refreshBackgroundProcesses(SID)
+
+    expect(gatewayMocks.requestGatewayForAgent).toHaveBeenCalledTimes(2)
+    expect(gatewayMocks.requestGatewayForAgent).toHaveBeenLastCalledWith(
+      ownerB.connectionId,
+      ownerB.profile,
+      'process.list',
+      { session_id: SID }
+    )
+    expect(ambient).not.toHaveBeenCalled()
   })
 })

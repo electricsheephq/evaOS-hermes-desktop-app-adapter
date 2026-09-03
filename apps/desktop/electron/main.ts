@@ -290,6 +290,7 @@ import {
   EVA_MANAGED_CONNECTION_ID,
   isLocalEnumerationFailure,
   localRouteFallbackProfiles,
+  normalizeEvaManagedActiveRoute,
   undialedSshRouteSeeds
 } from './plugin-profile-routes'
 import { selectPoolEvictions } from './pool-eviction'
@@ -10257,6 +10258,15 @@ async function resetPreviewReach(webContentsId?: number) {
  * failure; the pane explains an unreachable one on its own.
  */
 async function reachablePreviewUrl(webContentsId: number, rawUrl: string): Promise<string> {
+  if (EVA_MANAGED_BUILD) {
+    // Managed URL gateways intentionally have no workstation SSH transport.
+    // Never reuse saved Desktop registry credentials to tunnel VM loopback;
+    // authenticated managed port reach is tracked separately.
+    await resetPreviewReach(webContentsId)
+
+    return rawUrl
+  }
+
   let target = activeSshTerminalTarget(webContentsId)
 
   if (target === 'pending') {
@@ -14506,7 +14516,8 @@ const windowConnectionRouteOwners = new Set<number>()
 ipcMain.on('hermes:connection:active-route', (event, route) => {
   const id = event.sender.id
   const previous = windowConnectionRoutes.get(id)
-  const next = windowConnectionRoutes.set(id, route)
+  const safeRoute = EVA_MANAGED_BUILD ? normalizeEvaManagedActiveRoute(route) : route
+  const next = windowConnectionRoutes.set(id, safeRoute)
 
   if (
     previous?.connectionId !== next?.connectionId ||
