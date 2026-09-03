@@ -152,7 +152,12 @@ def _(rid, params: dict) -> dict:
                 # user just enabled in config this session is picked up.
                 refresh_agent_mcp_tools(
                     agent,
-                    enabled_override=_load_enabled_toolsets(),
+                    enabled_override=_load_enabled_toolsets(
+                        _session_source(session),
+                        _desktop_ui_protocol_for_session(
+                            str(params.get("session_id") or "")
+                        ),
+                    ),
                     quiet_mode=True,
                 )
             except Exception as _exc:

@@ -6031,6 +6031,9 @@ def _sync_bot_capabilities(sid: str, session: dict) -> None:
                 session["session_key"],
                 session_id=session["session_key"],
                 platform_override=_session_source(session),
+                desktop_ui_protocol_override=session.get(
+                    "desktop_ui_protocol"
+                ),
             )
         finally:
             _clear_session_context(tokens)
@@ -7525,6 +7528,14 @@ def _desktop_ui_protocol_for_session(sid: str) -> int:
             return 0
         source = str(session.get("source") or "").strip()
         requested = session.get("desktop_ui_protocol")
+    if source != "desktop":
+        return 0
+    # Session create/resume/activate already store a normalized result. In
+    # particular, zero is meaningful: a non-Desktop client has reattached to a
+    # Desktop-origin session. Do not reinterpret that trusted stored zero as a
+    # missing legacy marker and accidentally restore protocol 1.
+    if type(requested) is int and 0 <= requested <= DESKTOP_UI_PROTOCOL_CURRENT:
+        return requested
     return _negotiate_desktop_ui_protocol(source, requested)
 
 
@@ -8218,6 +8229,9 @@ def _reset_session_agent(sid: str, session: dict) -> dict:
             session["session_key"],
             session_id=session["session_key"],
             platform_override=_session_source(session),
+            desktop_ui_protocol_override=session.get(
+                "desktop_ui_protocol"
+            ),
         )
     finally:
         _clear_session_context(tokens)

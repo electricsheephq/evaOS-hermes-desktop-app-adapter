@@ -66,9 +66,9 @@ OPEN_PREVIEW_SCHEMA = {
         "preview pane — e.g. \"open cnn.com in the preview pane\" or \"preview "
         "localhost:3000\". Accepts a web URL (a bare domain like www.cnn.com is fine), "
         "a localhost dev-server URL, or a file path (HTML renders live; other files "
-        "show their contents). The pane opens for the current window only. To close "
-        "the pane or a tab, use close_preview. A successful result means the "
-        "request was dispatched; use read_preview to prove the page rendered."
+        "show their contents). The pane opens for the current window only. A "
+        "successful result means the request was dispatched to that window; it "
+        "does not prove that navigation finished rendering."
     ),
     "parameters": {
         "type": "object",

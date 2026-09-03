@@ -2,6 +2,8 @@
 
 import logging
 import json
+import threading
+import types
 
 import pytest
 
@@ -221,6 +223,26 @@ def test_create_and_activate_store_and_rebind_protocol(monkeypatch):
         )
         assert "error" not in activated
         assert server._sessions[sid]["desktop_ui_protocol"] == 2
+
+        calls = []
+        monkeypatch.setattr(
+            server,
+            "_block",
+            lambda *args, **kwargs: calls.append((args, kwargs)) or "unexpected",
+        )
+        activated = server._methods["session.activate"](
+            4,
+            {
+                "session_id": sid,
+                "source": "tui",
+                "desktop_ui_protocol": 2,
+            },
+        )
+        assert "error" not in activated
+        assert server._sessions[sid]["desktop_ui_protocol"] == 0
+        raw = server._agent_cbs(sid)["read_terminal_callback"]()
+        assert calls == []
+        assert json.loads(raw)["code"] == "desktop_ui_unavailable"
     finally:
         server._sessions.pop(sid, None)
 
@@ -237,6 +259,109 @@ def test_deferred_cold_session_stores_negotiated_protocol():
     )
 
     assert record["desktop_ui_protocol"] == 2
+
+
+def test_session_agent_rebuilds_preserve_negotiated_protocol(monkeypatch):
+    captured = []
+
+    def fake_make_agent(*_args, **kwargs):
+        captured.append(kwargs)
+        return types.SimpleNamespace(model="synthetic")
+
+    monkeypatch.setattr(server, "_make_agent", fake_make_agent)
+    monkeypatch.setattr(server, "_set_session_context", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(server, "_clear_session_context", lambda _tokens: None)
+    monkeypatch.setattr(server, "_config_model_target", lambda: ("", ""))
+    monkeypatch.setattr(server, "_load_show_reasoning", lambda: True)
+    monkeypatch.setattr(server, "_load_tool_progress_mode", lambda: "all")
+    monkeypatch.setattr(server, "_session_info", lambda *_args: {})
+    monkeypatch.setattr(server, "_emit", lambda *_args: None)
+    monkeypatch.setattr(server, "_restart_slash_worker", lambda *_args: None)
+
+    reset_session = {
+        "agent": types.SimpleNamespace(model="synthetic"),
+        "session_key": "reset-key",
+        "source": "desktop",
+        "desktop_ui_protocol": 2,
+        "history": [],
+        "history_lock": threading.Lock(),
+    }
+    server._reset_session_agent("reset-sid", reset_session)
+
+    import tools.bot_mode_probe as bot_mode_probe
+
+    monkeypatch.setattr(bot_mode_probe, "capability_fingerprint", lambda _home: "new")
+    bot_session = {
+        "agent": types.SimpleNamespace(_session_title_hint="Bot Chat"),
+        "session_key": "bot-key",
+        "source": "desktop",
+        "desktop_ui_protocol": 2,
+        "profile_home": None,
+        "bot_caps_seen": "old",
+    }
+    server._sync_bot_capabilities("bot-sid", bot_session)
+
+    assert [item["desktop_ui_protocol_override"] for item in captured] == [2, 2]
+
+
+def test_reload_mcp_preserves_session_protocol_surface(monkeypatch):
+    import tools.mcp_tool as mcp_tool
+
+    sid = "reload-ui"
+    agent = types.SimpleNamespace(enabled_toolsets=[])
+    server._sessions[sid] = {
+        "agent": agent,
+        "source": "desktop",
+        "desktop_ui_protocol": 2,
+    }
+    loaded = []
+    refreshed = []
+    saved = (server._mcp_reload_gen, server._mcp_reload_loaded_rev)
+    server._mcp_reload_gen = 0
+    server._mcp_reload_loaded_rev = ""
+    monkeypatch.setattr(mcp_tool, "shutdown_mcp_servers", lambda: None)
+    monkeypatch.setattr(mcp_tool, "discover_mcp_tools", lambda: None)
+    monkeypatch.setattr(server, "_compute_mcp_rev", lambda: "stable")
+    monkeypatch.setattr(server, "_emit", lambda *_args: None)
+    monkeypatch.setattr(server, "_session_info", lambda *_args: {})
+
+    def fake_load(platform=None, protocol=None):
+        loaded.append((platform, protocol))
+        return ["desktop_ui", "desktop_ui_v2"]
+
+    monkeypatch.setattr(server, "_load_enabled_toolsets", fake_load)
+    monkeypatch.setattr(
+        mcp_tool,
+        "refresh_agent_mcp_tools",
+        lambda current_agent, **kwargs: refreshed.append((current_agent, kwargs)) or set(),
+    )
+    try:
+        response = server._methods["reload.mcp"](
+            1, {"session_id": sid, "confirm": True}
+        )
+    finally:
+        server._sessions.pop(sid, None)
+        server._mcp_reload_gen, server._mcp_reload_loaded_rev = saved
+
+    assert response["result"]["status"] == "reloaded"
+    assert loaded == [("desktop", 2)]
+    assert refreshed == [
+        (
+            agent,
+            {
+                "enabled_override": ["desktop_ui", "desktop_ui_v2"],
+                "quiet_mode": True,
+            },
+        )
+    ]
+
+
+def test_legacy_open_preview_description_does_not_name_v2_only_tools():
+    from tools.open_preview_tool import OPEN_PREVIEW_SCHEMA
+
+    description = OPEN_PREVIEW_SCHEMA["description"]
+    assert "read_preview" not in description
+    assert "close_preview" not in description
 
 
 def test_lifecycle_logs_exclude_payload_and_raw_session(caplog, monkeypatch):
