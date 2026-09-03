@@ -44,6 +44,10 @@ const loadPreviewEngine = () => {
  *  message reactions. */
 export function handleDesktopBridgeEvent(ctx: GatewayEventContext): boolean {
   const { event, payload, isActiveEvent } = ctx
+  // Runtime session ids are only unique within a gateway source. Requiring
+  // both the routed id and the composite (connection, profile) owner keeps a
+  // same-id background source from reading or driving the visible surface.
+  const ownsActiveSurface = isActiveEvent && ctx.fromActiveSource()
 
   const respondToSource = (method: string, params: Record<string, unknown>) =>
     requestGatewayForAgent(
@@ -61,7 +65,7 @@ export function handleDesktopBridgeEvent(ctx: GatewayEventContext): boolean {
     if (requestId) {
       const start = typeof payload?.start === 'number' ? payload.start : undefined
       const count = typeof payload?.count === 'number' ? payload.count : undefined
-      const result = isActiveEvent ? readActiveTerminal({ start, count }) : null
+      const result = ownsActiveSurface ? readActiveTerminal({ start, count }) : null
 
       void respondToSource('terminal.read.respond', {
         request_id: requestId,
@@ -81,7 +85,7 @@ export function handleDesktopBridgeEvent(ctx: GatewayEventContext): boolean {
       const start = typeof payload?.start === 'number' ? payload.start : undefined
       const count = typeof payload?.count === 'number' ? payload.count : undefined
 
-      if (!isActiveEvent) {
+      if (!ownsActiveSurface) {
         void respondToSource('preview.read.respond', { request_id: requestId, text: '' })
       } else {
         void readActivePreview({ count, start }).then(result => {
@@ -111,7 +115,7 @@ export function handleDesktopBridgeEvent(ctx: GatewayEventContext): boolean {
           text: result ? JSON.stringify(result) : ''
         })
 
-      if (isActiveEvent) {
+      if (ownsActiveSurface) {
         void loadPreviewEngine()
           .then(run =>
             run({
@@ -158,7 +162,7 @@ export function handleDesktopBridgeEvent(ctx: GatewayEventContext): boolean {
       // .catch: ipcRenderer.invoke rejects on an older shell without the
       // handler or a main-side throw — without an empty answer the tool
       // would stall its full 30s timeout.
-      void Promise.resolve(isActiveEvent && read ? read() : null).then(answer, () => answer(null))
+      void Promise.resolve(ownsActiveSurface && read ? read() : null).then(answer, () => answer(null))
     }
 
     return true
@@ -195,7 +199,7 @@ export function handleDesktopBridgeEvent(ctx: GatewayEventContext): boolean {
           text: result ? JSON.stringify(result) : ''
         })
 
-      if (isActiveEvent) {
+      if (ownsActiveSurface) {
         void import('@/lib/tour')
           .then(({ runTour }) =>
             runTour(
@@ -230,7 +234,7 @@ export function handleDesktopBridgeEvent(ctx: GatewayEventContext): boolean {
     // response to an explicit user request. Active session only — a
     // background turn must never move the user's focus (desktop AGENTS.md:
     // offer, don't hijack).
-    if (isActiveEvent) {
+    if (ownsActiveSurface) {
       revealDesktopPane(payload?.pane ?? '')
     }
 
@@ -242,7 +246,7 @@ export function handleDesktopBridgeEvent(ctx: GatewayEventContext): boolean {
     // tool. Same contract as pane.reveal: active session only, and the
     // preset resolves against the SAME layouts registry the picker reads,
     // so core, plugin, and user presets are all addressable.
-    if (isActiveEvent) {
+    if (ownsActiveSurface) {
       applyDesktopLayoutPreset(typeof payload?.preset === 'string' ? payload.preset : '')
     }
 

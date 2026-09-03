@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const mocks = vi.hoisted(() => ({
   readActivePreview: vi.fn(async () => ({ text: 'foreground preview' })),
   readActiveTerminal: vi.fn(() => ({ text: 'foreground terminal' })),
+  revealDesktopPane: vi.fn(),
   requestGatewayForAgent: vi.fn(async () => ({}))
 }))
 
@@ -11,14 +12,14 @@ vi.mock('@/app/right-sidebar/terminal/agent-terminal-stream', () => ({ writeAgen
 vi.mock('@/app/right-sidebar/terminal/buffer', () => ({ readActiveTerminal: mocks.readActiveTerminal }))
 vi.mock('@/app/right-sidebar/terminal/terminals', () => ({ closeAgentTerminalByProc: vi.fn() }))
 vi.mock('@/store/gateway', () => ({ requestGatewayForAgent: mocks.requestGatewayForAgent }))
-vi.mock('@/store/pane-focus', () => ({ applyDesktopLayoutPreset: vi.fn(), revealDesktopPane: vi.fn() }))
+vi.mock('@/store/pane-focus', () => ({ applyDesktopLayoutPreset: vi.fn(), revealDesktopPane: mocks.revealDesktopPane }))
 vi.mock('@/store/reactions-local', () => ({ recordAgentReaction: vi.fn() }))
 vi.mock('@/store/session', () => ({ setMessages: vi.fn() }))
 
 import { handleDesktopBridgeEvent } from './desktop-bridge'
 import type { GatewayEventContext } from './types'
 
-function context(type: string, isActiveEvent: boolean): GatewayEventContext {
+function context(type: string, isActiveEvent: boolean, fromActiveSource = isActiveEvent): GatewayEventContext {
   return {
     deps: { activeGatewayProfile: 'active-profile' },
     event: {
@@ -28,7 +29,7 @@ function context(type: string, isActiveEvent: boolean): GatewayEventContext {
       type
     },
     explicitSid: 'runtime-session',
-    fromActiveSource: () => false,
+    fromActiveSource: () => fromActiveSource,
     isActiveEvent,
     occurredAt: 0,
     payload: { request_id: 'request-1' },
@@ -46,6 +47,21 @@ describe('desktop bridge source and foreground isolation', () => {
     await vi.waitFor(() => expect(mocks.requestGatewayForAgent).toHaveBeenCalledOnce())
 
     expect(mocks.readActivePreview).not.toHaveBeenCalled()
+    expect(mocks.requestGatewayForAgent).toHaveBeenCalledWith(
+      'source-b',
+      'background-profile',
+      'preview.read.respond',
+      { request_id: 'request-1', text: '' }
+    )
+  })
+
+  it('denies a same-session-id event from a different source access to the foreground surface', async () => {
+    expect(handleDesktopBridgeEvent(context('preview.read.request', true, false))).toBe(true)
+    expect(handleDesktopBridgeEvent(context('pane.reveal', true, false))).toBe(true)
+    await vi.waitFor(() => expect(mocks.requestGatewayForAgent).toHaveBeenCalledOnce())
+
+    expect(mocks.readActivePreview).not.toHaveBeenCalled()
+    expect(mocks.revealDesktopPane).not.toHaveBeenCalled()
     expect(mocks.requestGatewayForAgent).toHaveBeenCalledWith(
       'source-b',
       'background-profile',
