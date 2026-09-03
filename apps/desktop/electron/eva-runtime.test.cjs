@@ -106,6 +106,48 @@ test('cold launch preserves encrypted enrollment when secure storage cannot decr
   assert.equal(fs.readFileSync(statePath, 'utf8'), persistedBeforeLaunch)
 })
 
+test('renderer cleanup preserves unreadable encrypted enrollment before returning its retry error', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-unreadable-renderer-reset-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeActiveEnrollment(statePath)
+  const persisted = JSON.parse(fs.readFileSync(statePath, 'utf8'))
+  persisted.desktop.token = { encoding: 'safeStorage', value: 'opaque-desktop-ciphertext' }
+  persisted.runtime.token = { encoding: 'safeStorage', value: 'opaque-runtime-ciphertext' }
+  persisted.renderer_cleanup_pending = true
+  fs.writeFileSync(statePath, JSON.stringify(persisted))
+  let launches = 0
+  let resets = 0
+  const runtime = makeManagedRuntime(statePath, {
+    decryptSecret: () => {
+      throw new Error('secure storage is unavailable')
+    },
+    resetRenderer: async () => {
+      resets += 1
+      return true
+    },
+    launchRuntime: async () => {
+      launches += 1
+      throw new Error('runtime launch must not run without a readable desktop credential')
+    }
+  })
+
+  await assert.rejects(
+    runtime.resolveBackend(),
+    error =>
+      error instanceof EvaBrokerError &&
+      error.statusCode === 503 &&
+      error.code === 'managed-enrollment-unreadable'
+  )
+
+  const afterReset = JSON.parse(fs.readFileSync(statePath, 'utf8'))
+  const expectedAfterReset = { ...persisted }
+  delete expectedAfterReset.renderer_cleanup_pending
+  assert.equal(resets, 1)
+  assert.equal(launches, 0)
+  assert.deepEqual(afterReset, expectedAfterReset)
+})
+
 test('cold launch still requires sign-in for an expired readable desktop credential', async t => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-expired-desktop-session-'))
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }))

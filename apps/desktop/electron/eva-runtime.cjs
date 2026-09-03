@@ -250,6 +250,28 @@ function createEvaManagedRuntime(options) {
     })
   }
 
+  function clearRendererCleanupPendingState(state) {
+    if (!state?.rendererCleanupPending) return
+    if (!state.desktopCredentialUnreadable) {
+      writeState({ ...state, rendererCleanupPending: false })
+      return
+    }
+
+    // `state.desktop` is intentionally null when secure storage cannot read
+    // the persisted token. Rewrite only the raw tombstone so the encrypted
+    // enrollment remains available for a later retry or explicit sign-out.
+    const persisted = JSON.parse(fs.readFileSync(statePath, 'utf8'))
+    if (
+      !persisted ||
+      persisted.schema_version !== EVA_MANAGED_POLICY.schemaVersion ||
+      persisted.renderer_cleanup_pending !== true
+    ) {
+      return
+    }
+    delete persisted.renderer_cleanup_pending
+    atomicWrite(persisted)
+  }
+
   function clearSupportExpiryTimer() {
     if (supportExpiryTimer !== null) {
       cancelSupportExpiry(supportExpiryTimer)
@@ -267,7 +289,7 @@ function createEvaManagedRuntime(options) {
         rendererResetPending = performed === false
         if (!rendererResetPending) {
           const state = readState()
-          if (state.rendererCleanupPending) writeState({ ...state, rendererCleanupPending: false })
+          clearRendererCleanupPendingState(state)
         }
         return !rendererResetPending
       })
