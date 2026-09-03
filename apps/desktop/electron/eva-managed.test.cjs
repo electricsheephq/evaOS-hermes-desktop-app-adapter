@@ -567,6 +567,8 @@ test('account reset clears renderer account state while preserving global prefer
       'hermes.desktop.sessionOwnerHints.v1',
       '[["session-secret",{"connectionId":"prior-runtime","profile":"private"}]]'
     ],
+    ['hermes.desktop.sessionSeenCounts', '{"private":{"session-secret":4}}'],
+    ['hermes.desktop.unreadFinishedSessions', '{"private":["session-secret"]}'],
     ['hermes.desktop.workspace-cwd.remote.eva-managed%3A%2F%2Fcustomer.default', '/srv/customer'],
     ['hermes.desktop.pinnedSessions.remote.eva-managed%3A%2F%2Fcustomer', '["session-secret"]'],
     ['hermes.desktop.sessionOrder.remote.eva-managed%3A%2F%2Fcustomer.default', '["session-secret"]'],
@@ -612,6 +614,8 @@ test('account reset clears renderer account state while preserving global prefer
   assert.equal(values.has('hermes.desktop.prBranchBySession'), false)
   assert.equal(values.has('hermes.desktop.prScannedSessions'), false)
   assert.equal(values.has('hermes.desktop.sessionOwnerHints.v1'), false)
+  assert.equal(values.has('hermes.desktop.sessionSeenCounts'), false)
+  assert.equal(values.has('hermes.desktop.unreadFinishedSessions'), false)
   assert.equal(values.has('hermes.desktop.workspace-cwd.remote.eva-managed%3A%2F%2Fcustomer.default'), false)
   assert.equal(values.has('hermes.desktop.pinnedSessions.remote.eva-managed%3A%2F%2Fcustomer'), false)
   assert.equal(values.has('hermes.desktop.sessionOrder.remote.eva-managed%3A%2F%2Fcustomer.default'), false)

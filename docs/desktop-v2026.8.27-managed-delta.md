@@ -44,8 +44,9 @@ This is not a linear commit replay, so a mechanical `git range-diff` would misst
 - Managed backend creation, REST calls, media streams, and saved-file downloads stay on the enrollment runtime; renderer replies return through the event's owning connection/profile rather than the ambient gateway.
 - Background sessions receive empty or denied read/drive responses without inspecting the foreground terminal, Preview pane, or native window.
 - Managed callback ownership, pending renderer-isolation flush, account-scoped transcript/in-flight cache cleanup, and managed About identity are retained across the upstream reconstruction.
-- Managed account reset also clears persisted session-owner routes and bundled Bot Mode state so a later account cannot hydrate the prior account's session or room metadata.
-- The union Bot Mode roster publishes only one opaque assigned-runtime source in managed builds and never reads or probes workstation connection-registry entries.
+- Managed account reset also clears persisted session-owner routes, unread watermarks/markers, and bundled Bot Mode state so a later account cannot hydrate the prior account's session or room metadata.
+- The renderer connection inventory and union Bot Mode roster each publish only one opaque assigned-runtime source in managed builds and never read or probe workstation connection-registry entries.
+- MCP setup catalog/config writes, OAuth lifecycle calls, reloads, and responses resolve through the requesting session's owning connection/profile; a background Bot tile cannot mutate or answer the foreground gateway.
 - Extracted filesystem, Git, terminal, project-directory, and connection-setting IPC keeps the prior managed fail-closed boundary.
 - Managed enrollment credentials require OS-backed secure storage; Electron's Linux `basic_text` backend is not treated as secure.
 - The canonical Desktop check once again runs the managed contract suite, and the imported build keeps its required `electron-updater` and root `agent-browser` packages.

@@ -1,17 +1,23 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
+  addMcpServer,
+  authMcpServer,
+  cancelMcpOAuthFlow,
   getHermesConfigRecord,
   getMcpCatalog,
+  getMcpOAuthFlow,
   getSkillContent,
   getSkills,
   getToolsets,
   getUsageAnalytics,
   installSkillFromHub,
   profileScopeKey,
+  removeMcpServer,
   saveMcpServers,
   setApiRequestConnection,
   setApiRequestProfile,
+  setMcpServerEnabled,
   setSkillEnabled,
   setToolsetEnabled
 } from './hermes'
@@ -75,12 +81,20 @@ describe('capability helpers are connection-scoped', () => {
   })
 
   it('object scopes pin every read and write to the named connection', () => {
+    const scope = { connectionId: 'homelab', profile: 'inbox-bot' }
+
     void getSkills({ connectionId: 'homelab', profile: 'inbox-bot' })
     void getToolsets({ connectionId: 'homelab', profile: 'inbox-bot' })
     void getSkillContent('arxiv', { connectionId: 'homelab', profile: 'inbox-bot' })
     void setSkillEnabled('arxiv', false, { connectionId: 'homelab', profile: 'inbox-bot' })
     void setToolsetEnabled('browser', true, { connectionId: 'homelab', profile: 'inbox-bot' })
     void saveMcpServers({}, { connectionId: 'homelab', profile: 'inbox-bot' })
+    void addMcpServer({ name: 'calendar', url: 'https://example.com/mcp' }, scope)
+    void removeMcpServer('calendar', scope)
+    void setMcpServerEnabled('calendar', true, scope)
+    void authMcpServer('calendar', scope)
+    void getMcpOAuthFlow('flow-1', scope)
+    void cancelMcpOAuthFlow('flow-1', scope)
     void installSkillFromHub('official/research/arxiv', { connectionId: 'homelab', profile: 'inbox-bot' })
 
     for (const call of api.mock.calls) {

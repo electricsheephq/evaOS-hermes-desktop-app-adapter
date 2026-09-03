@@ -284,6 +284,7 @@ import { registerPetOverlayIpc } from './pet-overlay-ipc'
 import {
   assertEvaManagedConnectionId,
   buildEvaManagedAgentRoster,
+  buildEvaManagedConnectionsRegistry,
   buildEvaManagedProfileRoutes,
   buildRegistryProfileRoutes,
   EVA_MANAGED_CONNECTION_ID,
@@ -15033,7 +15034,13 @@ ipcMain.handle('hermes:secret-storage:set', async (_event: any, on: any) => appl
 // Storage-level CRUD for named agent sources. Routing/pooling consumption of
 // the registry lands separately; these handlers only manage the persisted
 // list, so they are safe to ship ahead of the switchover.
-ipcMain.handle('hermes:connections:list', async () => sanitizeConnectionsRegistry())
+ipcMain.handle('hermes:connections:list', async () => {
+  if (EVA_MANAGED_BUILD) {
+    return buildEvaManagedConnectionsRegistry()
+  }
+
+  return sanitizeConnectionsRegistry()
+})
 ipcMain.handle('hermes:connections:save', async (_event, payload) => {
   assertCanMutateManagedPrimaryRouting()
   const saved = await saveRegistryConnection(payload)

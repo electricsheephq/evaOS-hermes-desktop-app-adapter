@@ -4,6 +4,30 @@ import crypto from 'node:crypto'
  * It is routing metadata, never an authorization token. */
 export const EVA_MANAGED_CONNECTION_ID = 'eva-managed-runtime'
 
+/** Renderer-safe connection inventory for evaOS Agent. Managed builds have
+ * one enrollment-bound remote source and must never enumerate a workstation
+ * registry left by another Desktop build or account. */
+export function buildEvaManagedConnectionsRegistry() {
+  return {
+    connections: [
+      {
+        authMode: 'oauth' as const,
+        headerNames: [] as string[],
+        id: EVA_MANAGED_CONNECTION_ID,
+        kind: 'remote' as const,
+        label: 'Assigned runtime',
+        tokenPreview: null,
+        tokenSet: false
+      }
+    ],
+    lastUsed: EVA_MANAGED_CONNECTION_ID,
+    launchMode: 'primary' as const,
+    primary: EVA_MANAGED_CONNECTION_ID,
+    secureTokenStorage: true,
+    version: 2
+  }
+}
+
 export interface ProfileRouteConfig {
   cloudOrg: string
   mode: 'cloud' | 'local' | 'remote' | 'ssh'
