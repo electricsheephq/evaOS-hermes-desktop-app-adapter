@@ -1,4 +1,8 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+
+const mocks = vi.hoisted(() => ({ nudgeOverlay: vi.fn() }))
+
+vi.mock('./preview-nudge', () => ({ nudgeOverlay: mocks.nudgeOverlay }))
 
 import { $rightRailActiveTabId, selectRightRailTab } from '@/store/layout'
 import { closeRightRail, openPreview, type PreviewTarget } from '@/store/preview'
@@ -11,6 +15,16 @@ function urlTarget(url: string): PreviewTarget {
 
 function fileTarget(path: string): PreviewTarget {
   return { kind: 'file', label: path, path, previewKind: 'text', source: path, url: `file://${path}` }
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void
+
+  const promise = new Promise<T>(next => {
+    resolve = next
+  })
+
+  return { promise, resolve }
 }
 
 describe('readActivePreview (read_preview tool)', () => {
@@ -27,6 +41,8 @@ describe('readActivePreview (read_preview tool)', () => {
   }
 
   beforeEach(() => {
+    vi.clearAllMocks()
+
     for (const cleanup of cleanups) {
       cleanup()
     }
@@ -56,6 +72,23 @@ describe('readActivePreview (read_preview tool)', () => {
       // The live address wins over the target (in-page navigation).
       url: 'https://news.ycombinator.com/news'
     })
+    expect(mocks.nudgeOverlay).toHaveBeenCalledWith('read')
+  })
+
+  it('does not nudge a new foreground Preview when ownership changes during the page read', async () => {
+    const pending = deferred<{ text: string; title: string; url: string }>()
+    let ownsSurface = true
+
+    openPreview(urlTarget('https://example.com'), 'tool-result')
+    register($rightRailActiveTabId.get()!, () => pending.promise)
+
+    const reading = readActivePreview({ shouldNudge: () => ownsSurface })
+
+    ownsSurface = false
+    pending.resolve({ text: 'previous session page', title: 'Example', url: 'https://example.com' })
+
+    await expect(reading).resolves.toMatchObject({ text: 'previous session page' })
+    expect(mocks.nudgeOverlay).not.toHaveBeenCalled()
   })
 
   it('windows long pages with start/count and reports the full length', async () => {

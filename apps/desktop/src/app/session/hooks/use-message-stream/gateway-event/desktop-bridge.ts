@@ -98,7 +98,7 @@ export function handleDesktopBridgeEvent(ctx: GatewayEventContext): boolean {
       if (!ownsActiveSurface) {
         void respondToSource('preview.read.respond', { request_id: requestId, text: '' })
       } else {
-        void readActivePreview({ count, start }).then(result => {
+        void readActivePreview({ count, shouldNudge: ownsActiveSurfaceNow, start }).then(result => {
           const ownedResult = ownsActiveSurfaceNow() ? result : null
 
           void respondToSource('preview.read.respond', {
