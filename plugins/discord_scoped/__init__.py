@@ -148,21 +148,11 @@ def _commit(*, provider: str, job: Mapping[str, Any], receipt: Mapping[str, Any]
 def register(ctx) -> None:
     ctx.register_hook("cron_preflight", _preflight)
     ctx.register_hook("cron_preflight_commit", _commit)
-    from .approved import register_cli, register_tools
+    from .approved import register_tools
 
     register_tools(ctx)
-    ctx.register_cli_command(
-        name="discord-scoped",
-        help="Scoped Discord metadata and human-approved sends",
-        setup_fn=register_cli,
-        handler_fn=None,
-        description=(
-            "Issue one human-approved, exact-target Discord send approval. "
-            "Model-facing tools cannot mint approvals."
-        ),
-    )
 
 
-# Keep the two model handlers importable from the plugin package for focused
-# tests and downstream plugin diagnostics; approval issuance remains CLI-only.
-from .approved import _list_threads, _send_approved  # noqa: E402,F401
+# Keep the metadata handler importable from the plugin package for focused
+# tests and downstream plugin diagnostics.
+from .approved import _list_threads  # noqa: E402,F401
