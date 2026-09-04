@@ -19,6 +19,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { atom, computed } from 'nanostores'
 import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from 'react'
 
+import type { ProfileScope } from '@/api/client'
 import { useGatewayRequest } from '@/app/gateway/hooks/use-gateway-request'
 import { useModelControls } from '@/app/session/hooks/use-model-controls'
 import { blobToDataUrl } from '@/app/session/hooks/use-prompt-actions/utils'
@@ -133,17 +134,17 @@ function buildTileView(storedSessionId: string): SessionView {
 // tiles have no pin/delete affordance, and transcription needs no per-tile state.
 const noop = () => undefined
 
-const tileTranscribeAudio = async (audio: Blob) => {
+const tileTranscribeAudio = async (audio: Blob, scope?: ProfileScope) => {
   // Client-direct first (profile's own STT provider, no gateway audio hop);
   // relay when the provider is not client-callable. Same ladder as the main
   // composer's transcribeVoiceAudio.
-  const direct = await transcribeAudioClientDirect(audio)
+  const direct = await transcribeAudioClientDirect(audio, scope)
 
   if (direct !== null) {
     return direct
   }
 
-  return (await transcribeAudio(await blobToDataUrl(audio), audio.type)).transcript
+  return (await transcribeAudio(await blobToDataUrl(audio), audio.type, scope)).transcript
 }
 
 function TileChat({
@@ -158,6 +159,16 @@ function TileChat({
   const { gateway, requestGateway } = useGatewayRequest()
   const queryClient = useQueryClient()
   const ownerRoute = sessionTileOwnerRoute(storedSessionId)
+  const voiceScope = useMemo<ProfileScope>(
+    () =>
+      ownerRoute
+        ? {
+            connectionId: ownerRoute.connectionId,
+            profile: ownerRoute.targetProfile ?? ownerRoute.profile
+          }
+        : undefined,
+    [ownerRoute]
+  )
 
   const requestTileGateway = useCallback(
     <T,>(method: string, params?: Record<string, unknown>, timeoutMs?: number, signal?: AbortSignal): Promise<T> =>
@@ -224,6 +235,7 @@ function TileChat({
   const onPickFolders = useCallback(() => void pickContextPaths('folder'), [pickContextPaths])
   const onPickImages = useCallback(() => void pickImages(), [pickImages])
   const onRemoveAttachment = useCallback((id: string) => void removeAttachment(id), [removeAttachment])
+  const onTranscribeAudio = useCallback((audio: Blob) => tileTranscribeAudio(audio, voiceScope), [voiceScope])
   const onRetryResume = useCallback(() => patchSessionTile(storedSessionId, { error: undefined }), [storedSessionId])
 
   // Per-tile model menu — rendered under this tile's SessionView so the pill
@@ -267,7 +279,7 @@ function TileChat({
           onSubmit={actions.submitText}
           onThreadMessagesChange={actions.handleThreadMessagesChange}
           onToggleSelectedPin={noop}
-          onTranscribeAudio={tileTranscribeAudio}
+          onTranscribeAudio={onTranscribeAudio}
         />
       </ComposerScopeProvider>
     </SessionViewProvider>

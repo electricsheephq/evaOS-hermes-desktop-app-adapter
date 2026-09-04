@@ -99,6 +99,7 @@ const EVA_ACCOUNT_SCOPED_RENDERER_STORAGE_KEYS = Object.freeze([
   'hermes.desktop.dismissedWorktrees',
   'hermes.desktop.inflightTurnJournal.v1',
   'hermes.desktop.lastRoute',
+  'hermes.desktop.lastProfileByConnection',
   'hermes.desktop.lastSessionId',
   'hermes.desktop.layoutTree.v2',
   'hermes.desktop.paneStates.v1',

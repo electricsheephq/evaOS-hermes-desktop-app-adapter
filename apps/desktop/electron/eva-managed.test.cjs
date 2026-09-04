@@ -561,6 +561,7 @@ test('account reset clears renderer account state while preserving global prefer
   })
   const values = new Map([
     ['hermes.desktop.lastSessionId.research', 'session-secret'],
+    ['hermes.desktop.lastProfileByConnection', '{"eva-managed-runtime":"private-profile"}'],
     ['hermes.desktop.prBranchBySession', '{"session-secret":{"branch":"private"}}'],
     ['hermes.desktop.prScannedSessions', '["session-secret"]'],
     [
@@ -613,6 +614,7 @@ test('account reset clears renderer account state while preserving global prefer
   vm.runInNewContext(buildEvaAccountRendererResetScript(), { localStorage })
 
   assert.equal(values.has('hermes.desktop.lastSessionId.research'), false)
+  assert.equal(values.has('hermes.desktop.lastProfileByConnection'), false)
   assert.equal(values.has('hermes.desktop.prBranchBySession'), false)
   assert.equal(values.has('hermes.desktop.prScannedSessions'), false)
   assert.equal(values.has('hermes.desktop.sessionOwnerHints.v1'), false)

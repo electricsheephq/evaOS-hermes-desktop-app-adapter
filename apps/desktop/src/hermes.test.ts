@@ -327,8 +327,8 @@ describe('Hermes REST helpers', () => {
       messagingExclude: ['cron', 'desktop']
     })
 
-    // Slices reassembled from the legacy per-slice route with the same
-    // scoping: every section follows the caller's profile.
+    // Recents follow the selected profile; cron and messaging remain
+    // intentionally cross-profile, matching the pre-batching contract.
     expect(result.recents.sessions.map(s => s.id)).toEqual(['recent-1'])
     // One row back against a 30-row window: the profile is fully loaded, so
     // the legacy path must not claim there's another page.
@@ -341,8 +341,10 @@ describe('Hermes REST helpers', () => {
     expect(paths.filter(p => p.startsWith('/api/profiles/sessions?'))).toHaveLength(3)
     expect(
       paths.filter(path => path.startsWith('/api/profiles/sessions?') && path.includes('profile=work'))
-    ).toHaveLength(3)
-    expect(paths.some(path => path.includes('profile=all'))).toBe(false)
+    ).toHaveLength(1)
+    expect(
+      paths.filter(path => path.startsWith('/api/profiles/sessions?') && path.includes('profile=all'))
+    ).toHaveLength(2)
     expect(paths).toContainEqual(expect.stringContaining('source=cron'))
     expect(paths).toContainEqual(expect.stringContaining('exclude_sources=cron%2Ctool'))
   })
@@ -715,6 +717,25 @@ describe('Hermes REST helpers', () => {
       path: '/api/audio/transcribe',
       timeoutMs: AUDIO_TRANSCRIBE_MIN_REQUEST_TIMEOUT_MS
     })
+  })
+
+  it('routes blocking transcription through an explicit session owner scope', async () => {
+    setApiRequestConnection('foreground-runtime')
+    setApiRequestProfile('foreground-profile')
+    api.mockResolvedValueOnce({ ok: true, provider: 'openai', text: 'owned transcript' })
+
+    await transcribeAudio('data:audio/webm;base64,AA==', 'audio/webm', {
+      connectionId: 'tile-runtime',
+      profile: 'tile-profile'
+    })
+
+    expect(api).toHaveBeenCalledWith(
+      expect.objectContaining({
+        connectionId: 'tile-runtime',
+        path: '/api/audio/transcribe',
+        profile: 'tile-profile'
+      })
+    )
   })
 
   it('defaults model options to configured providers only', async () => {

@@ -230,7 +230,8 @@ export function resetSidebarBatchCapability() {
 
 // Compatibility fallback: reassemble the three sidebar slices from the
 // per-slice endpoint, mirroring the batched route's semantics (min_messages=1,
-// archived excluded, recency order; every slice scoped to the caller's profile).
+// archived excluded, recency order; recents follow the caller while cron and
+// messaging intentionally remain cross-profile as they were before batching).
 // Rides the same Electron remote-splice
 // interception as the pre-batching desktop, so remote profiles stay correct.
 async function listSidebarSessionsLegacy(req: SidebarSessionsRequest): Promise<SidebarSessionsResponse> {
@@ -238,8 +239,8 @@ async function listSidebarSessionsLegacy(req: SidebarSessionsRequest): Promise<S
     listAllProfileSessions(req.recentsLimit, 1, 'exclude', 'recent', req.recentsProfile, {
       excludeSources: req.recentsExclude
     }),
-    listAllProfileSessions(req.cronLimit, 1, 'exclude', 'recent', req.recentsProfile, { source: 'cron' }),
-    listAllProfileSessions(req.messagingLimit, 1, 'exclude', 'recent', req.recentsProfile, {
+    listAllProfileSessions(req.cronLimit, 1, 'exclude', 'recent', 'all', { source: 'cron' }),
+    listAllProfileSessions(req.messagingLimit, 1, 'exclude', 'recent', 'all', {
       excludeSources: req.messagingExclude
     })
   ])

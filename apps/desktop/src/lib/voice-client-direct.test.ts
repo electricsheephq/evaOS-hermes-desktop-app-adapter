@@ -76,6 +76,22 @@ describe('fetchVoiceClientConfig', () => {
     expect(api).toHaveBeenCalledTimes(2)
   })
 
+  it('uses an explicit session owner scope instead of ambient foreground state', async () => {
+    const api = mockDesktopApi({ ok: true, stt: directStt, tts: relay })
+    setApiRequestConnection('foreground-runtime')
+    setApiRequestProfile('foreground-profile')
+
+    await fetchVoiceClientConfig({ connectionId: 'tile-runtime', profile: 'tile-profile' })
+
+    expect(api).toHaveBeenCalledWith(
+      expect.objectContaining({
+        connectionId: 'tile-runtime',
+        path: '/api/audio/voice-config',
+        profile: 'tile-profile'
+      })
+    )
+  })
+
   it('resolves null on an older backend without the endpoint', async () => {
     Object.defineProperty(window, 'hermesDesktop', {
       configurable: true,
