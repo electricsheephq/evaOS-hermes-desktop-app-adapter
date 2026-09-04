@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { $rightRailActiveTabId } from '@/store/layout'
+import { $rightRailActiveTabId, selectRightRailTab } from '@/store/layout'
 import { closeRightRail, openPreview, type PreviewTarget } from '@/store/preview'
 
 import { actOnActivePreview } from './preview-act'
@@ -208,6 +208,47 @@ describe('actOnActivePreview (drive_preview tool)', () => {
       },
       'manual'
     )
+    finishLocate(JSON.stringify({ acted: 'looking at button "Save"', point: { x: 120, y: 80 }, success: true }))
+
+    const result = await resultPending
+
+    expect(send).not.toHaveBeenCalled()
+    expect(result).toMatchObject({ error: expect.stringContaining('no longer owns'), success: false })
+  })
+
+  it('does not resume input when its Preview tab loses and regains active ownership', async () => {
+    const tabId = openBrowserTab()
+    const send = vi.fn()
+    let finishLocate!: (value: string) => void
+
+    const locate = new Promise<string>(resolve => {
+      finishLocate = resolve
+    })
+
+    const runner = vi.fn((code: string) =>
+      code.includes('"kind":"locate"')
+        ? locate
+        : Promise.resolve(JSON.stringify({ elements: [], hit: { tag: 'BUTTON', trusted: true }, success: true }))
+    )
+
+    cleanups.push(registerPreviewScriptRunner(tabId, runner))
+    cleanups.push(registerPreviewInput(tabId, { focus: vi.fn(), send }))
+
+    const resultPending = actOnActivePreview({ kind: 'click', ref: '@e1' })
+
+    await vi.waitFor(() => expect(runner).toHaveBeenCalledOnce())
+    openPreview(
+      {
+        kind: 'file',
+        label: 'temporary.txt',
+        path: '/tmp/temporary.txt',
+        previewKind: 'text',
+        source: '/tmp/temporary.txt',
+        url: 'file:///tmp/temporary.txt'
+      },
+      'manual'
+    )
+    selectRightRailTab(tabId)
     finishLocate(JSON.stringify({ acted: 'looking at button "Save"', point: { x: 120, y: 80 }, success: true }))
 
     const result = await resultPending

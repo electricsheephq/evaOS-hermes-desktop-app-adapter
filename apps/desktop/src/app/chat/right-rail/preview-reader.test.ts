@@ -109,6 +109,23 @@ describe('readActivePreview (read_preview tool)', () => {
     expect(mocks.nudgeOverlay).not.toHaveBeenCalled()
   })
 
+  it('drops a stale read when its Preview tab loses and regains active ownership', async () => {
+    const pending = deferred<{ text: string; title: string; url: string }>()
+
+    openPreview(urlTarget('https://example.com'), 'tool-result')
+    const originalTabId = $rightRailActiveTabId.get()!
+    register(originalTabId, () => pending.promise)
+
+    const reading = readActivePreview()
+
+    openPreview(fileTarget('/work/temporary.md'), 'file-browser')
+    selectRightRailTab(originalTabId)
+    pending.resolve({ text: 'stale page', title: 'Example', url: 'https://example.com' })
+
+    await expect(reading).resolves.toBeNull()
+    expect(mocks.nudgeOverlay).not.toHaveBeenCalled()
+  })
+
   it('windows long pages with start/count and reports the full length', async () => {
     openPreview(urlTarget('https://example.com'), 'tool-result')
     register($rightRailActiveTabId.get()!, async () => ({

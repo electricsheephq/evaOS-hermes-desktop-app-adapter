@@ -4,7 +4,12 @@ import { persistentAtom } from '@/lib/persisted'
 import { readKey } from '@/lib/storage'
 import { normalize } from '@/lib/text'
 
-import { $rightRailActiveTabId, type RightRailTabId, selectRightRailTab } from './layout'
+import {
+  $rightRailActiveTabEpoch,
+  $rightRailActiveTabId,
+  type RightRailTabId,
+  selectRightRailTab
+} from './layout'
 import { canOpenBrowserWindow, openBrowserInNewWindow } from './windows'
 
 /**
@@ -167,6 +172,7 @@ function activePreviewTab(): PreviewTab | null {
  *  underneath the same input/script handles. */
 export interface PreviewSurfaceToken {
   generation: number
+  ownershipEpoch: number
   tabId: RightRailTabId
 }
 
@@ -198,7 +204,13 @@ export function markPreviewSurfaceChanged(tabId: string): void {
 export function captureActivePreviewSurface(): PreviewSurfaceToken | null {
   const tab = activePreviewTab()
 
-  return tab ? { generation: previewSurfaceGeneration(tab.id), tabId: tab.id } : null
+  return tab
+    ? {
+        generation: previewSurfaceGeneration(tab.id),
+        ownershipEpoch: $rightRailActiveTabEpoch.get(),
+        tabId: tab.id
+      }
+    : null
 }
 
 /** Whether a captured document still owns the visible Preview. */
@@ -208,6 +220,7 @@ export function ownsActivePreviewSurface(token: PreviewSurfaceToken | null): boo
   return Boolean(
     token &&
       tab?.id === token.tabId &&
+      $rightRailActiveTabEpoch.get() === token.ownershipEpoch &&
       previewSurfaceGenerations.get(token.tabId) === token.generation
   )
 }
