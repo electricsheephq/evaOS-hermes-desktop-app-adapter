@@ -1,18 +1,22 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
+  actOnActivePreview: vi.fn(async () => ({ acted: 'elements', success: true })),
   readActivePreview: vi.fn(async () => ({ text: 'foreground preview' })),
   readActiveTerminal: vi.fn(() => ({ text: 'foreground terminal' })),
   recordAgentReaction: vi.fn(),
   revealDesktopPane: vi.fn(),
   requestGatewayForAgent: vi.fn(async () => ({})),
+  runTour: vi.fn(async () => ({ success: true })),
   setMessages: vi.fn()
 }))
 
+vi.mock('@/app/chat/right-rail/preview-act', () => ({ actOnActivePreview: mocks.actOnActivePreview }))
 vi.mock('@/app/chat/right-rail/preview-reader', () => ({ readActivePreview: mocks.readActivePreview }))
 vi.mock('@/app/right-sidebar/terminal/agent-terminal-stream', () => ({ writeAgentTerminalChunk: vi.fn() }))
 vi.mock('@/app/right-sidebar/terminal/buffer', () => ({ readActiveTerminal: mocks.readActiveTerminal }))
 vi.mock('@/app/right-sidebar/terminal/terminals', () => ({ closeAgentTerminalByProc: vi.fn() }))
+vi.mock('@/lib/tour', () => ({ runTour: mocks.runTour }))
 vi.mock('@/store/gateway', () => ({ requestGatewayForAgent: mocks.requestGatewayForAgent }))
 vi.mock('@/store/pane-focus', () => ({ applyDesktopLayoutPreset: vi.fn(), revealDesktopPane: mocks.revealDesktopPane }))
 vi.mock('@/store/reactions-local', () => ({ recordAgentReaction: mocks.recordAgentReaction }))
@@ -23,7 +27,10 @@ import type { GatewayEventContext } from './types'
 
 function context(type: string, isActiveEvent: boolean, fromActiveSource = isActiveEvent): GatewayEventContext {
   return {
-    deps: { activeGatewayProfile: 'active-profile' },
+    deps: {
+      activeGatewayProfile: 'active-profile',
+      activeSessionIdRef: { current: isActiveEvent ? 'runtime-session' : 'other-session' }
+    },
     event: {
       connectionId: 'source-b',
       profile: 'background-profile',
@@ -37,6 +44,16 @@ function context(type: string, isActiveEvent: boolean, fromActiveSource = isActi
     payload: { request_id: 'request-1' },
     sessionId: 'runtime-session'
   } as unknown as GatewayEventContext
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void
+
+  const promise = new Promise<T>(next => {
+    resolve = next
+  })
+
+  return { promise, resolve }
 }
 
 describe('desktop bridge source and foreground isolation', () => {
@@ -54,6 +71,45 @@ describe('desktop bridge source and foreground isolation', () => {
       'background-profile',
       'preview.read.respond',
       { request_id: 'request-1', text: '' }
+    )
+  })
+
+  it('discards a preview read when its session loses the foreground while the read is pending', async () => {
+    const pending = deferred<{ text: string }>()
+    mocks.readActivePreview.mockReturnValueOnce(pending.promise)
+    const ctx = context('preview.read.request', true)
+
+    expect(handleDesktopBridgeEvent(ctx)).toBe(true)
+    expect(mocks.readActivePreview).toHaveBeenCalledOnce()
+
+    ctx.deps.activeSessionIdRef.current = 'new-foreground-session'
+    pending.resolve({ text: 'previous session preview' })
+
+    await vi.waitFor(() => expect(mocks.requestGatewayForAgent).toHaveBeenCalledOnce())
+    expect(mocks.requestGatewayForAgent).toHaveBeenCalledWith(
+      'source-b',
+      'background-profile',
+      'preview.read.respond',
+      { request_id: 'request-1', text: '' }
+    )
+  })
+
+  it('does not drive the new foreground preview after ownership changes during engine loading', async () => {
+    const ctx = context('preview.act.request', true)
+    const sourceOwner = { current: true }
+    ctx.fromActiveSource = () => sourceOwner.current
+    ctx.payload = { action: 'elements', request_id: 'request-1' } as GatewayEventContext['payload']
+
+    expect(handleDesktopBridgeEvent(ctx)).toBe(true)
+    sourceOwner.current = false
+
+    await vi.waitFor(() => expect(mocks.requestGatewayForAgent).toHaveBeenCalledOnce())
+    expect(mocks.actOnActivePreview).not.toHaveBeenCalled()
+    expect(mocks.requestGatewayForAgent).toHaveBeenCalledWith(
+      'source-b',
+      'background-profile',
+      'preview.act.respond',
+      expect.objectContaining({ request_id: 'request-1', text: expect.stringContaining('session') })
     )
   })
 
@@ -108,6 +164,43 @@ describe('desktop bridge source and foreground isolation', () => {
       'background-profile',
       'window.read.respond',
       { request_id: 'request-1', text: '' }
+    )
+  })
+
+  it('discards a native window read when its session loses the foreground while IPC is pending', async () => {
+    const pending = deferred<{ frontmost: null; platform: string; window: null }>()
+    const readWindowBelow = vi.fn(() => pending.promise)
+    window.hermesDesktop = { ...window.hermesDesktop, readWindowBelow } as typeof window.hermesDesktop
+    const ctx = context('window.read.request', true)
+
+    expect(handleDesktopBridgeEvent(ctx)).toBe(true)
+    expect(readWindowBelow).toHaveBeenCalledOnce()
+
+    ctx.deps.activeSessionIdRef.current = 'new-foreground-session'
+    pending.resolve({ frontmost: null, platform: 'darwin', window: null })
+
+    await vi.waitFor(() => expect(mocks.requestGatewayForAgent).toHaveBeenCalledOnce())
+    expect(mocks.requestGatewayForAgent).toHaveBeenCalledWith(
+      'source-b',
+      'background-profile',
+      'window.read.respond',
+      { request_id: 'request-1', text: '' }
+    )
+  })
+
+  it('does not paint a tour after its session loses the foreground during lazy loading', async () => {
+    const ctx = context('tour.request', true)
+
+    expect(handleDesktopBridgeEvent(ctx)).toBe(true)
+    ctx.deps.activeSessionIdRef.current = 'new-foreground-session'
+
+    await vi.waitFor(() => expect(mocks.requestGatewayForAgent).toHaveBeenCalledOnce())
+    expect(mocks.runTour).not.toHaveBeenCalled()
+    expect(mocks.requestGatewayForAgent).toHaveBeenCalledWith(
+      'source-b',
+      'background-profile',
+      'tour.respond',
+      expect.objectContaining({ request_id: 'request-1', text: expect.stringContaining('session') })
     )
   })
 

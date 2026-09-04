@@ -43,11 +43,21 @@ const loadPreviewEngine = () => {
  *  (terminal/preview/window), agent terminal streaming, pane reveal, and
  *  message reactions. */
 export function handleDesktopBridgeEvent(ctx: GatewayEventContext): boolean {
-  const { event, payload, isActiveEvent } = ctx
+  const { event, payload } = ctx
+
   // Runtime session ids are only unique within a gateway source. Requiring
   // both the routed id and the composite (connection, profile) owner keeps a
   // same-id background source from reading or driving the visible surface.
-  const ownsActiveSurface = isActiveEvent && ctx.fromActiveSource()
+  // Re-read both values after every async boundary: the user can switch the
+  // foreground chat while a webview read, IPC call, or lazy import is pending.
+  const ownsActiveSurfaceNow = () =>
+    Boolean(
+      ctx.sessionId &&
+        ctx.sessionId === ctx.deps.activeSessionIdRef.current &&
+        ctx.fromActiveSource()
+    )
+
+  const ownsActiveSurface = ownsActiveSurfaceNow()
 
   const respondToSource = (method: string, params: Record<string, unknown>) =>
     requestGatewayForAgent(
@@ -89,9 +99,11 @@ export function handleDesktopBridgeEvent(ctx: GatewayEventContext): boolean {
         void respondToSource('preview.read.respond', { request_id: requestId, text: '' })
       } else {
         void readActivePreview({ count, start }).then(result => {
+          const ownedResult = ownsActiveSurfaceNow() ? result : null
+
           void respondToSource('preview.read.respond', {
             request_id: requestId,
-            text: result ? JSON.stringify(result) : ''
+            text: ownedResult ? JSON.stringify(ownedResult) : ''
           })
         })
       }
@@ -109,6 +121,11 @@ export function handleDesktopBridgeEvent(ctx: GatewayEventContext): boolean {
     const requestId = typeof payload?.request_id === 'string' ? payload.request_id : ''
 
     if (requestId) {
+      const denied = {
+        error: 'The in-app browser only takes actions in the session the user is looking at.',
+        success: false
+      }
+
       const answer = (result: unknown) =>
         respondToSource('preview.act.respond', {
           request_id: requestId,
@@ -118,26 +135,31 @@ export function handleDesktopBridgeEvent(ctx: GatewayEventContext): boolean {
       if (ownsActiveSurface) {
         void loadPreviewEngine()
           .then(run =>
-            run({
-              amount: payload?.amount,
-              key: payload?.key,
-              kind: payload?.action ?? '',
-              max: payload?.max,
-              ref: payload?.ref,
-              selector: payload?.selector,
-              submit: payload?.submit,
-              text: payload?.text,
-              to: payload?.to as PreviewActAction['to']
-            })
+            ownsActiveSurfaceNow()
+              ? run({
+                  amount: payload?.amount,
+                  key: payload?.key,
+                  kind: payload?.action ?? '',
+                  max: payload?.max,
+                  ref: payload?.ref,
+                  selector: payload?.selector,
+                  submit: payload?.submit,
+                  text: payload?.text,
+                  to: payload?.to as PreviewActAction['to']
+                })
+              : denied
           )
-          .then(answer, error =>
-            answer({ error: error instanceof Error ? error.message : String(error), success: false })
+          .then(
+            result => answer(ownsActiveSurfaceNow() ? result : denied),
+            error =>
+              answer(
+                ownsActiveSurfaceNow()
+                  ? { error: error instanceof Error ? error.message : String(error), success: false }
+                  : denied
+              )
           )
       } else {
-        void answer({
-          error: 'The in-app browser only takes actions in the session the user is looking at.',
-          success: false
-        })
+        void answer(denied)
       }
     }
 
@@ -162,7 +184,10 @@ export function handleDesktopBridgeEvent(ctx: GatewayEventContext): boolean {
       // .catch: ipcRenderer.invoke rejects on an older shell without the
       // handler or a main-side throw — without an empty answer the tool
       // would stall its full 30s timeout.
-      void Promise.resolve(ownsActiveSurface && read ? read() : null).then(answer, () => answer(null))
+      void Promise.resolve(ownsActiveSurface && read ? read() : null).then(
+        result => answer(ownsActiveSurfaceNow() ? result : null),
+        () => answer(null)
+      )
     }
 
     return true
@@ -193,6 +218,11 @@ export function handleDesktopBridgeEvent(ctx: GatewayEventContext): boolean {
     const requestId = typeof payload?.request_id === 'string' ? payload.request_id : ''
 
     if (requestId) {
+      const denied = {
+        error: 'Tours only run in the session the user is looking at.',
+        success: false
+      }
+
       const answer = (result: unknown) =>
         respondToSource('tour.respond', {
           request_id: requestId,
@@ -202,27 +232,32 @@ export function handleDesktopBridgeEvent(ctx: GatewayEventContext): boolean {
       if (ownsActiveSurface) {
         void import('@/lib/tour')
           .then(({ runTour }) =>
-            runTour(
-              {
-                kind: (payload?.action ?? 'stop') as TourAction['kind'],
-                selector: payload?.selector,
-                side: payload?.side as TourStep['side'],
-                startAt: payload?.step_index,
-                steps: payload?.steps as TourStep[] | undefined,
-                text: payload?.text,
-                title: payload?.title
-              },
-              payload?.surface === 'preview' ? 'preview' : 'app'
-            )
+            ownsActiveSurfaceNow()
+              ? runTour(
+                  {
+                    kind: (payload?.action ?? 'stop') as TourAction['kind'],
+                    selector: payload?.selector,
+                    side: payload?.side as TourStep['side'],
+                    startAt: payload?.step_index,
+                    steps: payload?.steps as TourStep[] | undefined,
+                    text: payload?.text,
+                    title: payload?.title
+                  },
+                  payload?.surface === 'preview' ? 'preview' : 'app'
+                )
+              : denied
           )
-          .then(answer, error =>
-            answer({ error: error instanceof Error ? error.message : String(error), success: false })
+          .then(
+            result => answer(ownsActiveSurfaceNow() ? result : denied),
+            error =>
+              answer(
+                ownsActiveSurfaceNow()
+                  ? { error: error instanceof Error ? error.message : String(error), success: false }
+                  : denied
+              )
           )
       } else {
-        void answer({
-          error: 'Tours only run in the session the user is looking at.',
-          success: false
-        })
+        void answer(denied)
       }
     }
 
