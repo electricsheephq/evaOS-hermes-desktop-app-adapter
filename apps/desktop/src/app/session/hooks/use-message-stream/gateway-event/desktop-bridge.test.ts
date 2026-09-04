@@ -1,15 +1,22 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const mocks = vi.hoisted(() => ({
-  actOnActivePreview: vi.fn(async () => ({ acted: 'elements', success: true })),
-  readActivePreview: vi.fn(async () => ({ text: 'foreground preview' })),
-  readActiveTerminal: vi.fn(() => ({ text: 'foreground terminal' })),
-  recordAgentReaction: vi.fn(),
-  revealDesktopPane: vi.fn(),
-  requestGatewayForAgent: vi.fn(async () => ({})),
-  runTour: vi.fn(async () => ({ success: true })),
-  setMessages: vi.fn()
-}))
+const mocks = vi.hoisted(() => {
+  const previewSurface = { owned: true }
+
+  return {
+    actOnActivePreview: vi.fn(async () => ({ acted: 'elements', success: true })),
+    captureActivePreviewSurface: vi.fn(() => ({ generation: 1, ownershipEpoch: 1, tabId: 'url:one' })),
+    ownsActivePreviewSurface: vi.fn(() => previewSurface.owned),
+    previewSurface,
+    readActivePreview: vi.fn(async () => ({ text: 'foreground preview' })),
+    readActiveTerminal: vi.fn(() => ({ text: 'foreground terminal' })),
+    recordAgentReaction: vi.fn(),
+    revealDesktopPane: vi.fn(),
+    requestGatewayForAgent: vi.fn(async () => ({})),
+    runTour: vi.fn(async () => ({ success: true })),
+    setMessages: vi.fn()
+  }
+})
 
 vi.mock('@/app/chat/right-rail/preview-act', () => ({ actOnActivePreview: mocks.actOnActivePreview }))
 vi.mock('@/app/chat/right-rail/preview-reader', () => ({ readActivePreview: mocks.readActivePreview }))
@@ -19,6 +26,10 @@ vi.mock('@/app/right-sidebar/terminal/terminals', () => ({ closeAgentTerminalByP
 vi.mock('@/lib/tour', () => ({ runTour: mocks.runTour }))
 vi.mock('@/store/gateway', () => ({ requestGatewayForAgent: mocks.requestGatewayForAgent }))
 vi.mock('@/store/pane-focus', () => ({ applyDesktopLayoutPreset: vi.fn(), revealDesktopPane: mocks.revealDesktopPane }))
+vi.mock('@/store/preview', () => ({
+  captureActivePreviewSurface: mocks.captureActivePreviewSurface,
+  ownsActivePreviewSurface: mocks.ownsActivePreviewSurface
+}))
 vi.mock('@/store/reactions-local', () => ({ recordAgentReaction: mocks.recordAgentReaction }))
 vi.mock('@/store/session', () => ({ setMessages: mocks.setMessages }))
 
@@ -59,6 +70,7 @@ function deferred<T>() {
 describe('desktop bridge source and foreground isolation', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mocks.previewSurface.owned = true
   })
 
   it('answers a background preview read on its source without reading the foreground pane', async () => {
@@ -195,6 +207,24 @@ describe('desktop bridge source and foreground isolation', () => {
     ctx.deps.activeSessionIdRef.current = 'new-foreground-session'
 
     await vi.waitFor(() => expect(mocks.requestGatewayForAgent).toHaveBeenCalledOnce())
+    expect(mocks.runTour).not.toHaveBeenCalled()
+    expect(mocks.requestGatewayForAgent).toHaveBeenCalledWith(
+      'source-b',
+      'background-profile',
+      'tour.respond',
+      expect.objectContaining({ request_id: 'request-1', text: expect.stringContaining('session') })
+    )
+  })
+
+  it('does not paint a preview tour after its active tab changes during lazy loading', async () => {
+    const ctx = context('tour.request', true)
+    ctx.payload = { request_id: 'request-1', surface: 'preview' } as GatewayEventContext['payload']
+
+    expect(handleDesktopBridgeEvent(ctx)).toBe(true)
+    mocks.previewSurface.owned = false
+
+    await vi.waitFor(() => expect(mocks.requestGatewayForAgent).toHaveBeenCalledOnce())
+    expect(mocks.captureActivePreviewSurface).toHaveBeenCalledOnce()
     expect(mocks.runTour).not.toHaveBeenCalled()
     expect(mocks.requestGatewayForAgent).toHaveBeenCalledWith(
       'source-b',

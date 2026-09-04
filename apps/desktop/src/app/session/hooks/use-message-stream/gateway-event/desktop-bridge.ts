@@ -6,6 +6,7 @@ import type { PreviewActAction } from '@/lib/preview-act/act-in-page'
 import type { TourAction, TourStep } from '@/lib/tour'
 import { requestGatewayForAgent } from '@/store/gateway'
 import { applyDesktopLayoutPreset, revealDesktopPane } from '@/store/pane-focus'
+import { captureActivePreviewSurface, ownsActivePreviewSurface } from '@/store/preview'
 import { recordAgentReaction } from '@/store/reactions-local'
 import { setMessages } from '@/store/session'
 
@@ -226,6 +227,19 @@ export function handleDesktopBridgeEvent(ctx: GatewayEventContext): boolean {
         success: false
       }
 
+      const tourSurface = payload?.surface === 'preview' ? 'preview' : 'app'
+      const previewSurface = tourSurface === 'preview' ? captureActivePreviewSurface() : null
+
+      // A tour resolves its Preview runner only after the lazy module import.
+      // Retain the exact visible document across that gap: session/source
+      // ownership alone would allow A→B (or A→B→A) to paint the wrong page.
+      // A request made with no Preview may still return the existing no-page
+      // error, but it must not acquire a page that opened while importing.
+      const ownsTourSurfaceNow = () =>
+        ownsActiveSurfaceNow() &&
+        (tourSurface === 'app' ||
+          (previewSurface ? ownsActivePreviewSurface(previewSurface) : captureActivePreviewSurface() === null))
+
       const answer = (result: unknown) =>
         respondToSource('tour.respond', {
           request_id: requestId,
@@ -235,7 +249,7 @@ export function handleDesktopBridgeEvent(ctx: GatewayEventContext): boolean {
       if (ownsActiveSurface) {
         void import('@/lib/tour')
           .then(({ runTour }) =>
-            ownsActiveSurfaceNow()
+            ownsTourSurfaceNow()
               ? runTour(
                   {
                     kind: (payload?.action ?? 'stop') as TourAction['kind'],
@@ -246,15 +260,15 @@ export function handleDesktopBridgeEvent(ctx: GatewayEventContext): boolean {
                     text: payload?.text,
                     title: payload?.title
                   },
-                  payload?.surface === 'preview' ? 'preview' : 'app'
+                  tourSurface
                 )
               : denied
           )
           .then(
-            result => answer(ownsActiveSurfaceNow() ? result : denied),
+            result => answer(ownsTourSurfaceNow() ? result : denied),
             error =>
               answer(
-                ownsActiveSurfaceNow()
+                ownsTourSurfaceNow()
                   ? { error: error instanceof Error ? error.message : String(error), success: false }
                   : denied
               )
