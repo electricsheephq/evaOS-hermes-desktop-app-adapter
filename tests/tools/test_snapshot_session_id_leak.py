@@ -17,7 +17,10 @@ CRON_AUTO_DELIVER_) from the snapshot at both dump sites in
 
 import os
 import re
+import shlex
+import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -61,6 +64,24 @@ def test_export_snippet_shape():
     assert snippet.lstrip().startswith("{ ")
     assert "|| true; }" in snippet
     assert snippet.rstrip().endswith('> "$__hermes_snap_tmp"')
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX bash snapshot path")
+def test_cron_job_id_not_persisted_in_snapshot(tmp_path: Path):
+    """Scheduler-owned cron identity must not persist in a shared snapshot."""
+    snap = tmp_path / "snap"
+    dump = _export_dump_excluding_session_vars(shlex.quote(str(snap)))
+    proc = subprocess.run(
+        ["/bin/bash", "-c", f"set -e\n{dump}"],
+        cwd=str(tmp_path),
+        capture_output=True,
+        text=True,
+        env={**os.environ, "HERMES_CRON_JOB_ID": "synthetic-cron-job"},
+    )
+    assert proc.returncode == 0, (
+        f"rc={proc.returncode}\nstdout={proc.stdout!r}\nstderr={proc.stderr!r}"
+    )
+    assert "HERMES_CRON_JOB_ID" not in snap.read_text(encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------
