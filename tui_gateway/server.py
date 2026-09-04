@@ -1421,14 +1421,39 @@ def _close_sessions_for_transport(
                     and not _transport_is_dead(current)
                 ):
                     continue
+
+                def _viewer_seen_at(viewer_state) -> float:
+                    if isinstance(viewer_state, dict):
+                        try:
+                            return float(viewer_state.get("attached_at") or 0.0)
+                        except (TypeError, ValueError):
+                            return 0.0
+                    try:
+                        return float(viewer_state or 0.0)
+                    except (TypeError, ValueError):
+                        return 0.0
+
                 remaining = [
-                    (ts, v)
-                    for v, ts in (viewers or {}).items()
-                    if v is not transport and not _transport_is_dead(v)
+                    (_viewer_seen_at(viewer_state), viewer, viewer_state)
+                    for viewer, viewer_state in (viewers or {}).items()
+                    if viewer is not transport and not _transport_is_dead(viewer)
                 ]
                 if remaining:
                     remaining.sort(key=lambda kv: kv[0])
-                    session["transport"] = remaining[-1][1]
+                    _, surviving_transport, surviving_state = remaining[-1]
+                    session["transport"] = surviving_transport
+                    if isinstance(surviving_state, dict):
+                        surviving_source = str(
+                            surviving_state.get("source") or ""
+                        ).strip()
+                        if surviving_source:
+                            session["source"] = surviving_source
+                            session["desktop_ui_protocol"] = (
+                                _negotiate_desktop_ui_protocol(
+                                    surviving_source,
+                                    surviving_state.get("desktop_ui_protocol"),
+                                )
+                            )
                     continue
                 session["transport"] = _detached_ws_transport
                 session.pop("_client_gone_interrupt_requested", None)
@@ -2375,6 +2400,7 @@ def _compute_host_turn_frame(
         "reasoning_config_override": session.get("create_reasoning_override"),
         "service_tier_override": session.get("create_service_tier_override"),
         "source": _session_source(session),
+        "desktop_ui_protocol": session.get("desktop_ui_protocol"),
         "attached_images": attached_images,
         "queued_prompt_generation": queued_prompt_generation,
     }
@@ -5466,6 +5492,39 @@ def _negotiate_desktop_ui_protocol(platform: str, requested=None) -> int:
     if requested < DESKTOP_UI_PROTOCOL_CURRENT:
         return DESKTOP_UI_PROTOCOL_LEGACY
     return DESKTOP_UI_PROTOCOL_CURRENT
+
+
+def _bind_session_attachment(
+    session: dict,
+    source: str | None,
+    requested_desktop_ui_protocol=None,
+    *,
+    transport=None,
+) -> tuple[str, int]:
+    """Atomically bind the current client identity and optional viewer.
+
+    Stored session metadata is historical context, never attachment authority.
+    Every resume/activate resolves source from the current caller and stores the
+    negotiated protocol alongside it. Viewer metadata keeps that pair attached
+    to its transport so a multi-window disconnect can restore the surviving
+    client's exact surface instead of inheriting the departing viewer's level.
+    """
+    resolved_source = _resolve_session_source(source)
+    protocol = _negotiate_desktop_ui_protocol(
+        resolved_source, requested_desktop_ui_protocol
+    )
+    lock = session.setdefault("history_lock", threading.Lock())
+    with lock:
+        session["source"] = resolved_source
+        session["desktop_ui_protocol"] = protocol
+        if transport is not None:
+            session["transport"] = transport
+            session.setdefault("viewers", {})[transport] = {
+                "attached_at": time.time(),
+                "source": resolved_source,
+                "desktop_ui_protocol": protocol,
+            }
+    return resolved_source, protocol
 
 
 def _gui_surface_toolsets(
@@ -10423,7 +10482,18 @@ def _live_session_payload(
             # pop-out re-binds the session to a still-open window instead of
             # stranding it on the drop sentinel (#83716).
             viewers = session.setdefault("viewers", {})
-            viewers[transport] = time.time()
+            prior_viewer = viewers.get(transport)
+            if isinstance(prior_viewer, dict):
+                viewers[transport] = {
+                    **prior_viewer,
+                    "attached_at": time.time(),
+                }
+            else:
+                viewers[transport] = {
+                    "attached_at": time.time(),
+                    "source": _session_source(session),
+                    "desktop_ui_protocol": session.get("desktop_ui_protocol"),
+                }
             if transport is not _detached_ws_transport:
                 # A live transport rebind means the client is back — any
                 # pending ws-orphan reap must not fire (storm killer).

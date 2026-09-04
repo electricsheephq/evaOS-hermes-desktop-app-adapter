@@ -58,7 +58,11 @@ def test_resume_by_stored_key_reattaches(live_lazy_session):
     assert "error" not in out, out
     assert out["result"]["session_id"] == sid
     assert out["result"]["stored_session_id"] == record["session_key"]
-    assert record["desktop_ui_protocol"] == 1
+    # Attachment authority comes from the current caller, never the stored
+    # session source. The test gateway is a TUI process, so omitting source
+    # must revoke the stale Desktop surface instead of restoring legacy v1.
+    assert record["source"] == "tui"
+    assert record["desktop_ui_protocol"] == 0
 
 
 def test_resume_rebinds_protocol_on_each_attach(live_lazy_session):
@@ -73,16 +77,26 @@ def test_resume_rebinds_protocol_on_each_attach(live_lazy_session):
         {**base, "source": "desktop", "desktop_ui_protocol": 2}
     )
     assert "error" not in out, out
+    assert record["source"] == "desktop"
     assert record["desktop_ui_protocol"] == 2
 
     # A legacy Desktop reconnect omits the marker and safely rebinds to v1.
     out = _resume({**base, "source": "desktop"})
     assert "error" not in out, out
+    assert record["source"] == "desktop"
     assert record["desktop_ui_protocol"] == 1
 
     # The marker cannot grant GUI access to a non-Desktop client.
     out = _resume({**base, "source": "tui", "desktop_ui_protocol": 2})
     assert "error" not in out, out
+    assert record["source"] == "tui"
+    assert record["desktop_ui_protocol"] == 0
+
+    # A later source-less resume stays on the current non-Desktop attachment;
+    # it must not recover the record's original Desktop authority.
+    out = _resume(base)
+    assert "error" not in out, out
+    assert record["source"] == "tui"
     assert record["desktop_ui_protocol"] == 0
 
 

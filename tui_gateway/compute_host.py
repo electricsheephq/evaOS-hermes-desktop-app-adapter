@@ -531,9 +531,16 @@ class ComputeHost:
     def _ensure_server_session(self, server: Any, frame: dict[str, Any]) -> dict:
         sid = str(frame.get("sid") or "")
         key = str(frame.get("session_key") or sid)
+        source = server._resolve_session_source(
+            str(frame.get("source") or "").strip() or None
+        )
         session = server._sessions.get(sid)
         if session is not None:
             session["transport"] = self._transport
+            session["source"] = source
+            session["desktop_ui_protocol"] = server._negotiate_desktop_ui_protocol(
+                source, frame.get("desktop_ui_protocol")
+            )
             if frame.get("cols") is not None:
                 session["cols"] = int(frame.get("cols") or 80)
             if frame.get("cwd"):
@@ -572,7 +579,8 @@ class ComputeHost:
                 model_override=frame.get("model_override"),
                 reasoning_config_override=frame.get("reasoning_config_override"),
                 service_tier_override=frame.get("service_tier_override"),
-                platform_override=frame.get("source"),
+                platform_override=source,
+                desktop_ui_protocol_override=frame.get("desktop_ui_protocol"),
                 session_db=session_db,
             )
             if server._transfer_db_to_agent(agent, session_db):
@@ -603,7 +611,8 @@ class ComputeHost:
                     cols=int(frame.get("cols") or 80),
                     cwd=str(frame.get("cwd") or "") or None,
                     session_db=session_db,
-                    source=frame.get("source"),
+                    source=source,
+                    desktop_ui_protocol=frame.get("desktop_ui_protocol"),
                 )
             finally:
                 reset_transport(token)
@@ -631,7 +640,11 @@ class ComputeHost:
                 "edit_snapshots": {},
                 "tool_started_at": {},
                 "model_override": frame.get("model_override"),
-                "source": server._sanitize_client_source(frame.get("source")),
+                "source": source,
+                "desktop_ui_protocol": server._negotiate_desktop_ui_protocol(
+                    source,
+                    frame.get("desktop_ui_protocol"),
+                ),
                 "transport": self._transport,
             }
         session = server._sessions[sid]

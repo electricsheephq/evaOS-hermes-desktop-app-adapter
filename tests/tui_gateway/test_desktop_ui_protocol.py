@@ -1,7 +1,8 @@
 """Desktop UI capabilities are negotiated per attached client session."""
 
-import logging
+import io
 import json
+import logging
 import threading
 import types
 
@@ -211,6 +212,7 @@ def test_create_and_activate_store_and_rebind_protocol(monkeypatch):
             2, {"session_id": sid, "source": "desktop"}
         )
         assert "error" not in activated
+        assert server._sessions[sid]["source"] == "desktop"
         assert server._sessions[sid]["desktop_ui_protocol"] == 1
 
         activated = server._methods["session.activate"](
@@ -222,6 +224,7 @@ def test_create_and_activate_store_and_rebind_protocol(monkeypatch):
             },
         )
         assert "error" not in activated
+        assert server._sessions[sid]["source"] == "desktop"
         assert server._sessions[sid]["desktop_ui_protocol"] == 2
 
         calls = []
@@ -239,12 +242,122 @@ def test_create_and_activate_store_and_rebind_protocol(monkeypatch):
             },
         )
         assert "error" not in activated
+        assert server._sessions[sid]["source"] == "tui"
         assert server._sessions[sid]["desktop_ui_protocol"] == 0
+        # session.branch consumes this exact pair. Re-negotiating the already
+        # authoritative zero under a stale Desktop source would restore v1.
+        assert server._negotiate_desktop_ui_protocol(
+            server._session_source(server._sessions[sid]),
+            server._sessions[sid]["desktop_ui_protocol"],
+        ) == 0
         raw = server._agent_cbs(sid)["read_terminal_callback"]()
         assert calls == []
         assert json.loads(raw)["code"] == "desktop_ui_unavailable"
+
+        activated = server._methods["session.activate"](5, {"session_id": sid})
+        assert "error" not in activated
+        assert server._sessions[sid]["source"] == "tui"
+        assert server._sessions[sid]["desktop_ui_protocol"] == 0
     finally:
         server._sessions.pop(sid, None)
+
+
+def test_compute_host_carries_and_rebinds_desktop_ui_protocol():
+    from tui_gateway.compute_host import ComputeHost
+
+    parent = {
+        "attached_images": [],
+        "cols": 80,
+        "cwd": "/tmp",
+        "desktop_ui_protocol": 2,
+        "history": [],
+        "history_lock": threading.Lock(),
+        "history_version": 0,
+        "session_key": "compute-key",
+        "source": "desktop",
+    }
+    frame = server._compute_host_turn_frame("request", "compute-sid", parent, "hello")
+    assert frame["desktop_ui_protocol"] == 2
+
+    captured = {}
+    fake_server = types.SimpleNamespace(_sessions={})
+
+    def fake_make_agent(*_args, **kwargs):
+        captured["make"] = kwargs
+        return types.SimpleNamespace()
+
+    def fake_init_session(sid, key, agent, history, **kwargs):
+        captured["init"] = kwargs
+        fake_server._sessions[sid] = {
+            "agent": agent,
+            "history": history,
+            "session_key": key,
+            "source": kwargs.get("source"),
+            "desktop_ui_protocol": kwargs.get("desktop_ui_protocol"),
+        }
+
+    fake_server._make_agent = fake_make_agent
+    fake_server._init_session = fake_init_session
+    fake_server._transfer_db_to_agent = lambda *_args: False
+    fake_server._resolve_session_source = server._resolve_session_source
+    fake_server._negotiate_desktop_ui_protocol = server._negotiate_desktop_ui_protocol
+
+    host = ComputeHost(stdout=io.StringIO(), heartbeat_secs=0)
+    try:
+        created = host._ensure_server_session(fake_server, frame)
+        assert created["desktop_ui_protocol"] == 2
+        assert captured["make"]["desktop_ui_protocol_override"] == 2
+        assert captured["init"]["desktop_ui_protocol"] == 2
+
+        existing = {
+            "desktop_ui_protocol": 1,
+            "source": "desktop",
+            "transport": None,
+        }
+        fake_server._sessions["compute-sid"] = existing
+        rebound = host._ensure_server_session(fake_server, frame)
+        assert rebound["source"] == "desktop"
+        assert rebound["desktop_ui_protocol"] == 2
+    finally:
+        host.close()
+
+
+def test_disconnect_restores_surviving_viewer_protocol(monkeypatch):
+    monkeypatch.setattr(server, "_schedule_ws_orphan_reap", lambda _sid: None)
+
+    class _LiveTransport:
+        def write(self, *_args, **_kwargs):
+            return True
+
+    legacy = _LiveTransport()
+    current = _LiveTransport()
+    session = {
+        "close_on_disconnect": False,
+        "desktop_ui_protocol": 1,
+        "source": "desktop",
+        "transport": legacy,
+        "viewers": {
+            current: {
+                "attached_at": 100.0,
+                "desktop_ui_protocol": 2,
+                "source": "desktop",
+            },
+            legacy: {
+                "attached_at": 200.0,
+                "desktop_ui_protocol": 1,
+                "source": "desktop",
+            },
+        },
+    }
+    server._sessions["viewer-protocol"] = session
+    try:
+        reaped, detached = server._close_sessions_for_transport(legacy)
+        assert (reaped, detached) == (0, 0)
+        assert session["transport"] is current
+        assert session["source"] == "desktop"
+        assert session["desktop_ui_protocol"] == 2
+    finally:
+        server._sessions.pop("viewer-protocol", None)
 
 
 def test_deferred_cold_session_stores_negotiated_protocol():

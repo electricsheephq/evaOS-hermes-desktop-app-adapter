@@ -53,6 +53,14 @@ to a warm protocol-2 agent, a protocol-2 call returns
 renderer response that cannot arrive. A newer client attaching to a warm
 protocol-1 agent gets the protocol-1 schema until it starts a new session.
 
+Each resume or activate derives both source and protocol from the current
+caller; stored session metadata is not attachment authority. Multi-window
+viewer records retain that pair per transport so disconnecting one viewer
+restores the surviving viewer's exact protocol. Isolated compute-host turn
+frames carry the same negotiated level into both new and reused host sessions.
+These rules keep branches, reconnects, and source-less non-Desktop attachments
+from resurrecting stale Desktop tools.
+
 `open_preview` remains fire-and-forget to match upstream. A successful result
 means the event was dispatched; it does not prove that navigation rendered.
 Call `read_preview` when rendered-page proof is required.

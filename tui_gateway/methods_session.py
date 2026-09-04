@@ -394,16 +394,9 @@ def _(rid, params: dict) -> dict:
     explicit_source = str(params.get("source") or "").strip()
     source = _resolve_session_source(explicit_source or None)
     requested_desktop_ui_protocol = params.get("desktop_ui_protocol")
-
-    def _resume_desktop_ui_protocol(session: dict | None = None) -> int:
-        attach_source = explicit_source or str(
-            (session or {}).get("source") or ""
-        ).strip() or source
-        return _negotiate_desktop_ui_protocol(
-            attach_source, requested_desktop_ui_protocol
-        )
-
-    desktop_ui_protocol = _resume_desktop_ui_protocol()
+    desktop_ui_protocol = _negotiate_desktop_ui_protocol(
+        source, requested_desktop_ui_protocol
+    )
 
     # In a profile scope this opens a DEDICATED handle we own until the agent
     # takes it (see the ownership transfer at _init_session below); every path
@@ -473,7 +466,6 @@ def _(rid, params: dict) -> dict:
                         with contextlib.suppress(Exception):
                             db.close()
                     live["last_active"] = time.time()
-                    live["desktop_ui_protocol"] = _resume_desktop_ui_protocol(live)
                     # This resume reattaches the live record. A lazy session
                     # (no state.db row yet — every fresh Bot Chat) that was
                     # sentinel-parked by a WS drop MUST be rebound here, or it
@@ -481,10 +473,12 @@ def _(rid, params: dict) -> dict:
                     # fires against a client that is attached right now — the
                     # unpersisted sibling of the storm-killer paths (#91276).
                     transport = current_transport()
-                    if transport is not None:
-                        with live.setdefault("history_lock", threading.Lock()):
-                            live["transport"] = transport
-                            live.setdefault("viewers", {})[transport] = time.time()
+                    _bind_session_attachment(
+                        live,
+                        source,
+                        requested_desktop_ui_protocol,
+                        transport=transport,
+                    )
                     _cancel_ws_orphan_reap(live_sid)
                     history = live.get("history") or []
                     return _ok(
@@ -647,7 +641,12 @@ def _(rid, params: dict) -> dict:
                     return _err(rid, 4007, "session no longer live; retry resume")
                 if session.get("_client_gone_interrupt_requested"):
                     return _err(rid, 4009, "session disconnect interrupt settling")
-                session["desktop_ui_protocol"] = _resume_desktop_ui_protocol(session)
+                _bind_session_attachment(
+                    session,
+                    source,
+                    requested_desktop_ui_protocol,
+                    transport=current_transport() or _stdio_transport,
+                )
                 # This resume reattaches the live record: cancel any pending
                 # ws-orphan reap timer armed while the client was detached
                 # (storm killer — _live_session_payload's rebind also cancels,
@@ -1253,9 +1252,14 @@ def _(rid, params: dict) -> dict:
         return err
     assert session is not None
 
-    attach_source = str(params.get("source") or session.get("source") or "").strip()
-    session["desktop_ui_protocol"] = _negotiate_desktop_ui_protocol(
-        attach_source, params.get("desktop_ui_protocol")
+    attach_source = _resolve_session_source(
+        str(params.get("source") or "").strip() or None
+    )
+    _bind_session_attachment(
+        session,
+        attach_source,
+        params.get("desktop_ui_protocol"),
+        transport=current_transport() or _stdio_transport,
     )
 
     return _ok(
