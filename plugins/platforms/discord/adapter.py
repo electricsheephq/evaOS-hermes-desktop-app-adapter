@@ -4163,6 +4163,10 @@ class DiscordAdapter(BasePlatformAdapter):
             existing = self._voice_clients.get(guild_id)
             if existing and existing.is_connected():
                 if existing.channel.id == channel.id:
+                    await self._stop_voice_capture(guild_id)
+                    self._voice_text_channels.pop(guild_id, None)
+                    self._voice_sources.pop(guild_id, None)
+                    self._voice_channel_ids.pop(guild_id, None)
                     if capture_approved:
                         self._voice_text_channels[guild_id] = int(text_channel_id)
                         self._voice_sources[guild_id] = source
@@ -4170,17 +4174,11 @@ class DiscordAdapter(BasePlatformAdapter):
                         self._start_voice_capture(guild_id, existing)
                     self._reset_voice_timeout(guild_id)
                     return True
-                await existing.move_to(channel)
-                receiver = self._voice_receivers.get(guild_id)
-                if receiver:
-                    receiver.stop()
-                    self._voice_receivers.pop(guild_id, None)
-                listen_task = self._voice_listen_tasks.pop(guild_id, None)
-                if listen_task:
-                    listen_task.cancel()
+                await self._stop_voice_capture(guild_id)
                 self._voice_text_channels.pop(guild_id, None)
                 self._voice_sources.pop(guild_id, None)
                 self._voice_channel_ids.pop(guild_id, None)
+                await existing.move_to(channel)
                 if capture_approved:
                     self._voice_text_channels[guild_id] = int(text_channel_id)
                     self._voice_sources[guild_id] = source
@@ -4217,6 +4215,25 @@ class DiscordAdapter(BasePlatformAdapter):
                     logger.warning("Voice mixer failed to start: %s", e)
 
             return True
+
+    async def _stop_voice_capture(self, guild_id: int) -> None:
+        """Stop and forget only the capture generation currently installed."""
+        receiver = self._voice_receivers.get(guild_id)
+        listen_task = self._voice_listen_tasks.get(guild_id)
+        if receiver:
+            receiver.stop()
+        if listen_task:
+            listen_task.cancel()
+            if (
+                isinstance(listen_task, asyncio.Future)
+                and listen_task is not asyncio.current_task()
+            ):
+                with suppress(asyncio.CancelledError):
+                    await listen_task
+        if self._voice_receivers.get(guild_id) is receiver:
+            self._voice_receivers.pop(guild_id, None)
+        if self._voice_listen_tasks.get(guild_id) is listen_task:
+            self._voice_listen_tasks.pop(guild_id, None)
 
     def _start_voice_capture(self, guild_id: int, vc) -> None:
         """Start one receiver only after the exact capture tuple is bound."""
@@ -4541,7 +4558,6 @@ class DiscordAdapter(BasePlatformAdapter):
 
                 completed = receiver.check_silence()
                 if not self._voice_capture_binding_valid(guild_id):
-                    receiver.stop()
                     break
                 # Voice inputs always originate from a specific guild
                 # (guild_id is in scope). Pass it so role checks are
@@ -4564,6 +4580,13 @@ class DiscordAdapter(BasePlatformAdapter):
             pass
         except Exception as e:
             logger.error("Voice listen loop error: %s", e, exc_info=True)
+        finally:
+            receiver.stop()
+            current_task = asyncio.current_task()
+            if self._voice_receivers.get(guild_id) is receiver:
+                self._voice_receivers.pop(guild_id, None)
+            if self._voice_listen_tasks.get(guild_id) is current_task:
+                self._voice_listen_tasks.pop(guild_id, None)
 
     async def _process_voice_input(self, guild_id: int, user_id: int, pcm_data: bytes):
         """Convert PCM -> WAV -> STT -> callback."""
