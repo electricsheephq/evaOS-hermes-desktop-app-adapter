@@ -1,6 +1,14 @@
 import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { $rightRailActiveTabId } from '@/store/layout'
+import {
+  captureActivePreviewSurface,
+  closeRightRail,
+  openPreview,
+  ownsActivePreviewSurface,
+  type PreviewTarget
+} from '@/store/preview'
 import { $connection } from '@/store/session'
 
 import { forgetPreviewConsole, previewConsoleState } from './preview-console-store'
@@ -33,6 +41,7 @@ describe('PreviewPane console state', () => {
 
   afterEach(() => {
     cleanup()
+    closeRightRail()
     $connection.set(null)
     vi.unstubAllGlobals()
   })
@@ -143,13 +152,18 @@ describe('PreviewPane console state', () => {
   })
 
   it('drives the webview from the bar and tracks its history', async () => {
+    const target: PreviewTarget = {
+      kind: 'url',
+      label: 'Preview',
+      source: 'http://localhost:5174',
+      url: 'http://localhost:5174'
+    }
+
+    openPreview(target)
+    const tabId = $rightRailActiveTabId.get()!
     let rendered!: ReturnType<typeof render>
     await act(async () => {
-      rendered = render(
-        <PreviewPane
-          target={{ kind: 'url', label: 'Preview', source: 'http://localhost:5174', url: 'http://localhost:5174' }}
-        />
-      )
+      rendered = render(<PreviewPane tabId={tabId} target={target} />)
     })
 
     const webview = rendered.container.querySelector('webview') as HTMLElement & Record<string, unknown>
@@ -177,12 +191,15 @@ describe('PreviewPane console state', () => {
     expect(webview.goBack).toHaveBeenCalledOnce()
 
     const address = rendered.getByRole('textbox', { name: 'Address' }) as HTMLInputElement
+    const beforeNavigation = captureActivePreviewSurface()
 
     expect(address.value).toBe('http://localhost:5174/two')
+    expect(ownsActivePreviewSurface(beforeNavigation)).toBe(true)
 
     fireEvent.focus(address)
     fireEvent.change(address, { target: { value: 'localhost:4000/app' } })
     fireEvent.keyDown(address, { key: 'Enter' })
+    expect(ownsActivePreviewSurface(beforeNavigation)).toBe(false)
 
     // loadURL, not a `src` swap — re-entering the current address must reload.
     // Awaited: navigation first asks main whether the address needs a loopback

@@ -91,6 +91,24 @@ describe('readActivePreview (read_preview tool)', () => {
     expect(mocks.nudgeOverlay).not.toHaveBeenCalled()
   })
 
+  it('drops a stale read when ownership leaves and returns on a different Preview surface', async () => {
+    const pending = deferred<{ text: string; title: string; url: string }>()
+    let ownsSurface = true
+
+    openPreview(urlTarget('https://example.com'), 'tool-result')
+    register($rightRailActiveTabId.get()!, () => pending.promise)
+
+    const reading = readActivePreview({ shouldNudge: () => ownsSurface })
+
+    ownsSurface = false
+    openPreview(fileTarget('/work/other-session.md'), 'file-browser')
+    ownsSurface = true
+    pending.resolve({ text: 'previous session page', title: 'Example', url: 'https://example.com' })
+
+    await expect(reading).resolves.toBeNull()
+    expect(mocks.nudgeOverlay).not.toHaveBeenCalled()
+  })
+
   it('windows long pages with start/count and reports the full length', async () => {
     openPreview(urlTarget('https://example.com'), 'tool-result')
     register($rightRailActiveTabId.get()!, async () => ({

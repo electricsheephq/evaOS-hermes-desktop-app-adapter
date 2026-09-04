@@ -216,6 +216,37 @@ describe('actOnActivePreview (drive_preview tool)', () => {
     expect(result).toMatchObject({ error: expect.stringContaining('no longer owns'), success: false })
   })
 
+  it('does not emit input when the active Browser navigates during target lookup', async () => {
+    const tabId = openBrowserTab()
+    const send = vi.fn()
+    let finishLocate!: (value: string) => void
+
+    const locate = new Promise<string>(resolve => {
+      finishLocate = resolve
+    })
+
+    const runner = vi.fn((code: string) =>
+      code.includes('"kind":"locate"')
+        ? locate
+        : Promise.resolve(JSON.stringify({ elements: [], hit: { tag: 'BUTTON', trusted: true }, success: true }))
+    )
+
+    cleanups.push(registerPreviewScriptRunner(tabId, runner))
+    cleanups.push(registerPreviewInput(tabId, { focus: vi.fn(), send }))
+
+    const resultPending = actOnActivePreview({ kind: 'click', ref: '@e1' })
+
+    await vi.waitFor(() => expect(runner).toHaveBeenCalledOnce())
+    openPreview(urlTarget('https://example.org'), 'manual')
+    expect($rightRailActiveTabId.get()).toBe(tabId)
+    finishLocate(JSON.stringify({ acted: 'looking at button "Save"', point: { x: 120, y: 80 }, success: true }))
+
+    const result = await resultPending
+
+    expect(send).not.toHaveBeenCalled()
+    expect(result).toMatchObject({ error: expect.stringContaining('no longer owns'), success: false })
+  })
+
   it('stops a multi-step gesture as soon as session ownership changes', async () => {
     const tabId = openBrowserTab()
     let ownsSurface = true

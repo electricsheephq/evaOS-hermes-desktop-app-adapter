@@ -23,6 +23,7 @@ import {
   $previewServerRestart,
   commitBrowserTabLocation,
   failPreviewServerRestart,
+  markPreviewSurfaceChanged,
   noteBrowserPage,
   popOutBrowserTab,
   type PreviewTarget
@@ -362,12 +363,16 @@ export function PreviewPane({ embedded = false, onRestartServer, reloadRequest =
       return
     }
 
+    if (tabId) {
+      markPreviewSurfaceChanged(tabId)
+    }
+
     if (webviewRef.current?.reloadIgnoringCache) {
       webviewRef.current.reloadIgnoringCache()
     } else {
       webviewRef.current?.reload?.()
     }
-  }, [isWebPreview])
+  }, [isWebPreview, tabId])
 
   const appendConsoleEntry = useCallback(
     (entry: Omit<ConsoleEntry, 'id'>) => {
@@ -431,6 +436,11 @@ export function PreviewPane({ embedded = false, onRestartServer, reloadRequest =
   const navigateTo = useCallback(
     (url: string) => {
       setLoadError(null)
+
+      if (tabId) {
+        markPreviewSurfaceChanged(tabId)
+      }
+
       // The reach probe below is a round-trip of its own, and `did-start-loading`
       // can't fire until it resolves — so own the loading state from the moment
       // we accept the address, or the bar sits idle over a request in flight.
@@ -455,24 +465,32 @@ export function PreviewPane({ embedded = false, onRestartServer, reloadRequest =
           setLoading(false)
         })
     },
-    [copy.unreachableDescription]
+    [copy.unreachableDescription, tabId]
   )
 
   const goBack = useCallback(() => {
     const webview = webviewRef.current
 
     if (webview?.canGoBack?.()) {
+      if (tabId) {
+        markPreviewSurfaceChanged(tabId)
+      }
+
       webview.goBack?.()
     }
-  }, [])
+  }, [tabId])
 
   const goForward = useCallback(() => {
     const webview = webviewRef.current
 
     if (webview?.canGoForward?.()) {
+      if (tabId) {
+        markPreviewSurfaceChanged(tabId)
+      }
+
       webview.goForward?.()
     }
-  }, [])
+  }, [tabId])
 
   // Gestures that land on the app's chrome (⌘R from the address bar, a mouse
   // button over the frame). A gesture made INSIDE the page is answered by main
@@ -854,7 +872,13 @@ export function PreviewPane({ embedded = false, onRestartServer, reloadRequest =
       setLoading(false)
     }
 
-    const onStart = () => setLoading(true)
+    const onStart = () => {
+      if (tabId) {
+        markPreviewSurfaceChanged(tabId)
+      }
+
+      setLoading(true)
+    }
 
     const onStop = () => {
       setLoading(false)

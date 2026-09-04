@@ -162,10 +162,54 @@ function activePreviewTab(): PreviewTab | null {
   return resolveActiveTab($previewTabs.get(), $rightRailActiveTabId.get())
 }
 
-/** Stable identity for the Preview surface that would receive an action now.
- *  Uses the same stale-selection fallback as the live handle registries. */
-export function activePreviewTabId(): RightRailTabId | null {
-  return activePreviewTab()?.id ?? null
+/** Opaque identity for one visible Preview document. Browser tabs are stable
+ *  vessels, so tab id alone is insufficient: navigation changes the document
+ *  underneath the same input/script handles. */
+export interface PreviewSurfaceToken {
+  generation: number
+  tabId: RightRailTabId
+}
+
+let nextPreviewSurfaceGeneration = 0
+const previewSurfaceGenerations = new Map<string, number>()
+
+function previewSurfaceGeneration(tabId: string): number {
+  const existing = previewSurfaceGenerations.get(tabId)
+
+  if (existing !== undefined) {
+    return existing
+  }
+
+  const generation = ++nextPreviewSurfaceGeneration
+
+  previewSurfaceGenerations.set(tabId, generation)
+
+  return generation
+}
+
+/** Retire every continuation that captured this tab's previous document. */
+export function markPreviewSurfaceChanged(tabId: string): void {
+  if (tabId) {
+    previewSurfaceGenerations.set(tabId, ++nextPreviewSurfaceGeneration)
+  }
+}
+
+/** Capture the exact Preview document that would receive an action now. */
+export function captureActivePreviewSurface(): PreviewSurfaceToken | null {
+  const tab = activePreviewTab()
+
+  return tab ? { generation: previewSurfaceGeneration(tab.id), tabId: tab.id } : null
+}
+
+/** Whether a captured document still owns the visible Preview. */
+export function ownsActivePreviewSurface(token: PreviewSurfaceToken | null): boolean {
+  const tab = activePreviewTab()
+
+  return Boolean(
+    token &&
+      tab?.id === token.tabId &&
+      previewSurfaceGenerations.get(token.tabId) === token.generation
+  )
 }
 
 // A restored active id whose tab didn't survive validation would leave the rail
@@ -203,6 +247,10 @@ export function noteBrowserPage(tabId: string, page: BrowserPage) {
     return
   }
 
+  if (current?.url !== page.url) {
+    markPreviewSurfaceChanged(tabId)
+  }
+
   $browserPages.set({ ...$browserPages.get(), [tabId]: page })
 }
 
@@ -236,6 +284,10 @@ export function commitBrowserTabLocation(tabId: string, url: string, title?: str
 
   if (tab.target.kind !== 'url' || (tab.target.url === nextUrl && (!nextTitle || tab.target.label === nextTitle))) {
     return
+  }
+
+  if (tab.target.url !== nextUrl) {
+    markPreviewSurfaceChanged(tabId)
   }
 
   $previewTabs.set(
@@ -395,6 +447,7 @@ export function openPreview(target: PreviewTarget, source: PreviewRecordSource =
   const index = current.findIndex(tab => tab.id === id)
   const tab: PreviewTab = { id, target: resolved }
 
+  markPreviewSurfaceChanged(id)
   $previewTabs.set(index === -1 ? [...current, tab] : current.map((item, i) => (i === index ? tab : item)))
   selectRightRailTab(id)
 }
@@ -416,6 +469,7 @@ export function openBrowserTab() {
 export function newBrowserTab() {
   const id = mintBrowserTabId()
 
+  markPreviewSurfaceChanged(id)
   $previewTabs.set([...$previewTabs.get(), { id, target: blankPage() }])
   selectRightRailTab(id)
 }
@@ -430,6 +484,7 @@ export function closeRightRailTab(tabId: string) {
 
   const next = current.filter(tab => tab.id !== tabId)
 
+  markPreviewSurfaceChanged(tabId)
   $previewTabs.set(next)
 
   if ($rightRailActiveTabId.get() === tabId) {
@@ -483,6 +538,10 @@ export function closeArtifactPreviewTabs() {
 
 /** Close every tab so the rail's panes leave the tree. */
 export function closeRightRail() {
+  for (const tab of $previewTabs.get()) {
+    markPreviewSurfaceChanged(tab.id)
+  }
+
   $previewTabs.set([])
   selectRightRailTab(null)
 }

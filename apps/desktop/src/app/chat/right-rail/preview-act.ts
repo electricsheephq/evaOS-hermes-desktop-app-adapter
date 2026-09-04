@@ -29,7 +29,7 @@
 
 import { actEngineSource, type PreviewActAction, type PreviewActResult } from '@/lib/preview-act/act-in-page'
 import { watchInPage } from '@/lib/preview-act/watch-in-page'
-import { activePreviewTabId } from '@/store/preview'
+import { captureActivePreviewSurface, ownsActivePreviewSurface } from '@/store/preview'
 
 import {
   clickAt,
@@ -74,7 +74,7 @@ const CLICKS: readonly string[] = ['click', 'type']
 const NOTHING_OPEN = 'No live page is open in the in-app browser — open one with open_preview first.'
 
 const ACTION_CANCELLED =
-  'The in-app browser action stopped because its session or tab no longer owns the visible Preview.'
+  'The in-app browser action stopped because its session, tab, or page no longer owns the visible Preview.'
 
 const ALWAYS_CONTINUE: PreviewDriveContinuation = () => true
 
@@ -555,10 +555,9 @@ export async function actOnActivePreview(
     return cancelledResult()
   }
 
-  const ownerTabId = activePreviewTabId()
+  const ownerSurface = captureActivePreviewSurface()
 
-  const ownsActionSurface = () =>
-    shouldContinue() && ownerTabId !== null && activePreviewTabId() === ownerTabId
+  const ownsActionSurface = () => shouldContinue() && ownsActivePreviewSurface(ownerSurface)
 
   const nav = NAV_ACTIONS.find(verb => verb === action.kind)
 
