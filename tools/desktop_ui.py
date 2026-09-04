@@ -14,14 +14,15 @@ from typing import Callable, Optional
 
 from gateway.session_context import get_session_env
 
-# (sid, event, payload) sink, installed by the desktop gateway.
-_emit: Optional[Callable[[str, str, dict], None]] = None
+# (sid, event, payload) sink, installed by the desktop gateway. A gateway may
+# return ``False`` when a concurrent attachment change invalidates the route.
+_emit: Optional[Callable[[str, str, dict], object]] = None
 # (sid, event) -> structured JSON error or None. The gateway owns negotiation;
 # tools merely consult this resolver immediately before touching the renderer.
 _protocol_error: Optional[Callable[[str, str], Optional[str]]] = None
 
 
-def set_emitter(fn: Optional[Callable[[str, str, dict], None]]) -> None:
+def set_emitter(fn: Optional[Callable[[str, str, dict], object]]) -> None:
     """Install (or clear) the renderer-event sink. Called by the desktop gateway."""
     global _emit
     _emit = fn
@@ -59,5 +60,4 @@ def emit(event: str, payload: dict) -> bool:
     resolver = _protocol_error
     if resolver is not None and resolver(sid, event) is not None:
         return False
-    fn(sid, event, payload)
-    return True
+    return fn(sid, event, payload) is not False

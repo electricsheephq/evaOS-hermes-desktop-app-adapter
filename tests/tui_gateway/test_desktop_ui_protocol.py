@@ -129,7 +129,12 @@ def test_legacy_reused_session_names_annotate_upgrade_error(caplog, monkeypatch)
 def test_matched_session_makes_exactly_one_renderer_request(monkeypatch):
     sid = "matched-ui"
     calls = []
-    server._sessions[sid] = {"source": "desktop", "desktop_ui_protocol": 2}
+    transport = object()
+    server._sessions[sid] = {
+        "source": "desktop",
+        "desktop_ui_protocol": 2,
+        "transport": transport,
+    }
     monkeypatch.setattr(
         server,
         "_block",
@@ -142,7 +147,12 @@ def test_matched_session_makes_exactly_one_renderer_request(monkeypatch):
         server._sessions.pop(sid, None)
 
     assert json.loads(raw) == {"title": "Example Domain"}
-    assert calls == [(("preview.read.request", sid, {}), {"timeout": 45})]
+    assert calls == [
+        (
+            ("preview.read.request", sid, {}),
+            {"timeout": 45, "transport": transport},
+        )
+    ]
 
 
 def test_matched_open_read_drive_round_trip(monkeypatch):
@@ -290,6 +300,140 @@ def test_create_and_activate_store_and_rebind_protocol(monkeypatch):
         assert server._sessions[sid]["desktop_ui_protocol"] == 0
     finally:
         server._sessions.pop(sid, None)
+
+
+def test_rebind_publishes_protocol_and_transport_as_one_snapshot(monkeypatch):
+    """A protocol upgrade cannot expose v2 while the legacy transport is live."""
+    sid = "concurrent-upgrade"
+    protocol_published = threading.Event()
+    allow_transport_publish = threading.Event()
+    request_finished = threading.Event()
+    errors = []
+    blocked_transports = []
+
+    class _Transport:
+        def __init__(self, name):
+            self.name = name
+
+        def write(self, _frame):
+            return True
+
+    class _PausingSession(dict):
+        def __setitem__(self, key, value):
+            super().__setitem__(key, value)
+            if key == "desktop_ui_protocol" and value == 2:
+                protocol_published.set()
+                allow_transport_publish.wait(timeout=2)
+
+    legacy = _Transport("legacy")
+    current = _Transport("current")
+    session = _PausingSession(
+        {
+            "source": "desktop",
+            "desktop_ui_protocol": 1,
+            "history_lock": threading.Lock(),
+            "transport": legacy,
+        }
+    )
+    server._sessions[sid] = session
+
+    def fake_block(_event, _sid, _payload, **kwargs):
+        blocked_transports.append(kwargs.get("transport"))
+        return json.dumps({"title": "Example Domain"})
+
+    monkeypatch.setattr(server, "_block", fake_block)
+
+    def rebind():
+        try:
+            server._bind_session_attachment(
+                session,
+                "desktop",
+                2,
+                transport=current,
+            )
+        except Exception as exc:  # pragma: no cover - asserted below
+            errors.append(exc)
+
+    def request():
+        try:
+            server._agent_cbs(sid)["read_preview_callback"]()
+        except Exception as exc:  # pragma: no cover - asserted below
+            errors.append(exc)
+        finally:
+            request_finished.set()
+
+    bind_thread = threading.Thread(target=rebind)
+    request_thread = threading.Thread(target=request)
+    bind_thread.start()
+    try:
+        assert protocol_published.wait(timeout=1)
+        request_thread.start()
+        completed_while_attachment_was_partial = request_finished.wait(timeout=0.05)
+    finally:
+        allow_transport_publish.set()
+        bind_thread.join(timeout=1)
+        request_thread.join(timeout=1)
+        server._sessions.pop(sid, None)
+
+    assert completed_while_attachment_was_partial is False
+    assert errors == []
+    assert blocked_transports == [current]
+
+
+def test_fire_and_forget_rechecks_attachment_before_routing(monkeypatch):
+    """A downgrade between preflight and emit cannot reach the legacy client."""
+    sid = "fire-and-forget-downgrade"
+
+    class _Transport:
+        def __init__(self):
+            self.frames = []
+
+        def write(self, frame):
+            self.frames.append(frame)
+            return True
+
+    current = _Transport()
+    legacy = _Transport()
+    session = {
+        "source": "desktop",
+        "desktop_ui_protocol": 2,
+        "history_lock": threading.Lock(),
+        "transport": current,
+    }
+    server._sessions[sid] = session
+    monkeypatch.setattr(
+        desktop_ui,
+        "get_session_env",
+        lambda name, default="": sid if name == "HERMES_UI_SESSION_ID" else default,
+    )
+    previous_emitter = desktop_ui._emit
+    previous_resolver = desktop_ui._protocol_error
+    previous_wired = server._desktop_ui_wired
+    server._desktop_ui_wired = False
+    server._wire_desktop_ui()
+
+    def downgrade_after_preflight(current_sid, event):
+        error = server._desktop_ui_emitter_protocol_error(current_sid, event)
+        if error is None:
+            server._bind_session_attachment(
+                session,
+                "desktop",
+                1,
+                transport=legacy,
+            )
+        return error
+
+    desktop_ui.set_protocol_resolver(downgrade_after_preflight)
+    try:
+        assert desktop_ui.emit("preview.close", {}) is False
+    finally:
+        desktop_ui.set_emitter(previous_emitter)
+        desktop_ui.set_protocol_resolver(previous_resolver)
+        server._desktop_ui_wired = previous_wired
+        server._sessions.pop(sid, None)
+
+    assert current.frames == []
+    assert legacy.frames == []
 
 
 def test_compute_host_carries_and_rebinds_desktop_ui_protocol():

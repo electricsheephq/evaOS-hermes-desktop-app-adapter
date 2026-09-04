@@ -613,7 +613,6 @@ def _(rid, params: dict) -> dict:
                 session,
                 cols=cols,
                 touch=True,
-                transport=current_transport() or _stdio_transport,
                 omit_messages=omit_messages,
             )
             payload["resumed"] = target
@@ -1268,7 +1267,6 @@ def _(rid, params: dict) -> dict:
             sid,
             session,
             touch=True,
-            transport=current_transport() or _stdio_transport,
             omit_messages=is_truthy_value(params.get("omit_messages", False)),
         ),
     )
