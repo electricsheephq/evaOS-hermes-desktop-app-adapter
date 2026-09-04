@@ -1061,6 +1061,27 @@ test('connection-config save and apply IPC handlers route payloads through coerc
   }
 })
 
+test('safeStorage decrypt defers macOS keychain access until Electron is ready', () => {
+  const source = readMain()
+  const fnStart = source.indexOf('function decryptDesktopSecret(secret)')
+  assert.notEqual(fnStart, -1, 'decryptDesktopSecret must exist')
+
+  const fnEnd = source.indexOf('\nasync function resetEvaRendererSessions', fnStart)
+  assert.notEqual(fnEnd, -1, 'decryptDesktopSecret must remain bounded before renderer reset')
+
+  const body = source.slice(fnStart, fnEnd)
+
+  const readinessGuard = body.search(
+    /if \(process\.platform === 'darwin' && !app\.isReady\(\)\) \{\s*return ''\s*\}/
+  )
+
+  const keychainRead = body.indexOf('safeStorage.decryptString(')
+
+  assert.notEqual(readinessGuard, -1, 'cold startup must defer safeStorage decryption until app.whenReady')
+  assert.notEqual(keychainRead, -1, 'the production safeStorage decrypt must remain present')
+  assert.ok(readinessGuard < keychainRead, 'the readiness guard must run before the first keychain decrypt')
+})
+
 test('whenReady enables basic password-store encryption before createWindow', () => {
   const source = readMain()
   const enableIndex = source.indexOf('enableBasicPasswordStoreEncryption({')

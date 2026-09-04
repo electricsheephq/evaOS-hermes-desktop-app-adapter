@@ -9,7 +9,7 @@
 - Restores fail-closed local filesystem, Git, terminal, and secure-storage boundaries for managed installations, including account-switch cleanup for cached transcript and in-flight turn data.
 - Clears pull-request recovery, session-owner, unread-session, and sidebar-filter metadata with the rest of the account-scoped renderer state during managed sign-out or assignment changes.
 - Clears remembered connection profiles on managed account reset, routes session-tile transcription through the tile's exact owner, and keeps legacy cron and messaging sidebar slices complete across profiles without weakening managed assignment scope.
-- Preserves an existing encrypted managed enrollment when secure storage cannot decrypt it at startup, returning a retryable local error instead of silently replacing it with signed-out state.
+- Defers macOS managed Safe Storage reads until Electron is ready so a freshly authenticated assignment can survive a full app restart; genuinely unreadable ciphertext remains preserved and fail-closed.
 - Keeps managed SSH updates serialized at the configured mutex path without creating quote-prefixed paths in the checkout.
 - This is an unpublished developer candidate; it is not a signed or notarized release.
 

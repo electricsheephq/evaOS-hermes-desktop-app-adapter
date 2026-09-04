@@ -106,6 +106,31 @@ test('cold launch preserves encrypted enrollment when secure storage cannot decr
   assert.equal(fs.readFileSync(statePath, 'utf8'), persistedBeforeLaunch)
 })
 
+test('cold launch recovers after a deferred pre-ready secure-storage read', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-secure-storage-deferred-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeActiveEnrollment(statePath)
+  const persistedBeforeLaunch = fs.readFileSync(statePath, 'utf8')
+  let decrypts = 0
+  const runtime = makeManagedRuntime(statePath, {
+    // main.ts returns an empty sentinel instead of touching macOS Keychain
+    // before app.whenReady(). The next state read occurs after readiness and
+    // must recover the same preserved enrollment rather than latch failure.
+    decryptSecret: value => {
+      decrypts += 1
+      return decrypts === 1 ? '' : value
+    }
+  })
+
+  const connection = await runtime.resolveBackend()
+
+  assert.equal(connection.source, 'electric-sheep')
+  assert.equal(runtime.status().agentDisplayName, 'Asuka')
+  assert.ok(decrypts >= 3)
+  assert.equal(fs.readFileSync(statePath, 'utf8'), persistedBeforeLaunch)
+})
+
 test('renderer cleanup preserves unreadable encrypted enrollment before returning its retry error', async t => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-unreadable-renderer-reset-'))
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
