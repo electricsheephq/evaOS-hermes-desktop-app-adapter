@@ -58,7 +58,7 @@
     "test:desktop:existing": "node scripts/test-desktop.mjs existing",
     "test:desktop:fresh": "node scripts/test-desktop.mjs fresh",
     "typecheck": "tsc -p . --noEmit && tsc -p tsconfig.electron.json --noEmit && tsc -p tsconfig.e2e.json --noEmit",
-    "test:managed": "node --test electron/eva-app-updater.test.cjs electron/eva-managed-main-contract.test.cjs electron/eva-managed-scenarios.test.cjs electron/eva-managed.test.cjs electron/eva-protocol-handler.test.cjs electron/eva-runtime.test.cjs electron/eva-ws-relay.test.cjs e2e/verify-managed-reports.test.mjs scripts/notarize.test.mjs scripts/verify-managed-update-release.test.mjs",
+    "test:managed": "node --test electron/eva-app-updater.test.cjs electron/eva-managed-main-contract.test.cjs electron/eva-managed-scenarios.test.cjs electron/eva-managed.test.cjs electron/eva-protocol-handler.test.cjs electron/eva-runtime.test.cjs electron/eva-ws-relay.test.cjs e2e/verify-managed-reports.test.mjs scripts/notarize.test.mjs scripts/sign-mac.test.mjs scripts/verify-managed-update-release.test.mjs",
     "release:refresh-and-verify:mac": "node scripts/refresh-managed-update-metadata.mjs",
     "release:verify:mac": "node scripts/verify-managed-update-release.mjs",
     "lint": "eslint src/ electron/",
@@ -252,6 +252,7 @@
       "dist/**"
     ],
     "mac": {
+      "sign": "scripts/sign-mac.mjs",
       "category": "public.app-category.productivity",
       "entitlements": "electron/entitlements.mac.plist",
       "entitlementsInherit": "electron/entitlements.mac.inherit.plist",

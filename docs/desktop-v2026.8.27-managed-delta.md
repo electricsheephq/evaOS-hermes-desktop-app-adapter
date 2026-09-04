@@ -76,9 +76,15 @@ GitHub Actions, CodeQL dispositions, and exact-head semantic review remain requi
 
 ## Rollout and rollback boundary
 
-The later release owner should merge and deploy the runtime protocol guard before the Desktop candidate, then produce the signed and notarized macOS release through the canonical release path. Missing protocol metadata remains legacy-safe and older runtimes ignore the new field.
+The approved release gate is now the Desktop `2026.8.27-es.1` ARM64 update through the existing GitHub `latest` stream. Current r30 already emits the Preview events: runtime PR #244 remains unmerged and runtime deployment is not a prerequisite. Missing protocol metadata remains legacy-safe on the guarded runtime and older runtimes ignore the new field.
 
-This candidate must not be tagged, published, or placed in an updater feed by this PR. Before the authorized local canary, preserve and verify the installed ES17 app outside `/Applications`. Restore ES17 immediately if the candidate fails identity checks or the synthetic Preview round trip.
+Before merging Desktop PR #245, prove existing encrypted enrollment survives the upgrade and cold restart, and complete the assigned public-site Preview round trip. Fresh sign-in cannot substitute for upgrade persistence. Preserve and verify ES17 outside `/Applications`; restore it immediately on a failed installed attempt. Issue #242 holds the current bounded install budget and exact-head evidence.
+
+The current credential-read diagnostic emits only fixed failure categories, once per category per process. It never logs the exception, stack, ciphertext, plaintext or identity and does not change fail-closed behavior. The previous installed failure remains unresolved until the real preserved-enrollment path passes.
+
+macOS builds use the supported custom-sign hook in `scripts/sign-mac.mjs`. Set `CSC_NAME` to the exact certificate fingerprint resolved by the existing release credential profile; display names and mismatches fail closed. The hook passes the builder's existing nested-code options to its signer without replacing the hash with a display name. No dependency patch is required.
+
+After exact-head source and installed-product gates, merge the Desktop PR, build signed/notarized ZIP and DMG assets plus blockmaps and `latest-mac.yml`, and verify the final bytes with the repository release verifier. Keep ES17 public latest until the final artifact passes locally; then publish and verify one real ES17 in-app update. Failed public acceptance restores ES17 locally and the previous latest pointer, and marks the failed release prerelease so the latest guard cannot reselect it. This prevents new offers, not automatic rollback of already updated devices. Leave #242 open for employee acceptance.
 
 ## Non-goals
 
@@ -87,4 +93,4 @@ This candidate must not be tagged, published, or placed in an updater feed by th
 - No Linux GUI, VNC/noVNC, or VM-local loopback proxy. The latter is tracked separately in [#243](https://github.com/electricsheephq/evaOS-hermes-desktop-app-adapter/issues/243).
 - No managed profile-archive import/export claim. The exact-upstream flow assumes the app and backend share one filesystem; remote managed transfer needs a separate authenticated upload/download contract.
 - No move to upstream v2026.8.31 or later.
-- No signed distribution, updater publication, fleet rollout, or Karlen contact.
+- No fleet/runtime rollout or employee contact; signed Desktop distribution and existing-stream publication are gated as above.

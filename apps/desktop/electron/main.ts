@@ -8902,6 +8902,8 @@ function encryptDesktopSecret(value, options = {}) {
   return encryptDesktopSecretStrict(value, safeStorage, { ...options, managed: EVA_MANAGED_BUILD })
 }
 
+const reportedManagedStorageReadFailures = new Set<string>()
+
 function decryptDesktopSecret(secret) {
   if (!secret || typeof secret !== 'object') {
     return ''
@@ -8924,7 +8926,13 @@ function decryptDesktopSecret(secret) {
 
     return decryptSafeStorageValue(value, safeStorage, {
       appReady: app.isReady(),
-      platform: process.platform
+      platform: process.platform,
+      onFailure: category => {
+        if (EVA_MANAGED_BUILD && !reportedManagedStorageReadFailures.has(category)) {
+          reportedManagedStorageReadFailures.add(category)
+          rememberLog(`[eva-auth] secure-storage-read failed: ${category}`)
+        }
+      }
     })
   }
 

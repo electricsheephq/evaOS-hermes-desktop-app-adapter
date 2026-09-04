@@ -1122,6 +1122,72 @@ test('decryptSafeStorageValue preserves non-macOS behavior and fails closed', ()
   )
 })
 
+test('decryptSafeStorageValue reports only fixed failure categories without exposing errors or ciphertext', () => {
+  const ciphertext = Buffer.from('synthetic-encrypted-value').toString('base64')
+  const cases = [
+    ['safeStorage cannot be used before app is ready', 'not-ready'],
+    [
+      'Error while decrypting the ciphertext provided to safeStorage.decryptString. Decryption is not available.',
+      'unavailable'
+    ],
+    [
+      'Error while decrypting the ciphertext provided to safeStorage.decryptString. Ciphertext does not appear to be encrypted.',
+      'invalid-ciphertext'
+    ],
+    ['Error while decrypting the ciphertext provided to safeStorage.decryptString.', 'decrypt-failed'],
+    ['unexpected failure containing synthetic-private-value', 'unexpected']
+  ]
+
+  for (const [message, category] of cases) {
+    const failures: string[] = []
+    assert.equal(
+      decryptSafeStorageValue(
+        ciphertext,
+        {
+          decryptString: () => {
+            throw new Error(message)
+          }
+        },
+        { platform: 'darwin', appReady: true, onFailure: value => failures.push(value) }
+      ),
+      ''
+    )
+    assert.deepEqual(failures, [category])
+    assert.ok(!JSON.stringify(failures).includes(ciphertext))
+    assert.ok(!JSON.stringify(failures).includes('synthetic-private-value'))
+  }
+
+  const failures: string[] = []
+  assert.equal(
+    decryptSafeStorageValue(
+      ciphertext,
+      {
+        decryptString: () => 'synthetic-session'
+      },
+      { platform: 'darwin', appReady: true, onFailure: value => failures.push(value) }
+    ),
+    'synthetic-session'
+  )
+  assert.deepEqual(failures, [])
+  assert.doesNotThrow(() =>
+    decryptSafeStorageValue(
+      ciphertext,
+      {
+        decryptString: () => {
+          throw new Error('keychain denied')
+        }
+      },
+      {
+        platform: 'darwin',
+        appReady: true,
+        onFailure: () => {
+          throw new Error('logger failed')
+        }
+      }
+    )
+  )
+})
+
 test('whenReady enables basic password-store encryption before createWindow', () => {
   const source = readMain()
   const enableIndex = source.indexOf('enableBasicPasswordStoreEncryption({')

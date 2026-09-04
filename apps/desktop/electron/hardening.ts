@@ -245,10 +245,12 @@ function encryptDesktopSecret(
  * empty string keeps unreadable ciphertext fail-closed and lets the managed
  * runtime retry the preserved enrollment after readiness.
  */
+type SafeStorageReadFailure = 'not-ready' | 'unavailable' | 'invalid-ciphertext' | 'decrypt-failed' | 'unexpected'
+
 function decryptSafeStorageValue(
   value,
   safeStorageApi,
-  options: { platform?: string; appReady?: boolean } = {}
+  options: { platform?: string; appReady?: boolean; onFailure?: (category: SafeStorageReadFailure) => void } = {}
 ) {
   const raw = String(value || '')
 
@@ -264,7 +266,26 @@ function decryptSafeStorageValue(
 
   try {
     return safeStorageApi.decryptString(Buffer.from(raw, 'base64'))
-  } catch {
+  } catch (error) {
+    // Compare only Electron's fixed messages. Never forward an exception,
+    // stack, ciphertext or decrypted value to diagnostics.
+    const message = error instanceof Error ? error.message : ''
+    const prefix = 'Error while decrypting the ciphertext provided to safeStorage.decryptString.'
+    const category: SafeStorageReadFailure =
+      message === 'safeStorage cannot be used before app is ready'
+        ? 'not-ready'
+        : message === `${prefix} Decryption is not available.`
+          ? 'unavailable'
+          : message === `${prefix} Ciphertext does not appear to be encrypted.`
+            ? 'invalid-ciphertext'
+            : message === prefix
+              ? 'decrypt-failed'
+              : 'unexpected'
+    try {
+      options.onFailure?.(category)
+    } catch {
+      // A failed diagnostic sink must not change fail-closed credential reads.
+    }
     return ''
   }
 }
