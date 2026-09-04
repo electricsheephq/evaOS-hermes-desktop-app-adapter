@@ -29,6 +29,7 @@
 
 import { actEngineSource, type PreviewActAction, type PreviewActResult } from '@/lib/preview-act/act-in-page'
 import { watchInPage } from '@/lib/preview-act/watch-in-page'
+import { activePreviewTabId } from '@/store/preview'
 
 import {
   clickAt,
@@ -72,7 +73,8 @@ const CLICKS: readonly string[] = ['click', 'type']
 
 const NOTHING_OPEN = 'No live page is open in the in-app browser — open one with open_preview first.'
 
-const ACTION_CANCELLED = 'The in-app browser action stopped because this session no longer owns the visible Preview.'
+const ACTION_CANCELLED =
+  'The in-app browser action stopped because its session or tab no longer owns the visible Preview.'
 
 const ALWAYS_CONTINUE: PreviewDriveContinuation = () => true
 
@@ -544,7 +546,7 @@ async function driveScroll(
  *  string: the verb arrives off the wire, and the history ones never reach
  *  the in-page engine. Agent-driven callers pass a live ownership check so an
  *  in-flight action stops before its next script, navigation, or input event
- *  when the visible session changes. */
+ *  when the visible session or Preview tab changes. */
 export async function actOnActivePreview(
   action: Omit<PreviewActAction, 'kind'> & { kind: string },
   shouldContinue: PreviewDriveContinuation = ALWAYS_CONTINUE
@@ -552,6 +554,11 @@ export async function actOnActivePreview(
   if (!shouldContinue()) {
     return cancelledResult()
   }
+
+  const ownerTabId = activePreviewTabId()
+
+  const ownsActionSurface = () =>
+    shouldContinue() && ownerTabId !== null && activePreviewTabId() === ownerTabId
 
   const nav = NAV_ACTIONS.find(verb => verb === action.kind)
 
@@ -562,7 +569,7 @@ export async function actOnActivePreview(
       return { error: NOTHING_OPEN, success: false }
     }
 
-    if (!shouldContinue()) {
+    if (!ownsActionSurface()) {
       return cancelledResult()
     }
 
@@ -593,7 +600,7 @@ export async function actOnActivePreview(
             ? buildPinScript(typed, typed.text || '')
             : buildUnpinScript(typed)
 
-    const trip = await runJson(run, mark, shouldContinue)
+    const trip = await runJson(run, mark, ownsActionSurface)
 
     if (trip.kind === 'failed') {
       return { error: trip.error, success: false }
@@ -605,7 +612,7 @@ export async function actOnActivePreview(
   const input = activePreviewInput()
 
   if (input && DRIVEN.indexOf(typed.kind) !== -1) {
-    return driveAction(run, input, typed, shouldContinue)
+    return driveAction(run, input, typed, ownsActionSurface)
   }
 
   // A plain page scroll is a wheel gesture. Jumping to an end is not — no hand
@@ -613,11 +620,11 @@ export async function actOnActivePreview(
   const plain = typed.kind === 'scroll' && !typed.to && !typed.ref && !typed.selector
 
   if (plain && input) {
-    return driveScroll(run, input, typed, shouldContinue)
+    return driveScroll(run, input, typed, ownsActionSurface)
   }
 
   const settle = typed.kind === 'elements' ? 0 : SETTLE_MS
-  const scripted = await runJson(run, buildScriptedScript(typed, settle), shouldContinue)
+  const scripted = await runJson(run, buildScriptedScript(typed, settle), ownsActionSurface)
 
   if (scripted.kind === 'failed') {
     return { error: scripted.error, success: false }

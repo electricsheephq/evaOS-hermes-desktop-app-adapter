@@ -162,6 +162,12 @@ function activePreviewTab(): PreviewTab | null {
   return resolveActiveTab($previewTabs.get(), $rightRailActiveTabId.get())
 }
 
+/** Stable identity for the Preview surface that would receive an action now.
+ *  Uses the same stale-selection fallback as the live handle registries. */
+export function activePreviewTabId(): RightRailTabId | null {
+  return activePreviewTab()?.id ?? null
+}
+
 // A restored active id whose tab didn't survive validation would leave the rail
 // pointing at nothing.
 selectRightRailTab(activePreviewTab()?.id ?? null)
