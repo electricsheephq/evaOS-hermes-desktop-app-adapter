@@ -905,6 +905,35 @@ class TestDiscordVoiceChannelMethods:
         adapter._start_voice_capture.assert_called_once_with(111, existing)
 
     @pytest.mark.asyncio
+    async def test_fresh_connect_discards_stale_capture_from_disconnected_client(self):
+        adapter = self._make_adapter()
+        channel = MagicMock()
+        channel.guild.id = 111
+        channel.id = 456
+        stale_client = MagicMock()
+        stale_client.is_connected.return_value = False
+        adapter._voice_clients[111] = stale_client
+        stale_receiver = MagicMock()
+        stale_task = MagicMock()
+        adapter._voice_receivers[111] = stale_receiver
+        adapter._voice_listen_tasks[111] = stale_task
+        new_client = MagicMock()
+        channel.connect = AsyncMock(return_value=new_client)
+        adapter._start_voice_capture = MagicMock()
+
+        with patch("plugins.platforms.discord.adapter.DISCORD_AVAILABLE", True):
+            result = await adapter.join_voice_channel(
+                channel,
+                text_channel_id=999,
+                source={"platform": "discord", "chat_id": "999"},
+            )
+
+        assert result is True
+        stale_receiver.stop.assert_called_once()
+        stale_task.cancel.assert_called_once()
+        adapter._start_voice_capture.assert_called_once_with(111, new_client)
+
+    @pytest.mark.asyncio
     async def test_invalid_old_listen_loop_preserves_replacement_capture(self, monkeypatch):
         adapter = self._make_adapter()
         old_receiver = MagicMock()

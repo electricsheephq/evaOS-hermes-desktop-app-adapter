@@ -4187,6 +4187,13 @@ class DiscordAdapter(BasePlatformAdapter):
                 self._reset_voice_timeout(guild_id)
                 return True
 
+            # A disconnected VoiceClient can leave its receiver/listen task
+            # behind. Drop that capture generation before binding a fresh
+            # client so stale PCM cannot survive the reconnect.
+            await self._stop_voice_capture(guild_id)
+            self._voice_text_channels.pop(guild_id, None)
+            self._voice_sources.pop(guild_id, None)
+            self._voice_channel_ids.pop(guild_id, None)
             vc = await channel.connect()
             self._voice_clients[guild_id] = vc
             self._reset_voice_timeout(guild_id)
