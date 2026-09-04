@@ -1062,7 +1062,7 @@ test('connection-config save and apply IPC handlers route payloads through coerc
   }
 })
 
-test('decryptSafeStorageValue never touches macOS Keychain before Electron is ready', () => {
+test('decryptSafeStorageValue preserves the ES17 eager macOS credential read', () => {
   let decrypts = 0
 
   const ciphertext = Buffer.from('ciphertext', 'utf8').toString('base64')
@@ -1077,15 +1077,15 @@ test('decryptSafeStorageValue never touches macOS Keychain before Electron is re
 
   assert.equal(
     decryptSafeStorageValue(ciphertext, safeStorageApi, { platform: 'darwin', appReady: false }),
-    ''
+    'desktop-session'
   )
-  assert.equal(decrypts, 0)
+  assert.equal(decrypts, 1)
 
   assert.equal(
     decryptSafeStorageValue(ciphertext, safeStorageApi, { platform: 'darwin', appReady: true }),
     'desktop-session'
   )
-  assert.equal(decrypts, 1)
+  assert.equal(decrypts, 2)
 })
 
 test('decryptSafeStorageValue preserves non-macOS behavior and fails closed', () => {

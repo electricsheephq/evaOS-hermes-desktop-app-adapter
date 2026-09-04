@@ -9,7 +9,7 @@
 - Restores fail-closed local filesystem, Git, terminal, and secure-storage boundaries for managed installations, including account-switch cleanup for cached transcript and in-flight turn data.
 - Clears pull-request recovery, session-owner, unread-session, and sidebar-filter metadata with the rest of the account-scoped renderer state during managed sign-out or assignment changes.
 - Clears remembered connection profiles on managed account reset, routes session-tile transcription through the tile's exact owner, and keeps legacy cron and messaging sidebar slices complete across profiles without weakening managed assignment scope.
-- Defers macOS managed Safe Storage reads until Electron is ready and reports only redacted failure categories; genuinely unreadable ciphertext remains preserved and fail-closed. Existing-login upgrade persistence remains a required release gate.
+- Preserves ES17's native Safe Storage read ordering and reports only redacted failure categories; genuinely unreadable ciphertext remains preserved and fail-closed. Existing-login upgrade persistence remains a required release gate.
 - Uses exact certificate fingerprints through the supported macOS signing hook, avoiding ambiguous display-name selection without patching installed dependencies.
 - Keeps managed SSH updates serialized at the configured mutex path without creating quote-prefixed paths in the checkout.
 - Publication remains gated on signed/notarized artifact verification and installed upgrade, restart and Preview acceptance; these notes alone are not release proof.

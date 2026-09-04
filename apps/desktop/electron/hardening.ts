@@ -236,14 +236,12 @@ function encryptDesktopSecret(
 }
 
 /**
- * Read one safeStorage payload without letting a macOS cold start choose the
- * Keychain service before Electron has fixed the app identity.
+ * Preserve ES17's eager safeStorage read, including managed-runtime startup.
  *
- * Electron's safeStorage API is process-global. On macOS its first access can
- * establish the Keychain service name, so callers must defer that access until
- * app readiness. Other platforms retain their existing behavior. Returning an
- * empty string keeps unreadable ciphertext fail-closed and lets the managed
- * runtime retry the preserved enrollment after readiness.
+ * Electron 40 permits macOS reads before app readiness and caches its derived
+ * key. A JavaScript readiness gate changes that first-read ordering. Let the
+ * native API decide availability, as ES17 did; errors still fail closed and
+ * the managed runtime retains unreadable enrollment for a later retry.
  */
 type SafeStorageReadFailure = 'not-ready' | 'unavailable' | 'invalid-ciphertext' | 'decrypt-failed' | 'unexpected'
 
@@ -255,12 +253,6 @@ function decryptSafeStorageValue(
   const raw = String(value || '')
 
   if (!raw) {
-    return ''
-  }
-
-  const platform = options.platform || process.platform
-
-  if (platform === 'darwin' && options.appReady === false) {
     return ''
   }
 
