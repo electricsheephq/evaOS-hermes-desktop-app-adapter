@@ -23,6 +23,8 @@ it('accepts only the exact managed speech-stream endpoint', async () => {
   setApiRequestProfile('research')
 
   await expect(resolveSpeakStreamUrl()).resolves.toBeNull()
-  await expect(resolveSpeakStreamUrl()).resolves.toBe('ws://127.0.0.1:4123/api/audio/speak-stream?ticket=exact')
+  await expect(resolveSpeakStreamUrl()).resolves.toBe(
+    'ws://127.0.0.1:4123/api/audio/speak-stream?ticket=exact&profile=research'
+  )
   expect(getGatewayWsUrl).toHaveBeenCalledWith('research', '/api/audio/speak-stream')
 })

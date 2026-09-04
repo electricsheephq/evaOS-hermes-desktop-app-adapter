@@ -1,6 +1,7 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { clearClarifyRequest, setClarifyRequest } from './clarify'
+import { $profiles } from './profile'
 import {
   $activeSessionAwaitingInput,
   $approvalRequest,
@@ -10,11 +11,29 @@ import {
   clearApprovalRequest,
   clearSecretRequest,
   clearSudoRequest,
+  receiveApprovalRequest,
+  replayPendingApproval,
   setApprovalRequest,
   setSecretRequest,
   setSudoRequest
 } from './prompts'
-import { $activeSessionId } from './session'
+import { $activeSessionId, _resetSessionOwnerHintsForTests, setSessionOwnerHint } from './session'
+
+const gatewayMocks = vi.hoisted(() => ({
+  requestGatewayForAgent: vi.fn(
+    async (
+      _connectionId: string,
+      _profile: string,
+      _method: string,
+      _params?: Record<string, unknown>
+    ): Promise<unknown> => ({ ok: true })
+  )
+}))
+
+vi.mock('@/store/gateway', async importActual => ({
+  ...(await importActual<Record<string, unknown>>()),
+  requestGatewayForAgent: gatewayMocks.requestGatewayForAgent
+}))
 
 // Prompts are parked per-session; the exported $*Request views are scoped to the
 // active session, so each test focuses the session it's asserting on.
@@ -26,6 +45,9 @@ afterEach(() => {
   clearAllPrompts()
   clearClarifyRequest()
   $activeSessionId.set(null)
+  $profiles.set([])
+  _resetSessionOwnerHintsForTests({ storage: true })
+  vi.clearAllMocks()
 })
 
 describe('approval prompt store', () => {
@@ -66,6 +88,108 @@ describe('approval prompt store', () => {
     })
 
     expect($approvalRequest.get()?.allowPermanent).toBe(false)
+  })
+
+  it('correlates clearing to the exact approval request id', () => {
+    setApprovalRequest({ command: 'x', description: 'd', requestId: 'r1', sessionId: 's1' })
+
+    clearApprovalRequest('s1', 'stale')
+    expect($approvalRequest.get()?.requestId).toBe('r1')
+    clearApprovalRequest('s1', 'r1')
+    expect($approvalRequest.get()).toBeNull()
+  })
+
+  it('acknowledges an approval only after parking it', async () => {
+    const calls: Array<[string, Record<string, unknown>]> = []
+
+    const gateway = {
+      request: async (method: string, params: Record<string, unknown>) => {
+        calls.push([method, params])
+
+        return { acknowledged: true }
+      }
+    }
+
+    await receiveApprovalRequest(gateway, {
+      command: 'x',
+      description: 'd',
+      requestId: 'r1',
+      sessionId: 's1'
+    })
+
+    expect($approvalRequest.get()?.requestId).toBe('r1')
+    expect(calls).toEqual([['approval.received', { request_id: 'r1', session_id: 's1' }]])
+  })
+
+  it('replays and acknowledges the oldest unresolved approval after reconnect', async () => {
+    const calls: Array<[string, Record<string, unknown>]> = []
+
+    const gateway = {
+      request: async (method: string, params: Record<string, unknown>) => {
+        calls.push([method, params])
+
+        if (method === 'approval.pending') {
+          return {
+            approvals: [
+              { command: 'first', description: 'd1', request_id: 'r1' },
+              { command: 'second', description: 'd2', request_id: 'r2' }
+            ]
+          }
+        }
+
+        return { acknowledged: true }
+      }
+    }
+
+    await replayPendingApproval(gateway, 's1')
+
+    expect($approvalRequest.get()?.requestId).toBe('r1')
+    expect(calls).toEqual([
+      ['approval.pending', { session_id: 's1' }],
+      ['approval.received', { request_id: 'r1', session_id: 's1' }]
+    ])
+  })
+
+  it('routes background approval acknowledgement and reconnect replay through the requesting owner', async () => {
+    const owner = { connectionId: 'conn-background', profile: 'profile-background' }
+    const ambient = vi.fn(async () => ({ ok: true }))
+
+    $profiles.set([{ name: 'profile-foreground' }, { name: owner.profile }] as never)
+    setSessionOwnerHint('s2', owner)
+    gatewayMocks.requestGatewayForAgent.mockImplementation(async (_connectionId, _profile, method) => {
+      if (method === 'approval.pending') {
+        return { approvals: [{ command: 'x', description: 'd', request_id: 'r2' }] }
+      }
+
+      return { acknowledged: true }
+    })
+
+    await receiveApprovalRequest(
+      { request: ambient },
+      {
+        command: 'x',
+        description: 'd',
+        requestId: 'r1',
+        sessionId: 's2'
+      }
+    )
+
+    expect(gatewayMocks.requestGatewayForAgent).toHaveBeenLastCalledWith(
+      owner.connectionId,
+      owner.profile,
+      'approval.received',
+      { request_id: 'r1', session_id: 's2' }
+    )
+    expect(ambient).not.toHaveBeenCalled()
+
+    gatewayMocks.requestGatewayForAgent.mockClear()
+    await replayPendingApproval({ request: ambient }, 's2')
+
+    expect(gatewayMocks.requestGatewayForAgent.mock.calls).toEqual([
+      [owner.connectionId, owner.profile, 'approval.pending', { session_id: 's2' }],
+      [owner.connectionId, owner.profile, 'approval.received', { request_id: 'r2', session_id: 's2' }]
+    ])
+    expect(ambient).not.toHaveBeenCalled()
   })
 })
 
@@ -144,7 +268,7 @@ describe('$activeSessionAwaitingInput', () => {
     clearApprovalRequest('s1')
     expect($activeSessionAwaitingInput.get()).toBe(false)
 
-    setClarifyRequest({ choices: null, question: 'q', requestId: 'c1', sessionId: 's1' })
+    setClarifyRequest({ choices: null, multiSelect: false, question: 'q', requestId: 'c1', sessionId: 's1' })
     expect($activeSessionAwaitingInput.get()).toBe(true)
   })
 

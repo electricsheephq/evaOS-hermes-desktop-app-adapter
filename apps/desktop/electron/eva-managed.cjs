@@ -99,10 +99,13 @@ const EVA_ACCOUNT_SCOPED_RENDERER_STORAGE_KEYS = Object.freeze([
   'hermes.desktop.dismissedWorktrees',
   'hermes.desktop.inflightTurnJournal.v1',
   'hermes.desktop.lastRoute',
+  'hermes.desktop.lastProfileByConnection',
   'hermes.desktop.lastSessionId',
   'hermes.desktop.layoutTree.v2',
   'hermes.desktop.paneStates.v1',
   'hermes.desktop.pinnedSessions',
+  'hermes.desktop.prBranchBySession',
+  'hermes.desktop.prScannedSessions',
   'hermes.desktop.previewTabs.v2',
   'hermes.desktop.profileColors',
   'hermes.desktop.profileOrder',
@@ -111,11 +114,16 @@ const EVA_ACCOUNT_SCOPED_RENDERER_STORAGE_KEYS = Object.freeze([
   'hermes.desktop.routeTiles.v1',
   'hermes.desktop.sessionOrder',
   'hermes.desktop.sessionPreviews.v1',
+  'hermes.desktop.sessionOwnerHints.v1',
+  'hermes.desktop.sessionSeenCounts',
   'hermes.desktop.sessionTiles.v1',
   'hermes.desktop.sessionTiles.v2',
   'hermes.desktop.sidebarMessagingOpen',
+  'hermes.desktop.sidebarProfileFilter',
+  'hermes.desktop.sidebarProjectFilter',
   'hermes.desktop.terminals.v1',
   'hermes.desktop.toolDisclosure.v1',
+  'hermes.desktop.unreadFinishedSessions',
   'hermes.desktop.userPlacedPanes.v1',
   'hermes.desktop.workspaceCollapsed',
   'hermes.desktop.workspaceNodeOpen',
@@ -128,9 +136,15 @@ const EVA_ACCOUNT_SCOPED_RENDERER_STORAGE_KEYS = Object.freeze([
   'hermes-desktop-profile-themes-v1'
 ])
 const EVA_ACCOUNT_SCOPED_RENDERER_STORAGE_PREFIXES = Object.freeze([
+  'hermes.desktop.inflightTurnJournal.',
   'hermes.desktop.lastRoute.',
   'hermes.desktop.lastSessionId.',
-  'hermes.desktop.workspace-cwd.remote.'
+  'hermes.desktop.pinnedSessions.remote.',
+  'hermes.desktop.sessionOrder.manual.remote.',
+  'hermes.desktop.sessionOrder.remote.',
+  'hermes.desktop.workspace-cwd.remote.',
+  'hermes.plugin.hermes-bots.',
+  'hermes.transcript-tail.'
 ])
 
 class EvaBrokerError extends Error {

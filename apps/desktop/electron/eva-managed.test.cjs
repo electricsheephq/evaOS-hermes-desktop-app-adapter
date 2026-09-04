@@ -561,8 +561,29 @@ test('account reset clears renderer account state while preserving global prefer
   })
   const values = new Map([
     ['hermes.desktop.lastSessionId.research', 'session-secret'],
+    ['hermes.desktop.lastProfileByConnection', '{"eva-managed-runtime":"private-profile"}'],
+    ['hermes.desktop.prBranchBySession', '{"session-secret":{"branch":"private"}}'],
+    ['hermes.desktop.prScannedSessions', '["session-secret"]'],
+    [
+      'hermes.desktop.sessionOwnerHints.v1',
+      '[["session-secret",{"connectionId":"prior-runtime","profile":"private"}]]'
+    ],
+    ['hermes.desktop.sessionSeenCounts', '{"private":{"session-secret":4}}'],
+    ['hermes.desktop.unreadFinishedSessions', '{"private":["session-secret"]}'],
+    ['hermes.desktop.sidebarProjectFilter', '{"id":"private-project","name":"Private project"}'],
+    ['hermes.desktop.sidebarProfileFilter', 'private-profile'],
     ['hermes.desktop.workspace-cwd.remote.eva-managed%3A%2F%2Fcustomer.default', '/srv/customer'],
+    ['hermes.desktop.pinnedSessions.remote.eva-managed%3A%2F%2Fcustomer', '["session-secret"]'],
+    ['hermes.desktop.sessionOrder.remote.eva-managed%3A%2F%2Fcustomer.default', '["session-secret"]'],
+    ['hermes.desktop.sessionOrder.manual.remote.eva-managed%3A%2F%2Fcustomer.default', 'true'],
+    ['hermes.transcript-tail.v2:session-secret', '{"messages":[{"role":"user","content":"private"}]}'],
+    ['hermes.transcript-tail.v2:index', '["session-secret"]'],
+    ['hermes.desktop.inflightTurnJournal.v2:session-secret', '{"prompt":"private"}'],
     ['hermes:composer-drafts:v3', '{"session-secret":"draft"}'],
+    [
+      'hermes.plugin.hermes-bots.group-chats',
+      '{"room-private":{"log":["private"],"members":[{"name":"private"}],"sessions":{"private":"session"}}}'
+    ],
     [
       'hermes.desktop.layoutTree.v2',
       JSON.stringify({
@@ -593,8 +614,23 @@ test('account reset clears renderer account state while preserving global prefer
   vm.runInNewContext(buildEvaAccountRendererResetScript(), { localStorage })
 
   assert.equal(values.has('hermes.desktop.lastSessionId.research'), false)
+  assert.equal(values.has('hermes.desktop.lastProfileByConnection'), false)
+  assert.equal(values.has('hermes.desktop.prBranchBySession'), false)
+  assert.equal(values.has('hermes.desktop.prScannedSessions'), false)
+  assert.equal(values.has('hermes.desktop.sessionOwnerHints.v1'), false)
+  assert.equal(values.has('hermes.desktop.sessionSeenCounts'), false)
+  assert.equal(values.has('hermes.desktop.unreadFinishedSessions'), false)
+  assert.equal(values.has('hermes.desktop.sidebarProjectFilter'), false)
+  assert.equal(values.has('hermes.desktop.sidebarProfileFilter'), false)
   assert.equal(values.has('hermes.desktop.workspace-cwd.remote.eva-managed%3A%2F%2Fcustomer.default'), false)
+  assert.equal(values.has('hermes.desktop.pinnedSessions.remote.eva-managed%3A%2F%2Fcustomer'), false)
+  assert.equal(values.has('hermes.desktop.sessionOrder.remote.eva-managed%3A%2F%2Fcustomer.default'), false)
+  assert.equal(values.has('hermes.desktop.sessionOrder.manual.remote.eva-managed%3A%2F%2Fcustomer.default'), false)
+  assert.equal(values.has('hermes.transcript-tail.v2:session-secret'), false)
+  assert.equal(values.has('hermes.transcript-tail.v2:index'), false)
+  assert.equal(values.has('hermes.desktop.inflightTurnJournal.v2:session-secret'), false)
   assert.equal(values.has('hermes:composer-drafts:v3'), false)
+  assert.equal(values.has('hermes.plugin.hermes-bots.group-chats'), false)
   assert.equal(values.has('hermes.desktop.layoutTree.v2'), false)
   assert.equal(values.has('hermes.desktop.userPlacedPanes.v1'), false)
   assert.equal(values.get('hermes.desktop.layoutPresets.v2'), globalLayoutPresets)

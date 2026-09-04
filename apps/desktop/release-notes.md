@@ -1,3 +1,19 @@
+# evaOS Agent 2026.8.27-es.1
+
+- Aligns the Desktop UI with the exact Hermes r30 upstream base, including Preview read/drive, Bot Mode, tours, MCP setup, and related renderer behavior.
+- Declares Desktop UI protocol 2 on session create, resume, and activate so matched runtimes expose only the UI tools this client can answer.
+- Preserves managed Electric Sheep authentication, assigned-agent routing, callback ownership, delegated access, relay, updater, and distribution controls.
+- Keeps managed REST, media, downloads, and WebSocket responses on the enrolled assignment while preventing background sessions from reading or driving the visible Desktop surface.
+- Routes bundled Bot Mode profile requests, connection inventory, and MCP setup actions only through the enrolled managed runtime, including reconnects, while keeping background reactions and capability announcements out of the foreground session.
+- Keeps active Preview routes on the opaque enrolled runtime, never borrows saved workstation SSH credentials, and routes approvals plus background process controls through the session that owns them.
+- Restores fail-closed local filesystem, Git, terminal, and secure-storage boundaries for managed installations, including account-switch cleanup for cached transcript and in-flight turn data.
+- Clears pull-request recovery, session-owner, unread-session, and sidebar-filter metadata with the rest of the account-scoped renderer state during managed sign-out or assignment changes.
+- Clears remembered connection profiles on managed account reset, routes session-tile transcription through the tile's exact owner, and keeps legacy cron and messaging sidebar slices complete across profiles without weakening managed assignment scope.
+- Preserves ES17's native Safe Storage read ordering and reports only redacted failure categories; genuinely unreadable ciphertext remains preserved and fail-closed. Existing-login upgrade persistence remains a required release gate.
+- Uses exact certificate fingerprints through the supported macOS signing hook, avoiding ambiguous display-name selection without patching installed dependencies.
+- Keeps managed SSH updates serialized at the configured mutex path without creating quote-prefixed paths in the checkout.
+- Publication remains gated on signed/notarized artifact verification and installed upgrade, restart and Preview acceptance; these notes alone are not release proof.
+
 # evaOS Agent 2026.7.20-es.17
 
 - Repairs LaunchServices callback ownership for the canonical `/Applications/evaOS Agent.app` when the owner is missing, has vanished, or is a stale same-bundle app.

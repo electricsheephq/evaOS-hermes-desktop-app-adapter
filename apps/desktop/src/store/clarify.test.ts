@@ -1,5 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+const router = vi.hoisted(() => ({
+  requestForSessionProfile: vi.fn()
+}))
+
+vi.mock('./session-request-router', () => ({
+  isSessionOwnerRoute: (owner: unknown) => Boolean(owner && typeof owner === 'object' && 'connectionId' in owner),
+  requestForSessionProfile: router.requestForSessionProfile
+}))
+
 import {
   $clarifyRequest,
   $clarifyRequests,
@@ -7,17 +16,21 @@ import {
   clearClarifyRequest,
   hasClarifyRequest,
   normalizeChoices,
+  normalizeQuestions,
   setClarifyRequest,
   skipClarifyRequest
 } from './clarify'
+import { $connectionsRegistry } from './connection-registry-state'
 import { $gateway } from './gateway'
 import { $activeSessionId } from './session'
+import { $sessionTiles } from './session-states'
 
 function clarify(sessionId: string | null, requestId: string): ClarifyRequest {
   return {
     requestId,
     question: `question-${requestId}`,
     choices: null,
+    multiSelect: false,
     sessionId
   }
 }
@@ -89,12 +102,25 @@ describe('skipClarifyRequest', () => {
 
   beforeEach(() => {
     $clarifyRequests.set({})
+    $connectionsRegistry.set(null)
+    $sessionTiles.set([])
     request.mockClear()
+    router.requestForSessionProfile.mockReset()
+    router.requestForSessionProfile.mockImplementation(
+      async (
+        owner: unknown,
+        ambientRequest: (method: string, params?: Record<string, unknown>) => Promise<unknown>,
+        method: string,
+        params: Record<string, unknown>
+      ) => (owner && typeof owner === 'object' ? { status: 'routed' } : ambientRequest(method, params))
+    )
     $gateway.set({ request } as unknown as ReturnType<typeof $gateway.get>)
   })
 
   afterEach(() => {
     $clarifyRequests.set({})
+    $connectionsRegistry.set(null)
+    $sessionTiles.set([])
     $gateway.set(null)
   })
 
@@ -109,6 +135,34 @@ describe('skipClarifyRequest', () => {
     // A background session's question is untouched — only the one being typed
     // over is skipped.
     expect(hasClarifyRequest('session-b')).toBe(true)
+  })
+
+  it('routes a typed skip through the background session owner before dropping its card', async () => {
+    const owner = { connectionId: 'source-a', profile: 'profile-a', targetProfile: 'target-a' }
+    $sessionTiles.set([{ storedSessionId: 'stored-a', runtimeId: 'runtime-a', ownerRoute: owner }])
+    setClarifyRequest(clarify('runtime-a', 'req-a'))
+
+    await expect(skipClarifyRequest('runtime-a')).resolves.toBe(true)
+
+    expect(router.requestForSessionProfile).toHaveBeenCalledWith(
+      owner,
+      expect.any(Function),
+      'clarify.respond',
+      { request_id: 'req-a', answer: '' }
+    )
+    expect(request).not.toHaveBeenCalled()
+    expect(hasClarifyRequest('runtime-a')).toBe(false)
+  })
+
+  it('keeps the card and sends no RPC when a registry session owner is unknown', async () => {
+    $connectionsRegistry.set({ connections: [{ id: 'source-a' }] } as never)
+    setClarifyRequest(clarify('runtime-unknown', 'req-unknown'))
+
+    await expect(skipClarifyRequest('runtime-unknown')).resolves.toBe(false)
+
+    expect(router.requestForSessionProfile).not.toHaveBeenCalled()
+    expect(request).not.toHaveBeenCalled()
+    expect(hasClarifyRequest('runtime-unknown')).toBe(true)
   })
 
   it('is a no-op when the session has no clarify parked', async () => {
@@ -162,5 +216,52 @@ describe('normalizeChoices', () => {
   it('returns empty array when nothing survives', () => {
     expect(normalizeChoices(['', '  ', null, undefined])).toEqual([])
     expect(normalizeChoices([])).toEqual([])
+  })
+})
+
+describe('normalizeQuestions', () => {
+  it('returns empty array for non-array input', () => {
+    expect(normalizeQuestions(null)).toEqual([])
+    expect(normalizeQuestions('x')).toEqual([])
+    expect(normalizeQuestions({})).toEqual([])
+  })
+
+  it('normalizes a valid batch and keys by qid', () => {
+    const result = normalizeQuestions([
+      { choices: ['a', 'b'], qid: 'q0', question: 'One?' },
+      { qid: 'q1', question: 'Two?' }
+    ])
+
+    expect(result).toEqual([
+      { choices: ['a', 'b'], multiSelect: false, qid: 'q0', question: 'One?' },
+      { choices: null, multiSelect: false, qid: 'q1', question: 'Two?' }
+    ])
+  })
+
+  it('drops entries missing qid or question text', () => {
+    const result = normalizeQuestions([
+      { qid: '', question: 'no qid' },
+      { qid: 'q1', question: '   ' },
+      'not-an-object',
+      { qid: 'q2', question: 'kept' }
+    ])
+
+    expect(result.map(q => q.qid)).toEqual(['q2'])
+  })
+
+  it('degrades all-blank choices to open-ended per question', () => {
+    const result = normalizeQuestions([{ choices: ['', '  '], qid: 'q0', question: 'Q?' }])
+
+    expect(result[0]?.choices).toBeNull()
+  })
+
+  it('only honors multi_select when choices survive', () => {
+    const result = normalizeQuestions([
+      { choices: ['a', 'b'], multi_select: true, qid: 'q0', question: 'A?' },
+      { multi_select: true, qid: 'q1', question: 'B?' }
+    ])
+
+    expect(result[0]?.multiSelect).toBe(true)
+    expect(result[1]?.multiSelect).toBe(false)
   })
 })

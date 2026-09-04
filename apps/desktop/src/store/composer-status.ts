@@ -1,3 +1,4 @@
+import { JsonRpcGatewayError } from '@hermes/shared'
 import { atom, computed } from 'nanostores'
 
 import { translateNow } from '@/i18n'
@@ -8,7 +9,8 @@ import { $gateway } from './gateway'
 import { $goalsBySession, type GoalStatus } from './goals'
 import { dispatchNativeNotification } from './native-notifications'
 import { notifyError } from './notifications'
-import { $sessionStates } from './session-states'
+import { $sessions, lineageAliases } from './session'
+import { $sessionStates, knownOwnerForSession, requestForOwnedSession } from './session-states'
 import { $subagentsBySession, type SubagentProgress } from './subagents'
 import { $todosBySession } from './todos'
 
@@ -41,32 +43,38 @@ export interface ComposerStatusItem {
 export const $backgroundStatusBySession = atom<Record<string, ComposerStatusItem[]>>({})
 
 // Stored session ids that have at least one RUNNING background process. The
-// sidebar row reads this for a pulsing gray dot — distinct from the accent
-// pulse of an active LLM turn — so the user can tell at a glance "this session
-// has something chugging along in the background" even when the turn is idle.
+// sidebar row reads this for a hollow dot — distinct from the filled dot of an
+// active LLM turn — so the user can tell at a glance "this session has
+// something chugging along in the background" even when the turn is idle.
 //
 // $backgroundStatusBySession is keyed by RUNTIME session id (gateway events
 // and process.list both speak that); the sidebar row knows only the STORED id.
-// $sessionStates bridges the two: runtime id → state.storedSessionId.
+// $sessionStates bridges the two: runtime id → state.storedSessionId, then
+// lineageAliases covers whichever tip of that conversation a surface holds.
 // Perf: recomputes on every $sessionStates change (message deltas, tens/sec),
 // but the background-running set rarely moves. `stableArray` keeps the prior
 // reference when unchanged so rows reading this don't re-render per token.
 let backgroundRunningIds: readonly string[] = []
-export const $backgroundRunningSessionIds = computed([$backgroundStatusBySession, $sessionStates], (bg, states) => {
-  const ids = new Set<string>()
+export const $backgroundRunningSessionIds = computed(
+  [$backgroundStatusBySession, $sessionStates, $sessions],
+  (bg, states, sessions) => {
+    const ids = new Set<string>()
 
-  for (const [runtimeId, items] of Object.entries(bg)) {
-    if (items.some(i => i.state === 'running')) {
-      const storedId = states[runtimeId]?.storedSessionId
+    for (const [runtimeId, items] of Object.entries(bg)) {
+      if (!items.some(i => i.state === 'running')) {
+        continue
+      }
 
-      if (storedId) {
-        ids.add(storedId)
+      // Same fresh-chat fallback as the working/attention projections: before a
+      // conversation is persisted its runtime id is the id surfaces key on.
+      for (const alias of lineageAliases(states[runtimeId]?.storedSessionId ?? runtimeId, sessions)) {
+        ids.add(alias)
       }
     }
-  }
 
-  return (backgroundRunningIds = stableArray(backgroundRunningIds, [...ids]))
-})
+    return (backgroundRunningIds = stableArray(backgroundRunningIds, [...ids]))
+  }
+)
 
 // Rows the user X-ed away. The registry keeps finished processes around for a
 // while, so without this every refresh would resurrect a dismissed row.
@@ -370,19 +378,94 @@ export function reconcileBackgroundProcesses(sid: string, procs: GatewayProcessE
   writeBackground(sid, next)
 }
 
+/** Session ids the gateway has told us are gone. A session-scoped RPC against a
+ *  runtime the gateway no longer holds fails 4001 "session not found" — a
+ *  TERMINAL condition, not the transient socket loss the catch below assumes.
+ *
+ *  The status stack re-polls `process.list` every 5s while a running row is on
+ *  screen, so treating 4001 as transient meant re-sending the same dead id
+ *  forever: one runtime id accumulated 18,614 gateway rejections in a single day
+ *  (#94219 fallout). Latch the id here and skip it until something rebinds it. */
+const goneSessionScopes = new Map<string, string>()
+
+/** One runtime id may exist on several independently routed gateways. A 4001
+ * from owner A must never suppress owner B's healthy process poll when the id
+ * collides or is rebound. */
+function backgroundPollingGuardKey(sid: string): string {
+  const owner = knownOwnerForSession(sid)
+
+  if (owner && typeof owner === 'object') {
+    return JSON.stringify([owner.connectionId, owner.profile, owner.targetProfile ?? null, sid])
+  }
+
+  return JSON.stringify([null, typeof owner === 'string' ? owner : null, null, sid])
+}
+
+/** Gateway JSON-RPC code for "session not found" (tui_gateway _sess_nowait). */
+const GATEWAY_SESSION_NOT_FOUND_CODE = 4001
+
+/** A gone session is unrecoverable for THIS runtime id; a timeout or transport
+ *  blip is not. Only the former may stop the poll — misclassifying a transient
+ *  failure would silently freeze the status stack on a healthy session.
+ *
+ *  Match the gateway's 4001 code when the error carries one (JsonRpcGatewayError
+ *  from a structured RPC rejection) — a message substring alone could latch on
+ *  an unrelated error class that merely mentions "session not found" (e.g. a
+ *  wrapped tool/report string). The message fallback survives only for errors
+ *  with no numeric code at all, where the frame's structure was lost. */
+export function isSessionGoneForBackgroundPolling(error: unknown): boolean {
+  if (error instanceof JsonRpcGatewayError && typeof error.code === 'number') {
+    return error.code === GATEWAY_SESSION_NOT_FOUND_CODE
+  }
+
+  const message = error instanceof Error ? error.message : String(error ?? '')
+
+  return /session not found/i.test(message)
+}
+
+/** Clear the gone-latch. Called with a session id when a fresh runtime binds to
+ *  it (so polling resumes), or with no argument to reset everything (tests). */
+export function resetBackgroundPollingGuard(sid?: string): void {
+  if (sid) {
+    for (const [scope, scopedSid] of goneSessionScopes) {
+      if (scopedSid === sid) {
+        goneSessionScopes.delete(scope)
+      }
+    }
+
+    return
+  }
+
+  goneSessionScopes.clear()
+}
+
 /** Pull the session's live process snapshot from the gateway. */
 export async function refreshBackgroundProcesses(sid: string): Promise<void> {
   const gateway = $gateway.get()
+  const guardKey = backgroundPollingGuardKey(sid)
 
-  if (!sid || !gateway) {
+  if (!sid || !gateway || goneSessionScopes.has(guardKey)) {
     return
   }
 
   try {
-    const result = await gateway.request<{ processes?: GatewayProcessEntry[] }>('process.list', { session_id: sid })
+    const result = await requestForOwnedSession<{ processes?: GatewayProcessEntry[] }>(
+      sid,
+      gateway.request.bind(gateway) as typeof gateway.request,
+      'process.list',
+      { session_id: sid }
+    )
 
     reconcileBackgroundProcesses(sid, result?.processes ?? [])
-  } catch {
+  } catch (error) {
+    // A gone session never comes back under this runtime id: stop polling it,
+    // or the 5s timer hammers the gateway with 4001s for the window's lifetime.
+    if (isSessionGoneForBackgroundPolling(error)) {
+      goneSessionScopes.set(guardKey, sid)
+
+      return
+    }
+
     // Transient socket loss — the next trigger (event or poll) retries.
   }
 }
@@ -408,8 +491,17 @@ export function dismissBackgroundProcess(sid: string, id: string) {
  *  row while the process lived on, stranding rogue tasks. On failure the row
  *  stays so the user can retry / see it didn't die. */
 export async function stopBackgroundProcess(sid: string, id: string): Promise<void> {
+  const gateway = $gateway.get()
+
+  if (!gateway) {
+    return
+  }
+
   try {
-    await $gateway.get()?.request('process.kill', { process_id: id, session_id: sid })
+    await requestForOwnedSession(sid, gateway.request.bind(gateway) as typeof gateway.request, 'process.kill', {
+      process_id: id,
+      session_id: sid
+    })
     dismissBackgroundProcess(sid, id)
   } catch (err) {
     notifyError(err, 'Could not stop the process')
@@ -438,7 +530,12 @@ export function resetSessionBackground(sid: string) {
     dismissed.add(item.id)
 
     if (item.state === 'running') {
-      void gateway?.request('process.kill', { process_id: item.id, session_id: sid }).catch(() => undefined)
+      if (gateway) {
+        void requestForOwnedSession(sid, gateway.request.bind(gateway) as typeof gateway.request, 'process.kill', {
+          process_id: item.id,
+          session_id: sid
+        }).catch(() => undefined)
+      }
     }
   }
 

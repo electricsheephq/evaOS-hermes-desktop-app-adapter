@@ -1,4 +1,4 @@
-import type { TestProjectConfiguration } from 'vitest/config';
+import type { TestProjectConfiguration } from 'vitest/config'
 import { defineConfig } from 'vitest/config'
 
 const reactUi: TestProjectConfiguration = {
@@ -23,8 +23,10 @@ const electronNative: TestProjectConfiguration = {
     include: ['electron/**/*.test.ts', 'scripts/**.test.{ts,mjs}'],
     exclude: [
       'scripts/notarize.test.mjs',
-      'scripts/verify-managed-update-release.test.mjs',
-    ],
+      'scripts/sign-mac.test.mjs',
+      'scripts/run-short-session-hang-repro.test.mjs',
+      'scripts/verify-managed-update-release.test.mjs'
+    ]
   }
 }
 

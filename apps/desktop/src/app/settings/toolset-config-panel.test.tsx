@@ -44,6 +44,7 @@ const getHermesConfigRecord = vi.fn()
 const getHermesConfigSchema = vi.fn()
 const saveHermesConfig = vi.fn()
 const getElevenLabsVoices = vi.fn()
+const confirmRemoval = vi.fn()
 
 vi.mock('@/hermes', () => ({
   getToolsetConfig: (name: string) => getToolsetConfig(name),
@@ -63,12 +64,21 @@ vi.mock('@/hermes', () => ({
   getHermesConfigRecord: () => getHermesConfigRecord(),
   getHermesConfigSchema: () => getHermesConfigSchema(),
   saveHermesConfig: (config: unknown) => saveHermesConfig(config),
-  getElevenLabsVoices: () => getElevenLabsVoices()
+  getElevenLabsVoices: () => getElevenLabsVoices(),
+  // @/store/profile (pulled in transitively via use-config-record's
+  // normalizeProfileKey import) calls this at module-init; the full-replacement
+  // mock must provide it or the module graph throws on load.
+  setApiRequestProfile: () => undefined,
+  getApiRequestProfile: () => null
 }))
 
 vi.mock('@/store/notifications', () => ({
   notify: vi.fn(),
   notifyError: vi.fn()
+}))
+
+vi.mock('@/store/confirm', () => ({
+  confirm: (options: unknown) => confirmRemoval(options)
 }))
 
 vi.mock('@/store/activity', () => ({
@@ -146,6 +156,7 @@ beforeEach(() => {
   getHermesConfigSchema.mockResolvedValue({ fields: {}, category_order: [] })
   saveHermesConfig.mockResolvedValue({ ok: true })
   getElevenLabsVoices.mockResolvedValue({ available: false, voices: [] })
+  confirmRemoval.mockResolvedValue(true)
 })
 
 afterEach(() => {
@@ -855,7 +866,6 @@ describe('ToolsetConfigPanel', () => {
         value: { eva: {} },
         writable: true
       })
-      vi.spyOn(window, 'confirm').mockReturnValue(true)
       getToolsetConfig.mockResolvedValue(
         config({
           providers: [
