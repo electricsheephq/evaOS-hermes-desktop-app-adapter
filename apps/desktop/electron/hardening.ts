@@ -235,6 +235,40 @@ function encryptDesktopSecret(
   }
 }
 
+/**
+ * Read one safeStorage payload without letting a macOS cold start choose the
+ * Keychain service before Electron has fixed the app identity.
+ *
+ * Electron's safeStorage API is process-global. On macOS its first access can
+ * establish the Keychain service name, so callers must defer that access until
+ * app readiness. Other platforms retain their existing behavior. Returning an
+ * empty string keeps unreadable ciphertext fail-closed and lets the managed
+ * runtime retry the preserved enrollment after readiness.
+ */
+function decryptSafeStorageValue(
+  value,
+  safeStorageApi,
+  options: { platform?: string; appReady?: boolean } = {}
+) {
+  const raw = String(value || '')
+
+  if (!raw) {
+    return ''
+  }
+
+  const platform = options.platform || process.platform
+
+  if (platform === 'darwin' && options.appReady === false) {
+    return ''
+  }
+
+  try {
+    return safeStorageApi.decryptString(Buffer.from(raw, 'base64'))
+  } catch {
+    return ''
+  }
+}
+
 // Keyring-less Linux (e.g. Hyprland/Sway with no GNOME Keyring or KWallet):
 // `--password-store=basic` selects Electron's built-in "basic" backend, but
 // Electron only counts it as available once setUsePlainTextEncryption(true) is
@@ -567,6 +601,7 @@ export {
   DATA_URL_READ_MAX_MAX_MB,
   DATA_URL_READ_MIN_MAX_MB,
   dataUrlReadMaxBytesFromMb,
+  decryptSafeStorageValue,
   DEFAULT_FETCH_TIMEOUT_MS,
   enableBasicPasswordStoreEncryption,
   encryptDesktopSecret,

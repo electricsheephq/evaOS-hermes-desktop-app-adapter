@@ -215,6 +215,7 @@ import {
   clampDataUrlReadMaxMb,
   DATA_URL_READ_DEFAULT_MAX_MB,
   dataUrlReadMaxBytesFromMb,
+  decryptSafeStorageValue,
   DEFAULT_FETCH_TIMEOUT_MS,
   enableBasicPasswordStoreEncryption,
   encryptDesktopSecret as encryptDesktopSecretStrict,
@@ -8913,16 +8914,6 @@ function decryptDesktopSecret(secret) {
   }
 
   if (secret.encoding === SAFE_STORAGE_ENCODING) {
-    // On macOS Electron fixes the Keychain service name on the first
-    // safeStorage access. Before app readiness that can select the old/default
-    // product identity (electron/electron#45328), producing a session that
-    // works in memory but cannot be decrypted after restart. The managed
-    // runtime treats this empty pre-ready result as unreadable without
-    // deleting it, then reads the same state again after app.whenReady().
-    if (process.platform === 'darwin' && !app.isReady()) {
-      return ''
-    }
-
     // Legacy blob under an opted-out policy: once the one-shot migration pass
     // has run, never touch safeStorage again — a dead keychain would otherwise
     // prompt on every read. Before that pass, decryption is allowed so the
@@ -8931,11 +8922,10 @@ function decryptDesktopSecret(secret) {
       return ''
     }
 
-    try {
-      return safeStorage.decryptString(Buffer.from(value, 'base64'))
-    } catch {
-      return ''
-    }
+    return decryptSafeStorageValue(value, safeStorage, {
+      appReady: app.isReady(),
+      platform: process.platform
+    })
   }
 
   // Any other encoding (a hand-edited config, or one written by a pre-release
