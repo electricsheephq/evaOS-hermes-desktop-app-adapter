@@ -3399,7 +3399,7 @@ def invoke_tool(agent, function_name: str, function_args: dict, effective_task_i
                     ref=next_args.get("ref"),
                     selector=next_args.get("selector"),
                     label=next_args.get("label"),
-                    callback=getattr(agent, "drive_preview_callback", None),
+                    callback=getattr(agent, "annotate_preview_callback", None),
                 ),
                 next_args,
             )

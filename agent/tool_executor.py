@@ -2299,7 +2299,7 @@ def execute_tool_calls_sequential(agent, assistant_message, messages: list, effe
                     ref=next_args.get("ref"),
                     selector=next_args.get("selector"),
                     label=next_args.get("label"),
-                    callback=getattr(agent, "drive_preview_callback", None),
+                    callback=getattr(agent, "annotate_preview_callback", None),
                 )
             function_result, function_args, middleware_trace, _execution_blocked, _execution_dispatched = _managed_values(_run_agent_tool_execution_middleware(
                 agent,

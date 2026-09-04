@@ -29,6 +29,14 @@ def test_lives_in_the_gui_surface_toolset(monkeypatch):
     assert entry.check_fn is None
 
 
+def test_legacy_description_does_not_name_v2_only_tools():
+    """Protocol-1 clients must not be prompted to call unavailable v2 tools."""
+    entry = registry.get_entry("focus_pane")
+
+    assert entry is not None
+    assert "close_preview" not in entry.schema["description"]
+
+
 @pytest.mark.parametrize("pane", fp.PANES)
 def test_emits_pane_reveal(pane):
     calls = []

@@ -96,6 +96,36 @@ def test_legacy_reused_session_rejects_read_before_wait(monkeypatch):
     }
 
 
+def test_legacy_reused_session_names_annotate_upgrade_error(caplog, monkeypatch):
+    """Annotations share the act channel but retain their own tool identity."""
+    sid = "legacy-annotation"
+    calls = []
+    server._sessions[sid] = {"source": "desktop", "desktop_ui_protocol": 1}
+    monkeypatch.setattr(
+        server,
+        "_block",
+        lambda *args, **kwargs: calls.append((args, kwargs)) or "unexpected",
+    )
+    try:
+        with caplog.at_level(logging.DEBUG, logger=server.logger.name):
+            raw = server._agent_cbs(sid)["annotate_preview_callback"](
+                {"action": "pin", "ref": "@e1"}
+            )
+    finally:
+        server._sessions.pop(sid, None)
+
+    assert calls == []
+    assert json.loads(raw) == {
+        "error": "This Desktop client needs an update before it can use annotate_preview.",
+        "code": "desktop_ui_protocol_upgrade_required",
+        "required_protocol": 2,
+        "negotiated_protocol": 1,
+    }
+    logs = "\n".join(record.getMessage() for record in caplog.records)
+    assert "tool=annotate_preview outcome=protocol_blocked" in logs
+    assert "tool=drive_preview" not in logs
+
+
 def test_matched_session_makes_exactly_one_renderer_request(monkeypatch):
     sid = "matched-ui"
     calls = []

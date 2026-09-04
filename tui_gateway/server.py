@@ -7784,12 +7784,22 @@ def _agent_cbs(sid: str) -> dict:
         # and answers preview.act.respond with the outcome plus a refreshed
         # element inventory. Same budget as the preview read, which it ends
         # with — a click on a slow page pays for the settle and the re-scan.
-        # annotate_preview rides this same callback: it resolves a target
-        # through the same engine and differs only in the verb it sends, so it
-        # needs a tool of its own but not a channel of its own.
         "drive_preview_callback": lambda payload: _desktop_ui_request(
             sid,
             "drive_preview",
+            2,
+            lambda: _block(
+                "preview.act.request",
+                sid,
+                dict(payload),
+                timeout=45,
+            ),
+        ),
+        # annotate_preview shares the renderer act channel, but retains its own
+        # tool identity for protocol errors and redacted lifecycle diagnostics.
+        "annotate_preview_callback": lambda payload: _desktop_ui_request(
+            sid,
+            "annotate_preview",
             2,
             lambda: _block(
                 "preview.act.request",
