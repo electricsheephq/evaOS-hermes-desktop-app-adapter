@@ -136,17 +136,20 @@ export function handleDesktopBridgeEvent(ctx: GatewayEventContext): boolean {
         void loadPreviewEngine()
           .then(run =>
             ownsActiveSurfaceNow()
-              ? run({
-                  amount: payload?.amount,
-                  key: payload?.key,
-                  kind: payload?.action ?? '',
-                  max: payload?.max,
-                  ref: payload?.ref,
-                  selector: payload?.selector,
-                  submit: payload?.submit,
-                  text: payload?.text,
-                  to: payload?.to as PreviewActAction['to']
-                })
+              ? run(
+                  {
+                    amount: payload?.amount,
+                    key: payload?.key,
+                    kind: payload?.action ?? '',
+                    max: payload?.max,
+                    ref: payload?.ref,
+                    selector: payload?.selector,
+                    submit: payload?.submit,
+                    text: payload?.text,
+                    to: payload?.to as PreviewActAction['to']
+                  },
+                  ownsActiveSurfaceNow
+                )
               : denied
           )
           .then(

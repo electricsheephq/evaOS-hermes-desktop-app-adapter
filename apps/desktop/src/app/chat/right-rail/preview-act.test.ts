@@ -145,6 +145,58 @@ describe('actOnActivePreview (drive_preview tool)', () => {
     expect(result.acted).toBe('clicked button "Save"')
   })
 
+  it('does not emit input when session ownership changes during target lookup', async () => {
+    const tabId = openBrowserTab()
+    const send = vi.fn()
+    let ownsSurface = true
+    let finishLocate!: (value: string) => void
+
+    const locate = new Promise<string>(resolve => {
+      finishLocate = resolve
+    })
+
+    const runner = vi.fn((code: string) =>
+      code.includes('"kind":"locate"')
+        ? locate
+        : Promise.resolve(JSON.stringify({ elements: [], hit: { tag: 'BUTTON', trusted: true }, success: true }))
+    )
+
+    cleanups.push(registerPreviewScriptRunner(tabId, runner))
+    cleanups.push(registerPreviewInput(tabId, { focus: vi.fn(), send }))
+
+    const resultPending = actOnActivePreview({ kind: 'click', ref: '@e1' }, () => ownsSurface)
+
+    await vi.waitFor(() => expect(runner).toHaveBeenCalledOnce())
+    ownsSurface = false
+    finishLocate(JSON.stringify({ acted: 'looking at button "Save"', point: { x: 120, y: 80 }, success: true }))
+
+    const result = await resultPending
+
+    expect(send).not.toHaveBeenCalled()
+    expect(result).toMatchObject({ error: expect.stringContaining('no longer owns'), success: false })
+  })
+
+  it('stops a multi-step gesture as soon as session ownership changes', async () => {
+    const tabId = openBrowserTab()
+    let ownsSurface = true
+
+    const send = vi.fn(() => {
+      ownsSurface = false
+    })
+
+    cleanups.push(
+      registerPreviewScriptRunner(tabId, async () =>
+        JSON.stringify({ acted: 'looking at button "Save"', point: { x: 120, y: 80 }, success: true })
+      )
+    )
+    cleanups.push(registerPreviewInput(tabId, { focus: vi.fn(), send }))
+
+    const result = await actOnActivePreview({ kind: 'click', ref: '@e1' }, () => ownsSurface)
+
+    expect(sentTypes(send)).toEqual(['mouseMove'])
+    expect(result).toMatchObject({ error: expect.stringContaining('no longer owns'), success: false })
+  })
+
   it('types by pressing keys, after selecting whatever the field held', async () => {
     const send = withDrivenPane()
 
