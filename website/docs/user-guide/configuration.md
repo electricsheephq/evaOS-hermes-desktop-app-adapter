@@ -1836,7 +1836,7 @@ Hashes are deterministic — the same user always maps to the same hash, so the 
 ```yaml
 stt:
   enabled: true                # Auto-transcribe inbound voice messages (default: true)
-  echo_transcripts: true       # Post raw transcripts back to the chat as 🎙️ "..." (default: true)
+  echo_transcripts: false      # Post raw transcripts back to the chat as 🎙️ "..." (default: false)
   provider: "local"            # "local" | "groq" | "openai" | "mistral" | "xai" | "elevenlabs" | "deepinfra" | ...
   language: "en"               # GLOBAL language hint for every provider (per-provider language wins); set "" for auto-detect
   local:

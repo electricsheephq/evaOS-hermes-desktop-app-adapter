@@ -28,6 +28,7 @@ def _runner(adapter=None):
     runner = object.__new__(GatewayRunner)
     runner.config = SimpleNamespace(
         stt_enabled=True,
+        stt_echo_transcripts=True,
         group_sessions_per_user=True,
         thread_sessions_per_user=False,
     )
@@ -274,5 +275,4 @@ def _voice_event(source, urls):
         media_urls=list(urls),
         media_types=["audio/ogg"] * len(urls),
     )
-
 

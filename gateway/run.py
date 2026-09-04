@@ -11097,7 +11097,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     # Wire voice input callback at connect time so voice
                     # transcription is forwarded without requiring /voice join.
                     if hasattr(adapter, "_voice_input_callback"):
-                        adapter._voice_input_callback = self._handle_voice_channel_input
+                        self._bind_voice_input_callback(adapter)
                     connected_count += 1
                     self._update_platform_runtime_status(
                         platform.value,
@@ -12460,7 +12460,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                         self._sync_voice_mode_state_to_adapter(adapter)
                         # Wire voice input callback on reconnect as well (#60623).
                         if hasattr(adapter, "_voice_input_callback"):
-                            adapter._voice_input_callback = self._handle_voice_channel_input
+                            self._bind_voice_input_callback(adapter)
                         self.delivery_router.adapters = self.adapters
                         del self._failed_platforms[platform]
                         self._update_platform_runtime_status(
@@ -13508,6 +13508,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         platform: Platform,
     ) -> None:
         """Install the profile-scoped handlers shared by startup and reconnect."""
+        adapter._gateway_profile_name = profile_name
         adapter.set_message_handler(self._make_profile_message_handler(profile_name))
         adapter.set_fatal_error_handler(
             self._make_profile_fatal_error_handler(profile_name, platform)
@@ -13522,6 +13523,8 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             self._make_adapter_auth_check(platform, profile_name=profile_name)
         )
         adapter._busy_text_mode = self._busy_text_mode
+        if hasattr(adapter, "_voice_input_callback"):
+            self._bind_voice_input_callback(adapter, profile_name=profile_name)
 
     async def _run_secondary_profile_reconnect(
         self, profile_name: str, platform: Platform
@@ -16375,9 +16378,18 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         """Inner handler that runs under the _running_agents sentinel guard."""
         _msg_start_time = time.time()
         _platform_name = source.platform.value if hasattr(source.platform, "value") else str(source.platform)
-        _msg_preview = (event.text or "")[:80].replace("\n", " ")
+        is_voice_event = event.message_type == MessageType.VOICE
+        _msg_preview = (
+            "[voice redacted]"
+            if is_voice_event
+            else (event.text or "")[:80].replace("\n", " ")
+        )
         _reply_id = getattr(event, "reply_to_message_id", None)
-        _reply_txt = (getattr(event, "reply_to_text", None) or "")[:80].replace("\n", " ")
+        _reply_txt = (
+            "[voice redacted]"
+            if is_voice_event and getattr(event, "reply_to_text", None)
+            else (getattr(event, "reply_to_text", None) or "")[:80].replace("\n", " ")
+        )
         logger.info(
             "inbound message: platform=%s user=%s chat=%s msg=%r reply_to_id=%s reply_to_text=%r",
             _platform_name, source.user_name or source.user_id or "unknown",
@@ -18966,7 +18978,10 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         # Wire callbacks BEFORE join so voice input arriving immediately
         # after connection is not lost.
         if hasattr(adapter, "_voice_input_callback"):
-            adapter._voice_input_callback = self._handle_voice_channel_input
+            bound_profile = getattr(event.source, "profile", None)
+            if getattr(self.config, "multiplex_profiles", False) and not bound_profile:
+                bound_profile = self._profile_name_for_source(event.source) or "default"
+            self._bind_voice_input_callback(adapter, profile_name=bound_profile)
         if hasattr(adapter, "_on_voice_disconnect"):
             adapter._on_voice_disconnect = self._handle_voice_timeout_cleanup
         # Let the adapter's inactivity timer see the live voice-reply mode so it
@@ -18977,7 +18992,11 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             )
 
         try:
-            success = await adapter.join_voice_channel(voice_channel)
+            success = await adapter.join_voice_channel(
+                voice_channel,
+                text_channel_id=int(event.source.chat_id),
+                source=event.source.to_dict(),
+            )
         except Exception as e:
             logger.warning("Failed to join voice channel: %s", e)
             adapter._voice_input_callback = None
@@ -18990,9 +19009,6 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             return f"Failed to join voice channel: {e}"
 
         if success:
-            adapter._voice_text_channels[guild_id] = int(event.source.chat_id)
-            if hasattr(adapter, "_voice_sources"):
-                adapter._voice_sources[guild_id] = event.source.to_dict()
             self._voice_mode[self._voice_key(event.source.platform, event.source.chat_id)] = "all"
             self._save_voice_modes()
             self._set_adapter_auto_tts_enabled(adapter, event.source.chat_id, enabled=True)
@@ -19037,7 +19053,14 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         adapter = self.adapters.get(Platform.DISCORD)
         self._set_adapter_auto_tts_disabled(adapter, chat_id, disabled=True)
 
-    def _is_duplicate_voice_transcript(self, guild_id: int, user_id: int, transcript: str) -> bool:
+    def _is_duplicate_voice_transcript(
+        self,
+        adapter,
+        profile_name: Optional[str],
+        guild_id: int,
+        user_id: int,
+        transcript: str,
+    ) -> bool:
         """Suppress repeated STT outputs for the same recent utterance.
 
         Voice capture can occasionally emit the same utterance twice a few
@@ -19054,7 +19077,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
 
         now = time.monotonic()
         window_seconds = 12.0
-        key = (guild_id, user_id)
+        key = (id(adapter), str(profile_name or "default"), guild_id, user_id)
         recent_store = getattr(self, "_recent_voice_transcripts", None)
         if not isinstance(recent_store, dict):
             recent_store = {}
@@ -19078,60 +19101,111 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         recent_store[key] = recent[-5:]
         return False
 
+    def _bind_voice_input_callback(
+        self, adapter, *, profile_name: Optional[str] = None
+    ) -> None:
+        """Bind inbound voice delivery to the exact initiating adapter."""
+        adapter_profile = getattr(adapter, "_gateway_profile_name", None)
+        if not isinstance(adapter_profile, str) or not adapter_profile:
+            adapter_profile = None
+        bound_profile = profile_name or adapter_profile
+
+        async def _callback(**kwargs):
+            await self._handle_voice_channel_input(
+                adapter=adapter,
+                profile_name=bound_profile,
+                **kwargs,
+            )
+
+        adapter._voice_input_callback = _callback
+
     async def _handle_voice_channel_input(
-        self, guild_id: int, user_id: int, transcript: str
+        self,
+        guild_id: int,
+        user_id: int,
+        transcript: str,
+        *,
+        adapter,
+        profile_name: Optional[str] = None,
+        _profile_scoped: bool = False,
     ):
         """Handle transcribed voice from a user in a voice channel.
 
         Creates a synthetic MessageEvent and processes it through the
         adapter's full message pipeline (session, typing, agent, TTS reply).
         """
-        adapter = self.adapters.get(Platform.DISCORD)
-        if not adapter:
+        if adapter is None:
             return
 
         text_ch_id = adapter._voice_text_channels.get(guild_id)
-        if not text_ch_id:
+        bound_voice_id = getattr(adapter, "_voice_channel_ids", {}).get(guild_id)
+        vc = getattr(adapter, "_voice_clients", {}).get(guild_id)
+        if (
+            not text_ch_id
+            or not bound_voice_id
+            or getattr(getattr(vc, "channel", None), "id", None) != bound_voice_id
+        ):
             return
 
         # Build source — reuse the linked text channel's metadata when available
         # so voice input shares the same session as the bound text conversation.
         source_data = getattr(adapter, "_voice_sources", {}).get(guild_id)
-        if source_data:
-            source = SessionSource.from_dict(source_data)
-            source.user_id = str(user_id)
-            source.user_name = str(user_id)
-        else:
-            source = SessionSource(
-                platform=Platform.DISCORD,
-                chat_id=str(text_ch_id),
-                user_id=str(user_id),
-                user_name=str(user_id),
-                chat_type="channel",
-            )
+        if not source_data:
+            return
+        source = SessionSource.from_dict(source_data)
+        if source.platform != Platform.DISCORD or source.chat_id != str(text_ch_id):
+            return
+        adapter_profile = getattr(adapter, "_gateway_profile_name", None)
+        if not isinstance(adapter_profile, str) or not adapter_profile:
+            adapter_profile = None
+        source_profile = getattr(source, "profile", None)
+        if not isinstance(source_profile, str) or not source_profile:
+            source_profile = None
+        bound_profile = profile_name or adapter_profile or source_profile
+        if bound_profile:
+            source.profile = str(bound_profile)
+        source.user_id = str(user_id)
+        source.user_name = str(user_id)
+
+        if (
+            getattr(self.config, "multiplex_profiles", False)
+            and not _profile_scoped
+        ):
+            with _profile_runtime_scope(self._resolve_profile_home_for_source(source)):
+                return await self._handle_voice_channel_input(
+                    guild_id,
+                    user_id,
+                    transcript,
+                    adapter=adapter,
+                    profile_name=bound_profile,
+                    _profile_scoped=True,
+                )
 
         # Check authorization before processing voice input
         if not self._is_user_authorized(source):
             logger.debug("Unauthorized voice input from user %d, ignoring", user_id)
             return
 
-        if self._is_duplicate_voice_transcript(guild_id, user_id, transcript):
+        if self._is_duplicate_voice_transcript(
+            adapter, bound_profile, guild_id, user_id, transcript
+        ):
             logger.info(
-                "Suppressing duplicate voice transcript for guild=%s user=%s: %s",
+                "Suppressing duplicate voice transcript (guild=%s user=%s chars=%d)",
                 guild_id,
                 user_id,
-                transcript[:100],
+                len(transcript),
             )
             return
 
         # Show transcript in text channel (after auth, with mention sanitization)
-        try:
-            channel = adapter._client.get_channel(text_ch_id)
-            if channel:
-                safe_text = transcript[:2000].replace("@everyone", "@\u200beveryone").replace("@here", "@\u200bhere")
-                await channel.send(f"**[Voice]** <@{user_id}>: {safe_text}")
-        except Exception:
-            pass
+        if self._should_echo_stt_transcripts(source):
+            try:
+                channel = adapter._client.get_channel(text_ch_id)
+                if channel:
+                    safe_text = transcript[:2000].replace("@everyone", "@\u200beveryone").replace("@here", "@\u200bhere")
+                    await channel.send(f"**[Voice]** <@{user_id}>: {safe_text}")
+            except Exception:
+                pass
 
         # Build a synthetic MessageEvent and feed through the normal pipeline
         # Use SimpleNamespace as raw_message so _get_guild_id() can extract
@@ -19141,7 +19215,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         # the same per-channel context as typed messages (#50149).
         channel_prompt: Optional[str] = None
         resolver = getattr(adapter, "_resolve_channel_prompt", None)
-        if callable(resolver):
+        if callable(resolver) and not inspect.iscoroutinefunction(resolver):
             try:
                 resolved = resolver(str(text_ch_id))
                 channel_prompt = resolved if isinstance(resolved, str) else None
@@ -19233,9 +19307,18 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
 
         return True
 
-    def _should_echo_stt_transcripts(self) -> bool:
+    def _should_echo_stt_transcripts(
+        self, source: Optional[SessionSource] = None
+    ) -> bool:
         """Return whether inbound voice/STT transcripts should be echoed to chat."""
-        return bool(getattr(self.config, "stt_echo_transcripts", True))
+        if source is not None and getattr(self.config, "multiplex_profiles", False):
+            try:
+                from gateway.config import load_gateway_config
+
+                return bool(load_gateway_config().stt_echo_transcripts)
+            except Exception:
+                return False
+        return bool(getattr(self.config, "stt_echo_transcripts", False))
 
     async def _send_voice_reply(self, event: MessageEvent, text: str) -> None:
         """Generate TTS audio and send as a voice message before the text reply."""
