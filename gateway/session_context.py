@@ -101,6 +101,11 @@ _SESSION_PROFILE: ContextVar = ContextVar("HERMES_SESSION_PROFILE", default=_UNS
 # masks any leaked process env value.
 _CRON_SESSION: ContextVar = ContextVar("HERMES_CRON_SESSION", default=_UNSET)
 
+# The scheduler-owned identity of the cron job executing in this context.
+# Unlike the legacy environment marker above, this value has no environment
+# fallback: model-facing tools must never accept a caller-supplied job id.
+_CRON_JOB_ID: ContextVar = ContextVar("HERMES_CRON_JOB_ID", default=_UNSET)
+
 # Whether the current session's delivery channel can route an ASYNC completion
 # back to the agent AFTER the current turn ends (i.e. wake a fresh turn).
 #
@@ -142,6 +147,7 @@ _VAR_MAP = {
     "HERMES_SESSION_MESSAGE_ID": _SESSION_MESSAGE_ID,
     "HERMES_SESSION_PROFILE": _SESSION_PROFILE,
     "HERMES_CRON_SESSION": _CRON_SESSION,
+    "HERMES_CRON_JOB_ID": _CRON_JOB_ID,
     "HERMES_CRON_AUTO_DELIVER_PLATFORM": _CRON_AUTO_DELIVER_PLATFORM,
     "HERMES_CRON_AUTO_DELIVER_CHAT_ID": _CRON_AUTO_DELIVER_CHAT_ID,
     "HERMES_CRON_AUTO_DELIVER_THREAD_ID": _CRON_AUTO_DELIVER_THREAD_ID,
@@ -297,6 +303,7 @@ def clear_session_vars(tokens: list) -> None:
         _SESSION_MESSAGE_ID,
         _SESSION_PROFILE,
         _CRON_SESSION,
+        _CRON_JOB_ID,
     ):
         var.set("")
     # Reset async-delivery capability to the "never set" sentinel rather than a
@@ -384,6 +391,20 @@ def get_session_env(name: str, default: str = "") -> str:
             return value
     # Fall back to os.environ for CLI, cron, and test compatibility
     return os.getenv(name, default)
+
+
+def get_current_cron_job_id() -> str:
+    """Return the scheduler-bound cron job id, never an environment fallback.
+
+    A model-facing capability may use this only as an execution-context
+    identity.  Keeping the resolver separate from ``get_session_env`` avoids
+    treating a process environment value as proof that the scheduler actually
+    commissioned the current turn.
+    """
+    value = _CRON_JOB_ID.get()
+    if value is _UNSET:
+        return ""
+    return str(value or "")
 
 
 # Surfaces that are not a human chat channel. The gateway binds a platform

@@ -3213,12 +3213,18 @@ def run_job(
     # future writers.  Acquire itself can't leak (it either blocks or returns).
     _cron_session_var = _VAR_MAP["HERMES_CRON_SESSION"]
     _cron_session_token = None
+    _cron_job_id_var = _VAR_MAP["HERMES_CRON_JOB_ID"]
+    _cron_job_id_token = None
     try:
         # Scope cron approval policy to this job. Keep the token so the finally
         # restores the pre-job state instead of pinning an explicit empty value,
         # which would suppress the legacy os.environ fallback used by standalone
         # cron entrypoints and tests.
         _cron_session_token = _cron_session_var.set("1")
+        # Bind the scheduler-owned job identity in a ContextVar.  Plugins can
+        # use this to authorize narrowly scoped capabilities, while callers
+        # cannot select or forge the identity through tool arguments or env.
+        _cron_job_id_token = _cron_job_id_var.set(str(job_id))
         if _job_workdir:
             os.environ["TERMINAL_CWD"] = _job_workdir
             logger.info("Job '%s': using workdir %s", job_id, _job_workdir)
@@ -3869,6 +3875,8 @@ def run_job(
         clear_session_vars(_ctx_tokens)
         if _cron_session_token is not None:
             _cron_session_var.reset(_cron_session_token)
+        if _cron_job_id_token is not None:
+            _cron_job_id_var.reset(_cron_job_id_token)
         for _var_name in _cron_delivery_vars:
             _VAR_MAP[_var_name].set("")
         if _session_db:
