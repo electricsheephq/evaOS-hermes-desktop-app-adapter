@@ -1,0 +1,8 @@
+name: discord_scoped
+version: 1.0.0
+description: "Fail-closed Discord cron reads, metadata-only thread discovery, and one-shot approved sends."
+author: Electric Sheep
+kind: backend
+provides_tools:
+  - discord_scoped_list_threads
+  - discord_scoped_send_approved

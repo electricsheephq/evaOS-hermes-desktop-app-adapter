@@ -10,6 +10,7 @@ runs at a time if multiple processes overlap.
 
 import asyncio
 import atexit
+import copy
 import concurrent.futures
 import contextvars
 import json
@@ -32,6 +33,7 @@ except ImportError:
     except ImportError:
         msvcrt = None
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any, List, Optional
 
 # Add parent directory to path for imports BEFORE repo-level imports.
@@ -51,6 +53,63 @@ from hermes_time import now as _hermes_now
 from agent.interrupt_compat import request_hard_interrupt
 
 logger = logging.getLogger(__name__)
+
+
+def _freeze_cron_value(value):
+    if isinstance(value, dict):
+        return MappingProxyType({k: _freeze_cron_value(v) for k, v in value.items()})
+    if isinstance(value, list):
+        return tuple(_freeze_cron_value(v) for v in value)
+    return value
+
+
+def _invoke_cron_preflight(job: dict) -> Optional[dict]:
+    """Run one explicitly named plugin preflight against an immutable job."""
+    spec = job.get("preflight")
+    if spec is None:
+        return None
+    provider = spec.get("provider") if isinstance(spec, dict) else None
+    if not isinstance(provider, str) or not provider.strip():
+        raise RuntimeError("Cron preflight requires a non-empty provider")
+
+    from hermes_cli.plugins import discover_plugins
+    from hermes_cli.lifecycle import invoke_hook
+
+    discover_plugins()
+    snapshot = _freeze_cron_value(copy.deepcopy(job))
+    matches = [
+        result for result in invoke_hook(
+            "cron_preflight", provider=provider, job=snapshot
+        )
+        if isinstance(result, dict) and result.get("provider") == provider
+    ]
+    if len(matches) != 1:
+        raise RuntimeError(
+            f"Cron preflight provider {provider!r} returned {len(matches)} matching results"
+        )
+    result = matches[0]
+    if result.get("action") not in {"continue", "silent", "error"}:
+        raise RuntimeError(f"Cron preflight provider {provider!r} returned an invalid action")
+    return result
+
+
+def _commit_cron_preflight(job: dict, result: Optional[dict]) -> None:
+    if not result or result.get("action") != "continue":
+        return
+    provider = result["provider"]
+    from hermes_cli.lifecycle import invoke_hook
+
+    matches = [
+        item for item in invoke_hook(
+            "cron_preflight_commit",
+            provider=provider,
+            job=_freeze_cron_value(copy.deepcopy(job)),
+            receipt=_freeze_cron_value(copy.deepcopy(result.get("receipt") or {})),
+        )
+        if isinstance(item, dict) and item.get("provider") == provider
+    ]
+    if len(matches) != 1 or matches[0].get("ok") is not True:
+        raise RuntimeError(f"Cron preflight provider {provider!r} did not commit its checkpoint")
 
 
 def _set_cron_session_title(session_db, session_id, base_title):
@@ -2887,6 +2946,19 @@ def run_job(
         )
         return True, doc, output, None
 
+    # Plugin preflights run before SessionDB or AIAgent construction, so an
+    # unchanged external source can keep the tick silent without inference.
+    try:
+        _preflight = _invoke_cron_preflight(job)
+    except Exception as exc:
+        return False, "", "", f"Cron preflight failed: {exc}"
+    if _preflight and job.get("script"):
+        return False, "", "", "Cron preflight and script cannot be combined"
+    if _preflight and _preflight["action"] == "silent":
+        return True, "", SILENT_MARKER, None
+    if _preflight and _preflight["action"] == "error":
+        return False, "", "", str(_preflight.get("error") or "Cron preflight failed")
+
     # ---------------------------------------------------------------
     # Default (LLM) path — import and construct the agent machinery now
     # that we know we actually need it. Doing these imports here instead of
@@ -2966,7 +3038,10 @@ def run_job(
     # the prompt so a ``{"wakeAgent": false}`` response can short-circuit
     # the whole agent run. We pass the result into _build_job_prompt so
     # the script is only executed once.
-    prerun_script = None
+    prerun_script = (
+        (True, str(_preflight.get("context") or ""))
+        if _preflight else None
+    )
     script_path = job.get("script")
     if script_path:
         prerun_script = _run_job_script_with_claim_heartbeat(job, script_path)
@@ -3732,6 +3807,7 @@ def run_job(
 """
         
         logger.info("Job '%s' completed successfully", job_name)
+        _commit_cron_preflight(job, _preflight)
         return True, output, final_response, None
         
     except Exception as e:

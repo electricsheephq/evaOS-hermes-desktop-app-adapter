@@ -144,6 +144,11 @@ VALID_HOOKS: Set[str] = {
     "transform_llm_output",
     "pre_llm_call",
     "post_llm_call",
+    # Trusted scheduler edge. A configured job names one provider; the
+    # scheduler passes an immutable job snapshot and requires exactly one
+    # matching result before constructing an agent.
+    "cron_preflight",
+    "cron_preflight_commit",
     # Verification-loop gate. Fired once per turn when the agent has edited code
     # and is about to verify/finish (after the verify-on-stop guard). A callback
     # may keep the agent going — run a check, defer it, tidy the diff — instead
