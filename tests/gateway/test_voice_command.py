@@ -3,6 +3,7 @@
 import asyncio
 import importlib.util
 import json
+import logging
 import os
 import queue
 import sys
@@ -82,6 +83,7 @@ def _make_runner(tmp_path):
     runner._session_db = None
     runner.session_store = MagicMock()
     runner._is_user_authorized = lambda source: True
+    runner.config = SimpleNamespace(stt_echo_transcripts=False)
     return runner
 
 
@@ -484,6 +486,20 @@ class TestVoiceReceiver:
         completed = receiver.check_silence()
         assert len(completed) == 0
 
+    def test_hard_pcm_limit_flushes_and_clears_deterministically(self):
+        receiver = self._make_receiver()
+        receiver._max_buffer_bytes = 192000
+        receiver.map_ssrc(100, 42)
+
+        receiver._buffer_pcm(100, b"\x00" * 250000)
+        receiver._buffer_pcm(100, b"\x01" * 1000)
+
+        assert len(receiver._buffers[100]) == 192000
+        completed = receiver.check_silence()
+        assert completed == [(42, b"\x00" * 192000)]
+        assert len(receiver._buffers[100]) == 0
+        assert receiver._ready_buffers == set()
+
 
     def test_ffmpeg_resolver_finds_winget_install_when_not_on_path(self, monkeypatch, tmp_path):
         """Windows winget installs ffmpeg outside PATH; Discord voice should still find it."""
@@ -569,8 +585,11 @@ class TestVoiceChannelCommands:
         assert "joined" in result.lower()
         assert "General" in result
         assert runner._voice_mode["discord:123"] == "all"
-        assert mock_adapter._voice_sources[111]["chat_id"] == "123"
-        assert mock_adapter._voice_sources[111]["chat_type"] == "group"
+        mock_adapter.join_voice_channel.assert_awaited_once_with(
+            mock_channel,
+            text_channel_id=123,
+            source=event.source.to_dict(),
+        )
 
 
     @pytest.mark.asyncio
@@ -612,24 +631,38 @@ class TestVoiceChannelCommands:
 
 
     @pytest.mark.asyncio
-    async def test_input_creates_event_and_dispatches(self, runner):
+    async def test_input_creates_event_and_dispatches(self, runner, caplog):
         """Voice input creates synthetic event and calls handle_message."""
         from gateway.config import Platform
         mock_adapter = AsyncMock()
         mock_adapter._voice_text_channels = {111: 123}
-        mock_adapter._voice_sources = {}
+        mock_adapter._voice_channel_ids = {111: 456}
+        mock_adapter._voice_clients = {111: SimpleNamespace(channel=SimpleNamespace(id=456))}
+        mock_adapter._voice_sources = {111: {
+            "platform": "discord", "chat_id": "123", "chat_type": "channel",
+        }}
         mock_channel = AsyncMock()
         mock_adapter._client = MagicMock()
         mock_adapter._client.get_channel = MagicMock(return_value=mock_channel)
         mock_adapter.handle_message = AsyncMock()
-        runner.adapters[Platform.DISCORD] = mock_adapter
-        await runner._handle_voice_channel_input(111, 42, "Hello from VC")
+        other_adapter = AsyncMock()
+        runner.adapters[Platform.DISCORD] = other_adapter
+        caplog.set_level(logging.INFO)
+        await runner._handle_voice_channel_input(
+            111, 42, "Hello from VC", adapter=mock_adapter,
+        )
+        await runner._handle_voice_channel_input(
+            111, 42, "Hello from VC", adapter=mock_adapter,
+        )
         mock_adapter.handle_message.assert_called_once()
         event = mock_adapter.handle_message.call_args[0][0]
         assert event.text == "Hello from VC"
         assert event.message_type == MessageType.VOICE
         assert event.source.chat_id == "123"
         assert event.source.chat_type == "channel"
+        mock_channel.send.assert_not_awaited()
+        other_adapter.handle_message.assert_not_awaited()
+        assert "Hello from VC" not in caplog.text
 
     @pytest.mark.asyncio
     async def test_input_resolves_channel_prompt(self, runner):
@@ -637,13 +670,19 @@ class TestVoiceChannelCommands:
         from gateway.config import Platform
         mock_adapter = AsyncMock()
         mock_adapter._voice_text_channels = {111: 123}
-        mock_adapter._voice_sources = {}
+        mock_adapter._voice_channel_ids = {111: 456}
+        mock_adapter._voice_clients = {111: SimpleNamespace(channel=SimpleNamespace(id=456))}
+        mock_adapter._voice_sources = {111: {
+            "platform": "discord", "chat_id": "123", "chat_type": "channel",
+        }}
         mock_adapter._client = MagicMock()
         mock_adapter._client.get_channel = MagicMock(return_value=AsyncMock())
         mock_adapter.handle_message = AsyncMock()
         mock_adapter._resolve_channel_prompt = MagicMock(return_value="Be terse in #dev.")
         runner.adapters[Platform.DISCORD] = mock_adapter
-        await runner._handle_voice_channel_input(111, 42, "Hello from VC")
+        await runner._handle_voice_channel_input(
+            111, 42, "Hello from VC", adapter=mock_adapter,
+        )
         mock_adapter._resolve_channel_prompt.assert_called_once_with("123")
         event = mock_adapter.handle_message.call_args[0][0]
         assert event.channel_prompt == "Be terse in #dev."
@@ -665,14 +704,19 @@ class TestVoiceChannelCommands:
 
         mock_adapter = AsyncMock()
         mock_adapter._voice_text_channels = {111: 123}
+        mock_adapter._voice_channel_ids = {111: 456}
+        mock_adapter._voice_clients = {111: SimpleNamespace(channel=SimpleNamespace(id=456))}
         mock_adapter._voice_sources = {111: bound_source.to_dict()}
         mock_channel = AsyncMock()
         mock_adapter._client = MagicMock()
         mock_adapter._client.get_channel = MagicMock(return_value=mock_channel)
         mock_adapter.handle_message = AsyncMock()
         runner.adapters[Platform.DISCORD] = mock_adapter
+        runner.config.stt_echo_transcripts = True
 
-        await runner._handle_voice_channel_input(111, 42, "Hello from VC")
+        await runner._handle_voice_channel_input(
+            111, 42, "Hello from VC", adapter=mock_adapter,
+        )
 
         mock_adapter.handle_message.assert_called_once()
         event = mock_adapter.handle_message.call_args[0][0]
@@ -680,6 +724,7 @@ class TestVoiceChannelCommands:
         assert event.source.chat_type == "group"
         assert event.source.chat_name == "Hermes Server / #general"
         assert event.source.user_id == "42"
+        mock_channel.send.assert_awaited_once()
 
 
     # -- _get_guild_id --
@@ -719,9 +764,11 @@ class TestDiscordVoiceChannelMethods:
         adapter._voice_locks = {}
         adapter._voice_text_channels = {}
         adapter._voice_sources = {}
+        adapter._voice_channel_ids = {}
         adapter._voice_timeout_tasks = {}
         adapter._voice_receivers = {}
         adapter._voice_listen_tasks = {}
+        adapter._voice_input_max_seconds = 30
         adapter._voice_input_callback = None
         adapter._allowed_user_ids = set()
         adapter._running = True
@@ -902,14 +949,19 @@ class TestDiscordVoiceChannelMethods:
 
 
     @pytest.mark.asyncio
-    async def test_process_voice_input_success(self):
+    async def test_process_voice_input_success(self, caplog):
         """Successful voice input: PCM->WAV->STT->callback."""
         adapter = self._make_adapter()
         callback = AsyncMock()
         adapter._voice_input_callback = callback
         adapter._allowed_user_ids = set()
+        adapter._voice_text_channels[111] = 123
+        adapter._voice_sources[111] = {"platform": "discord", "chat_id": "123"}
+        adapter._voice_channel_ids[111] = 456
+        adapter._voice_clients[111] = SimpleNamespace(channel=SimpleNamespace(id=456))
 
         pcm_data = b"\x00" * 96000
+        caplog.set_level(logging.INFO)
 
         with patch("plugins.platforms.discord.adapter.VoiceReceiver.pcm_to_wav"), \
              patch("tools.transcription_tools.transcribe_audio",
@@ -917,7 +969,20 @@ class TestDiscordVoiceChannelMethods:
              patch("tools.voice_mode.is_whisper_hallucination", return_value=False):
             await adapter._process_voice_input(111, 42, pcm_data)
 
-        callback.assert_called_once_with(guild_id=111, user_id=42, transcript="Hello")
+        callback.assert_called_once_with(
+            guild_id=111,
+            user_id=42,
+            transcript="Hello",
+        )
+        assert "Hello" not in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_process_voice_input_without_binding_skips_provider(self):
+        """No approved tuple means no temp audio and no provider invocation."""
+        adapter = self._make_adapter()
+        with patch("tools.transcription_tools.transcribe_audio") as transcribe:
+            await adapter._process_voice_input(111, 42, b"pcm")
+        transcribe.assert_not_called()
 
 
         # Should not raise

@@ -523,8 +523,11 @@ class VoiceReceiver:
     MIN_SPEECH_DURATION = 0.5  # minimum seconds to process (skip noise)
     SAMPLE_RATE = 48000        # Discord native rate
     CHANNELS = 2               # Discord sends stereo
+    BYTES_PER_SECOND = SAMPLE_RATE * CHANNELS * 2
+    DEFAULT_MAX_BUFFER_SECONDS = 30
 
-    def __init__(self, voice_client, allowed_user_ids: set = None):
+    def __init__(self, voice_client, allowed_user_ids: set = None,
+                 max_buffer_seconds: int = DEFAULT_MAX_BUFFER_SECONDS):
         self._vc = voice_client
         self._allowed_user_ids = allowed_user_ids or set()
         self._running = False
@@ -541,6 +544,8 @@ class VoiceReceiver:
         # Per-user audio buffers
         self._buffers: Dict[int, bytearray] = defaultdict(bytearray)
         self._last_packet_time: Dict[int, float] = {}
+        self._max_buffer_bytes = max(1, int(max_buffer_seconds)) * self.BYTES_PER_SECOND
+        self._ready_buffers: set[int] = set()
 
         # Opus decoder per SSRC (each user needs own decoder state)
         self._decoders: Dict[int, object] = {}
@@ -577,6 +582,7 @@ class VoiceReceiver:
         with self._lock:
             self._buffers.clear()
             self._last_packet_time.clear()
+            self._ready_buffers.clear()
             self._decoders.clear()
             self._ssrc_to_user.clear()
         logger.info("VoiceReceiver stopped")
@@ -759,9 +765,7 @@ class VoiceReceiver:
             if ssrc not in self._decoders:
                 self._decoders[ssrc] = discord.opus.Decoder()
             pcm = self._decoders[ssrc].decode(decrypted)
-            with self._lock:
-                self._buffers[ssrc].extend(pcm)
-                self._last_packet_time[ssrc] = time.monotonic()
+            self._buffer_pcm(ssrc, pcm)
         except Exception as e:
             with self._lock:
                 self._decoders.pop(ssrc, None)
@@ -771,6 +775,19 @@ class VoiceReceiver:
                 e,
             )
             return
+
+    def _buffer_pcm(self, ssrc: int, pcm: bytes) -> None:
+        """Append decoded PCM without ever exceeding the configured ceiling."""
+        with self._lock:
+            if ssrc in self._ready_buffers:
+                return
+            buf = self._buffers[ssrc]
+            remaining = self._max_buffer_bytes - len(buf)
+            if remaining > 0:
+                buf.extend(pcm[:remaining])
+                self._last_packet_time[ssrc] = time.monotonic()
+            if len(buf) >= self._max_buffer_bytes:
+                self._ready_buffers.add(ssrc)
 
     # ------------------------------------------------------------------
     # Silence detection
@@ -818,7 +835,8 @@ class VoiceReceiver:
                 # 48kHz, 16-bit, stereo = 192000 bytes/sec
                 buf_duration = len(buf) / (self.SAMPLE_RATE * self.CHANNELS * 2)
 
-                if silence_duration >= self.SILENCE_THRESHOLD and buf_duration >= self.MIN_SPEECH_DURATION:
+                at_hard_limit = ssrc in self._ready_buffers
+                if (at_hard_limit or silence_duration >= self.SILENCE_THRESHOLD) and buf_duration >= self.MIN_SPEECH_DURATION:
                     user_id = ssrc_user_map.get(ssrc, 0)
                     if not user_id:
                         # SSRC not mapped (SPEAKING event missing after bot rejoin).
@@ -828,10 +846,12 @@ class VoiceReceiver:
                         completed.append((user_id, bytes(buf)))
                     self._buffers[ssrc] = bytearray()
                     self._last_packet_time.pop(ssrc, None)
+                    self._ready_buffers.discard(ssrc)
                 elif silence_duration >= self.SILENCE_THRESHOLD * 2:
                     # Stale buffer with no valid user — discard
                     self._buffers.pop(ssrc, None)
                     self._last_packet_time.pop(ssrc, None)
+                    self._ready_buffers.discard(ssrc)
 
         return completed
 
@@ -852,6 +872,7 @@ class VoiceReceiver:
                         completed.append((user_id, bytes(buf)))
                 self._buffers.pop(ssrc, None)
                 self._last_packet_time.pop(ssrc, None)
+                self._ready_buffers.discard(ssrc)
 
         return completed
 
@@ -995,6 +1016,7 @@ class DiscordAdapter(BasePlatformAdapter):
     # Auto-disconnect from voice channel after this many seconds of inactivity.
     # Config key: discord.voice_channel_inactivity_timeout_seconds (0 disables)
     VOICE_TIMEOUT = 300
+    VOICE_INPUT_MAX_SECONDS = 30
     # Minimum seconds to wait for a single voice playback. The effective limit
     # scales with the probed clip duration so long readbacks are not cut off at
     # a hard two-minute ceiling.
@@ -1029,9 +1051,13 @@ class DiscordAdapter(BasePlatformAdapter):
         self._pending_text_batch_tasks: Dict[str, asyncio.Task] = {}
         self._voice_text_channels: Dict[int, int] = {}  # guild_id -> text_channel_id
         self._voice_sources: Dict[int, Dict[str, Any]] = {}  # guild_id -> linked text channel source metadata
+        self._voice_channel_ids: Dict[int, int] = {}  # guild_id -> approved voice_channel_id
         self._voice_timeout_tasks: Dict[int, asyncio.Task] = {}  # guild_id -> timeout task
         self._voice_timeout_seconds = self._load_voice_timeout()
         self._playback_timeout_seconds = self._load_playback_timeout()
+        self._voice_input_max_seconds = self._load_discord_int_config(
+            "voice_input_max_seconds", self.VOICE_INPUT_MAX_SECONDS, minimum=1,
+        )
         # Phase 2: voice listening
         self._voice_receivers: Dict[int, VoiceReceiver] = {}  # guild_id -> VoiceReceiver
         self._voice_listen_tasks: Dict[int, asyncio.Task] = {}  # guild_id -> listen loop
@@ -4124,15 +4150,42 @@ class DiscordAdapter(BasePlatformAdapter):
         if not self._client or not DISCORD_AVAILABLE:
             return False
         guild_id = channel.guild.id
+        source_chat_id = str(source.get("chat_id", "")) if isinstance(source, dict) else ""
+        source_platform = str(source.get("platform", "")) if isinstance(source, dict) else ""
+        capture_approved = (
+            text_channel_id is not None
+            and source_chat_id == str(text_channel_id)
+            and source_platform == "discord"
+        )
 
         async with self._voice_locks.setdefault(guild_id, asyncio.Lock()):
             # Already connected in this guild?
             existing = self._voice_clients.get(guild_id)
             if existing and existing.is_connected():
                 if existing.channel.id == channel.id:
+                    if capture_approved:
+                        self._voice_text_channels[guild_id] = int(text_channel_id)
+                        self._voice_sources[guild_id] = source
+                        self._voice_channel_ids[guild_id] = int(channel.id)
+                        self._start_voice_capture(guild_id, existing)
                     self._reset_voice_timeout(guild_id)
                     return True
                 await existing.move_to(channel)
+                receiver = self._voice_receivers.get(guild_id)
+                if receiver:
+                    receiver.stop()
+                    self._voice_receivers.pop(guild_id, None)
+                listen_task = self._voice_listen_tasks.pop(guild_id, None)
+                if listen_task:
+                    listen_task.cancel()
+                self._voice_text_channels.pop(guild_id, None)
+                self._voice_sources.pop(guild_id, None)
+                self._voice_channel_ids.pop(guild_id, None)
+                if capture_approved:
+                    self._voice_text_channels[guild_id] = int(text_channel_id)
+                    self._voice_sources[guild_id] = source
+                    self._voice_channel_ids[guild_id] = int(channel.id)
+                    self._start_voice_capture(guild_id, existing)
                 self._reset_voice_timeout(guild_id)
                 return True
 
@@ -4142,19 +4195,15 @@ class DiscordAdapter(BasePlatformAdapter):
 
             # Store text-channel binding for automatic/programmatic joins
             # so voice transcriptions can be routed without /voice join.
-            if text_channel_id is not None:
-                self._voice_text_channels[guild_id] = text_channel_id
-            if source is not None:
+            if capture_approved:
+                self._voice_text_channels[guild_id] = int(text_channel_id)
                 self._voice_sources[guild_id] = source
+                self._voice_channel_ids[guild_id] = int(channel.id)
 
             # Start voice receiver (Phase 2: listen to users)
             try:
-                receiver = VoiceReceiver(vc, allowed_user_ids=self._allowed_user_ids)
-                receiver.start()
-                self._voice_receivers[guild_id] = receiver
-                self._voice_listen_tasks[guild_id] = asyncio.ensure_future(
-                    self._voice_listen_loop(guild_id)
-                )
+                if capture_approved:
+                    self._start_voice_capture(guild_id, vc)
             except Exception as e:
                 logger.warning("Voice receiver failed to start: %s", e)
 
@@ -4169,6 +4218,21 @@ class DiscordAdapter(BasePlatformAdapter):
 
             return True
 
+    def _start_voice_capture(self, guild_id: int, vc) -> None:
+        """Start one receiver only after the exact capture tuple is bound."""
+        if guild_id in self._voice_receivers:
+            return
+        receiver = VoiceReceiver(
+            vc,
+            allowed_user_ids=self._allowed_user_ids,
+            max_buffer_seconds=self._voice_input_max_seconds,
+        )
+        receiver.start()
+        self._voice_receivers[guild_id] = receiver
+        self._voice_listen_tasks[guild_id] = asyncio.ensure_future(
+            self._voice_listen_loop(guild_id)
+        )
+
     async def leave_voice_channel(self, guild_id: int) -> None:
         """Disconnect from the voice channel in a guild."""
         async with self._voice_locks.setdefault(guild_id, asyncio.Lock()):
@@ -4181,6 +4245,9 @@ class DiscordAdapter(BasePlatformAdapter):
             listen_task = self._voice_listen_tasks.pop(guild_id, None)
             if listen_task:
                 listen_task.cancel()
+                if isinstance(listen_task, asyncio.Future):
+                    with suppress(asyncio.CancelledError):
+                        await listen_task
 
             guild = self._client.get_guild(guild_id) if self._client is not None else None
             for user_id, pcm_data in pending_inputs:
@@ -4204,6 +4271,7 @@ class DiscordAdapter(BasePlatformAdapter):
                 task.cancel()
             self._voice_text_channels.pop(guild_id, None)
             self._voice_sources.pop(guild_id, None)
+            getattr(self, "_voice_channel_ids", {}).pop(guild_id, None)
 
     async def play_in_voice_channel(self, guild_id: int, audio_path: str) -> bool:
         """Play an audio file in the connected voice channel.
@@ -4472,6 +4540,9 @@ class DiscordAdapter(BasePlatformAdapter):
                         pass
 
                 completed = receiver.check_silence()
+                if not self._voice_capture_binding_valid(guild_id):
+                    receiver.stop()
+                    break
                 # Voice inputs always originate from a specific guild
                 # (guild_id is in scope). Pass it so role checks are
                 # guild-scoped and not cross-guild.
@@ -4498,6 +4569,9 @@ class DiscordAdapter(BasePlatformAdapter):
         """Convert PCM -> WAV -> STT -> callback."""
         from tools.voice_mode import is_whisper_hallucination
 
+        if not self._voice_capture_binding_valid(guild_id):
+            return
+
         tmp_f = tempfile.NamedTemporaryFile(suffix=".wav", prefix="vc_listen_", delete=False)
         wav_path = tmp_f.name
         tmp_f.close()
@@ -4513,7 +4587,7 @@ class DiscordAdapter(BasePlatformAdapter):
             if not transcript or is_whisper_hallucination(transcript):
                 return
 
-            logger.info("Voice input from user %d: %s", user_id, transcript[:100])
+            logger.info("Voice input transcribed (guild=%d user=%d chars=%d)", guild_id, user_id, len(transcript))
 
             if self._voice_input_callback:
                 await self._voice_input_callback(
@@ -4539,6 +4613,19 @@ class DiscordAdapter(BasePlatformAdapter):
                 os.unlink(wav_path)
             except OSError:
                 pass
+
+    def _voice_capture_binding_valid(self, guild_id: int) -> bool:
+        """Validate the approved guild/voice/text/source tuple for capture."""
+        vc = self._voice_clients.get(guild_id)
+        source = self._voice_sources.get(guild_id)
+        text_channel_id = self._voice_text_channels.get(guild_id)
+        voice_channel_id = self._voice_channel_ids.get(guild_id)
+        return bool(
+            vc and source and text_channel_id and voice_channel_id
+            and getattr(getattr(vc, "channel", None), "id", None) == voice_channel_id
+            and str(source.get("chat_id", "")) == str(text_channel_id)
+            and str(source.get("platform", "")) == "discord"
+        )
 
     def _discord_channel_ids_allowed(self, channel_ids: set[str]) -> bool:
         """True when *channel_ids* intersect ``DISCORD_ALLOWED_CHANNELS``."""
