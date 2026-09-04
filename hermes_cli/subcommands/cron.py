@@ -12,6 +12,57 @@ from typing import Callable
 from hermes_cli.subcommands._shared import add_accept_hooks_flag
 
 
+def _configure_discord_monitor(args) -> int:
+    """Create or re-save one exact-target Discord monitor without raw JSON edits."""
+    from cron.jobs import create_job, get_job, update_job
+    from cron.scheduler import _notify_provider_jobs_changed
+    from hermes_cli.profiles import get_active_profile_name
+
+    existing = get_job(args.job_id) if args.job_id else None
+    if args.job_id and not existing:
+        print(f"Job not found: {args.job_id}")
+        return 1
+    prior = (existing or {}).get("preflight") or {}
+    same_target = all(str(prior.get(key) or "") == str(value or "") for key, value in {
+        "guild_id": args.guild_id,
+        "parent_channel_id": args.parent_channel_id,
+        "thread_id": args.thread_id,
+    }.items())
+    checkpoint = args.checkpoint or (prior.get("checkpoint") if same_target else None)
+    if not checkpoint:
+        print("A checkpoint is required when creating or retargeting a Discord monitor")
+        return 1
+    preflight = {
+        "provider": "discord_scoped",
+        "profile": args.profile or get_active_profile_name(),
+        "guild_id": args.guild_id,
+        "parent_channel_id": args.parent_channel_id,
+        "thread_id": args.thread_id,
+        "checkpoint": checkpoint,
+        "limit": args.limit,
+        "max_pages": args.max_pages,
+    }
+    try:
+        if existing:
+            job = update_job(args.job_id, {
+                "schedule": args.schedule, "prompt": args.prompt,
+                "name": args.name or existing.get("name"),
+                "deliver": args.deliver or existing.get("deliver"),
+                "preflight": preflight,
+            })
+        else:
+            job = create_job(
+                args.prompt, args.schedule, name=args.name, deliver=args.deliver,
+                preflight=preflight,
+            )
+    except (TypeError, ValueError) as exc:
+        print(f"Failed to configure Discord monitor: {exc}")
+        return 1
+    _notify_provider_jobs_changed()
+    print(f"Configured Discord monitor: {job['id']}")
+    return 0
+
+
 def build_cron_parser(subparsers, *, cmd_cron: Callable) -> None:
     """Attach the ``cron`` subcommand (and its sub-actions) to ``subparsers``."""
     cron_parser = subparsers.add_parser(
@@ -160,6 +211,23 @@ def build_cron_parser(subparsers, *, cmd_cron: Callable) -> None:
         dest="model_provider",
         help="Inference provider paired with --model. Pass empty string to clear.",
     )
+
+    monitor = cron_subparsers.add_parser(
+        "discord-monitor", help="Create or re-save an exact-target Discord monitor"
+    )
+    monitor.add_argument("schedule")
+    monitor.add_argument("prompt")
+    monitor.add_argument("--job-id", help="Existing monitor to re-save")
+    monitor.add_argument("--name")
+    monitor.add_argument("--deliver")
+    monitor.add_argument("--profile", help="Defaults to the active profile")
+    monitor.add_argument("--guild-id", required=True)
+    monitor.add_argument("--parent-channel-id", required=True)
+    monitor.add_argument("--thread-id", default="")
+    monitor.add_argument("--checkpoint", help="Required for create or retarget")
+    monitor.add_argument("--limit", type=int, default=50)
+    monitor.add_argument("--max-pages", type=int, default=3)
+    monitor.set_defaults(func=_configure_discord_monitor)
 
     # lifecycle actions
     cron_pause = cron_subparsers.add_parser("pause", help="Pause a scheduled job")

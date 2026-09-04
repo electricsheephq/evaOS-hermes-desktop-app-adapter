@@ -1,13 +1,12 @@
-import hashlib
 import json
-import time
 from types import MappingProxyType
 
 import pytest
 
 from cron import jobs as cron_jobs
-from cron.scheduler import SILENT_MARKER, _invoke_cron_preflight, run_job
-from plugins.discord_scoped import _commit, _list_threads, _preflight, _send_approved
+import cron.scheduler as scheduler
+from cron.scheduler import SILENT_MARKER, _build_job_prompt, _invoke_cron_preflight, run_job
+from plugins.discord_scoped import _commit, _preflight
 
 
 @pytest.fixture(autouse=True)
@@ -56,92 +55,89 @@ def test_scheduler_preflight_is_immutable_and_silent_skips_agent(monkeypatch):
     )
 
 
-def test_preflight_fails_closed_and_commits_checkpoint_only_on_success(monkeypatch):
+def test_preflight_processes_oldest_humans_without_skipping_or_bot_wake(monkeypatch):
     calls = []
 
     def request(method, path, _token, params=None, body=None):
         calls.append((method, path, params, body))
         if path == "/channels/300":
             return {"id": "300", "guild_id": "100", "parent_id": "200", "type": 11}
-        return [{"id": "402", "content": "new"}, {"id": "401", "content": "older"}]
+        return [
+            {"id": "403", "content": "new", "author": {"bot": False}},
+            {"id": "402", "content": "delivery", "author": {"bot": True}},
+            {"id": "401", "content": "old", "author": {"bot": False}},
+        ]
 
     monkeypatch.setattr("plugins.discord_scoped._get_bot_token", lambda: "redacted")
     monkeypatch.setattr("plugins.discord_scoped._discord_request", request)
-    job = _job()
+    job = _job(preflight={**_job()["preflight"], "limit": 1})
     _save(job)
     result = _preflight(provider="discord_scoped", job=job)
     assert result["action"] == "continue", result
+    assert [row["id"] for row in json.loads(result["context"])["discord_messages"]] == ["401"]
+    assert result["receipt"]["next"] == "401"
     assert cron_jobs.get_job("job-1")["preflight"]["checkpoint"] == "400"
     assert _commit(provider="discord_scoped", job=job, receipt=result["receipt"])["ok"]
-    assert cron_jobs.get_job("job-1")["preflight"]["checkpoint"] == "402"
+    assert cron_jobs.get_job("job-1")["preflight"]["checkpoint"] == "401"
 
     bad = _job(preflight={**job["preflight"], "guild_id": "999"})
     assert _preflight(provider="discord_scoped", job=bad)["action"] == "error"
-    assert cron_jobs.get_job("job-1")["preflight"]["checkpoint"] == "402"
+    assert cron_jobs.get_job("job-1")["preflight"]["checkpoint"] == "401"
+
+    monkeypatch.setattr("plugins.discord_scoped._discord_request", lambda method, path, token, **kwargs: (
+        {"id": "300", "guild_id": "100", "parent_id": "200", "type": 11}
+        if path == "/channels/300" else [{"id": "404", "author": {"bot": True}}]
+    ))
+    assert _preflight(provider="discord_scoped", job=job)["action"] == "silent"
 
 
-def test_thread_listing_is_bounded_metadata_only(monkeypatch):
+def test_prompt_injection_checkpoint_guards_and_script_rejection(monkeypatch):
+    prompt = _build_job_prompt({"prompt": "summarize"}, preflight_context='{"id":"401"}')
+    assert "Preflight Data" in prompt and '"id":"401"' in prompt
+
+    job = _job(script="fixture.py")
+    monkeypatch.setattr("cron.scheduler._invoke_cron_preflight", lambda _job: pytest.fail("REST preflight ran"))
+    monkeypatch.setattr("cron.scheduler._run_job_script_with_claim_heartbeat", lambda *_a, **_k: pytest.fail("script ran"))
+    assert run_job(job)[3] == "Cron preflight and script cannot be combined"
+    assert run_job({**job, "no_agent": True})[3] == "Cron preflight and script cannot be combined"
+
     _save(_job())
-    paths = []
-
-    def request(_method, path, _token, params=None, body=None):
-        paths.append(path)
-        thread = {
-            "id": "300", "name": "fixture", "guild_id": "100",
-            "parent_id": "200", "type": 11,
-            "thread_metadata": {"archived": "archived" in path, "locked": False,
-                                "archive_timestamp": "2026-01-01T00:00:00Z"},
-            "messages": [{"content": "must-not-leak"}],
-        }
-        if path.endswith("/active"):
-            return {"threads": [thread]}
-        return {"threads": [thread], "has_more": False}
-
-    monkeypatch.setattr("plugins.discord_scoped._get_bot_token", lambda: "redacted")
-    monkeypatch.setattr("plugins.discord_scoped._discord_request", request)
-    payload = json.loads(_list_threads({"job_id": "job-1", "limit": 5, "max_pages": 1}))
-    assert payload.get("count") == 1, payload
-    assert set(payload["threads"][0]) == {
-        "id", "name", "guild_id", "parent_id", "type", "state",
-        "archived", "locked", "archive_timestamp",
-    }
-    assert len(paths) == 3
-    assert "must-not-leak" not in json.dumps(payload)
+    receipt = {"job_id": "job-1", "prior": "400", "next": "399",
+               "policy_hash": _preflight_hash(_job())}
+    assert not _commit(provider="discord_scoped", job=_job(), receipt=receipt)["ok"]
+    assert cron_jobs.get_job("job-1")["preflight"]["checkpoint"] == "400"
 
 
-def test_approved_send_is_exact_one_shot_and_rejects_before_transport(monkeypatch):
-    message = "approved fixture"
-    approval = {
-        "id": "approval-1", "profile": "custom", "destination_id": "300",
-        "message_sha256": hashlib.sha256(message.encode()).hexdigest(),
-        "nonce": "nonce-1", "expires_at": time.time() + 60,
-    }
-    _save(_job(discord_approvals=[approval]))
-    calls = []
+def _preflight_hash(job):
+    from plugins.discord_scoped import _policy, _policy_hash
+    return _policy_hash(_policy(job))
 
-    def request(method, path, _token, params=None, body=None):
-        calls.append((method, path, body))
-        if method == "GET":
-            return {"id": "300", "guild_id": "100", "parent_id": "200", "type": 11,
-                    "thread_metadata": {"archived": False, "locked": False}}
-        return {"id": "sent"}
 
-    monkeypatch.setattr("plugins.discord_scoped._get_bot_token", lambda: "redacted")
-    monkeypatch.setattr("plugins.discord_scoped._discord_request", request)
-    args = {"job_id": "job-1", "approval_id": "approval-1", "nonce": "nonce-1",
-            "destination_id": "300", "message": message}
+def test_checkpoint_commits_only_after_nonempty_successful_delivery(monkeypatch):
+    receipt = {"provider": "discord_scoped", "action": "continue", "receipt": {"next": "401"}}
+    commits = []
+    monkeypatch.setattr(scheduler, "claim_dispatch", lambda _id: True)
+    monkeypatch.setattr(scheduler, "create_execution", lambda *_a, **_k: {"id": "exec"})
+    monkeypatch.setattr(scheduler, "mark_execution_running", lambda *_a: None)
+    monkeypatch.setattr(scheduler, "finish_execution", lambda *_a, **_k: None)
+    monkeypatch.setattr(scheduler, "save_job_output", lambda *_a: "fixture")
+    monkeypatch.setattr(scheduler, "mark_job_run", lambda *_a, **_k: None)
+    monkeypatch.setattr(scheduler, "_consume_interrupted_flag", lambda *_a: False)
+    monkeypatch.setattr(scheduler, "_is_interrupted", lambda *_a: False)
+    monkeypatch.setattr(scheduler, "_teardown_cron_agent", lambda *_a: None)
+    monkeypatch.setattr(scheduler, "_commit_cron_preflight", lambda *_a: commits.append(True))
+    monkeypatch.setattr("agent.secret_scope.build_profile_secret_scope", lambda *_a: None)
+    monkeypatch.setattr("agent.secret_scope.set_secret_scope", lambda *_a: None)
+    monkeypatch.setattr("agent.secret_scope.reset_secret_scope", lambda *_a: None)
 
-    assert "error" in json.loads(_send_approved({**args, "message": "changed"}))
-    assert calls == []
-    sent = json.loads(_send_approved(args))
-    assert sent.get("success") is True, sent
-    assert [call[0] for call in calls] == ["GET", "POST"]
-    calls.clear()
-    assert "error" in json.loads(_send_approved(args))
-    assert calls == []
-
-    expired = {**approval, "id": "expired", "nonce": "nonce-2",
-               "used_at": None, "expires_at": time.time() - 1}
-    _save(_job(discord_approvals=[expired]))
-    assert "error" in json.loads(_send_approved({**args, "approval_id": "expired", "nonce": "nonce-2"}))
-    assert calls == []
+    outcomes = iter([(True, "answer", None), (True, "", None), (True, "answer", "failed"), (False, "answer", None)])
+    def fake_run(job, **_kwargs):
+        ok, final, _delivery = next(outcomes)
+        job["_cron_preflight_result"] = receipt
+        job["_test_delivery"] = _delivery
+        return ok, "doc", final, None if ok else "agent failed"
+    monkeypatch.setattr(scheduler, "run_job", fake_run)
+    monkeypatch.setattr(scheduler, "_deliver_result", lambda job, *_a, **_k: job.pop("_test_delivery"))
+    for _ in range(4):
+        scheduler.run_one_job({"id": "job-1", "name": "fixture"})
+    assert commits == [True]

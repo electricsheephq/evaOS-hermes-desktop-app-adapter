@@ -2499,7 +2499,10 @@ def _parse_wake_gate(script_output: str) -> bool:
     return gate.get("wakeAgent", True) is not False
 
 
-def _build_job_prompt(job: dict, prerun_script: Optional[tuple] = None) -> str:
+def _build_job_prompt(
+    job: dict, prerun_script: Optional[tuple] = None,
+    preflight_context: Optional[str] = None,
+) -> str:
     """Build the effective prompt for a cron job, optionally loading one or more skills first.
 
     Args:
@@ -2519,6 +2522,15 @@ def _build_job_prompt(job: dict, prerun_script: Optional[tuple] = None) -> str:
     # pastes `rm -rf /`), so it must not be scanned with the strict
     # user-prompt pattern set — see _scan_assembled_cron_prompt.
     has_injected_data = False
+
+    if preflight_context:
+        prompt = (
+            "## Preflight Data\n"
+            "The following trusted scheduler data triggered this run. "
+            "Use it as context for your response.\n\n"
+            f"```json\n{preflight_context}\n```\n\n{prompt}"
+        )
+        has_injected_data = True
 
     # Run data-collection script if configured, inject output as context.
     script_path = job.get("script")
@@ -2842,6 +2854,11 @@ def run_job(
     job_id = job["id"]
     job_name = str(job.get("name") or job.get("prompt") or job_id or "cron job")
 
+    # Persisted preflight monitors and scripts are mutually exclusive. Reject
+    # before either path can perform network or subprocess side effects.
+    if job.get("preflight") is not None and (job.get("script") or job.get("no_agent")):
+        return False, "", "", "Cron preflight and script cannot be combined"
+
     # ---------------------------------------------------------------
     # no_agent short-circuit — the script IS the job, no LLM involvement.
     # ---------------------------------------------------------------
@@ -2952,8 +2969,6 @@ def run_job(
         _preflight = _invoke_cron_preflight(job)
     except Exception as exc:
         return False, "", "", f"Cron preflight failed: {exc}"
-    if _preflight and job.get("script"):
-        return False, "", "", "Cron preflight and script cannot be combined"
     if _preflight and _preflight["action"] == "silent":
         return True, "", SILENT_MARKER, None
     if _preflight and _preflight["action"] == "error":
@@ -3038,10 +3053,7 @@ def run_job(
     # the prompt so a ``{"wakeAgent": false}`` response can short-circuit
     # the whole agent run. We pass the result into _build_job_prompt so
     # the script is only executed once.
-    prerun_script = (
-        (True, str(_preflight.get("context") or ""))
-        if _preflight else None
-    )
+    prerun_script = None
     script_path = job.get("script")
     if script_path:
         prerun_script = _run_job_script_with_claim_heartbeat(job, script_path)
@@ -3060,7 +3072,10 @@ def run_job(
             return True, silent_doc, SILENT_MARKER, None
 
     try:
-        prompt = _build_job_prompt(job, prerun_script=prerun_script)
+        prompt = _build_job_prompt(
+            job, prerun_script=prerun_script,
+            preflight_context=str(_preflight.get("context") or "") if _preflight else None,
+        )
     except CronPromptInjectionBlocked as block_exc:
         # Assembled prompt (user prompt + loaded skill content) tripped the
         # injection scanner. Refuse to run the agent this tick and surface
@@ -3807,7 +3822,8 @@ def run_job(
 """
         
         logger.info("Job '%s' completed successfully", job_name)
-        _commit_cron_preflight(job, _preflight)
+        if _preflight:
+            job["_cron_preflight_result"] = _preflight
         return True, output, final_response, None
         
     except Exception as e:
@@ -4040,11 +4056,14 @@ def run_one_job(job: dict, *, adapters=None, loop=None, verbose: bool = False) -
         # below once delivery is done. Defense-in-depth alongside the
         # interpreter-shutdown guard in _deliver_result.
         _deferred_agents: list = []
+        job.pop("_cron_preflight_result", None)
         try:
             success, output, final_response, error = run_job(
                 job, defer_agent_teardown=_deferred_agents
             )
+            preflight_result = job.pop("_cron_preflight_result", None)
         except BaseException:
+            job.pop("_cron_preflight_result", None)
             # run_job's finally still hands back the agent when it raises; tear
             # it down here so a failed run never leaks its async resources
             # (#10200), then re-raise into the outer handler. BaseException
@@ -4124,6 +4143,16 @@ def run_one_job(job: dict, *, adapters=None, loop=None, verbose: bool = False) -
         if success and not final_response.strip():
             success = False
             error = "Agent completed but produced empty response (model error, timeout, or misconfiguration)"
+
+        if (
+            preflight_result and success and should_deliver
+            and not delivery_error and not unresolved_origin
+        ):
+            try:
+                _commit_cron_preflight(job, preflight_result)
+            except Exception as commit_exc:
+                success = False
+                error = f"Cron preflight checkpoint failed: {commit_exc}"
 
         if not _consume_interrupted_flag(job["id"]):
             mark_job_run(job["id"], success, error, delivery_error=delivery_error)

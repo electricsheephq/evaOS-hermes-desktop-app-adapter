@@ -1,6 +1,6 @@
 """Tests for hermes_cli.cron command handling."""
 
-from argparse import Namespace
+from argparse import ArgumentParser, Namespace
 from types import SimpleNamespace
 
 import pytest
@@ -8,6 +8,7 @@ import pytest
 from cron.jobs import create_job, get_job, list_jobs
 from hermes_cli import cron as cron_cli
 from hermes_cli.cron import cron_command
+from hermes_cli.subcommands.cron import build_cron_parser
 
 
 @pytest.fixture()
@@ -234,3 +235,31 @@ def test_cron_create_failure_returns_nonzero(monkeypatch, capsys):
     out = capsys.readouterr().out
     assert rc == 1
     assert "Failed to create job: boom" in out
+
+
+def test_discord_monitor_cli_creates_and_resaves_validated_scope(tmp_cron_dir, monkeypatch):
+    monkeypatch.setattr("hermes_cli.profiles.get_active_profile_name", lambda: "custom")
+    monkeypatch.setattr("cron.scheduler._notify_provider_jobs_changed", lambda: None)
+    parser = ArgumentParser()
+    subparsers = parser.add_subparsers(dest="command")
+    build_cron_parser(subparsers, cmd_cron=lambda _args: pytest.fail("generic handler used"))
+    base = ["cron", "discord-monitor", "every 5m", "summarize humans",
+            "--guild-id", "100", "--parent-channel-id", "200",
+            "--thread-id", "300"]
+
+    missing = parser.parse_args(base)
+    assert missing.func(missing) == 1
+    created = parser.parse_args(base + ["--checkpoint", "400", "--limit", "2"])
+    assert created.func(created) == 0
+    job = list_jobs()[0]
+    assert job["preflight"] == {
+        "provider": "discord_scoped", "profile": "custom", "guild_id": "100",
+        "parent_channel_id": "200", "thread_id": "300", "checkpoint": "400",
+        "limit": 2, "max_pages": 3,
+    }
+
+    resave = parser.parse_args(base + ["--job-id", job["id"], "--profile", "renamed"])
+    assert resave.func(resave) == 0
+    updated = get_job(job["id"])
+    assert updated["preflight"]["profile"] == "renamed"
+    assert updated["preflight"]["checkpoint"] == "400"

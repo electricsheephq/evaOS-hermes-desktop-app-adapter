@@ -1135,6 +1135,37 @@ def _normalize_workdir(workdir: Optional[str]) -> Optional[str]:
     return str(resolved)
 
 
+def _normalize_preflight(spec: Any) -> Optional[Dict[str, Any]]:
+    """Validate the bundled Discord monitor's persisted exact-target policy."""
+    if spec is None:
+        return None
+    if not isinstance(spec, dict) or spec.get("provider") != "discord_scoped":
+        raise ValueError("Cron preflight must use the discord_scoped provider")
+    normalized = {
+        "provider": "discord_scoped",
+        "profile": str(spec.get("profile") or "").strip(),
+        "guild_id": str(spec.get("guild_id") or "").strip(),
+        "parent_channel_id": str(spec.get("parent_channel_id") or "").strip(),
+        "thread_id": str(spec.get("thread_id") or "").strip(),
+        "checkpoint": str(spec.get("checkpoint") or "").strip(),
+        "limit": int(spec.get("limit", 50)),
+        "max_pages": int(spec.get("max_pages", 3)),
+    }
+    if not normalized["profile"]:
+        raise ValueError("Discord monitor profile is required")
+    for field in ("guild_id", "parent_channel_id", "checkpoint"):
+        value = normalized[field]
+        if not value.isdigit() or len(value) > 20:
+            raise ValueError(f"Discord monitor {field} must be a snowflake")
+    if normalized["thread_id"] and (
+        not normalized["thread_id"].isdigit() or len(normalized["thread_id"]) > 20
+    ):
+        raise ValueError("Discord monitor thread_id must be a snowflake")
+    if not 1 <= normalized["limit"] <= 100 or not 1 <= normalized["max_pages"] <= 10:
+        raise ValueError("Discord monitor limit must be 1-100 and max_pages 1-10")
+    return normalized
+
+
 def _resolve_default_model_snapshot() -> Optional[str]:
     """Resolve the global default model the same way the cron ticker does.
 
@@ -1261,6 +1292,7 @@ def create_job(
     workdir: Optional[str] = None,
     no_agent: bool = False,
     attach_to_session: Optional[bool] = None,
+    preflight: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     Create a new cron job.
@@ -1337,6 +1369,7 @@ def create_job(
     normalized_workdir = _normalize_workdir(workdir)
     normalized_no_agent = bool(no_agent)
     normalized_attach = attach_to_session if isinstance(attach_to_session, bool) else None
+    normalized_preflight = _normalize_preflight(preflight)
 
     # no_agent jobs are meaningless without a script — the script IS the job.
     # Surface this as a clear ValueError at create time so bad configs never
@@ -1346,6 +1379,8 @@ def create_job(
             "no_agent=True requires a script — with no agent and no script "
             "there is nothing for the job to run."
         )
+    if normalized_preflight and normalized_script:
+        raise ValueError("Cron preflight and script cannot be combined")
 
     # Normalize context_from: accept str or list of str, store as list or None
     if isinstance(context_from, str):
@@ -1432,6 +1467,8 @@ def create_job(
     # global cron.mirror_delivery config, default off).
     if normalized_attach is not None:
         job["attach_to_session"] = normalized_attach
+    if normalized_preflight is not None:
+        job["preflight"] = normalized_preflight
 
     with _jobs_lock():
         jobs = load_jobs()
@@ -1529,9 +1566,13 @@ def update_job(job_id: str, updates: Dict[str, Any]) -> Optional[Dict[str, Any]]
                     updates["workdir"] = None
                 else:
                     updates["workdir"] = _normalize_workdir(_wd)
+            if "preflight" in updates:
+                updates["preflight"] = _normalize_preflight(updates["preflight"])
 
             previous_inference_axes = _normalized_inference_axes(job)
             updated = _apply_skill_fields({**job, **updates})
+            if updated.get("preflight") and (updated.get("script") or updated.get("no_agent")):
+                raise ValueError("Cron preflight and script cannot be combined")
             schedule_changed = "schedule" in updates
             inference_fields_changed = bool(
                 {"provider", "model", "base_url", "no_agent"}.intersection(updates)
