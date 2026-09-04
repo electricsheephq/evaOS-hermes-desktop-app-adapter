@@ -23,6 +23,7 @@ const electronNative: TestProjectConfiguration = {
     include: ['electron/**/*.test.ts', 'scripts/**.test.{ts,mjs}'],
     exclude: [
       'scripts/notarize.test.mjs',
+      'scripts/sign-mac.test.mjs',
       'scripts/run-short-session-hang-repro.test.mjs',
       'scripts/verify-managed-update-release.test.mjs'
     ]
