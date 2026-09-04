@@ -54,6 +54,7 @@ import {
   $sessionTileDelegateRevision,
   $sessionTiles,
   closeSessionTile,
+  knownOwnerForSession,
   patchSessionTile,
   type SessionTile,
   sessionTileDelegate,
@@ -159,15 +160,18 @@ function TileChat({
   const { gateway, requestGateway } = useGatewayRequest()
   const queryClient = useQueryClient()
   const ownerRoute = sessionTileOwnerRoute(storedSessionId)
+
+  const voiceOwner = knownOwnerForSession(storedSessionId)
+
   const voiceScope = useMemo<ProfileScope>(
     () =>
-      ownerRoute
+      voiceOwner && typeof voiceOwner === 'object'
         ? {
-            connectionId: ownerRoute.connectionId,
-            profile: ownerRoute.targetProfile ?? ownerRoute.profile
+            connectionId: voiceOwner.connectionId,
+            profile: voiceOwner.targetProfile ?? voiceOwner.profile
           }
-        : undefined,
-    [ownerRoute]
+        : voiceOwner,
+    [voiceOwner]
   )
 
   const requestTileGateway = useCallback(

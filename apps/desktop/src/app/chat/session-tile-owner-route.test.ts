@@ -10,4 +10,9 @@ describe('SessionTilePane owner-scoped listing', () => {
     expect(source).toContain('void resolveStoredSession(storedSessionId, ownerRoute)')
     expect(source).not.toMatch(/void resolveStoredSession\(storedSessionId\)\s*\n/)
   })
+
+  it('derives transcription scope from the full session-owner ladder', () => {
+    expect(source).toContain('knownOwnerForSession(storedSessionId)')
+    expect(source).toContain('voiceOwner.targetProfile ?? voiceOwner.profile')
+  })
 })
