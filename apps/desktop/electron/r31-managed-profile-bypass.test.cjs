@@ -70,12 +70,16 @@ function makeHarness({ managed }) {
     console,
     crypto: { randomBytes: () => ({ toString: () => 'synthetic' }) },
     evaManagedRuntime: {
-      resolveBackend: async ({ profile }) => {
+      resolveBackend: async (input = {}) => {
+        const { profile } = input
         events.managedResolves.push(profile)
 
         return { mode: 'remote', profile, source: 'synthetic-managed' }
       }
     },
+    advanceBootProgress: async () => {},
+    getWindowState: () => ({ window: 'synthetic' }),
+    hermesLog: [],
     isPrimaryInstance: true,
     managedPrimaryRestoreOwners: new Set(),
     migrateActiveProfileIfMissing: () => {
@@ -134,13 +138,14 @@ test('managed boot and reconnect bypass upstream profile migration and local own
 
   await assert.doesNotReject(
     async () => {
+      await harness.functions.startHermes()
       await harness.functions.ensureBackend('managed-owner')
       await harness.functions.ensureBackend('managed-owner')
     },
     'managed boot and reconnect must resolve through evaManagedRuntime without entering startHermes'
   )
 
-  assert.deepEqual(harness.events.managedResolves, ['managed-owner', 'managed-owner'])
+  assert.deepEqual(harness.events.managedResolves, [undefined, 'managed-owner', 'managed-owner'])
   assert.equal(harness.events.deleteChecks.length, 0, 'managed resolution must bypass workstation profile gates')
   assert.equal(harness.events.routeResolves, 0, 'managed resolution must bypass workstation route selection')
   assert.equal(harness.events.reaps, 0, 'managed resolution must not reap workstation backends')

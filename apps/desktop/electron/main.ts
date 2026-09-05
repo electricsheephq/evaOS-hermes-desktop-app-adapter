@@ -170,6 +170,8 @@ import {
 } from './desktop-uninstall'
 import { describeDevCdpDecision, resolveDevCdpPort } from './dev-cdp'
 import { installEmbedReferer } from './embed-referer'
+const { buildEvaAccountRendererResetScript } = require('./eva-managed.cjs')
+const { createEvaManagedRuntime } = require('./eva-runtime.cjs')
 import { createEventDeduper } from './event-dedupe'
 import {
   buildTerminalScript,
@@ -455,6 +457,8 @@ import { readWindowsUserEnvVar } from './windows-user-env'
 import { isPackagedInstallPath as isPackagedInstallPathUnderRoots } from './workspace-cwd'
 import { readWslWindowsClipboardImage } from './wsl-clipboard-image'
 import { resolvePickerDefaultPath, setActiveGatewayProfile, setWslBridgeProfileState } from './wsl-path-bridge'
+
+const EVA_MANAGED_BUILD = true
 
 const USER_DATA_OVERRIDE = process.env.HERMES_DESKTOP_USER_DATA_DIR
 
@@ -847,6 +851,7 @@ const DESKTOP_INSTALLATION_PATH = path.join(app.getPath('userData'), 'desktop-in
 const DESKTOP_UPDATE_CONFIG_PATH = path.join(app.getPath('userData'), 'updates.json')
 const DESKTOP_WINDOW_STATE_PATH = path.join(app.getPath('userData'), 'window-state.json')
 const DESKTOP_BACKEND_OWNERSHIP_PATH = path.join(app.getPath('userData'), 'backend-ownership.json')
+const EVA_ENROLLMENT_STATE_PATH = path.join(app.getPath('userData'), 'eva-enrollment.json')
 const DESKTOP_MANAGED_SSH_RECOVERY_PATH = path.join(app.getPath('userData'), 'managed-ssh-update-recovery.json')
 // active-profile.json records which Hermes profile the desktop launches its
 // local backend as. When set, startHermes() passes `hermes --profile <name>
@@ -8819,6 +8824,10 @@ const _secretStoragePolicyIo = {
 let _secretStoragePolicy: SecretStoragePolicy | null = null
 
 function secretStoragePolicy(): SecretStoragePolicy {
+  if (EVA_MANAGED_BUILD) {
+    return { on: true, migrated: true }
+  }
+
   if (!_secretStoragePolicy) {
     _secretStoragePolicy = readSecretStoragePolicy(_secretStoragePolicyIo)
   }
@@ -8827,6 +8836,10 @@ function secretStoragePolicy(): SecretStoragePolicy {
 }
 
 function setSecretStoragePolicy(next: SecretStoragePolicy) {
+  if (EVA_MANAGED_BUILD) {
+    throw new Error('evaOS Agent managed access requires OS-backed secure storage.')
+  }
+
   _secretStoragePolicy = { on: next.on === true, migrated: next.migrated === true }
   writeSecretStoragePolicy(_secretStoragePolicy, _secretStoragePolicyIo)
 }
@@ -8931,6 +8944,10 @@ function rewriteAllStoredSecrets(shouldRewrite: (secret: any) => boolean, reenco
  * Runs before createWindow() so every later read sees the final encodings.
  */
 function migrateLegacyEncryptedSecretsOnce() {
+  if (EVA_MANAGED_BUILD) {
+    return
+  }
+
   const policy = secretStoragePolicy()
 
   if (policy.on || policy.migrated) {
@@ -8977,6 +8994,14 @@ function migrateLegacyEncryptedSecretsOnce() {
  * expected and acceptable.
  */
 function applySecretStorageEncryption(on: boolean) {
+  if (EVA_MANAGED_BUILD) {
+    if (!on) {
+      throw new Error('evaOS Agent managed access requires OS-backed secure storage.')
+    }
+
+    return { on: true }
+  }
+
   const enable = on === true
 
   if (secretStoragePolicy().on === enable) {
@@ -9038,6 +9063,10 @@ function applySecretStorageEncryption(on: boolean) {
 }
 
 function encryptDesktopSecret(value, options = {}) {
+  if (EVA_MANAGED_BUILD) {
+    return encryptDesktopSecretStrict(value, safeStorage, { ...options, allowPlainText: false })
+  }
+
   if (!secretStoragePolicy().on) {
     const raw = String(value || '')
 
@@ -9080,6 +9109,57 @@ function decryptDesktopSecret(secret) {
   // persists a token this way.
   return value
 }
+
+async function resetEvaRendererSessions() {
+  quickEntryLastState = null
+
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (window !== mainWindow && !window.isDestroyed()) {
+      window.close()
+    }
+  }
+
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    return false
+  }
+
+  const rendererSession = mainWindow.webContents.session
+  await mainWindow.webContents.executeJavaScript(buildEvaAccountRendererResetScript(), true)
+  await Promise.all([
+    rendererSession.clearStorageData({ storages: ['cachestorage', 'indexdb', 'serviceworkers'] }),
+    rendererSession.clearCache()
+  ])
+
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    return false
+  }
+
+  mainWindow.reload()
+
+  return true
+}
+
+const evaManagedRuntime = createEvaManagedRuntime({
+  statePath: EVA_ENROLLMENT_STATE_PATH,
+  encryptSecret: encryptDesktopSecret,
+  decryptSecret: decryptDesktopSecret,
+  openExternal: url => shell.openExternal(url),
+  waitForHermes,
+  fetchJson,
+  resolveTimeoutMs: value => resolveTimeoutMs(value, DEFAULT_FETCH_TIMEOUT_MS),
+  rememberLog,
+  advanceBootProgress,
+  updateBootProgress,
+  resetConnection: () => backendConnectionState.invalidate(),
+  resetRenderer: resetEvaRendererSessions,
+  focusWindow: () => {
+    if (!mainWindow || mainWindow.isDestroyed()) {
+      return
+    }
+
+    focusWindow(mainWindow)
+  }
+})
 
 function decryptRemoteHeaders(headers) {
   const normalized = normalizeRemoteHeaders(headers)
@@ -11369,6 +11449,10 @@ function profileRouteOptions(profile, request?) {
 // resolveProfileBackendRoute(). An empty / unknown profile resolves to the
 // primary, so legacy callers are unchanged.
 async function ensureBackend(profile) {
+  if (EVA_MANAGED_BUILD) {
+    return evaManagedRuntime.resolveBackend({ profile })
+  }
+
   const key = profile && String(profile).trim() ? String(profile).trim() : primaryProfileKey()
 
   profileDeletionGate.assertCanStart(key)
@@ -12745,6 +12829,36 @@ async function startHermes() {
   if (!isPrimaryInstance) {
     rememberLog('[boot] non-primary instance: skipping backend machinery')
     throw new Error('Hermes Desktop is already running in another window.')
+  }
+
+  if (EVA_MANAGED_BUILD) {
+    await advanceBootProgress('backend.resolve', 'Resolving your managed evaOS agent', 8)
+
+    try {
+      const remote = await evaManagedRuntime.resolveBackend()
+
+      await advanceBootProgress('backend.remote', 'Connecting to your managed evaOS agent', 30)
+      updateBootProgress({
+        phase: 'backend.ready',
+        message: 'evaOS Agent is connected',
+        progress: 94,
+        running: true,
+        error: null
+      })
+
+      return { ...remote, logs: hermesLog.slice(-80), ...getWindowState() }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+
+      updateBootProgress({
+        phase: 'backend.error',
+        message,
+        progress: 100,
+        running: false,
+        error: message
+      })
+      throw error
+    }
   }
 
   await reapOrphanedBackendsOnce()
