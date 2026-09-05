@@ -625,7 +625,9 @@ def test_session_agent_rebuilds_preserve_negotiated_protocol(monkeypatch):
 
 
 def test_reload_mcp_preserves_session_protocol_surface(monkeypatch):
-    import tools.mcp_tool as mcp_tool
+    import tools.mcp_tool_agent as mcp_tool_agent
+    import tools.mcp_tool_discovery as mcp_tool_discovery
+    import tools.mcp_tool_lifecycle as mcp_tool_lifecycle
 
     sid = "reload-ui"
     agent = types.SimpleNamespace(enabled_toolsets=[])
@@ -639,8 +641,9 @@ def test_reload_mcp_preserves_session_protocol_surface(monkeypatch):
     saved = (server._mcp_reload_gen, server._mcp_reload_loaded_rev)
     server._mcp_reload_gen = 0
     server._mcp_reload_loaded_rev = ""
-    monkeypatch.setattr(mcp_tool, "shutdown_mcp_servers", lambda: None)
-    monkeypatch.setattr(mcp_tool, "discover_mcp_tools", lambda: None)
+    monkeypatch.setattr(mcp_tool_lifecycle, "shutdown_mcp_servers", lambda: None)
+    monkeypatch.setattr(mcp_tool_agent, "reprobe_tool_availability", lambda: None)
+    monkeypatch.setattr(mcp_tool_discovery, "discover_mcp_tools", lambda: None)
     monkeypatch.setattr(server, "_compute_mcp_rev", lambda: "stable")
     monkeypatch.setattr(server, "_emit", lambda *_args: None)
     monkeypatch.setattr(server, "_session_info", lambda *_args: {})
@@ -651,7 +654,7 @@ def test_reload_mcp_preserves_session_protocol_surface(monkeypatch):
 
     monkeypatch.setattr(server, "_load_enabled_toolsets", fake_load)
     monkeypatch.setattr(
-        mcp_tool,
+        mcp_tool_agent,
         "refresh_agent_mcp_tools",
         lambda current_agent, **kwargs: refreshed.append((current_agent, kwargs)) or set(),
     )

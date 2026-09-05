@@ -2023,11 +2023,11 @@ def _desktop_ui_request(sid: str, tool_name: str, required_protocol: int, reques
     return result
 
 
-def _desktop_ui_emit(sid: str, event: str, payload: dict) -> None:
+def _desktop_ui_emit(sid: str, event: str, payload: dict) -> bool:
     """Guard the final fire-and-forget renderer write and record its outcome."""
     attachment = _desktop_ui_attachment_for_session(sid)
     if error := _desktop_ui_emitter_protocol_error(sid, event, attachment=attachment):
-        return
+        return False
     _emit_on_transport(event, sid, payload, attachment[2])
     required, tool_name = _DESKTOP_UI_EVENT_REQUIREMENTS[event]
     _log_desktop_ui_lifecycle(
@@ -2037,6 +2037,7 @@ def _desktop_ui_emit(sid: str, event: str, payload: dict) -> None:
         required_protocol=required,
         negotiated_protocol=attachment[1],
     )
+    return True
 
 
 def _gui_surface_toolsets(platform: str, desktop_ui_protocol=None) -> set[str]:

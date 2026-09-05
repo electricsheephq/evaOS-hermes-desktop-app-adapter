@@ -105,8 +105,11 @@ def emit(event: str, payload: dict) -> bool:
     """Route ``event`` to the window owning the current turn; False when no emitter."""
     if _emit is None or protocol_error(event) is not None:
         return False
-    _emit(get_session_env("HERMES_UI_SESSION_ID", ""), event, payload)
-    return True
+    result = _emit(get_session_env("HERMES_UI_SESSION_ID", ""), event, payload)
+    # Gateway emitters may perform a second attachment/protocol check immediately
+    # before routing. Preserve that final denial for callers instead of reporting
+    # success merely because the emitter callback returned.
+    return result is not False
 
 
 def emit_or_error(event: str, payload: dict, fail_prefix: str, desktop_only: str, result: dict) -> str:
