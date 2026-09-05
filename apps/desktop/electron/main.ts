@@ -8263,7 +8263,11 @@ async function saveGatewayFile(payload: GatewayFileSavePayload = {}) {
     })
   }
 
-  const { connection, connectionId, profile: routedProfile } = await resolveGatewayFileBackend<GatewayFileConnection>(payload, {
+  const {
+    connection,
+    connectionId,
+    profile: routedProfile
+  } = await resolveGatewayFileBackend<GatewayFileConnection>(payload, {
     ensureLegacy: ensureBackend,
     ensureRegistry: ensureRegistryBackend
   })
@@ -11651,72 +11655,72 @@ async function ensureBackend(profile) {
   return evaManagedBackendGate.resolve(profile, async () => {
     const key = profile && String(profile).trim() ? String(profile).trim() : primaryProfileKey()
 
-  profileDeletionGate.assertCanStart(key)
+    profileDeletionGate.assertCanStart(key)
 
-  const route = resolveProfileBackendRoute(key, profileRouteOptions(key))
+    const route = resolveProfileBackendRoute(key, profileRouteOptions(key))
 
-  if (route.backend === 'primary') {
-    const connection = await startHermes()
+    if (route.backend === 'primary') {
+      const connection = await startHermes()
+      setWslBridgeProfileState(key, connection.mode !== 'remote')
+
+      // A shared backend still owes the caller its profile scope, so renderer-side
+      // WebSocket, filesystem, and cache routing target the selected profile.
+      // `sharedPrimary` marks this as the shared-primary route: pooled backends
+      // also carry `profile`, so only this descriptor gets the flag.
+      return route.descriptorProfile
+        ? { ...connection, profile: route.descriptorProfile, sharedPrimary: true }
+        : connection
+    }
+
+    // A backend for this key may still be dying (idle reap, LRU eviction, a
+    // just-finished delete). Wait for its bounded exit before reusing or
+    // spawning, so two children never share one profile's HERMES_HOME.
+    const stopping = poolStopper.inFlight(key)
+
+    if (stopping) {
+      await stopping
+    }
+
+    const existing = backendPool.get(key)
+
+    if (existing) {
+      existing.lastActiveAt = Date.now()
+      const connection = await existing.connectionPromise
+      setWslBridgeProfileState(key, connection.mode !== 'remote')
+
+      return connection
+    }
+
+    evictLruPoolBackends(poolMaxBackends() - 1)
+
+    const entry = {
+      process: null,
+      port: null,
+      token: null,
+      connectionPromise: null,
+      lastActiveAt: Date.now(),
+      remoteBaseUrl: null,
+      releaseLocalBackendSlot: null,
+      localBackendSlotKey: null,
+      localBackendSpawnRequest: null
+    }
+
+    entry.connectionPromise = spawnPoolBackend(key, entry).catch(async error => {
+      // Land the failure in desktop.log: without this a spawn that dies before
+      // its child exists (guard rejection, runtime resolution) leaves no trace
+      // beyond renderer-side rejections users never see in a bundle.
+      rememberLog(
+        `Hermes backend for profile "${key}" failed to start: ${error instanceof Error ? error.message : String(error)}`
+      )
+
+      await teardownFailedLocalBackend(key, entry)
+      throw error
+    })
+    backendPool.set(key, entry)
+    startPoolIdleReaper()
+
+    const connection = await entry.connectionPromise
     setWslBridgeProfileState(key, connection.mode !== 'remote')
-
-    // A shared backend still owes the caller its profile scope, so renderer-side
-    // WebSocket, filesystem, and cache routing target the selected profile.
-    // `sharedPrimary` marks this as the shared-primary route: pooled backends
-    // also carry `profile`, so only this descriptor gets the flag.
-    return route.descriptorProfile
-      ? { ...connection, profile: route.descriptorProfile, sharedPrimary: true }
-      : connection
-  }
-
-  // A backend for this key may still be dying (idle reap, LRU eviction, a
-  // just-finished delete). Wait for its bounded exit before reusing or
-  // spawning, so two children never share one profile's HERMES_HOME.
-  const stopping = poolStopper.inFlight(key)
-
-  if (stopping) {
-    await stopping
-  }
-
-  const existing = backendPool.get(key)
-
-  if (existing) {
-    existing.lastActiveAt = Date.now()
-    const connection = await existing.connectionPromise
-    setWslBridgeProfileState(key, connection.mode !== 'remote')
-
-    return connection
-  }
-
-  evictLruPoolBackends(poolMaxBackends() - 1)
-
-  const entry = {
-    process: null,
-    port: null,
-    token: null,
-    connectionPromise: null,
-    lastActiveAt: Date.now(),
-    remoteBaseUrl: null,
-    releaseLocalBackendSlot: null,
-    localBackendSlotKey: null,
-    localBackendSpawnRequest: null
-  }
-
-  entry.connectionPromise = spawnPoolBackend(key, entry).catch(async error => {
-    // Land the failure in desktop.log: without this a spawn that dies before
-    // its child exists (guard rejection, runtime resolution) leaves no trace
-    // beyond renderer-side rejections users never see in a bundle.
-    rememberLog(
-      `Hermes backend for profile "${key}" failed to start: ${error instanceof Error ? error.message : String(error)}`
-    )
-
-    await teardownFailedLocalBackend(key, entry)
-    throw error
-  })
-  backendPool.set(key, entry)
-  startPoolIdleReaper()
-
-  const connection = await entry.connectionPromise
-  setWslBridgeProfileState(key, connection.mode !== 'remote')
 
     return connection
   })
@@ -13030,486 +13034,491 @@ async function startHermes() {
 
   return evaManagedBackendGate.start(
     async () => {
-    await advanceBootProgress('backend.resolve', 'Resolving your managed evaOS agent', 8)
+      await advanceBootProgress('backend.resolve', 'Resolving your managed evaOS agent', 8)
 
-    try {
-      const remote = await evaManagedRuntime.resolveBackend()
+      try {
+        const remote = await evaManagedRuntime.resolveBackend()
 
-      await advanceBootProgress('backend.remote', 'Connecting to your managed evaOS agent', 30)
-      updateBootProgress({
-        phase: 'backend.ready',
-        message: 'evaOS Agent is connected',
-        progress: 94,
-        running: true,
-        error: null
-      })
+        await advanceBootProgress('backend.remote', 'Connecting to your managed evaOS agent', 30)
+        updateBootProgress({
+          phase: 'backend.ready',
+          message: 'evaOS Agent is connected',
+          progress: 94,
+          running: true,
+          error: null
+        })
 
-      return { ...remote, logs: hermesLog.slice(-80), ...getWindowState() }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
+        return { ...remote, logs: hermesLog.slice(-80), ...getWindowState() }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
 
-      updateBootProgress({
-        phase: 'backend.error',
-        message,
-        progress: 100,
-        running: false,
-        error: message
-      })
-      throw error
+        updateBootProgress({
+          phase: 'backend.error',
+          message,
+          progress: 100,
+          running: false,
+          error: message
+        })
+        throw error
+      }
     },
     async () => {
       await reapOrphanedBackendsOnce()
 
-  // Latched-failure short-circuit: once bootstrap has failed in this
-  // process, every subsequent startHermes() call re-throws the same error
-  // without re-running install.ps1. This prevents the renderer's
-  // ensureGatewayOpen retries (and any other getConnection callers) from
-  // restarting a 5-10 minute install loop while the user is still reading
-  // the failure overlay.
-  if (bootstrapFailure) {
-    throw bootstrapFailure
-  }
-
-  if (backendStartFailure) {
-    throw backendStartFailure
-  }
-
-  // A confirmed remote reauth rejection is terminal until the user signs in.
-  // Short-circuiting here keeps the boot-failure overlay latched and its
-  // "Sign in" button clickable, instead of re-driving boot on every retry.
-  if (remoteReauthFailure) {
-    throw remoteReauthFailure
-  }
-
-  // E2E: simulate a boot failure without breaking the real backend. The boot
-  // progresses a few steps, then fails with the given error message.
-  if (BOOT_FAKE_ERROR) {
-    await advanceBootProgress('backend.resolve', 'Resolving Hermes backend', 8)
-    const error = new Error(BOOT_FAKE_ERROR) as any
-    error.isBootstrapFailure = true
-    bootstrapFailure = error
-    throw error
-  }
-
-  const existingConnectionPromise = backendConnectionState.getPromise()
-
-  if (existingConnectionPromise) {
-    return existingConnectionPromise
-  }
-
-  // Seed active-profile.json from legacy signals BEFORE the first
-  // profile-dependent read (`primaryBackendIsRemote()` on the next line, then
-  // `primaryProfileKey()` inside the connection IIFE below). Without this,
-  // remote-mode users whose preference file is missing (first boot after
-  // update) resolve primaryProfileKey() to 'default' inside the IIFE, then
-  // the remote branch returns and never runs the migration. Runs once;
-  // no-op when the preference file already exists.
-  migrateActiveProfileIfMissing()
-
-  const connectionAttempt = backendConnectionState.startAttempt()
-  const primaryProfile = primaryProfileKey()
-
-  // Legacy path callers without an explicit profile belong to the primary
-  // window backend. Profile-scoped callers still pass their key directly.
-  setActiveGatewayProfile(primaryProfile)
-
-  // Classify this boot BEFORE the throwing resolve/mint runs: a remote failure
-  // must NOT latch (it's transient — see shouldLatchBackendStartFailure), while
-  // a local failure latches to break install-restart loops.
-  let attemptedRemote = managedPrimaryRestoreOwners.size > 0 || primaryBackendIsRemote()
-
-  const connectionPromise = (async () => {
-    const connectRemote = async remote => {
-      // resolveRemote() may take arbitrarily long (settings resolve / ws-ticket
-      // mint). If a newer attempt started meanwhile (e.g. the user switched
-      // remotes and Apply invalidated this attempt), bail before probing.
-      if (!backendConnectionState.isCurrentAttempt(connectionAttempt)) {
-        throw new Error('Hermes backend start was superseded by a newer connection attempt.')
+      // Latched-failure short-circuit: once bootstrap has failed in this
+      // process, every subsequent startHermes() call re-throws the same error
+      // without re-running install.ps1. This prevents the renderer's
+      // ensureGatewayOpen retries (and any other getConnection callers) from
+      // restarting a 5-10 minute install loop while the user is still reading
+      // the failure overlay.
+      if (bootstrapFailure) {
+        throw bootstrapFailure
       }
 
-      await advanceBootProgress('backend.remote', `Connecting to remote Hermes backend at ${remote.baseUrl}`, 24)
-      await waitForHermes(remote.baseUrl, remote.token, undefined, remote.authMode, remote.headers)
-
-      // Second async boundary: the health probe itself can outlive the
-      // attempt. A late success here must not publish a stale descriptor.
-      if (!backendConnectionState.isCurrentAttempt(connectionAttempt)) {
-        throw new Error('Hermes backend start was superseded by a newer connection attempt.')
+      if (backendStartFailure) {
+        throw backendStartFailure
       }
 
-      updateBootProgress({
-        phase: 'backend.ready',
-        message: 'Remote Hermes backend is ready',
-        progress: 94,
-        running: true,
-        error: null
-      })
-
-      return createPrimaryRemoteConnection(remote, hermesLog.slice(-80), getWindowState())
-    }
-
-    await advanceBootProgress('backend.resolve', 'Resolving Hermes backend', 8)
-    // Resolve for the desktop's primary profile so a per-profile remote
-    // override on the active profile is honored (falls back to env / global).
-
-    // GUI launches (Finder/Dock, desktop launchers) inherit a minimal PATH
-    // that skips the user's shell profiles. Merge the login-shell PATH into
-    // process.env BEFORE resolving the runtime or spawning the backend, so
-    // both the Electron-side resolvers and the whole backend subtree (tool
-    // availability checks, stdio MCP servers) can find Homebrew-, nvm-, and
-    // ~/.local/bin-installed CLIs. Single-flight with the whenReady warmup;
-    // failure-hardened — a broken shell profile never blocks boot.
-    const loginShellPath = await ensureLoginShellPath()
-
-    if (loginShellPath.applied) {
-      rememberLog('[env] merged login-shell PATH into process.env for backend spawn')
-    } else if (loginShellPath.reason && !['win32', 'unchanged'].includes(loginShellPath.reason)) {
-      rememberLog(`[env] login-shell PATH resolution unavailable (${loginShellPath.reason}); keeping inherited PATH`)
-    }
-
-    const token = crypto.randomBytes(32).toString('base64url')
-    // --port 0: the OS assigns an ephemeral port; the child announces it on stdout.
-    const backendArgs = ['serve', '--host', '127.0.0.1', '--port', '0']
-    // Pin the desktop's chosen profile via the global --profile flag. This is
-    // deterministic (it wins over the sticky ~/.hermes/active_profile file) and
-    // resolves HERMES_HOME the same way `hermes -p <name>` does on the CLI. An
-    // unset preference keeps the legacy launch so existing installs are
-    // unaffected.
-    const activeProfile = readActiveDesktopProfile()
-
-    if (activeProfile) {
-      backendArgs.unshift('--profile', activeProfile)
-    }
-
-    const setup = await runPrimaryBackendStartup({
-      connectRemote,
-      ensureLocalRuntime: ensureRuntime,
-      prepareLocalBackend: async () => {
-        await advanceBootProgress('backend.runtime', 'Resolving Hermes runtime', 28)
-
-        return resolveHermesBackend(backendArgs)
-      },
-      resolveRemote: () => {
-        // Classify immediately before each throwing resolve. This callback runs
-        // both for an already-saved remote and after first-run remote Apply.
-        attemptedRemote = managedPrimaryRestoreOwners.size > 0 || primaryBackendIsRemote()
-
-        return resolveRemoteBackend(primaryProfile, { primary: true })
-      },
-      waitForDecision: waitForFirstRunSetupChoice,
-      // Mutual exclusion with an in-app update (#50238). Remote connections
-      // return before this waiter; local starts park until the updater exits.
-      waitForLocalStart: waitForUpdateToFinish
-    })
-
-    if (setup.kind === 'remote') {
-      // Paths from the remote backend belong to a host the Windows desktop
-      // cannot open via wsl.exe — disable WSL path bridging so native dialogs
-      // and file panels don't spawn wsl.exe (or the interactive install prompt
-      // on WSL-less machines) for unresolvable paths. (#66433)
-      setWslBridgeProfileState(primaryProfile, false)
-
-      return setup.connection
-    }
-
-    // Local WSL backend — paths are bridgeable.
-    setWslBridgeProfileState(primaryProfile, true)
-
-    const backend = setup.backend
-    // Route old runtimes (no `serve`) through the legacy `dashboard --no-open`.
-    backend.args = getBackendArgsForRuntime(backend)
-    const hermesCwd = resolveHermesCwd()
-    const webDist = resolveWebDist()
-    const readyFile = backend.readyFile ? makeDashboardReadyFile() : null
-
-    await advanceBootProgress('backend.spawn', `Starting Hermes backend via ${backend.label}`, 84)
-    rememberLog(`Starting Hermes backend via ${backend.label}`)
-
-    const profile = primaryProfileKey()
-    const parentStartMarker = await desktopParentStartMarker()
-    const backendNonce = crypto.randomBytes(16).toString('hex')
-    const parentIdentityEnv = parentWatchdogEnv(process.pid, parentStartMarker, backendNonce)
-
-    const hermesProcess = spawn(
-      backend.command,
-      backend.args,
-      hiddenWindowsChildOptions({
-        cwd: hermesCwd,
-        env: {
-          ...process.env,
-          // Explicitly pin HERMES_HOME for the child so Python's get_hermes_home()
-          // resolves to the SAME location our resolveHermesHome() picked. Without
-          // this pin, Python falls back to ~/.hermes on every platform — fine on
-          // mac/linux (where our default matches), but on Windows our default is
-          // %LOCALAPPDATA%\hermes, which differs from C:\Users\<u>\.hermes.
-          // Mismatch would split config / sessions / .env / logs across two
-          // directories. install.ps1 sets HERMES_HOME via setx; the desktop
-          // can't reliably do that, so we set it inline for every spawn.
-          HERMES_HOME,
-          ...backend.env,
-          TERMINAL_CWD: hermesCwd,
-          HERMES_DASHBOARD_SESSION_TOKEN: token,
-          // Marks this dashboard backend as desktop-spawned so it runs the cron
-          // scheduler tick loop (the gateway isn't running under the app).
-          HERMES_DESKTOP: '1',
-          // Exact parent identity lets the backend self-exit after an unclean
-          // Desktop death without mistaking a reused PID for its owner. If the
-          // optional marker probe fails, retain legacy PID-only tracking.
-          ...parentIdentityEnv,
-          HERMES_WEB_DIST: webDist,
-          ...(readyFile ? { HERMES_DESKTOP_READY_FILE: readyFile } : {})
-        },
-        shell: backend.shell,
-        stdio: ['ignore', 'pipe', 'pipe']
-      })
-    )
-
-    // Buffer stdout+stderr from the instant of spawn (#93608): an early
-    // crash's traceback must survive into the claim error and the
-    // before-ready exit message shown by the boot UI. rememberLog attaches
-    // later, after the claim, and would miss anything printed before it.
-    const primaryOutputTail = createBackendOutputTail()
-    primaryOutputTail.attach(hermesProcess)
-
-    // Start watching for the READY announcement BEFORE any await (#60323):
-    // claimBackendChild can take seconds (its Windows Get-Process probe cold
-    // start alone runs 2-8s) and advanceBootProgress awaits renderer IPC.
-    // stdout is already flowing into the tail, and Node streams never replay
-    // consumed chunks to late listeners, so a sentinel printed during that
-    // window was lost forever — the wait then hit its 90s timeout and a
-    // healthy backend was killed (deterministic on Windows, racy on
-    // macOS/Linux). The tail-buffer accessor covers any residual gap.
-    const portAnnouncement = waitForDashboardPortAnnouncement(hermesProcess, {
-      bufferedOutput: () => primaryOutputTail.text(),
-      describeOutputTail: () => primaryOutputTail.describe(),
-      readyFile
-    })
-
-    // Mark handled so an early rejection (child dies during the claim) can't
-    // surface as an unhandled rejection before the Promise.race below attaches.
-    portAnnouncement.catch(() => {})
-    await claimBackendChild(
-      hermesProcess,
-      `${backend.command} ${backend.args.join(' ')}`,
-      profile,
-      backendNonce,
-      primaryOutputTail
-    )
-    const processOwner = backendConnectionState.attachProcess(connectionAttempt, hermesProcess)
-
-    if (!processOwner) {
-      stopBackendChild(hermesProcess)
-      await waitForBackendExit(hermesProcess)
-      releaseBackendChild(hermesProcess)
-      throw new Error('Hermes backend start was superseded by a newer connection attempt.')
-    }
-
-    hermesProcess.stdout.on('data', rememberLog)
-    hermesProcess.stderr.on('data', rememberLog)
-    let backendReady = false
-    let rejectBackendStart = null
-
-    const backendStartFailed = new Promise((_resolve, reject) => {
-      rejectBackendStart = reject
-    })
-
-    hermesProcess.once('error', error => {
-      releaseBackendChild(hermesProcess)
-
-      if (!backendConnectionState.clearForCurrentProcess(processOwner)) {
-        rememberLog(`Ignoring stale Hermes backend error: ${error.message}`)
-        rejectBackendStart?.(new Error('Hermes backend start was superseded by a newer connection attempt.'))
-
-        return
+      // A confirmed remote reauth rejection is terminal until the user signs in.
+      // Short-circuiting here keeps the boot-failure overlay latched and its
+      // "Sign in" button clickable, instead of re-driving boot on every retry.
+      if (remoteReauthFailure) {
+        throw remoteReauthFailure
       }
 
-      rememberLog(`Hermes backend failed to start: ${error.message}`)
-      updateBootProgress(
-        {
-          error: error.message,
-          message: `Hermes backend failed to start: ${error.message}`,
-          phase: 'backend.error',
-          running: false
-        },
-        { allowDecrease: true }
-      )
-      sendBackendExit({ code: null, signal: null, error: error.message })
-      rejectBackendStart?.(error)
-    })
-    hermesProcess.once('exit', (code, signal) => {
-      releaseBackendChild(hermesProcess)
+      // E2E: simulate a boot failure without breaking the real backend. The boot
+      // progresses a few steps, then fails with the given error message.
+      if (BOOT_FAKE_ERROR) {
+        await advanceBootProgress('backend.resolve', 'Resolving Hermes backend', 8)
+        const error = new Error(BOOT_FAKE_ERROR) as any
+        error.isBootstrapFailure = true
+        bootstrapFailure = error
+        throw error
+      }
 
-      if (!backendConnectionState.clearForCurrentProcess(processOwner)) {
-        rememberLog(`Ignoring stale Hermes backend exit (${signal || code})`)
+      const existingConnectionPromise = backendConnectionState.getPromise()
 
-        if (!backendReady) {
-          rejectBackendStart?.(new Error('Hermes backend start was superseded by a newer connection attempt.'))
+      if (existingConnectionPromise) {
+        return existingConnectionPromise
+      }
+
+      // Seed active-profile.json from legacy signals BEFORE the first
+      // profile-dependent read (`primaryBackendIsRemote()` on the next line, then
+      // `primaryProfileKey()` inside the connection IIFE below). Without this,
+      // remote-mode users whose preference file is missing (first boot after
+      // update) resolve primaryProfileKey() to 'default' inside the IIFE, then
+      // the remote branch returns and never runs the migration. Runs once;
+      // no-op when the preference file already exists.
+      migrateActiveProfileIfMissing()
+
+      const connectionAttempt = backendConnectionState.startAttempt()
+      const primaryProfile = primaryProfileKey()
+
+      // Legacy path callers without an explicit profile belong to the primary
+      // window backend. Profile-scoped callers still pass their key directly.
+      setActiveGatewayProfile(primaryProfile)
+
+      // Classify this boot BEFORE the throwing resolve/mint runs: a remote failure
+      // must NOT latch (it's transient — see shouldLatchBackendStartFailure), while
+      // a local failure latches to break install-restart loops.
+      let attemptedRemote = managedPrimaryRestoreOwners.size > 0 || primaryBackendIsRemote()
+
+      const connectionPromise = (async () => {
+        const connectRemote = async remote => {
+          // resolveRemote() may take arbitrarily long (settings resolve / ws-ticket
+          // mint). If a newer attempt started meanwhile (e.g. the user switched
+          // remotes and Apply invalidated this attempt), bail before probing.
+          if (!backendConnectionState.isCurrentAttempt(connectionAttempt)) {
+            throw new Error('Hermes backend start was superseded by a newer connection attempt.')
+          }
+
+          await advanceBootProgress('backend.remote', `Connecting to remote Hermes backend at ${remote.baseUrl}`, 24)
+          await waitForHermes(remote.baseUrl, remote.token, undefined, remote.authMode, remote.headers)
+
+          // Second async boundary: the health probe itself can outlive the
+          // attempt. A late success here must not publish a stale descriptor.
+          if (!backendConnectionState.isCurrentAttempt(connectionAttempt)) {
+            throw new Error('Hermes backend start was superseded by a newer connection attempt.')
+          }
+
+          updateBootProgress({
+            phase: 'backend.ready',
+            message: 'Remote Hermes backend is ready',
+            progress: 94,
+            running: true,
+            error: null
+          })
+
+          return createPrimaryRemoteConnection(remote, hermesLog.slice(-80), getWindowState())
         }
 
-        return
-      }
+        await advanceBootProgress('backend.resolve', 'Resolving Hermes backend', 8)
+        // Resolve for the desktop's primary profile so a per-profile remote
+        // override on the active profile is honored (falls back to env / global).
 
-      rememberLog(`Hermes backend exited (${signal || code})`)
-      sendBackendExit({ code, signal })
+        // GUI launches (Finder/Dock, desktop launchers) inherit a minimal PATH
+        // that skips the user's shell profiles. Merge the login-shell PATH into
+        // process.env BEFORE resolving the runtime or spawning the backend, so
+        // both the Electron-side resolvers and the whole backend subtree (tool
+        // availability checks, stdio MCP servers) can find Homebrew-, nvm-, and
+        // ~/.local/bin-installed CLIs. Single-flight with the whenReady warmup;
+        // failure-hardened — a broken shell profile never blocks boot.
+        const loginShellPath = await ensureLoginShellPath()
 
-      if (!backendReady) {
-        const message = `Hermes backend exited before it became ready (${signal || code}).${primaryOutputTail.describe()}`
+        if (loginShellPath.applied) {
+          rememberLog('[env] merged login-shell PATH into process.env for backend spawn')
+        } else if (loginShellPath.reason && !['win32', 'unchanged'].includes(loginShellPath.reason)) {
+          rememberLog(
+            `[env] login-shell PATH resolution unavailable (${loginShellPath.reason}); keeping inherited PATH`
+          )
+        }
+
+        const token = crypto.randomBytes(32).toString('base64url')
+        // --port 0: the OS assigns an ephemeral port; the child announces it on stdout.
+        const backendArgs = ['serve', '--host', '127.0.0.1', '--port', '0']
+        // Pin the desktop's chosen profile via the global --profile flag. This is
+        // deterministic (it wins over the sticky ~/.hermes/active_profile file) and
+        // resolves HERMES_HOME the same way `hermes -p <name>` does on the CLI. An
+        // unset preference keeps the legacy launch so existing installs are
+        // unaffected.
+        const activeProfile = readActiveDesktopProfile()
+
+        if (activeProfile) {
+          backendArgs.unshift('--profile', activeProfile)
+        }
+
+        const setup = await runPrimaryBackendStartup({
+          connectRemote,
+          ensureLocalRuntime: ensureRuntime,
+          prepareLocalBackend: async () => {
+            await advanceBootProgress('backend.runtime', 'Resolving Hermes runtime', 28)
+
+            return resolveHermesBackend(backendArgs)
+          },
+          resolveRemote: () => {
+            // Classify immediately before each throwing resolve. This callback runs
+            // both for an already-saved remote and after first-run remote Apply.
+            attemptedRemote = managedPrimaryRestoreOwners.size > 0 || primaryBackendIsRemote()
+
+            return resolveRemoteBackend(primaryProfile, { primary: true })
+          },
+          waitForDecision: waitForFirstRunSetupChoice,
+          // Mutual exclusion with an in-app update (#50238). Remote connections
+          // return before this waiter; local starts park until the updater exits.
+          waitForLocalStart: waitForUpdateToFinish
+        })
+
+        if (setup.kind === 'remote') {
+          // Paths from the remote backend belong to a host the Windows desktop
+          // cannot open via wsl.exe — disable WSL path bridging so native dialogs
+          // and file panels don't spawn wsl.exe (or the interactive install prompt
+          // on WSL-less machines) for unresolvable paths. (#66433)
+          setWslBridgeProfileState(primaryProfile, false)
+
+          return setup.connection
+        }
+
+        // Local WSL backend — paths are bridgeable.
+        setWslBridgeProfileState(primaryProfile, true)
+
+        const backend = setup.backend
+        // Route old runtimes (no `serve`) through the legacy `dashboard --no-open`.
+        backend.args = getBackendArgsForRuntime(backend)
+        const hermesCwd = resolveHermesCwd()
+        const webDist = resolveWebDist()
+        const readyFile = backend.readyFile ? makeDashboardReadyFile() : null
+
+        await advanceBootProgress('backend.spawn', `Starting Hermes backend via ${backend.label}`, 84)
+        rememberLog(`Starting Hermes backend via ${backend.label}`)
+
+        const profile = primaryProfileKey()
+        const parentStartMarker = await desktopParentStartMarker()
+        const backendNonce = crypto.randomBytes(16).toString('hex')
+        const parentIdentityEnv = parentWatchdogEnv(process.pid, parentStartMarker, backendNonce)
+
+        const hermesProcess = spawn(
+          backend.command,
+          backend.args,
+          hiddenWindowsChildOptions({
+            cwd: hermesCwd,
+            env: {
+              ...process.env,
+              // Explicitly pin HERMES_HOME for the child so Python's get_hermes_home()
+              // resolves to the SAME location our resolveHermesHome() picked. Without
+              // this pin, Python falls back to ~/.hermes on every platform — fine on
+              // mac/linux (where our default matches), but on Windows our default is
+              // %LOCALAPPDATA%\hermes, which differs from C:\Users\<u>\.hermes.
+              // Mismatch would split config / sessions / .env / logs across two
+              // directories. install.ps1 sets HERMES_HOME via setx; the desktop
+              // can't reliably do that, so we set it inline for every spawn.
+              HERMES_HOME,
+              ...backend.env,
+              TERMINAL_CWD: hermesCwd,
+              HERMES_DASHBOARD_SESSION_TOKEN: token,
+              // Marks this dashboard backend as desktop-spawned so it runs the cron
+              // scheduler tick loop (the gateway isn't running under the app).
+              HERMES_DESKTOP: '1',
+              // Exact parent identity lets the backend self-exit after an unclean
+              // Desktop death without mistaking a reused PID for its owner. If the
+              // optional marker probe fails, retain legacy PID-only tracking.
+              ...parentIdentityEnv,
+              HERMES_WEB_DIST: webDist,
+              ...(readyFile ? { HERMES_DESKTOP_READY_FILE: readyFile } : {})
+            },
+            shell: backend.shell,
+            stdio: ['ignore', 'pipe', 'pipe']
+          })
+        )
+
+        // Buffer stdout+stderr from the instant of spawn (#93608): an early
+        // crash's traceback must survive into the claim error and the
+        // before-ready exit message shown by the boot UI. rememberLog attaches
+        // later, after the claim, and would miss anything printed before it.
+        const primaryOutputTail = createBackendOutputTail()
+        primaryOutputTail.attach(hermesProcess)
+
+        // Start watching for the READY announcement BEFORE any await (#60323):
+        // claimBackendChild can take seconds (its Windows Get-Process probe cold
+        // start alone runs 2-8s) and advanceBootProgress awaits renderer IPC.
+        // stdout is already flowing into the tail, and Node streams never replay
+        // consumed chunks to late listeners, so a sentinel printed during that
+        // window was lost forever — the wait then hit its 90s timeout and a
+        // healthy backend was killed (deterministic on Windows, racy on
+        // macOS/Linux). The tail-buffer accessor covers any residual gap.
+        const portAnnouncement = waitForDashboardPortAnnouncement(hermesProcess, {
+          bufferedOutput: () => primaryOutputTail.text(),
+          describeOutputTail: () => primaryOutputTail.describe(),
+          readyFile
+        })
+
+        // Mark handled so an early rejection (child dies during the claim) can't
+        // surface as an unhandled rejection before the Promise.race below attaches.
+        portAnnouncement.catch(() => {})
+        await claimBackendChild(
+          hermesProcess,
+          `${backend.command} ${backend.args.join(' ')}`,
+          profile,
+          backendNonce,
+          primaryOutputTail
+        )
+        const processOwner = backendConnectionState.attachProcess(connectionAttempt, hermesProcess)
+
+        if (!processOwner) {
+          stopBackendChild(hermesProcess)
+          await waitForBackendExit(hermesProcess)
+          releaseBackendChild(hermesProcess)
+          throw new Error('Hermes backend start was superseded by a newer connection attempt.')
+        }
+
+        hermesProcess.stdout.on('data', rememberLog)
+        hermesProcess.stderr.on('data', rememberLog)
+        let backendReady = false
+        let rejectBackendStart = null
+
+        const backendStartFailed = new Promise((_resolve, reject) => {
+          rejectBackendStart = reject
+        })
+
+        hermesProcess.once('error', error => {
+          releaseBackendChild(hermesProcess)
+
+          if (!backendConnectionState.clearForCurrentProcess(processOwner)) {
+            rememberLog(`Ignoring stale Hermes backend error: ${error.message}`)
+            rejectBackendStart?.(new Error('Hermes backend start was superseded by a newer connection attempt.'))
+
+            return
+          }
+
+          rememberLog(`Hermes backend failed to start: ${error.message}`)
+          updateBootProgress(
+            {
+              error: error.message,
+              message: `Hermes backend failed to start: ${error.message}`,
+              phase: 'backend.error',
+              running: false
+            },
+            { allowDecrease: true }
+          )
+          sendBackendExit({ code: null, signal: null, error: error.message })
+          rejectBackendStart?.(error)
+        })
+        hermesProcess.once('exit', (code, signal) => {
+          releaseBackendChild(hermesProcess)
+
+          if (!backendConnectionState.clearForCurrentProcess(processOwner)) {
+            rememberLog(`Ignoring stale Hermes backend exit (${signal || code})`)
+
+            if (!backendReady) {
+              rejectBackendStart?.(new Error('Hermes backend start was superseded by a newer connection attempt.'))
+            }
+
+            return
+          }
+
+          rememberLog(`Hermes backend exited (${signal || code})`)
+          sendBackendExit({ code, signal })
+
+          if (!backendReady) {
+            const message = `Hermes backend exited before it became ready (${signal || code}).${primaryOutputTail.describe()}`
+            updateBootProgress(
+              {
+                error: message,
+                message,
+                phase: 'backend.error',
+                running: false
+              },
+              { allowDecrease: true }
+            )
+            rejectBackendStart?.(
+              new Error(
+                `Hermes backend exited before it became ready (${signal || code}). Log: ${DESKTOP_LOG_PATH}\n${recentHermesLog()}`
+              )
+            )
+          }
+        })
+
+        await advanceBootProgress('backend.port', 'Waiting for Hermes backend to launch', 86)
+
+        // Discover the ephemeral port the child bound to
+        const port = await Promise.race([portAnnouncement, backendStartFailed])
+
+        if (readyFile) {
+          fs.unlink(readyFile, () => {})
+        }
+
+        const baseUrl = `http://127.0.0.1:${port}`
+        await advanceBootProgress('backend.wait', 'Waiting for Hermes backend to become ready', 90)
+        await Promise.race([waitForHermes(baseUrl, token), backendStartFailed])
+        backendReady = true
+        backendStartFailure = null
+
+        const authToken = await adoptServedDashboardToken(baseUrl, token, {
+          childAlive: () => hermesProcess.exitCode === null && !hermesProcess.killed,
+          rememberLog
+        })
+
+        // Verify the WebSocket session token before declaring backend ready.
+        const wsUrl = `ws://127.0.0.1:${port}/api/ws?token=${encodeURIComponent(authToken)}`
+        const wsProbe = await probeGatewayWebSocket(wsUrl, { WebSocketImpl: globalThis.WebSocket })
+
+        if (!wsProbe.ok) {
+          throw new Error(
+            `Local Hermes backend is HTTP-reachable but the WebSocket (/api/ws) rejected the session token: ${wsProbe.reason}`
+          )
+        }
+
+        updateBootProgress({
+          phase: 'backend.ready',
+          message: 'Hermes backend is ready. Finalizing desktop startup',
+          progress: 94,
+          running: true,
+          error: null
+        })
+
+        // A successful boot (including a soft restart that the repair-guard
+        // chose over a hard reinstall, see #74874) means any in-flight repair
+        // attempt counter has been honoured — reset it so the next genuine
+        // failure starts fresh from attempt 1 instead of inheriting the
+        // accumulated count of the resolved episode.
+        bootstrapRepairAttempt = 0
+
+        // The backend's plugin discovery just ran and refreshed HERMES_HOME/.plugin-compat-report.json.
+        // Surface it once (per distinct set of affected plugins) after the window is up; never block boot.
+        setTimeout(() => void showPluginCompatNoticeOnce(), 1500)
+
+        return {
+          baseUrl,
+          mode: 'local',
+          source: 'local',
+          authMode: 'token',
+          token: authToken,
+          wsUrl,
+          logs: hermesLog.slice(-80),
+          ...getWindowState()
+        }
+      })().catch(async error => {
+        if (!backendConnectionState.clearPromiseForAttempt(connectionAttempt)) {
+          throw error
+        }
+
+        const failedProcess = backendConnectionState.invalidate()
+        stopBackendChild(failedProcess)
+        await waitForBackendExit(failedProcess)
+
+        if (error instanceof FirstRunSetupResetError) {
+          throw error
+        }
+
+        const message = error instanceof Error ? error.message : String(error)
+        const hostKeyChanged = isHostKeyChangedBootFailure(error)
+
+        // Carry structured Cloud-down metadata through the boot-progress / IPC
+        // boundary when present, so the renderer overlay can key on it rather than
+        // re-classifying the message string. main owns classification; the renderer
+        // only consumes the structured result (#85335).
+        const isCloudBackendDown = Boolean(
+          error && typeof error === 'object' && (error as any).isCloudBackendDown === true
+        )
+
+        const statusCode = Number(
+          error && typeof error === 'object' && Number.isInteger((error as any).statusCode)
+            ? (error as any).statusCode
+            : NaN
+        )
+
+        // Only latch LOCAL boot failures. A remote failure (lapsed session / mint
+        // timeout / host briefly unreachable across sleep) is transient and has no
+        // child 'exit' handler to clear the cache — latching it would wedge the app
+        // on "session expired" until a full restart, defeating reconnect, the
+        // "Sign out & sign in" reload, and the wake-recovery revalidate path.
+        if (shouldLatchBackendStartFailure({ attemptedRemote })) {
+          backendStartFailure = error instanceof Error ? error : new Error(message)
+        }
+
+        // A host-key CHANGE is the terminal exception among remote failures: SSH
+        // fails closed until the user verifies the change and clears the stale
+        // known_hosts entry, so retrying re-drives the identical doomed boot (one
+        // bundle showed 157 consecutive failures over 2.5h). Latch it like a local
+        // failure — reset/repair/apply-config clear the latch after the user fixes
+        // known_hosts.
+        if (shouldLatchHostKeyChangedFailure({ attemptedRemote, isReauth: false, isHostKeyChanged: hostKeyChanged })) {
+          backendStartFailure = error instanceof Error ? error : new Error(message)
+        }
+
+        // A confirmed reauth rejection latches separately: it can't self-heal, and
+        // leaving it unlatched hides the overlay's "Sign in" button on every retry.
+        if (shouldLatchRemoteReauthFailure({ attemptedRemote, isReauth: isReauthRequiredError(error) })) {
+          remoteReauthFailure = error instanceof Error ? error : new Error(message)
+        }
+
         updateBootProgress(
           {
             error: message,
-            message,
+            isCloudBackendDown: isCloudBackendDown || undefined,
+            message: `Desktop boot failed: ${message}`,
             phase: 'backend.error',
-            running: false
+            // Renderer contract for the self-heal loop (#82679): a transient
+            // REMOTE failure (dropped SSH/HTTP registered connection, mint
+            // timeout) is retryable — the renderer re-attempts the boot with
+            // bounded backoff. Local failures, confirmed reauth rejections, and
+            // host-key changes are not: those end in the recovery overlay /
+            // sign-in affordance.
+            retryable: isRetryableRemoteBootFailure({
+              attemptedRemote,
+              isReauth: isReauthRequiredError(error),
+              isHostKeyChanged: hostKeyChanged
+            }),
+            running: false,
+            statusCode: Number.isInteger(statusCode) ? statusCode : undefined
           },
           { allowDecrease: true }
         )
-        rejectBackendStart?.(
-          new Error(
-            `Hermes backend exited before it became ready (${signal || code}). Log: ${DESKTOP_LOG_PATH}\n${recentHermesLog()}`
-          )
-        )
-      }
-    })
+        throw error
+      })
 
-    await advanceBootProgress('backend.port', 'Waiting for Hermes backend to launch', 86)
+      backendConnectionState.setPromise(connectionAttempt, connectionPromise)
 
-    // Discover the ephemeral port the child bound to
-    const port = await Promise.race([portAnnouncement, backendStartFailed])
-
-    if (readyFile) {
-      fs.unlink(readyFile, () => {})
-    }
-
-    const baseUrl = `http://127.0.0.1:${port}`
-    await advanceBootProgress('backend.wait', 'Waiting for Hermes backend to become ready', 90)
-    await Promise.race([waitForHermes(baseUrl, token), backendStartFailed])
-    backendReady = true
-    backendStartFailure = null
-
-    const authToken = await adoptServedDashboardToken(baseUrl, token, {
-      childAlive: () => hermesProcess.exitCode === null && !hermesProcess.killed,
-      rememberLog
-    })
-
-    // Verify the WebSocket session token before declaring backend ready.
-    const wsUrl = `ws://127.0.0.1:${port}/api/ws?token=${encodeURIComponent(authToken)}`
-    const wsProbe = await probeGatewayWebSocket(wsUrl, { WebSocketImpl: globalThis.WebSocket })
-
-    if (!wsProbe.ok) {
-      throw new Error(
-        `Local Hermes backend is HTTP-reachable but the WebSocket (/api/ws) rejected the session token: ${wsProbe.reason}`
-      )
-    }
-
-    updateBootProgress({
-      phase: 'backend.ready',
-      message: 'Hermes backend is ready. Finalizing desktop startup',
-      progress: 94,
-      running: true,
-      error: null
-    })
-
-    // A successful boot (including a soft restart that the repair-guard
-    // chose over a hard reinstall, see #74874) means any in-flight repair
-    // attempt counter has been honoured — reset it so the next genuine
-    // failure starts fresh from attempt 1 instead of inheriting the
-    // accumulated count of the resolved episode.
-    bootstrapRepairAttempt = 0
-
-    // The backend's plugin discovery just ran and refreshed HERMES_HOME/.plugin-compat-report.json.
-    // Surface it once (per distinct set of affected plugins) after the window is up; never block boot.
-    setTimeout(() => void showPluginCompatNoticeOnce(), 1500)
-
-    return {
-      baseUrl,
-      mode: 'local',
-      source: 'local',
-      authMode: 'token',
-      token: authToken,
-      wsUrl,
-      logs: hermesLog.slice(-80),
-      ...getWindowState()
-    }
-  })().catch(async error => {
-    if (!backendConnectionState.clearPromiseForAttempt(connectionAttempt)) {
-      throw error
-    }
-
-    const failedProcess = backendConnectionState.invalidate()
-    stopBackendChild(failedProcess)
-    await waitForBackendExit(failedProcess)
-
-    if (error instanceof FirstRunSetupResetError) {
-      throw error
-    }
-
-    const message = error instanceof Error ? error.message : String(error)
-    const hostKeyChanged = isHostKeyChangedBootFailure(error)
-
-    // Carry structured Cloud-down metadata through the boot-progress / IPC
-    // boundary when present, so the renderer overlay can key on it rather than
-    // re-classifying the message string. main owns classification; the renderer
-    // only consumes the structured result (#85335).
-    const isCloudBackendDown = Boolean(error && typeof error === 'object' && (error as any).isCloudBackendDown === true)
-
-    const statusCode = Number(
-      error && typeof error === 'object' && Number.isInteger((error as any).statusCode)
-        ? (error as any).statusCode
-        : NaN
-    )
-
-    // Only latch LOCAL boot failures. A remote failure (lapsed session / mint
-    // timeout / host briefly unreachable across sleep) is transient and has no
-    // child 'exit' handler to clear the cache — latching it would wedge the app
-    // on "session expired" until a full restart, defeating reconnect, the
-    // "Sign out & sign in" reload, and the wake-recovery revalidate path.
-    if (shouldLatchBackendStartFailure({ attemptedRemote })) {
-      backendStartFailure = error instanceof Error ? error : new Error(message)
-    }
-
-    // A host-key CHANGE is the terminal exception among remote failures: SSH
-    // fails closed until the user verifies the change and clears the stale
-    // known_hosts entry, so retrying re-drives the identical doomed boot (one
-    // bundle showed 157 consecutive failures over 2.5h). Latch it like a local
-    // failure — reset/repair/apply-config clear the latch after the user fixes
-    // known_hosts.
-    if (shouldLatchHostKeyChangedFailure({ attemptedRemote, isReauth: false, isHostKeyChanged: hostKeyChanged })) {
-      backendStartFailure = error instanceof Error ? error : new Error(message)
-    }
-
-    // A confirmed reauth rejection latches separately: it can't self-heal, and
-    // leaving it unlatched hides the overlay's "Sign in" button on every retry.
-    if (shouldLatchRemoteReauthFailure({ attemptedRemote, isReauth: isReauthRequiredError(error) })) {
-      remoteReauthFailure = error instanceof Error ? error : new Error(message)
-    }
-
-    updateBootProgress(
-      {
-        error: message,
-        isCloudBackendDown: isCloudBackendDown || undefined,
-        message: `Desktop boot failed: ${message}`,
-        phase: 'backend.error',
-        // Renderer contract for the self-heal loop (#82679): a transient
-        // REMOTE failure (dropped SSH/HTTP registered connection, mint
-        // timeout) is retryable — the renderer re-attempts the boot with
-        // bounded backoff. Local failures, confirmed reauth rejections, and
-        // host-key changes are not: those end in the recovery overlay /
-        // sign-in affordance.
-        retryable: isRetryableRemoteBootFailure({
-          attemptedRemote,
-          isReauth: isReauthRequiredError(error),
-          isHostKeyChanged: hostKeyChanged
-        }),
-        running: false,
-        statusCode: Number.isInteger(statusCode) ? statusCode : undefined
-      },
-      { allowDecrease: true }
-    )
-    throw error
-  })
-
-  backendConnectionState.setPromise(connectionAttempt, connectionPromise)
-
-  return connectionPromise
+      return connectionPromise
     }
   )
 }
@@ -18027,8 +18036,7 @@ ipcMain.handle('hermes:version', async () => {
     hermesRoot: EVA_MANAGED_BUILD ? null : resolveUpdateRoot(),
     bundleOutOfSync: EVA_MANAGED_BUILD ? false : skew.outOfSync,
     bundleCommitsBehind: EVA_MANAGED_BUILD ? 0 : skew.desktopCommitsBehind,
-    bundleSwapPending:
-      !EVA_MANAGED_BUILD && IS_PACKAGED && detectBundleSwap(INSTALL_STAMP, loadInstallStamp())
+    bundleSwapPending: !EVA_MANAGED_BUILD && IS_PACKAGED && detectBundleSwap(INSTALL_STAMP, loadInstallStamp())
   }
 })
 

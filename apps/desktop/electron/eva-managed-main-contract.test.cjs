@@ -13,8 +13,12 @@ function assertSourceMatch(pattern, message) {
 
 test('managed main-process wiring survives an upstream Desktop recut', () => {
   assertSourceMatch(
-    /async function ensureBackend\(profile\)\s*{\s*if \(EVA_MANAGED_BUILD\)\s*{\s*return evaManagedRuntime\.resolveBackend\(\{ profile \}\)/,
+    /const evaManagedBackendGate = createManagedBackendGate\(\{\s*enabled: EVA_MANAGED_BUILD,\s*resolveBackend: input => evaManagedRuntime\.resolveBackend\(input\)/,
     'managed connections must resolve through the enrollment runtime'
+  )
+  assertSourceMatch(
+    /async function ensureBackend\(profile\)\s*{\s*return evaManagedBackendGate\.resolve\(profile, async \(\) =>/,
+    'backend resolution must enter the tested managed gate before the unmanaged fallback'
   )
   assertSourceMatch(
     /function globalRemoteActive\(\)\s*{\s*if \(EVA_MANAGED_BUILD\)\s*{\s*return true/,
