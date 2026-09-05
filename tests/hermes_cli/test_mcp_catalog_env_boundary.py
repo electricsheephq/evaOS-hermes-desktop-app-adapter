@@ -191,6 +191,38 @@ def test_generic_env_endpoint_rejects_protected_key(
     )
 
 
+def test_generic_env_endpoint_reports_managed_placeholder_refusal(
+    client: TestClient,
+    catalog_env: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from hermes_cli import managed_scope
+    from hermes_cli.config import invalidate_env_cache
+
+    managed = catalog_env / "managed-fixture"
+    managed.mkdir()
+    (managed / "config.yaml").write_text(
+        "mcp_servers:\n  evaos:\n    url: ${MANAGED_LEASE_ID}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HERMES_MANAGED_DIR", str(managed))
+    managed_scope.invalidate_managed_cache()
+    invalidate_env_cache()
+
+    response = client.put(
+        "/api/env",
+        headers=HEADERS,
+        json={"key": "MANAGED_LEASE_ID", "value": "must-not-land"},
+    )
+
+    assert response.status_code == 403
+    assert "managed by your administrator" in response.json()["detail"]
+    env_path = catalog_env / ".env"
+    assert not env_path.exists() or "MANAGED_LEASE_ID" not in env_path.read_text(
+        encoding="utf-8"
+    )
+
+
 def test_process_supplied_catalog_root_remains_supported(catalog_env: Path):
     from hermes_cli.mcp_catalog import get_entry
 

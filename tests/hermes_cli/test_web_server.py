@@ -177,6 +177,25 @@ class TestReloadEnv:
             assert known_key not in os.environ
             assert count >= 1
 
+    def test_managed_authority_survives_explicit_reload(self, tmp_path, monkeypatch):
+        managed = tmp_path / "managed-fixture"
+        managed.mkdir()
+        (managed / "config.yaml").write_text(
+            "mcp_servers:\n  evaos:\n    url: ${MANAGED_LEASE_ID}\n",
+            encoding="utf-8",
+        )
+        env_file = tmp_path / ".env"
+        env_file.write_text("MANAGED_LEASE_ID=profile-forged\n", encoding="utf-8")
+        monkeypatch.setenv("HERMES_MANAGED_DIR", str(managed))
+        monkeypatch.setenv("MANAGED_LEASE_ID", "service-owned")
+        from hermes_cli import managed_scope
+
+        managed_scope.invalidate_managed_cache()
+        with patch.dict(reload_env.__globals__, {"get_env_path": lambda: env_file}):
+            reload_env()
+
+        assert os.environ["MANAGED_LEASE_ID"] == "service-owned"
+
 
 # ---------------------------------------------------------------------------
 # redact_key tests

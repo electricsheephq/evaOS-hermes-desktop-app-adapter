@@ -31,6 +31,95 @@ def test_recovered_update_retry_skips_external_secret_sources(tmp_path, monkeypa
     assert external_calls == []
 
 
+def test_profile_dotenv_cannot_override_managed_runtime_lease_authority(
+    tmp_path, monkeypatch
+):
+    """Profile-owned dotenv values cannot replace service-owned authority."""
+    import hermes_cli.env_loader as env_loader
+
+    home = tmp_path / "hermes"
+    home.mkdir()
+    authority = {
+        "HERMES_MANAGED_DIR": "profile-managed-dir",
+        "HERMES_SHARED_AUTH_FILE": "profile-shared-auth",
+        "CREDENTIALS_DIRECTORY": "profile-credentials",
+        "EVAOS_DESKTOP_RUNTIME_SESSION_URL": "profile-session-url",
+        "PIPEDREAM_AGENT_BROKER_SECRET_FILE": "profile-broker-secret",
+    }
+    (home / ".env").write_text(
+        "".join(f"{key}={value}\n" for key, value in authority.items()),
+        encoding="utf-8",
+    )
+    process_values = {
+        key: f"process-{key.lower()}" for key in authority
+    }
+    for key, value in process_values.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setattr(env_loader, "_apply_external_secret_sources", lambda _path: None)
+    monkeypatch.setattr(env_loader, "_apply_managed_env", lambda: None)
+
+    load_hermes_dotenv(hermes_home=home)
+
+    for key, value in process_values.items():
+        assert os.environ[key] == value
+
+
+def test_profile_dotenv_cannot_create_managed_runtime_lease_authority(
+    tmp_path, monkeypatch
+):
+    """A profile dotenv cannot create package-owned authority keys."""
+    import hermes_cli.env_loader as env_loader
+
+    home = tmp_path / "hermes"
+    home.mkdir()
+    keys = (
+        "HERMES_MANAGED_DIR",
+        "HERMES_SHARED_AUTH_FILE",
+        "CREDENTIALS_DIRECTORY",
+        "EVAOS_DESKTOP_RUNTIME_SESSION_URL",
+        "PIPEDREAM_AGENT_BROKER_SECRET_FILE",
+    )
+    (home / ".env").write_text(
+        "".join(f"{key}=profile-owned\n" for key in keys), encoding="utf-8"
+    )
+    for key in keys:
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setattr(env_loader, "_apply_external_secret_sources", lambda _path: None)
+    monkeypatch.setattr(env_loader, "_apply_managed_env", lambda: None)
+
+    load_hermes_dotenv(hermes_home=home)
+
+    for key in keys:
+        assert key not in os.environ
+
+
+def test_profile_dotenv_cannot_override_managed_config_placeholder(
+    tmp_path, monkeypatch
+):
+    """A profile dotenv cannot redefine an env placeholder from managed config."""
+    import hermes_cli.env_loader as env_loader
+    from hermes_cli import managed_scope
+
+    home = tmp_path / "hermes"
+    home.mkdir()
+    managed = tmp_path / "managed"
+    managed.mkdir()
+    (managed / "config.yaml").write_text(
+        "mcp_servers:\n  evaos:\n    env: ${EVAOS_TEST_AGENT_ID}\n",
+        encoding="utf-8",
+    )
+    (home / ".env").write_text("EVAOS_TEST_AGENT_ID=sibling\n", encoding="utf-8")
+    monkeypatch.setenv("HERMES_MANAGED_DIR", str(managed))
+    monkeypatch.setenv("EVAOS_TEST_AGENT_ID", "main")
+    managed_scope.invalidate_managed_cache()
+    monkeypatch.setattr(env_loader, "_apply_external_secret_sources", lambda _path: None)
+    monkeypatch.setattr(env_loader, "_apply_managed_env", lambda: None)
+
+    load_hermes_dotenv(hermes_home=home)
+
+    assert os.environ["EVAOS_TEST_AGENT_ID"] == "main"
+
+
 def test_utf8_bom_does_not_mangle_first_key(tmp_path, monkeypatch):
     """A leading UTF-8 BOM must not prefix the first key name in os.environ.
 

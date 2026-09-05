@@ -1309,6 +1309,11 @@ class TestEnvWriteDenylist:
         [
             "HERMES_CONFIG_PATH",
             "HERMES_ENV_PATH",
+            "HERMES_MANAGED_DIR",
+            "HERMES_SHARED_AUTH_FILE",
+            "CREDENTIALS_DIRECTORY",
+            "EVAOS_DESKTOP_RUNTIME_SESSION_URL",
+            "PIPEDREAM_AGENT_BROKER_SECRET_FILE",
             "HERMES_OPTIONAL_MCPS",
             "HERMES_COPILOT_ACP_COMMAND",
             "HERMES_COPILOT_ACP_ARGS",
@@ -1330,6 +1335,28 @@ class TestEnvWriteDenylist:
             save_env_value(protected_key, "1")
 
         assert protected_key not in load_env()
+
+    @pytest.mark.parametrize(
+        "protected_key",
+        ["HERMES_MANAGED_DIR", "HERMES_SHARED_AUTH_FILE", "CREDENTIALS_DIRECTORY"],
+    )
+    def test_managed_authority_keys_are_not_removable(
+        self, protected_key, tmp_path, monkeypatch
+    ):
+        from hermes_cli.config import invalidate_env_cache
+
+        env_path = tmp_path / ".env"
+        env_path.write_text(f"{protected_key}=operator-owned\n", encoding="utf-8")
+        monkeypatch.setenv(protected_key, "process-owned")
+        invalidate_env_cache()
+
+        with pytest.raises(ValueError, match="denylist"):
+            remove_env_value(protected_key)
+
+        assert env_path.read_text(encoding="utf-8") == (
+            f"{protected_key}=operator-owned\n"
+        )
+        assert os.environ[protected_key] == "process-owned"
 
     def test_preexisting_optional_mcps_override_still_loads(self, tmp_path):
         """The writer gate must not migrate or ignore operator-owned .env state."""
