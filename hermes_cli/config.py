@@ -2583,7 +2583,7 @@ def _publish_env_value(key: str, value: Optional[str]) -> None:
             target[key] = value
 
 
-def _env_write_blocked(key: str, action: str) -> bool:
+def _env_write_blocked(key: str, action: str, *, raise_on_managed: bool = False) -> bool:
     """Shared write-lock check for ``.env`` writers; prints the refusal and returns True when blocked.
     Two distinct locks: ``is_managed()`` (package-manager install) and the managed *scope*
     (administrator-pinned env key — the managed .env wins at load anyway)."""
@@ -2592,9 +2592,12 @@ def _env_write_blocked(key: str, action: str) -> bool:
         return True
 
     if managed_scope.is_env_managed(key):
-        print(
+        message = (
             f"Cannot {action} {key}: it is managed by your administrator ({_managed_source('.env')}) "
-            f"and cannot be changed.", file=sys.stderr)
+            "and cannot be changed.")
+        print(message, file=sys.stderr)
+        if raise_on_managed:
+            raise PermissionError(message)
         return True
     return False
 
@@ -2612,7 +2615,7 @@ def save_env_value(key: str, value: str):
     # path lookup. A forged or unreadable managed directory must not be
     # dereferenced merely because a generic caller attempted this write.
     validate_env_var_name_for_write(key)
-    if _env_write_blocked(key, "set"):
+    if _env_write_blocked(key, "set", raise_on_managed=True):
         return
     value = value.replace("\n", "").replace("\r", "")
     value = _check_non_ascii_credential(key, value)

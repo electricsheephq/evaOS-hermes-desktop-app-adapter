@@ -1088,6 +1088,8 @@ class SessionSessionsMixin:
             SELECT
                 tip.id,
                 tip.source,
+                tip.profile_name,
+                tip.session_key,
                 tip.model,
                 tip.title,
                 s.started_at AS started_at,

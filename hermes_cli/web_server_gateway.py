@@ -147,8 +147,14 @@ def _collect_profile_gateway_topology() -> Dict[str, Any]:
     """
     try:
         from hermes_cli.profiles import _check_gateway_running, profiles_to_serve
+        from hermes_cli.managed_profile_scope import managed_profile_name
         from gateway.status import read_runtime_status
-        homes = profiles_to_serve(True)
+        owner = managed_profile_name()
+        homes = (
+            [(owner, get_hermes_home())]
+            if owner is not None
+            else profiles_to_serve(True)
+        )
     except Exception:
         _log.debug("profile/gateway topology enumeration failed", exc_info=True)
         return {"profiles": [], "gateway_mode": "unknown", "gateways": [], "profile_platforms": {}}
