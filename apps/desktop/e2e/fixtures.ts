@@ -34,6 +34,18 @@ const DESKTOP_ROOT = path.resolve(import.meta.dirname, '..')
 const REPO_ROOT = path.resolve(DESKTOP_ROOT, '..', '..')
 const RELEASE_ROOT = path.join(DESKTOP_ROOT, 'release')
 
+const DESKTOP_PACKAGE = JSON.parse(
+  fs.readFileSync(path.join(DESKTOP_ROOT, 'package.json'), 'utf8'),
+) as {
+  build?: { appId?: string; executableName?: string; productName?: string }
+  productName?: string
+}
+
+export const IS_MANAGED_EVAOS_AGENT =
+  DESKTOP_PACKAGE.build?.appId === 'com.electricsheephq.evaos.agent'
+export const DESKTOP_PRODUCT_NAME = DESKTOP_PACKAGE.build?.productName ?? DESKTOP_PACKAGE.productName ?? 'Hermes'
+export const DESKTOP_EXECUTABLE_NAME = DESKTOP_PACKAGE.build?.executableName ?? DESKTOP_PRODUCT_NAME
+
 // ─── Credential stripping (matches launch.spec.ts) ──────────────────────
 
 const CREDENTIAL_SUFFIXES: string[] = [
@@ -422,6 +434,30 @@ export async function setupMockBackend(options: MockBackendOptions = {}): Promis
   }
 }
 
+export interface ManagedSignedOutFixture {
+  app: ElectronApplication
+  page: Page
+  sandbox: Sandbox
+  cleanup: () => Promise<void>
+}
+
+/** Launch managed sign-in without enrollment or a local-backend fallback. */
+export async function setupManagedSignedOut(): Promise<ManagedSignedOutFixture> {
+  const sandbox = createSandbox('managed-signed-out')
+  const env = buildAppEnv(sandbox)
+  const { app, page } = await launchDesktop(env)
+
+  return {
+    app,
+    page,
+    sandbox,
+    cleanup: async () => {
+      await app.close().catch(() => undefined)
+      sandbox.cleanup()
+    },
+  }
+}
+
 export interface NoProviderFixture {
   app: ElectronApplication
   page: Page
@@ -520,16 +556,23 @@ providers:
  */
 function resolvePackagedBinaryPath(): string {
   if (process.platform === 'win32') {
-    return path.join(RELEASE_ROOT, 'win-unpacked', 'Hermes.exe')
+    return path.join(RELEASE_ROOT, 'win-unpacked', `${DESKTOP_EXECUTABLE_NAME}.exe`)
   }
 
   if (process.platform === 'darwin') {
     const arch = process.arch === 'arm64' ? 'arm64' : 'x64'
 
-    return path.join(RELEASE_ROOT, `mac-${arch}`, 'Hermes.app', 'Contents', 'MacOS', 'Hermes')
+    return path.join(
+      RELEASE_ROOT,
+      `mac-${arch}`,
+      `${DESKTOP_PRODUCT_NAME}.app`,
+      'Contents',
+      'MacOS',
+      DESKTOP_EXECUTABLE_NAME,
+    )
   }
 
-  return path.join(RELEASE_ROOT, 'linux-unpacked', 'hermes')
+  return path.join(RELEASE_ROOT, 'linux-unpacked', DESKTOP_EXECUTABLE_NAME)
 }
 
 export const PACKAGED_BINARY_PATH = resolvePackagedBinaryPath()
