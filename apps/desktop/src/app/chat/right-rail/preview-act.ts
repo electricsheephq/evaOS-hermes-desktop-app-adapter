@@ -413,6 +413,7 @@ async function driveAction(
     if (!(await clickAt(input, 1, shouldContinue))) {
       return cancelledResult()
     }
+
     // Select-all inside the now-focused field, so typing replaces what is there
     // the way it would for a person. NOT a triple-click: that is a pointer
     // gesture and selects the paragraph under the cursor whenever the target

@@ -264,6 +264,7 @@ export function useSlashCommand(deps: SlashCommandDeps) {
         }
 
         const { render, sessionId, storedSessionId } = resolved
+
         const renderSlashOutput = (text: string) =>
           render(sanitizeDesktopSlashOutput(name, text, isManagedEvaosAgent()))
 

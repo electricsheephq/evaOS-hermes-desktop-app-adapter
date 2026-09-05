@@ -70,10 +70,7 @@ test('redactSecrets masks a credential glued into an ssh target string', () => {
 })
 
 test('redactSecrets leaves legitimate ssh target logging untouched', () => {
-  assert.equal(
-    redactSecrets('connecting (no-mux) to root@192.0.2.10:22'),
-    'connecting (no-mux) to root@192.0.2.10:22'
-  )
+  assert.equal(redactSecrets('connecting (no-mux) to root@192.0.2.10:22'), 'connecting (no-mux) to root@192.0.2.10:22')
   assert.equal(
     redactSecrets('opening control master to alice@box.example.com:2222'),
     'opening control master to alice@box.example.com:2222'

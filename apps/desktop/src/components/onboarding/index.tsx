@@ -35,21 +35,21 @@ import {
   FeaturedProviderRow,
   FireworksProviderRow,
   LocalModelsProviderRow,
+  managedOAuthProviders,
   OpenRouterProviderRow,
   ProviderRow,
-  managedOAuthProviders,
   sortProviders
 } from './providers'
 
 export {
   FeaturedProviderRow,
   FireworksProviderRow,
+  isManagedLocalCliProviderUnavailable,
   KeyProviderRow,
   LocalModelsProviderRow,
+  managedOAuthProviders,
   OpenRouterProviderRow,
   ProviderRow,
-  isManagedLocalCliProviderUnavailable,
-  managedOAuthProviders,
   providerTitle,
   sortProviders
 } from './providers'
@@ -492,12 +492,14 @@ export function Picker({ ctx }: { ctx: OnboardingContext }) {
   }
 
   const select = (p: OAuthProvider) => void startProviderOAuth(p, ctx)
-  const featured = managedEva ? null : availableProviders.find(p => p.id === FEATURED_ID) ?? null
+  const featured = managedEva ? null : (availableProviders.find(p => p.id === FEATURED_ID) ?? null)
+
   const rest = managedEva
     ? availableProviders
     : featured
       ? availableProviders.filter(p => p.id !== FEATURED_ID)
       : availableProviders
+
   // Collapse the secondary providers behind a disclosure whenever Nous Portal
   // is present to anchor the choice — otherwise show the full list. The
   // Fireworks/OpenRouter key rows always live behind the disclosure, so the

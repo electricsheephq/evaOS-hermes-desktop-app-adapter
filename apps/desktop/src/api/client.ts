@@ -39,10 +39,7 @@ export const DESKTOP_UI_PROTOCOL = 3
 
 const DESKTOP_UI_PROTOCOL_METHODS = new Set(['session.create', 'session.resume', 'session.activate'])
 
-export function withDesktopUiProtocol(
-  method: string,
-  params: Record<string, unknown>
-): Record<string, unknown> {
+export function withDesktopUiProtocol(method: string, params: Record<string, unknown>): Record<string, unknown> {
   if (!DESKTOP_UI_PROTOCOL_METHODS.has(method)) {
     return params
   }

@@ -4,12 +4,7 @@ import { persistentAtom } from '@/lib/persisted'
 import { readKey } from '@/lib/storage'
 import { normalize } from '@/lib/text'
 
-import {
-  $rightRailActiveTabEpoch,
-  $rightRailActiveTabId,
-  type RightRailTabId,
-  selectRightRailTab
-} from './layout'
+import { $rightRailActiveTabEpoch, $rightRailActiveTabId, type RightRailTabId, selectRightRailTab } from './layout'
 import { canOpenBrowserWindow, openBrowserInNewWindow } from './windows'
 
 /**
@@ -219,9 +214,9 @@ export function ownsActivePreviewSurface(token: PreviewSurfaceToken | null): boo
 
   return Boolean(
     token &&
-      tab?.id === token.tabId &&
-      $rightRailActiveTabEpoch.get() === token.ownershipEpoch &&
-      previewSurfaceGenerations.get(token.tabId) === token.generation
+    tab?.id === token.tabId &&
+    $rightRailActiveTabEpoch.get() === token.ownershipEpoch &&
+    previewSurfaceGenerations.get(token.tabId) === token.generation
   )
 }
 

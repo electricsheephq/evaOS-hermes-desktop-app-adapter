@@ -13,6 +13,7 @@ import { $localRuntimeJobs, runningModelDownloads, watchLocalRuntimeJobs } from 
 import type { LocalModelLoadProgress, ModelOptionProvider, ModelPricing } from '@/types/hermes'
 
 import type { HermesGateway } from '../hermes'
+import { isManagedEvaosAgent, managedProviderDisplayValue } from '../i18n/managed-brand'
 import { cn } from '../lib/utils'
 import { startManualOnboarding } from '../store/onboarding'
 
@@ -22,7 +23,6 @@ import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, Command
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from './ui/dialog'
 import { HighlightMatches } from './ui/highlight-matches'
 import { Skeleton } from './ui/skeleton'
-import { isManagedEvaosAgent, managedProviderDisplayValue } from '../i18n/managed-brand'
 
 interface ModelPickerDialogProps {
   open: boolean
@@ -245,6 +245,7 @@ function ModelResults({
 }) {
   const { t } = useI18n()
   const copy = t.modelPicker
+  const managedEva = isManagedEvaosAgent()
 
   if (loading) {
     return <LoadingResults />

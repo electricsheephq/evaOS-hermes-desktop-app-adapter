@@ -101,11 +101,7 @@ describe('ProvidersSettings', () => {
       writable: true
     })
     listOAuthProviders.mockResolvedValue({
-      providers: [
-        provider('nous', true),
-        provider('openai-codex', true),
-        provider('minimax-oauth', false)
-      ]
+      providers: [provider('nous', true), provider('openai-codex', true), provider('minimax-oauth', false)]
     })
 
     await renderProvidersSettings()

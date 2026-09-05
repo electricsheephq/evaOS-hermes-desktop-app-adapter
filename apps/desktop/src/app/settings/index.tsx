@@ -105,11 +105,13 @@ export function SettingsView({ onClose, onConfigSaved, onMainModelChanged }: Set
       setActiveView('gateway')
     }
   }, [activeView, setActiveView])
+
   // Providers subnav (Accounts vs API keys) lives in its own param so each
   // sub-view is deep-linkable and survives a refresh.
   const providerViews = managedEva
     ? PROVIDER_VIEWS.filter(view => view !== 'custom-endpoints' && view !== 'local')
     : PROVIDER_VIEWS
+
   const [providerView, setProviderView] = useRouteEnumParam<ProviderView>('pview', providerViews, 'accounts')
   const [keysView] = useRouteEnumParam<KeysView>('kview', KEYS_VIEWS, 'tools')
 

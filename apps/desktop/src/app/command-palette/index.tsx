@@ -604,7 +604,16 @@ function CommandPaletteBody({ onExited }: { onExited: () => void }) {
       updateAvailable: status?.updateAvailable,
       version: backend ? status?.currentVersion : desktopVersion?.appVersion
     }).label
-  }, [backendApply, backendStatus, clientApply, clientStatus, connection?.mode, desktopVersion?.appVersion, managedEva, t])
+  }, [
+    backendApply,
+    backendStatus,
+    clientApply,
+    clientStatus,
+    connection?.mode,
+    desktopVersion?.appVersion,
+    managedEva,
+    t
+  ])
 
   // cmdk's onSelect doesn't forward the triggering event — keep the last
   // click/keydown modifiers so session rows can honour ⌘-Enter / ⌘-click.

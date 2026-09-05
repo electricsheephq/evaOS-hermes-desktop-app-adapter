@@ -278,10 +278,7 @@ function EvaManagedGatewaySettings({ embedded = false }: { embedded?: boolean } 
           <div className="overflow-hidden rounded-xl border border-border/70">
             <ListRow description={status.email ?? g.notSignedIn} title={g.accountTitle} />
             <ListRow description={businessDisplayName} title={g.businessTitle} />
-            <ListRow
-              description={status.agentDisplayName ?? g.assignedAfterSignIn}
-              title={g.agentTitle}
-            />
+            <ListRow description={status.agentDisplayName ?? g.assignedAfterSignIn} title={g.agentTitle} />
             <ListRow description={status.updateChannel} title={g.updateChannelTitle} />
           </div>
         ) : null}

@@ -182,7 +182,6 @@ const {
 const { createEvaMediaGrantCodec } = require('./eva-media-grant.cjs')
 const { createEvaProtocolHandlerManager } = require('./eva-protocol-handler.cjs')
 const { createEvaManagedRuntime } = require('./eva-runtime.cjs')
-const { createManagedBackendGate } = require('./managed-backend-gate.cjs')
 import { createEventDeduper } from './event-dedupe'
 import {
   buildTerminalScript,
@@ -247,6 +246,7 @@ import { buildHudWindowUrl } from './hud-url'
 import { resolveHudWindowing } from './hud-windowing'
 import { createLinkTitleWindow, guardLinkTitleSession, readLinkTitleWindowTitle } from './link-title-window'
 import { ensureMainWindow } from './main-window-lifecycle'
+const { createManagedBackendGate } = require('./managed-backend-gate.cjs')
 import { classifyManagedDeepLink } from './managed-deep-link'
 import {
   assertManagedUpdatePreflightClear,
@@ -887,12 +887,14 @@ const PROFILE_NAME_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/
 // tracks main. User can also override at runtime via
 // hermesDesktop.updates.setBranch().
 const DEFAULT_UPDATE_BRANCH = EVA_MANAGED_BUILD ? EVA_MANAGED_POLICY.updateChannel : 'main'
+
 // desktop.log lives under HERMES_HOME/logs/ so it sits next to agent.log,
 // errors.log, gateway.log produced by hermes_logging.setup_logging — one log
 // directory per user, regardless of which UI surface produced the line.
 const DESKTOP_LOG_PATH = EVA_MANAGED_BUILD
   ? path.join(app.getPath('userData'), 'logs', 'evaos-agent-desktop.log')
   : path.join(HERMES_HOME, 'logs', 'desktop.log')
+
 const DESKTOP_LOG_FLUSH_MS = 120
 const DESKTOP_LOG_BUFFER_MAX_CHARS = 64 * 1024
 // Bound desktop.log on disk. It is an append-only forensic log, so a boot loop
@@ -5356,6 +5358,7 @@ function multipartBody(upload) {
 function httpStatusError(statusCode, detail) {
   const error = new Error(`${statusCode}: ${detail}`) as Error & { statusCode: number }
   error.statusCode = statusCode
+
   return error
 }
 
@@ -5385,12 +5388,14 @@ function fetchJson(url, token, options: any = {}) {
         }
 
         let settled = false
+
         const resolveOnce = value => {
           if (!settled) {
             settled = true
             resolve(value)
           }
         }
+
         const rejectOnce = error => {
           if (!settled) {
             settled = true
@@ -5466,12 +5471,14 @@ function fetchJson(url, token, options: any = {}) {
         const signal = options.signal
         const abortRequest = () => req.destroy(new Error('Managed support request cancelled.'))
         req.on('error', rejectOnce)
+
         if (signal?.aborted) {
           rejectOnce(new Error('Managed support request cancelled.'))
           abortRequest()
 
           return
         }
+
         signal?.addEventListener('abort', abortRequest, { once: true })
         req.on('close', () => signal?.removeEventListener('abort', abortRequest))
         req.setTimeout(timeoutMs, () => {
@@ -5548,13 +5555,16 @@ function downloadViaTokenToFile(url, token, ctx, options: any = {}) {
     const signal = options.signal
     const abortRequest = () => req.destroy(new Error('Managed support request cancelled.'))
     req.on('error', rejectOnce)
+
     if (signal?.aborted) {
       rejectOnce(new Error('Managed support request cancelled.'))
       abortRequest()
+
       return
     } else {
       signal?.addEventListener('abort', abortRequest, { once: true })
     }
+
     req.on('close', () => signal?.removeEventListener('abort', abortRequest))
     req.setTimeout(timeoutMs, () => {
       req.destroy(new Error(`Timed out connecting to Hermes backend after ${timeoutMs}ms`))
@@ -9277,11 +9287,13 @@ async function resetEvaRendererSessions() {
   // sessions before closing auxiliary windows so prior delegated context
   // cannot reopen while the main renderer is re-homed.
   quickEntryLastState = null
+
   for (const window of BrowserWindow.getAllWindows()) {
     if (window !== mainWindow && !window.isDestroyed()) {
       window.close()
     }
   }
+
   if (!mainWindow || mainWindow.isDestroyed()) {
     return false
   }
@@ -9334,9 +9346,11 @@ const evaManagedRuntime = createEvaManagedRuntime({
     if (!mainWindow || mainWindow.isDestroyed()) {
       return
     }
+
     if (mainWindow.isMinimized()) {
       mainWindow.restore()
     }
+
     mainWindow.show()
     mainWindow.focus()
   }
@@ -16371,6 +16385,7 @@ ipcMain.handle('hermes:cloud:login', async () => {
   if (EVA_MANAGED_BUILD) {
     throw new Error('Cloud selection is managed by Electric Sheep.')
   }
+
   await openPortalLoginWindow()
 
   return { ok: true, signedIn: await hasLivePortalSession() }
@@ -16379,6 +16394,7 @@ ipcMain.handle('hermes:cloud:logout', async () => {
   if (EVA_MANAGED_BUILD) {
     throw new Error('Cloud selection is managed by Electric Sheep.')
   }
+
   await clearOauthSession(resolvePortalBaseUrl())
 
   return { ok: true, signedIn: await hasLivePortalSession() }
@@ -16387,6 +16403,7 @@ ipcMain.handle('hermes:cloud:discover', async (_event, org) => {
   if (EVA_MANAGED_BUILD) {
     throw new Error('Cloud selection is managed by Electric Sheep.')
   }
+
   // Returns { agents } or { needsOrgSelection: true, orgs }. `org` (optional)
   // scopes discovery to a chosen org for multi-org users.
   return discoverCloudAgents(typeof org === 'string' && org ? org : undefined)
@@ -16395,6 +16412,7 @@ ipcMain.handle('hermes:cloud:agent-sign-in', async (_event, dashboardUrl) => {
   if (EVA_MANAGED_BUILD) {
     throw new Error('Cloud selection is managed by Electric Sheep.')
   }
+
   // Silent per-agent sign-in via the shared portal session. Returns the agent's
   // gateway baseUrl + whether its session cookie landed; the renderer then
   // saves a cloud-mode connection pointed at this dashboardUrl.
@@ -17959,6 +17977,7 @@ ipcMain.handle('hermes:updates:branch:set', async (_event, name) => {
   if (EVA_MANAGED_BUILD) {
     throw new Error('Updates are managed by Electric Sheep.')
   }
+
   const branch = typeof name === 'string' && name.trim() ? name.trim() : DEFAULT_UPDATE_BRANCH
   writeDesktopUpdateConfig({ branch })
 

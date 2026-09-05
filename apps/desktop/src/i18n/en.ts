@@ -45,6 +45,16 @@ export const en: Translations = {
     off: 'Off'
   },
 
+  quickEntry: {
+    inputLabel: 'Quick Entry',
+    askPlaceholder: 'Ask Hermes…',
+    disconnectedPlaceholder: 'Not connected — open Hermes to reconnect',
+    sendTo: 'Send to',
+    targetLabel: 'Target session',
+    currentChat: 'Current chat',
+    newSession: 'New session'
+  },
+
   fileMenu: {
     revealFinder: 'Reveal in Finder',
     revealExplorer: 'Reveal in File Explorer',

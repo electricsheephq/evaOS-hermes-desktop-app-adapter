@@ -1,6 +1,6 @@
 # r31.1 release and compatibility packet
 
-Status: implementation in progress; source freeze, CI/review, artifacts and protected canaries pending. Canonical release gate [#255](https://github.com/electricsheephq/evaOS-hermes-desktop-app-adapter/issues/255), epic #252 and milestone 12.
+Status: planned runtime and Desktop ports are integrated; focused source gates pass. Exact-source CI/security and independent implementation review remain pending before merge. Artifacts and protected canaries have not started. Canonical release gate [#255](https://github.com/electricsheephq/evaOS-hermes-desktop-app-adapter/issues/255), epic #252 and milestone 12.
 
 ## Identity set
 
@@ -19,6 +19,8 @@ Status: implementation in progress; source freeze, CI/review, artifacts and prot
 The final fork head, merge/tree SHA, artifact digests, manifest candidate SHA, CI/review links and internal receipts are execution outputs. Do not publish placeholders as proof or change the upstream pin on drift.
 
 ## Required compatibility
+
+The [managed-delta ledger](../r31-managed-delta.md) records port commits and focused RED/GREEN receipts. Final PR checks and selected reviewers must bind one frozen head; local checks do not waive remote CI. The approved upstream pin and both predecessor inputs are unchanged.
 
 Four pairings: current/current, new-runtime/current-Mac, current-runtime/new-Mac, new/new. Legacy protocol1, current2 and new3 must expose and dispatch only supported GUI actions. Missing/invalid/future values and aliases/direct calls receive the same safe treatment. Non-Desktop/background/cross-owner GUI requests do not reach another session's surface.
 

@@ -45,6 +45,16 @@ export const zh: Translations = {
     off: '关'
   },
 
+  quickEntry: {
+    inputLabel: '快速输入',
+    askPlaceholder: '询问 Hermes…',
+    disconnectedPlaceholder: '未连接 — 打开 Hermes 以重新连接',
+    sendTo: '发送到',
+    targetLabel: '目标会话',
+    currentChat: '当前聊天',
+    newSession: '新会话'
+  },
+
   fileMenu: {
     revealFinder: '在访达中显示',
     revealExplorer: '在文件资源管理器中显示',
@@ -1071,7 +1081,8 @@ export const zh: Translations = {
       managed: {
         loading: '正在加载托管 evaOS Agent 访问权限…',
         title: '由 Electric Sheep 管理',
-        description: 'evaOS Agent 只能连接到业务管理员分配的智能体。本地后端、自定义网关 URL、原始会话令牌和外部网关覆盖均已禁用。',
+        description:
+          'evaOS Agent 只能连接到业务管理员分配的智能体。本地后端、自定义网关 URL、原始会话令牌和外部网关覆盖均已禁用。',
         accountTitle: 'Electric Sheep 账户',
         notSignedIn: '未登录',
         businessTitle: '业务',
@@ -1082,7 +1093,8 @@ export const zh: Translations = {
         refresh: '刷新分配的访问权限',
         signOut: '退出登录',
         failed: '无法加载托管访问权限。请重试或联系 Electric Sheep 支持。',
-        callbackHandlerUnavailable: '另一个 evaOS Agent 副本正在处理登录链接。请仅保留 Applications 中的已安装应用，重新打开后再试。',
+        callbackHandlerUnavailable:
+          '另一个 evaOS Agent 副本正在处理登录链接。请仅保留 Applications 中的已安装应用，重新打开后再试。',
         failedWithCode: code => `Electric Sheep 请求失败 [代码：${code}]`
       },
       loading: '正在加载网关设置...',

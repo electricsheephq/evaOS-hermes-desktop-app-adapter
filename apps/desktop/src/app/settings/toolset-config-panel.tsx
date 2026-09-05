@@ -19,6 +19,7 @@ import {
   startOAuthLogin
 } from '@/hermes'
 import { useI18n } from '@/i18n'
+import { isManagedEvaosAgent, managedProviderDisplayValue } from '@/i18n/managed-brand'
 import { Check, Loader2, Save, Terminal } from '@/lib/icons'
 import { cn } from '@/lib/utils'
 import { upsertDesktopActionTask } from '@/store/activity'
@@ -32,7 +33,6 @@ import type {
   ToolsetConfig,
   ToolsetModelsResponse
 } from '@/types/hermes'
-import { isManagedEvaosAgent, managedProviderDisplayValue } from '@/i18n/managed-brand'
 
 import { EnvVarActionsMenu, EnvVarActionsTrigger, EnvVarContextMenu } from './env-var-actions-menu'
 import { Pill } from './primitives'
@@ -809,7 +809,9 @@ export function ToolsetConfigPanel({ toolset, onConfiguredChange, profile }: Too
             >
               <span className="flex min-w-0 items-center gap-2">
                 <span className="truncate text-sm font-medium">{providerDisplayName}</span>
-                {provider.badge && <Pill>{managedProviderDisplayValue(provider.name, provider.badge, managedEva)}</Pill>}
+                {provider.badge && (
+                  <Pill>{managedProviderDisplayValue(provider.name, provider.badge, managedEva)}</Pill>
+                )}
                 {isBackendActive && (
                   <Pill tone="primary">
                     <Check className="size-3" />

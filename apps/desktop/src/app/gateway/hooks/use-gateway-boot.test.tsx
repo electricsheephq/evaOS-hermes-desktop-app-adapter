@@ -397,6 +397,7 @@ describe('useGatewayBoot remote reconnect loop (real hook, fake socket)', () => 
   it('adopts the backend-authoritative managed profile before session refresh', async () => {
     const desktop = fakeDesktop()
     desktop.profile.get = vi.fn(async () => ({ profile: 'assigned-profile' }))
+
     const refreshSessions = vi.fn(async () => undefined)
 
     ;(window as unknown as { hermesDesktop: unknown }).hermesDesktop = { ...desktop, eva: {} }
@@ -412,6 +413,7 @@ describe('useGatewayBoot remote reconnect loop (real hook, fake socket)', () => 
   it('tags primary gateway events with the profile adopted during managed boot', async () => {
     const desktop = fakeDesktop()
     desktop.profile.get = vi.fn(async () => ({ profile: 'assigned-profile' }))
+
     const events: Array<{ profile?: string }> = []
 
     ;(window as unknown as { hermesDesktop: unknown }).hermesDesktop = { ...desktop, eva: {} }
@@ -431,10 +433,13 @@ describe('useGatewayBoot remote reconnect loop (real hook, fake socket)', () => 
   it('does not connect the managed gateway before the authoritative profile resolves', async () => {
     const desktop = fakeDesktop()
     let resolveProfile: ((value: { profile: string }) => void) | undefined
+
     const profile = new Promise<{ profile: string }>(resolve => {
       resolveProfile = resolve
     })
+
     desktop.profile.get = vi.fn(() => profile)
+
     const events: Array<{ profile?: string }> = []
 
     ;(window as unknown as { hermesDesktop: unknown }).hermesDesktop = { ...desktop, eva: {} }
