@@ -1174,7 +1174,7 @@ async def test_lp2_layer0_source_contract_probe(tmp_path):
 
 
 def test_mcp2_snake_case_tool_schema_is_written_to_cache(monkeypatch):
-    from tools import mcp_schema_cache, mcp_tool as mcp_tool_module
+    from tools import mcp_schema_cache, mcp_tool_registration as registration_module
     from tools import registry as registry_module
     from tools.registry import ToolRegistry
 
@@ -1186,7 +1186,7 @@ def test_mcp2_snake_case_tool_schema_is_written_to_cache(monkeypatch):
     monkeypatch.setattr(registry_module, "registry", ToolRegistry())
     monkeypatch.setattr(mcp_schema_cache, "write_cache_entry", capture_cache)
     monkeypatch.setattr(
-        mcp_tool_module,
+        registration_module,
         "_track_mcp_tool_server",
         lambda _tool_name, _server_name: None,
     )
@@ -1200,7 +1200,7 @@ def test_mcp2_snake_case_tool_schema_is_written_to_cache(monkeypatch):
         )
     ]
 
-    registered = mcp_tool_module._register_server_tools(
+    registered = registration_module._register_server_tools(
         "lease-schema-probe",
         task,
         {"auth": "evaos_lease", "app_slug": "google_sheets"},
