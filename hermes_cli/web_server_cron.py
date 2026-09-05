@@ -112,7 +112,10 @@ def _cron_default_profile() -> str:
 def _cron_profile_home(profile: Optional[str]) -> Tuple[str, Path]:
     """Resolve a profile query value to (profile_name, HERMES_HOME)."""
     from hermes_cli import profiles as profiles_mod
-    raw = (profile or _cron_default_profile()).strip() or "default"
+    from hermes_cli.web_server_profiles import _managed_profile_or_http
+
+    raw = _managed_profile_or_http(profile or _cron_default_profile())
+    raw = raw.strip() or "default"
     try:
         canon = profiles_mod.normalize_profile_name(raw)
         profiles_mod.validate_profile_name(canon)
