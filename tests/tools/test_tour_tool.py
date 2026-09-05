@@ -17,7 +17,7 @@ def test_lives_in_the_gui_surface_toolset(monkeypatch):
     entry = registry.get_entry("gui_tour")
 
     assert entry is not None
-    assert entry.toolset == "desktop_ui"
+    assert entry.toolset == "desktop_ui_v2"
 
 
 def test_answers_to_the_appearance_switch():

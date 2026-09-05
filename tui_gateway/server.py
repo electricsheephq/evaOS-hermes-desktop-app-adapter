@@ -573,8 +573,30 @@ def _event_frame(event: str, sid: str, payload: dict | None = None) -> dict:
     return {"jsonrpc": "2.0", "method": "event", "params": params}
 
 
-def _emit(event: str, sid: str, payload: dict | None = None):
-    write_json(_event_frame(event, sid, payload))
+def _emit(
+    event: str,
+    sid: str,
+    payload: dict | None = None,
+    *,
+    transport: Transport | None = None,
+):
+    frame = _event_frame(event, sid, payload)
+    if transport is None:
+        return write_json(frame)
+    # A Desktop UI request validates one attachment snapshot and routes on that
+    # same transport. Re-reading session state in write_json would recreate a
+    # check/use race during resume or activate.
+    from tui_gateway.event_replay import _stamp_event
+
+    _stamp_event(frame)
+    return transport.write(frame)
+
+
+def _emit_on_transport(event: str, sid: str, payload: dict | None, transport: Transport | None):
+    """Preserve the legacy three-argument emitter seam when no snapshot transport exists."""
+    if transport is None:
+        return _emit(event, sid, payload)
+    return _emit(event, sid, payload, transport=transport)
 
 
 # Live WS peer transports (maintained by tui_gateway.ws): the only route for session-less background
@@ -1233,7 +1255,14 @@ _EXPIRING_REQUESTS = frozenset({
 })
 
 
-def _block(event: str, sid: str, payload: dict, timeout: float | None = 300, batch_qids: list[str] | None = None) -> str:
+def _block(
+    event: str,
+    sid: str,
+    payload: dict,
+    timeout: float | None = 300,
+    batch_qids: list[str] | None = None,
+    transport: Transport | None = None,
+) -> str:
     # Check before registering a pending request so a legacy or non-Desktop
     # client never waits for a responder it cannot implement.  The same check
     # is repeated immediately before emit to close the lifecycle-downgrade race.
@@ -1255,7 +1284,7 @@ def _block(event: str, sid: str, payload: dict, timeout: float | None = 300, bat
         if event in _DESKTOP_UI_EVENT_REQUIREMENTS:
             if error := _desktop_ui_emitter_protocol_error(sid, event):
                 return error
-        _emit(event, sid, payload)
+        _emit_on_transport(event, sid, payload, transport)
         # Event semantics: None → wait forever (clarify_timeout <= 0; released only by a real answer or
         # session.interrupt), 0 → return immediately, > 0 → bounded wait.
         answered = ev.wait(timeout)
@@ -1267,7 +1296,12 @@ def _block(event: str, sid: str, payload: dict, timeout: float | None = 300, bat
             answer = _answers.pop(rid, "")
             if (batch_state := _batch_clarify.pop(rid, None)) is not None:
                 batch_answers = dict(batch_state["answers"])
-    expire = lambda: _emit(f"{event.removesuffix('.request')}.expire", sid, {"request_id": rid})
+    expire = lambda: _emit_on_transport(
+        f"{event.removesuffix('.request')}.expire",
+        sid,
+        {"request_id": rid},
+        transport,
+    )
     if batch_qids is not None:
         # Cancel-all (respond with no question_id) resolves via _answers with "" — a plain cancel, not a partial result.
         if answer_present:
@@ -1276,7 +1310,12 @@ def _block(event: str, sid: str, payload: dict, timeout: float | None = 300, bat
         if not answered:
             # Deadline hit: keep what was locked, report the rest as absences (not skips), still expire live cards.
             result["timed_out"] = True
-            expire()
+            _emit_on_transport(
+                f"{event.removesuffix('.request')}.expire",
+                sid,
+                {"request_id": rid},
+                transport,
+            )
         return json.dumps(result, ensure_ascii=False)
     if not answered and not answer_present and event in _EXPIRING_REQUESTS:
         expire()
@@ -1320,7 +1359,7 @@ _TOUR_BRIDGE_UNAVAILABLE = json.dumps({
               "in this session.")})
 
 
-def _tour_request(sid: str, payload: dict) -> str:
+def _tour_request(sid: str, payload: dict, *, transport: Transport | None = None) -> str:
     """Bridge the tour tool callback onto _block without paying for a client that cannot answer: against
     an older app nobody calls ``tour.respond`` and each action would block the full deadline, stacking per
     turn. First action per session gets the short probe deadline; unanswered → bridge marked unavailable
@@ -1337,8 +1376,13 @@ def _tour_request(sid: str, payload: dict) -> str:
     state = session.get("tour_bridge")
     if state == "unanswered":
         return _TOUR_BRIDGE_UNAVAILABLE
-    answer = _block("tour.request", sid, dict(payload),
-                    timeout=_TOUR_TIMEOUT_S if state == "answered" else _TOUR_PROBE_TIMEOUT_S)
+    answer = _block(
+        "tour.request",
+        sid,
+        dict(payload),
+        timeout=_TOUR_TIMEOUT_S if state == "answered" else _TOUR_PROBE_TIMEOUT_S,
+        transport=transport,
+    )
     if answer:
         session["tour_bridge"] = "answered"
     elif state != "answered":
@@ -1800,8 +1844,8 @@ _DESKTOP_UI_EVENT_REQUIREMENTS = {
 }
 
 
-def _desktop_ui_protocol_for_session(sid: str) -> int:
-    """Return the normalized UI level for an existing live session."""
+def _desktop_ui_attachment_for_session(sid: str) -> tuple[str, int, Transport | None]:
+    """Capture one coherent source/protocol/transport attachment snapshot."""
     with _sessions_lock:
         session = _sessions.get(sid)
         if session is None and sid:
@@ -1810,16 +1854,24 @@ def _desktop_ui_protocol_for_session(sid: str) -> int:
                  if str(candidate.get("session_key") or "") == sid),
                 None)
         if not isinstance(session, dict):
-            return 0
+            return "", 0, None
+    lock = session.setdefault("history_lock", threading.Lock())
+    with lock:
         source = str(session.get("source") or "").strip()
         requested = session.get("desktop_ui_protocol")
+        transport = session.get("transport")
     if source != "desktop":
-        return 0
+        return source, 0, transport
     # A stored zero is meaningful when a non-Desktop client reattached to an
     # existing record.  Do not reinterpret it as a missing legacy marker.
     if type(requested) is int and 0 <= requested <= DESKTOP_UI_PROTOCOL_CURRENT:
-        return requested
-    return _negotiate_desktop_ui_protocol(source, requested)
+        return source, requested, transport
+    return source, _negotiate_desktop_ui_protocol(source, requested), transport
+
+
+def _desktop_ui_protocol_for_session(sid: str) -> int:
+    """Return the normalized UI level for an existing live session."""
+    return _desktop_ui_attachment_for_session(sid)[1]
 
 
 def _desktop_ui_session_ref(sid: str) -> str:
@@ -1849,9 +1901,13 @@ def _log_desktop_ui_lifecycle(
 
 
 def _desktop_ui_protocol_error(
-    sid: str, tool_name: str, required_protocol: int
+    sid: str,
+    tool_name: str,
+    required_protocol: int,
+    *,
+    attachment: tuple[str, int, Transport | None] | None = None,
 ) -> str | None:
-    negotiated = _desktop_ui_protocol_for_session(sid)
+    negotiated = (attachment or _desktop_ui_attachment_for_session(sid))[1]
     if negotiated >= required_protocol:
         return None
     _log_desktop_ui_lifecycle(
@@ -1875,7 +1931,12 @@ def _desktop_ui_protocol_error(
     }, ensure_ascii=False)
 
 
-def _desktop_ui_emitter_protocol_error(sid: str, event: str) -> str | None:
+def _desktop_ui_emitter_protocol_error(
+    sid: str,
+    event: str,
+    *,
+    attachment: tuple[str, int, Transport | None] | None = None,
+) -> str | None:
     requirement = _DESKTOP_UI_EVENT_REQUIREMENTS.get(event)
     if requirement is None:
         _log_desktop_ui_lifecycle(
@@ -1883,16 +1944,16 @@ def _desktop_ui_emitter_protocol_error(sid: str, event: str) -> str | None:
             event,
             "protocol_blocked",
             required_protocol=DESKTOP_UI_PROTOCOL_CURRENT,
-            negotiated_protocol=_desktop_ui_protocol_for_session(sid),
+            negotiated_protocol=(attachment or _desktop_ui_attachment_for_session(sid))[1],
         )
         return json.dumps({
             "error": "The requested Desktop UI action is unavailable.",
             "code": "desktop_ui_action_unavailable",
             "required_protocol": DESKTOP_UI_PROTOCOL_CURRENT,
-            "negotiated_protocol": _desktop_ui_protocol_for_session(sid),
+            "negotiated_protocol": (attachment or _desktop_ui_attachment_for_session(sid))[1],
         }, ensure_ascii=False)
     required, tool_name = requirement
-    return _desktop_ui_protocol_error(sid, tool_name, required)
+    return _desktop_ui_protocol_error(sid, tool_name, required, attachment=attachment)
 
 
 def _desktop_ui_protocol_level(sid: str) -> int:
@@ -1932,18 +1993,21 @@ def _bind_session_attachment(
 
 def _desktop_ui_request(sid: str, tool_name: str, required_protocol: int, request) -> str:
     """Run a blocking renderer request only after the session-level guard."""
-    if error := _desktop_ui_protocol_error(sid, tool_name, required_protocol):
+    attachment = _desktop_ui_attachment_for_session(sid)
+    if error := _desktop_ui_protocol_error(
+        sid, tool_name, required_protocol, attachment=attachment
+    ):
         return error
     started = time.monotonic()
     try:
-        result = request()
+        result = request(attachment[2])
     except Exception:
         _log_desktop_ui_lifecycle(
             sid,
             tool_name,
             "error",
             required_protocol=required_protocol,
-            negotiated_protocol=_desktop_ui_protocol_for_session(sid),
+            negotiated_protocol=attachment[1],
             latency_ms=int((time.monotonic() - started) * 1000),
         )
         raise
@@ -1953,7 +2017,7 @@ def _desktop_ui_request(sid: str, tool_name: str, required_protocol: int, reques
         tool_name,
         "expired" if expired else "responded",
         required_protocol=required_protocol,
-        negotiated_protocol=_desktop_ui_protocol_for_session(sid),
+        negotiated_protocol=attachment[1],
         latency_ms=int((time.monotonic() - started) * 1000),
     )
     return result
@@ -1961,16 +2025,17 @@ def _desktop_ui_request(sid: str, tool_name: str, required_protocol: int, reques
 
 def _desktop_ui_emit(sid: str, event: str, payload: dict) -> None:
     """Guard the final fire-and-forget renderer write and record its outcome."""
-    if error := _desktop_ui_emitter_protocol_error(sid, event):
+    attachment = _desktop_ui_attachment_for_session(sid)
+    if error := _desktop_ui_emitter_protocol_error(sid, event, attachment=attachment):
         return
-    _emit(event, sid, payload)
+    _emit_on_transport(event, sid, payload, attachment[2])
     required, tool_name = _DESKTOP_UI_EVENT_REQUIREMENTS[event]
     _log_desktop_ui_lifecycle(
         sid,
         tool_name,
         "dispatched",
         required_protocol=required,
-        negotiated_protocol=_desktop_ui_protocol_for_session(sid),
+        negotiated_protocol=attachment[1],
     )
 
 

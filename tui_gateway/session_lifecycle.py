@@ -6,6 +6,7 @@ globals at install time (method_ctx.bind_module), so they reference server.py gl
 from __future__ import annotations
 
 import contextlib
+import threading
 
 from .method_ctx import bind_module
 
@@ -578,14 +579,15 @@ def _close_sessions_for_transport(transport, *, end_reason: str = "ws_disconnect
                 ]
                 if live:
                     surviving = live[-1]
-                    current["transport"] = surviving
-                    state = viewers.get(surviving)
-                    if isinstance(state, dict):
-                        source = str(state.get("source") or "").strip()
-                        if source:
-                            current["source"] = source
-                            current["desktop_ui_protocol"] = _negotiate_desktop_ui_protocol(
-                                source, state.get("desktop_ui_protocol"))
+                    with current.setdefault("history_lock", threading.Lock()):
+                        current["transport"] = surviving
+                        state = viewers.get(surviving)
+                        if isinstance(state, dict):
+                            source = str(state.get("source") or "").strip()
+                            if source:
+                                current["source"] = source
+                                current["desktop_ui_protocol"] = _negotiate_desktop_ui_protocol(
+                                    source, state.get("desktop_ui_protocol"))
                 else:
                     current["transport"] = _detached_ws_transport
                     current.pop("_client_gone_interrupt_requested", None)

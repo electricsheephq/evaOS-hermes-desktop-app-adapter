@@ -11,8 +11,10 @@ from tools.registry import registry
 @pytest.fixture(autouse=True)
 def _reset_emitter():
     desktop_ui.set_emitter(None)
+    desktop_ui.set_protocol_resolver(None)
     yield
     desktop_ui.set_emitter(None)
+    desktop_ui.set_protocol_resolver(None)
 
 
 def test_lives_in_the_gui_surface_toolset(monkeypatch):
@@ -25,6 +27,14 @@ def test_lives_in_the_gui_surface_toolset(monkeypatch):
     assert entry is not None
     assert entry.toolset == "desktop_ui"
     assert entry.check_fn is None
+
+
+def test_legacy_description_does_not_name_v2_only_tools():
+    """Protocol-1 clients must not be prompted to call unavailable v2 tools."""
+    entry = registry.get_entry("focus_pane")
+
+    assert entry is not None
+    assert "close_preview" not in entry.schema["description"]
 
 
 @pytest.mark.parametrize("pane", fp.PANES)

@@ -74,6 +74,12 @@ class TestSurfaceResolution:
     def test_desktop_session_gets_them_with_no_desktop_env(self, no_desktop_env):
         """THE regression: a desktop client on a remote/cloud backend."""
         assert "desktop_ui" in server._gui_surface_toolsets("desktop")
+        assert "desktop_ui_v2" not in server._gui_surface_toolsets("desktop")
+
+    def test_protocol_two_session_gets_new_responder_tools(self, no_desktop_env):
+        assert "desktop_ui_v2" in server._gui_surface_toolsets(
+            "desktop", desktop_ui_protocol=2
+        )
 
     def test_tui_session_does_not(self, no_desktop_env):
         assert "desktop_ui" not in server._gui_surface_toolsets("tui")
@@ -99,9 +105,10 @@ class TestResolverPlumbing:
 
         no_desktop_env.setattr(cc, "coding_selection", lambda **_: ["coding"])
 
-        assert server._load_enabled_toolsets("desktop") == [
+        assert server._load_enabled_toolsets("desktop", 2) == [
             "coding",
             "desktop_ui",
+            "desktop_ui_v2",
             "project",
         ]
         assert server._load_enabled_toolsets("tui") == ["coding", "project"]
@@ -120,7 +127,11 @@ class TestResolverPlumbing:
 
         assert desktop is not None and tui is not None
         assert "desktop_ui" in desktop
+        assert "desktop_ui_v2" not in desktop
         assert "desktop_ui" not in tui
+
+        desktop_v2 = server._load_enabled_toolsets("desktop", 2)
+        assert desktop_v2 is not None and "desktop_ui_v2" in desktop_v2
 
     def test_explicit_env_pin_still_wins(self, no_desktop_env):
         """HERMES_TUI_TOOLSETS is an operator override; surface can't re-add."""

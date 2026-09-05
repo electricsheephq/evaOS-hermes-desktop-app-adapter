@@ -81,10 +81,10 @@ def _agent_cbs(sid: str) -> dict:
         # read gets longer since a URL tab extracts text from a live page.
         return lambda start=None, count=None: _desktop_ui_request(
             sid, tool_name, 1 if tool_name == "read_terminal" else 2,
-            lambda: _block(
+            lambda transport: _block(
                 event, sid,
                 {k: v for k, v in (("start", start), ("count", count)) if v is not None},
-                timeout=timeout))
+                timeout=timeout, transport=transport))
 
     callbacks = {
         "tool_start_callback": lambda tc_id, name, args: _on_tool_start(sid, tc_id, name, args),
@@ -110,23 +110,25 @@ def _agent_cbs(sid: str) -> dict:
         # drive_preview / annotate_preview (desktop GUI): same budget as the preview read it ends with.
         "drive_preview_callback": lambda payload: _desktop_ui_request(
             sid, "drive_preview", 2,
-            lambda: _block("preview.act.request", sid, dict(payload), timeout=45)),
+            lambda transport: _block("preview.act.request", sid, dict(payload), timeout=45, transport=transport)),
         "annotate_preview_callback": lambda payload: _desktop_ui_request(
             sid, "annotate_preview", 2,
-            lambda: _block("preview.act.request", sid, dict(payload), timeout=45)),
+            lambda transport: _block("preview.act.request", sid, dict(payload), timeout=45, transport=transport)),
         # read_window_below (desktop GUI): main process enumerates native windows.
         "read_window_below_callback": lambda: _desktop_ui_request(
             sid, "read_window_below", 2,
-            lambda: _block("window.read.request", sid, {}, timeout=30)),
+            lambda transport: _block("window.read.request", sid, {}, timeout=30, transport=transport)),
         # setup_mcp (desktop GUI): consent card + install/enable/OAuth; long timeout on purpose
         # (typing an API key, browser OAuth) and, like clarify, a late answer is tolerated.
         "setup_mcp_callback": lambda server, action, reason: _desktop_ui_request(
             sid, "setup_mcp", 2,
-            lambda: _block("mcp.setup.request", sid,
-                           {"server": server, "action": action, "reason": reason}, timeout=600)),
+            lambda transport: _block("mcp.setup.request", sid,
+                           {"server": server, "action": action, "reason": reason}, timeout=600,
+                           transport=transport)),
         # tour (desktop GUI): renderer drives driver.js and answers tour.respond.
         "tour_callback": lambda payload: _desktop_ui_request(
-            sid, "gui_tour", 2, lambda: _tour_request(sid, payload))}
+            sid, "gui_tour", 2,
+            lambda transport: _tour_request(sid, payload, transport=transport))}
 
     # Interim assistant commentary (text alongside tool calls), gated on display.interim_assistant_
     # messages; _run_prompt_submit overwrites it per turn and clears it so a stale closure can't fire.

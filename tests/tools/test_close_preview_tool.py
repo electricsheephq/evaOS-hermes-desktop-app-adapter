@@ -12,8 +12,19 @@ from tools.registry import registry
 def _reset_emitter():
     """Each test controls the emitter; never leak one across tests."""
     desktop_ui.set_emitter(None)
+    desktop_ui.set_protocol_resolver(None)
     yield
     desktop_ui.set_emitter(None)
+    desktop_ui.set_protocol_resolver(None)
+
+
+def test_protocol_error_returns_before_emission():
+    calls = []
+    desktop_ui.set_protocol_resolver(lambda _sid, _event: '{"code":"upgrade"}')
+    desktop_ui.set_emitter(lambda sid, event, payload: calls.append((event, payload)))
+
+    assert cp.close_preview_tool() == '{"code":"upgrade"}'
+    assert calls == []
 
 
 def test_lives_in_the_gui_surface_toolset(monkeypatch):
