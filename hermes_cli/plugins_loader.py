@@ -291,6 +291,7 @@ class PluginLoaderMixin:
         module_name = self._policy_module_name(manifest)
         self._track_tool_override_policy(manifest, module_name)
         try:
+            self._assert_scoped_override_policy(manifest, module_name)
             # Reuse a deferred platform's already-imported package so its body doesn't run twice.
             # See #78050.
             module = self._predeclared_modules.pop(plugin_key, None)
@@ -324,6 +325,21 @@ class PluginLoaderMixin:
         if not loaded.enabled:
             self._predeclared_tools.pop(plugin_key, None)
         self._plugins[plugin_key] = loaded
+
+    def _assert_scoped_override_policy(self, manifest: PluginManifest, module_name: str) -> None:
+        """Require an explicit profile policy before executing a directory plugin body."""
+        from agent.secret_scope import is_multiplex_active
+        if not is_multiplex_active() or manifest.source not in {"user", "project", "bundled"}:
+            return
+        from tools.registry import registry
+        if registry.snapshot_plugin_override_policy(module_name, scope=self.scope_key) is not None:
+            return
+        message = (
+            "Plugin override policy missing before module execution: "
+            f"profile={self.scope_key!r}, plugin={manifest_key(manifest)!r}, module={module_name!r}"
+        )
+        logger.error(message)
+        raise RuntimeError(message)
 
     def _track_tool_override_policy(self, manifest: PluginManifest, module_name: str) -> None:
         """Install the plugin's tool-override policy in tools.registry as a ledger-owned lease."""
@@ -399,10 +415,17 @@ class PluginLoaderMixin:
         self._plugins[lookup_key] = loaded
 
     def _directory_module_name(self, manifest: PluginManifest) -> str:
-        """Profile-safe import namespace for a directory plugin: the bare ``hermes_plugins.<slug>`` for the
-        first scope that claims it, a ``__home_<digest>`` suffix for any other scope."""
+        """Return a private import namespace for multiplex profiles and a stable bare name otherwise."""
         slug = manifest_key(manifest).replace("/", "__").replace("-", "_")
         bare_name = f"{_NS_PARENT}.{slug}"
+        try:
+            from agent.secret_scope import is_multiplex_active
+            multiplex_active = is_multiplex_active()
+        except Exception:
+            multiplex_active = False
+        if multiplex_active:
+            digest = hashlib.sha256(self.scope_key.encode("utf-8")).hexdigest()[:12]
+            return f"{_NS_PARENT}.scope_{digest}__{slug}"
         with _MODULE_NAMESPACE_LOCK:
             if _BARE_MODULE_SCOPE.setdefault(bare_name, self.scope_key) == self.scope_key:
                 return bare_name

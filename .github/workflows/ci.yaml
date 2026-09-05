@@ -255,6 +255,7 @@ jobs:
       - case-collision-check
       - lockfile-diff
       - docker-lint
+      - infographic-check
       - profile-artifact-check
       - supply-chain
       - review-labels

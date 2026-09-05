@@ -18,6 +18,7 @@ import/patch target): ``terminal_tool_config`` (TERMINAL_* reads, ``_quiet``),
 ``terminal_tool_result`` (foreground result post-processing).
 """
 
+import hashlib
 import json
 import logging
 import os
@@ -413,6 +414,10 @@ def _resolve_container_task_id(task_id: Optional[str]) -> str:
     4. No session key (CLI): ``shared:<key>`` when opted in (else a CLI run of a
        keyed profile would split from its gateway sessions), else ``"default"``,
        which subagent ids collapse onto to share the parent's container.
+
+    In multiplex mode, after the above identity is resolved, the active
+    profile home and backend are appended to the key. Explicit shared-container
+    opt-in remains authoritative and returns before this profile scoping.
     """
     if task_id and _has_isolation_overrides(task_id):
         return task_id
@@ -435,11 +440,30 @@ def _resolve_container_task_id(task_id: Optional[str]) -> str:
         # ONE container/cache slot (and sandbox dir) regardless of profile name (#84671).
         return f"shared:{shared}"
     if not session_key:
-        return "default"
-    if not scope.docker_profile_scoped:
-        return f"session:{session_key}"
-    profile = _current_session_profile() or "default"
-    return "default" if profile == "default" else f"profile:{profile}"
+        resolved_task_id = "default"
+    elif not scope.docker_profile_scoped:
+        resolved_task_id = f"session:{session_key}"
+    else:
+        profile = _current_session_profile() or "default"
+        resolved_task_id = "default" if profile == "default" else f"profile:{profile}"
+
+    # A multiplexed process serves several profiles in one interpreter. Scope
+    # the cache identity by the active profile home and backend so a routed
+    # profile cannot reuse another profile's live environment or file-ops
+    # cache. The unscoped path remains unchanged for CLI/TUI processes that do
+    # not run as profile multiplexers.
+    from agent.secret_scope import is_multiplex_active
+
+    if not is_multiplex_active():
+        return resolved_task_id
+    from hermes_constants import get_hermes_home
+
+    profile_home = str(get_hermes_home().expanduser().resolve())
+    env_type = _tenv("TERMINAL_ENV", "local").strip().lower() or "local"
+    scope_digest = hashlib.sha256(
+        f"{profile_home}\0{env_type}".encode("utf-8")
+    ).hexdigest()[:16]
+    return f"{resolved_task_id}-{env_type}-{scope_digest}"
 
 
 def resolve_task_overrides(task_id: Optional[str]) -> Dict[str, Any]:

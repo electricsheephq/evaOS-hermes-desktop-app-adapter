@@ -79,6 +79,11 @@ class PluginToolOverrideError(PermissionError):
 
 logger = logging.getLogger(__name__)
 
+# Directory plugins share the process-global import namespace even though a
+# multiplex gateway keeps one PluginManager per profile. Serialize discovery
+# across managers so concurrent imports cannot race package setup.
+_PLUGIN_DISCOVERY_LOCK = threading.RLock()
+
 # ``HERMES_PLUGINS_DEBUG=1`` tees verbose discovery logs to stderr in addition to agent.log. Read
 # once at import; tests flip it mid-process via ``_install_plugin_debug_handler(force=True)``.
 _PLUGINS_DEBUG = env_var_enabled("HERMES_PLUGINS_DEBUG")
@@ -1198,6 +1203,10 @@ class PluginManager(PluginLoaderMixin, PluginDispatchMixin, PluginLedgerMixin):
         return registered is not None and bool(registered[1](**kwargs))
 
     def discover_and_load(self, force: bool = False) -> None:
+        with _PLUGIN_DISCOVERY_LOCK:
+            self._discover_and_load_serialized(force=force)
+
+    def _discover_and_load_serialized(self, force: bool = False) -> None:
         """Scan all plugin sources and load each plugin found; ``force`` unloads first so config
         changes / new bundled backends become visible in long-lived sessions."""
         with self._discovery_lock, _plugin_home_scope(self.home_path):

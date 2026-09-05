@@ -76,8 +76,8 @@ test.describe('managed signed-out boot', () => {
       }
     })
 
-    expect(errors.unenrolled).toContain('sign-in-required')
+    expect(errors.unenrolled).toContain('Sign in to evaOS Agent from Settings.')
     expect(errors.wrongOwner).toContain('outside the managed runtime route')
-    expect(errors.terminal).toContain('managed-terminal-unavailable')
+    expect(errors.terminal).toContain('Terminal access is unavailable for this managed remote agent.')
   })
 })

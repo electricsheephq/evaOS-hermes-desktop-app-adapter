@@ -272,6 +272,10 @@ def _existing_profile_dir(name: str) -> Tuple[str, Path]:
 
 def get_profile_dir(name: str) -> Path:
     """Resolve a profile name to its HERMES_HOME directory."""
+    from hermes_cli.profile_scope import current_principal, require_profile
+
+    if current_principal() is not None:
+        name = require_profile(name)
     canon = normalize_profile_name(name)
     flat = _flat_managed_profile()
     if canon == "default":
@@ -287,6 +291,13 @@ def get_profile_dir(name: str) -> Path:
 
 def profile_exists(name: str) -> bool:
     """Check whether a live (non-tombstoned) profile directory exists."""
+    from hermes_cli.profile_scope import current_principal, require_profile
+
+    if current_principal() is not None:
+        try:
+            name = require_profile(name)
+        except PermissionError:
+            return False
     canon = normalize_profile_name(name)
     if canon == "default":
         return True

@@ -15,7 +15,7 @@ _TERMINAL_ENV_PREFIX = "TERMINAL_"
 
 @pytest.fixture(autouse=True)
 def _reset_terminal_scope_and_environment():
-    from tools import terminal_tool
+    from tools import terminal_scope, terminal_tool
 
     original_env = {
         key: value
@@ -26,13 +26,11 @@ def _reset_terminal_scope_and_environment():
         os.environ.pop(key, None)
     bridge_attempted = terminal_tool._terminal_config_bridge_attempted
     terminal_tool._terminal_config_bridge_attempted = False
-    scope_setter = getattr(terminal_tool, "set_terminal_config_scope", None)
-    token = scope_setter(None) if scope_setter is not None else None
+    token = terminal_scope.set_terminal_scope(None)
     try:
         yield
     finally:
-        if token is not None:
-            terminal_tool.reset_terminal_config_scope(token)
+        terminal_scope.reset_terminal_scope(token)
         terminal_tool._terminal_config_bridge_attempted = bridge_attempted
         for key in list(os.environ):
             if key.startswith(_TERMINAL_ENV_PREFIX):
@@ -216,27 +214,30 @@ def test_single_profile_path_still_uses_process_environment(tmp_path, monkeypatc
 
 
 def test_terminal_scope_propagates_through_copy_context(tmp_path):
-    from tools import terminal_tool
+    from tools import terminal_scope, terminal_tool
 
     scope = {
         "TERMINAL_ENV": "docker",
         "TERMINAL_DOCKER_IMAGE": "thread-image",
     }
-    token = terminal_tool.set_terminal_config_scope(scope)
+    token = terminal_scope.set_terminal_scope(scope)
     try:
         context = copy_context()
-        with mock.patch.object(
-            terminal_tool,
-            "_ensure_terminal_env_bridged",
+        # The upstream bridge itself now performs the scope check. Exercise it
+        # and guard its process-environment write seam, rather than replacing
+        # the guard with an unconditional failure.
+        with mock.patch(
+            "hermes_cli.config.apply_terminal_config_to_env",
             side_effect=AssertionError("active terminal scope used the global bridge"),
         ):
             with ThreadPoolExecutor(max_workers=1) as executor:
                 config = executor.submit(context.run, terminal_tool._get_env_config).result()
     finally:
-        terminal_tool.reset_terminal_config_scope(token)
+        terminal_scope.reset_terminal_scope(token)
 
     assert config["env_type"] == "docker"
     assert config["docker_image"] == "thread-image"
+    assert terminal_tool._terminal_config_bridge_attempted is False
 
 
 def test_missing_terminal_section_fails_open(tmp_path, monkeypatch):

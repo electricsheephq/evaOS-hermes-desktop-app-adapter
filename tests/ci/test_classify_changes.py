@@ -49,6 +49,16 @@ DEFAULT = {
 }
 
 
+def test_infographic_policy_is_a_required_aggregate_dependency():
+    """The declared required check must wait for and evaluate this policy job."""
+    import yaml
+
+    workflow = _PATH.parents[2] / ".github" / "workflows" / "ci.yaml"
+    jobs = yaml.safe_load(workflow.read_text(encoding="utf-8"))["jobs"]
+    assert "infographic-check" in jobs
+    assert "infographic-check" in jobs["all-checks-pass"]["needs"]
+
+
 def _lanes(python=False, frontend=False, site=False, scan=False, deps=False, uv_lock=False, npm_lock=False, installer=False, desktop_updater=False, rust=False, mcp_catalog=False, docker_meta=False, ci_review=False, python_prod=None, nix=None, docker=None) -> dict[str, bool]:
     # python_prod tracks python except for tests-only diffs; default it to
     # python so the majority of cases don't need to spell it out.
