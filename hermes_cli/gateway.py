@@ -6116,7 +6116,7 @@ def _cmd_restart(args):
     # Managed flat-profile services are owned by an external supervisor. Hand
     # the restart to the running gateway (SIGUSR1 -> drain/exit) and require a
     # fresh supervisor-owned replacement; never fall through to manual launch.
-    if not restart_all and _restart_managed_external_gateway_if_applicable():
+    if _restart_managed_external_gateway_if_applicable():
         return
     if restart_all and _dispatch_all_via_service_manager_if_s6("restart"):
         return
