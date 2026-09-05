@@ -210,6 +210,50 @@ def validate_alias_name(name: str) -> None:
         raise ValueError(f"Invalid alias name {name!r}. Must match [a-z0-9][a-z0-9_-]{{0,63}}")
 
 
+def _effective_service_user() -> str | None:
+    """Return the effective Unix account name, or ``None`` when unavailable."""
+    try:
+        import pwd
+
+        get_effective_uid = getattr(os, "geteuid", None)
+        if not callable(get_effective_uid):
+            return None
+        return (pwd.getpwuid(get_effective_uid()).pw_name or "").strip() or None
+    except Exception:
+        return None
+
+
+def _flat_managed_profile() -> tuple[str, Path, Path] | None:
+    """Return ``(name, home, root)`` for an exact managed flat profile.
+
+    The shared-auth file, flat home, and effective service account must agree;
+    an incomplete or malformed signal remains unmanaged rather than guessing.
+    """
+    shared_raw = os.environ.get("HERMES_SHARED_AUTH_FILE", "").strip()
+    if not shared_raw:
+        return None
+    try:
+        from hermes_constants import get_hermes_home
+
+        shared_path = Path(shared_raw).expanduser()
+        if not shared_path.is_absolute():
+            return None
+        shared_path = shared_path.resolve(strict=False)
+        home = Path(get_hermes_home()).expanduser().resolve(strict=False)
+        if shared_path.parent.name != "shared-auth":
+            return None
+        managed_root = shared_path.parent.parent
+        if home.parent != managed_root or home == shared_path.parent:
+            return None
+        name = home.name
+        validate_profile_name(name)
+        if _effective_service_user() != f"hermes-{name}":
+            return None
+        return name, home, managed_root
+    except Exception:
+        return None
+
+
 def _canon_valid(name: str) -> str:
     """normalize + validate in one step; returns the canonical id."""
     canon = normalize_profile_name(name)
@@ -229,8 +273,15 @@ def _existing_profile_dir(name: str) -> Tuple[str, Path]:
 def get_profile_dir(name: str) -> Path:
     """Resolve a profile name to its HERMES_HOME directory."""
     canon = normalize_profile_name(name)
+    flat = _flat_managed_profile()
     if canon == "default":
+        if flat is not None:
+            return flat[1]
         return _get_default_hermes_home()
+    if flat is not None:
+        if canon == flat[0]:
+            return flat[1]
+        return flat[2] / "profiles" / canon
     return _get_profiles_root() / canon
 
 
@@ -250,7 +301,11 @@ def profile_matches_home(name: str, home: "Path | None" = None) -> bool:
     self-referential (safe on the bare route) or names a different profile, which must fail
     closed rather than silently resolve the owner's config. Invalid names return False."""
     try:
-        target = get_profile_dir(name)
+        canon = normalize_profile_name(name)
+        flat = _flat_managed_profile()
+        if flat is not None and canon == "default" and flat[0] != "default":
+            return False
+        target = get_profile_dir(canon)
         if home is None:
             from hermes_constants import get_hermes_home
             home = get_hermes_home()
@@ -276,6 +331,10 @@ def _iter_named_profile_dirs(*, live_only: bool = True) -> List[Path]:
 def list_profile_names() -> List[str]:
     """Cheap name-only listing (``default`` + profile dirs). Unlike :func:`list_profiles` this
     reads NO per-profile config — safe for hot paths (cron target listings, create validation)."""
+    flat = _flat_managed_profile()
+    if flat is not None:
+        return [flat[0]]
+
     names = ["default"]
     with contextlib.suppress(OSError):
         names.extend(entry.name for entry in _iter_named_profile_dirs(live_only=False))
@@ -687,6 +746,10 @@ def _profile_info(name: str, path: Path, *, is_default: bool, alias_name: Option
 
 def list_profiles() -> List[ProfileInfo]:
     """Return info for all profiles, including the default."""
+    flat = _flat_managed_profile()
+    if flat is not None:
+        return [_profile_info(flat[0], flat[1], is_default=flat[0] == "default")]
+
     profiles = []
     default_home = _get_default_hermes_home()
     if default_home.is_dir():
@@ -708,6 +771,12 @@ def profiles_to_serve(multiplex: bool, profile_allowlist: Optional[List[str]] = 
     historical single-profile behavior; name is ``"default"`` or the named profile's id).
     ``multiplex=True``: default plus every live named profile, optionally filtered by
     *profile_allowlist* (invalid entries skipped, missing ones warned once)."""
+    flat = _flat_managed_profile()
+    if flat is not None:
+        # A flat managed process is already isolated to one profile. Keep this
+        # owner-only even when a stale/overbroad multiplex flag is present.
+        return [(flat[0], flat[1])]
+
     active = get_active_profile_name() or "default"
     if not multiplex:
         return [(active, get_profile_dir(active))]
@@ -1137,6 +1206,12 @@ def delete_profile(name: str, yes: bool = False) -> Path:
     canon = normalize_profile_name(name)
     if canon == "default":
         raise ValueError("Cannot delete the default profile (~/.hermes).\nTo remove everything, use: hermes uninstall")
+    flat = _flat_managed_profile()
+    if flat is not None and canon == flat[0]:
+        raise ValueError(
+            f"Cannot delete active managed profile '{canon}': "
+            "profile lifecycle is managed by evaOS."
+        )
     canon, profile_dir = _existing_profile_dir(canon)
     gw_running = _check_gateway_running(profile_dir)
     wrapper_path = _get_wrapper_dir() / canon
@@ -1357,6 +1432,9 @@ def get_active_profile_name() -> str:
     name under ``~/.hermes/profiles/<name>``, ``"custom"`` for any other path."""
     from hermes_constants import get_hermes_home
     resolved = get_hermes_home().resolve()
+    flat = _flat_managed_profile()
+    if flat is not None and resolved == flat[1]:
+        return flat[0]
     if resolved == _get_default_hermes_home().resolve():
         return "default"
     profiles_root = _get_profiles_root().resolve()
@@ -1633,6 +1711,12 @@ def rename_profile(old_name: str, new_name: str) -> Path:
     profile's home IS the installation root, so "renaming" it sets a presentation-only
     ``display_name`` instead — the canonical id stays ``default``."""
     old_canon = _canon_valid(old_name)
+    flat = _flat_managed_profile()
+    if flat is not None and old_canon in {flat[0], "default"}:
+        raise ValueError(
+            f"Cannot rename active managed profile '{old_canon}': "
+            "profile lifecycle is managed by evaOS."
+        )
     if old_canon == "default":
         if not (new_name or "").strip():
             raise ValueError("Display name cannot be empty.")
@@ -1689,6 +1773,11 @@ def resolve_profile_env(profile_name: str) -> str:
     """
     canon = _canon_valid(profile_name)
     env_home = os.environ.get("HERMES_HOME", "").strip()
+    flat = _flat_managed_profile()
+    if flat is not None and canon == flat[0]:
+        # Preserve the launcher's configured spelling (including a symlink
+        # alias) while using the validated managed profile identity.
+        return env_home or str(flat[1])
     if env_home:
         env_path = Path(env_home)
         # A profile-shaped env value means the root is the grandparent (mirrors

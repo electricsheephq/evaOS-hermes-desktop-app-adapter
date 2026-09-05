@@ -160,7 +160,8 @@ _ENV_VAR_NAME_DENYLIST: frozenset[str] = frozenset({
     "GIT_SSH_COMMAND", "GIT_EXEC_PATH", "GIT_SHELL",
     # Hermes runtime location
     "HERMES_HOME", "HERMES_PROFILE", "HERMES_CONFIG", "HERMES_ENV",
-    "HERMES_CONFIG_PATH", "HERMES_ENV_PATH",
+    "HERMES_CONFIG_PATH", "HERMES_ENV_PATH", "HERMES_MANAGED_DIR",
+    "HERMES_SHARED_AUTH_FILE", "CREDENTIALS_DIRECTORY",
     # MCP catalog trust root; package-manager wrappers may still set it in the process env.
     "HERMES_OPTIONAL_MCPS",
     # Local ACP subprocess selection (executable/argv authority).
@@ -169,7 +170,11 @@ _ENV_VAR_NAME_DENYLIST: frozenset[str] = frozenset({
     "HERMES_YOLO_MODE", "HERMES_ACCEPT_HOOKS", "HERMES_REDACT_SECRETS",
     "HERMES_INTERACTIVE", "HERMES_EXEC_ASK", "HERMES_GATEWAY_SESSION",
     "HERMES_CRON_SESSION", "HERMES_SINGLE_QUERY_SESSION",
-    "HERMES_SESSION_KEY", "HERMES_SESSION_PLATFORM"})
+    "HERMES_SESSION_KEY", "HERMES_SESSION_PLATFORM",
+    # Managed MCP lease authority is injected by the service; profile dotenv
+    # writers must not redirect its broker or secret source.
+    "EVAOS_DESKTOP_RUNTIME_SESSION_URL",
+    "PIPEDREAM_AGENT_BROKER_SECRET_FILE"})
 
 
 def _env_var_policy_name(key: str, *, is_windows: Optional[bool] = None) -> str:
@@ -1333,6 +1338,14 @@ def migrate_config(interactive: bool = True, quiet: bool = False) -> Dict[str, A
     # Validate config.yaml before any migration side effect: sanitize_env_file() rewrites .env,
     # which must not happen when the migration will be refused for malformed YAML.
     current_ver, latest_ver = check_config_version(raise_on_parse_error=True)
+
+    # A managed package update must preserve the profile's existing settings
+    # and dotenv, including values which happen to equal an older default.
+    # load_config() already interprets the prior format and overlays current
+    # defaults/policy in memory. Do not turn an ordinary package update into
+    # a persistent configuration migration (or stamp an unperformed one).
+    if managed_scope.get_managed_dir() is not None:
+        return results
 
     try:
         fixes = sanitize_env_file()
@@ -2595,9 +2608,12 @@ def _managed_source(filename: str):
 def save_env_value(key: str, value: str):
     """Save or update a value in ~/.hermes/.env (also matching ``export KEY=`` lines, so a save
     never appends a second line that a later delete would resurrect)."""
+    # Reject protected authority names before any environment-backed managed
+    # path lookup. A forged or unreadable managed directory must not be
+    # dereferenced merely because a generic caller attempted this write.
+    validate_env_var_name_for_write(key)
     if _env_write_blocked(key, "set"):
         return
-    validate_env_var_name_for_write(key)
     value = value.replace("\n", "").replace("\r", "")
     value = _check_non_ascii_credential(key, value)
     ensure_hermes_home()
@@ -2630,10 +2646,11 @@ def custom_endpoint_key_env(identity: str) -> str:
 
 def remove_env_value(key: str) -> bool:
     """Remove a key from ~/.hermes/.env and os.environ; True if it was found and removed."""
+    # Validate before consulting environment-backed managed state; this keeps
+    # protected authority keys fail-closed even when the managed path is bad.
+    validate_env_var_name_for_write(key)
     if _env_write_blocked(key, "remove"):
         return False
-    if not _ENV_VAR_NAME_RE.match(key):
-        raise ValueError(f"Invalid environment variable name: {key!r}")
     env_path = get_env_path()
     if not env_path.exists():
         _publish_env_value(key, None)
@@ -2689,12 +2706,24 @@ def reload_env() -> int:
     Removes deleted vars only when known to Hermes (OPTIONAL_ENV_VARS and _EXTRA_ENV_KEYS) so
     unrelated environment is never clobbered."""
     env_vars = load_env()
+    managed_authority_keys = set(managed_scope.load_managed_env())
+    managed_authority_keys.update(managed_scope.managed_config_env_keys())
+    try:
+        from hermes_cli.env_loader import _MANAGED_RUNTIME_AUTHORITY_KEYS
+
+        managed_authority_keys.update(_MANAGED_RUNTIME_AUTHORITY_KEYS)
+    except Exception:
+        pass
     count = 0
     for key, value in env_vars.items():
+        if key in managed_authority_keys:
+            continue
         if os.environ.get(key) != value:
             os.environ[key] = value
             count += 1
     for key in (set(OPTIONAL_ENV_VARS) | _EXTRA_ENV_KEYS) - set(env_vars):
+        if key in managed_authority_keys:
+            continue
         if key in os.environ:
             del os.environ[key]
             count += 1

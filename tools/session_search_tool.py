@@ -10,6 +10,7 @@ No LLM calls — every shape returns actual DB messages.
 
 import json
 import logging
+import os
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Union
 
@@ -183,7 +184,12 @@ def _discovery_entry(lineage_root: Optional[str], **fields) -> Dict[str, Any]:
     return entry
 
 
-def _title_match_result(db, query: str, current_lineage_root: Optional[str]) -> Optional[Dict[str, Any]]:
+def _title_match_result(
+    db,
+    query: str,
+    current_lineage_root: Optional[str],
+    routed_profile: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
     """Discovery-shaped result when the query matches a session title, else None."""
     title_query = query.strip().strip("`'\"")  # models often quote a remembered title
     session_id = title_query and _quiet(lambda: db.resolve_session_by_title(title_query), None,
@@ -197,6 +203,8 @@ def _title_match_result(db, query: str, current_lineage_root: Optional[str]) -> 
         return None
     session_meta = _quiet(lambda: db.get_session(lineage_root) or db.get_session(session_id), None,
                           "get_session failed for title match %s", session_id) or {}
+    if routed_profile is not None and _session_profile(session_meta) != routed_profile:
+        return None
     if session_meta.get("source") in _HIDDEN_SESSION_SOURCES:
         return None
     messages = _quiet(lambda: db.get_messages(session_id), [], "get_messages failed for title match %s", session_id)
@@ -259,10 +267,12 @@ def _hydrate_hit(db, lineage_root: str, match_info: Dict[str, Any], result_detai
 
 
 def _discover(db, query: str, role_filter: Optional[List[str]], limit: int, sort: Optional[str],
-              detail: str, current_session_id: str = None, link_profile: str = None) -> str:
+              detail: str, current_session_id: str = None, link_profile: str = None,
+              routed_profile: Optional[str] = None) -> str:
     """Discovery shape: FTS5 plus adaptive or full result hydration."""
     current_lineage_root = _resolve_lineage(db, current_session_id) if current_session_id else None
-    title_result = _title_match_result(db, query, current_lineage_root)
+    title_result = _title_match_result(
+        db, query, current_lineage_root, routed_profile=routed_profile)
     raw_results, err = _loud(lambda: db.search_messages(
         query=query, role_filter=role_filter or ["user", "assistant"],
         exclude_sources=list(_HIDDEN_SESSION_SOURCES), limit=_DISCOVER_SCAN_LIMIT, offset=0, sort=sort,
@@ -292,6 +302,10 @@ def _discover(db, query: str, role_filter: Optional[List[str]], limit: int, sort
         if len(seen_sessions) >= limit:
             break
         raw_sid, resolved_sid = r["session_id"], _resolve_lineage(db, r["session_id"])
+        if routed_profile is not None and not _session_matches_profile(db, raw_sid, routed_profile):
+            continue
+        if routed_profile is not None and not _session_matches_profile(db, resolved_sid, routed_profile):
+            continue
         # Skip the current session lineage — UNLESS the hit's transcript has left live context. Three
         # sub-cases: Legacy compression rotation: the FTS hit lives in a session that itself ended with
         # end_reason='compression'. That session's content has been replaced by a summary in the
@@ -339,6 +353,70 @@ def _resolve_profile_db(profile: str):
     return SessionDB(db_path=profiles_mod.get_profile_dir(canon) / "state.db", read_only=True)
 
 
+def _canonical_profile_name(value: Any) -> Optional[str]:
+    """Return the stable profile namespace used for session ownership checks."""
+    name = str(value or "").strip().casefold()
+    return "default" if name in ("", "default") else name
+
+
+def _session_profile(meta: Dict[str, Any]) -> Optional[str]:
+    """Derive a session's routed profile from persisted ownership metadata."""
+    if not isinstance(meta, dict):
+        return None
+    profile = meta.get("profile_name")
+    if profile is not None and str(profile).strip():
+        return _canonical_profile_name(profile)
+    session_key = str(meta.get("session_key") or "")
+    parts = session_key.split(":")
+    if len(parts) >= 2 and parts[0] == "agent" and parts[1]:
+        return "default" if parts[1].casefold() == "main" else _canonical_profile_name(parts[1])
+    return None
+
+
+def _routed_profile(db, current_session_id: Optional[str]) -> Optional[str]:
+    """Return the agent's persisted routed profile, when available."""
+    if not current_session_id:
+        return None
+    try:
+        return _session_profile(db.get_session(current_session_id) or {})
+    except Exception:
+        logging.debug("failed to resolve routed profile", exc_info=True)
+        return None
+
+
+def _is_managed_profile_database(db) -> bool:
+    """True when ``db`` is the private state DB for this managed process."""
+    if not os.getenv("HERMES_SHARED_AUTH_FILE", "").strip():
+        return False
+    db_path = getattr(db, "db_path", None)
+    if db_path is None:
+        return False
+    try:
+        from pathlib import Path
+
+        from hermes_cli.managed_profile_scope import managed_profile_name
+        from hermes_constants import get_hermes_home
+
+        if not managed_profile_name():
+            return False
+        return Path(db_path).resolve(strict=False) == (
+            get_hermes_home() / "state.db"
+        ).resolve(strict=False)
+    except Exception:
+        return False
+
+
+def _session_matches_profile(db, session_id: str, routed_profile: Optional[str]) -> bool:
+    """True when a session belongs to the routed profile; unknown is hidden."""
+    if routed_profile is None:
+        return True
+    try:
+        return _session_profile(db.get_session(session_id) or {}) == routed_profile
+    except Exception:
+        logging.debug("failed to inspect session owner", exc_info=True)
+        return False
+
+
 def _locate_session_db(session_id: str):
     """Scan every profile's ``state.db`` -> ``(db, profile_name)`` or ``(None, None)``.
     Ids are globally unique, so the first hit is authoritative."""
@@ -365,10 +443,19 @@ def _locate_session_db(session_id: str):
     return None, None
 
 
-def _read_session(db, session_id: str, head: int = 20, tail: int = 10, link_profile: str = None) -> str:
+def _read_session(
+    db,
+    session_id: str,
+    head: int = 20,
+    tail: int = 10,
+    link_profile: str = None,
+    routed_profile: Optional[str] = None,
+) -> str:
     """Read shape: whole session, or ``head`` + ``tail`` messages with a scroll pointer."""
     meta = _get_session_meta(db, session_id)
     if not meta:
+        return tool_error(f"session_id not found: {session_id}", success=False)
+    if routed_profile is not None and _session_profile(meta) != routed_profile:
         return tool_error(f"session_id not found: {session_id}", success=False)
     rows, err = _loud(lambda: db.get_messages(session_id), "get_messages failed for %s: %s", "failed to load session",
                       session_id)
@@ -383,11 +470,22 @@ def _read_session(db, session_id: str, head: int = 20, tail: int = 10, link_prof
                                "Pass around_message_id (any id above) to scroll the middle.")} if truncated else {}))
 
 
-def _read_with_profile_fallback(db, sid: str, profile: Optional[str]) -> str:
+def _read_with_profile_fallback(
+    db,
+    sid: str,
+    profile: Optional[str],
+    routed_profile: Optional[str] = None,
+    allow_fallback: bool = True,
+) -> str:
     """Read shape; on a miss scan every profile (the model may have dropped the owning
     profile from the link) and tag the result with where it was found."""
-    result = _read_session(db, sid, link_profile=profile)
-    located, owner = (None, None) if json.loads(result).get("success") else _locate_session_db(sid)
+    result = _read_session(
+        db, sid, link_profile=profile, routed_profile=routed_profile)
+    located, owner = (
+        (None, None)
+        if json.loads(result).get("success") or not allow_fallback
+        else _locate_session_db(sid)
+    )
     if located is None:
         return result
     try:
@@ -397,7 +495,13 @@ def _read_with_profile_fallback(db, sid: str, profile: Optional[str]) -> str:
     return json.dumps({**found, "profile": owner}, ensure_ascii=False) if found.get("success") else result
 
 
-def _list_recent_sessions(db, limit: int, current_session_id: str = None, link_profile: str = None) -> str:
+def _list_recent_sessions(
+    db,
+    limit: int,
+    current_session_id: str = None,
+    link_profile: str = None,
+    routed_profile: Optional[str] = None,
+) -> str:
     """Browse shape: metadata for the most recent sessions (no LLM, no FTS5)."""
     def _browse():
         # Never use list_sessions_rich(order_by_last_active=True) here: it walks every
@@ -417,11 +521,16 @@ def _list_recent_sessions(db, limit: int, current_session_id: str = None, link_p
         # Compression continuation: the root was summarised into the live child, so hide
         # it. /new-reset children carry no transcript — keep that root browsable.
         hidden = {current_session_id, current_root if has_compression_hop and current_root else None}
+        visible = [
+            x for x in sessions
+            if x.get("id", "") not in hidden
+            and (routed_profile is None or _session_profile(x) == routed_profile)
+        ]
         results = [{
             "session_id": s.get("id", ""), "link": _session_link(s.get("id", ""), link_profile),
             "title": s.get("title") or None, **{k: s.get(k, "") for k in ("source", "started_at", "last_active")},
             "message_count": s.get("message_count", 0), "preview": s.get("preview", "")}
-            for s in [x for x in sessions if x.get("id", "") not in hidden][:limit]]
+            for s in visible[:limit]]
         return _ok(mode="browse", results=results, count=len(results), message=(
             f"Showing {len(results)} most recent sessions. Pass a query= to search, "
             "or session_id+around_message_id to scroll."))
@@ -449,7 +558,8 @@ def _anchor_in_live_context(db, anchor_state, anchor_sid: str, current_session_i
 
 
 def _scroll(db, session_id: str, around_message_id: int, window: int = 5,
-            current_session_id: str = None) -> str:
+            current_session_id: str = None,
+            routed_profile: Optional[str] = None) -> str:
     """Scroll shape: a window centered on an anchor (no FTS5, no bookends)."""
     try:
         around_message_id = int(around_message_id)
@@ -464,6 +574,12 @@ def _scroll(db, session_id: str, around_message_id: int, window: int = 5,
     session_meta = _get_session_meta(db, session_id)
     if not session_meta:
         return tool_error(f"session_id not found: {session_id}", success=False)
+    if routed_profile is not None and _session_profile(session_meta) != routed_profile:
+        return tool_error(f"session_id not found: {session_id}", success=False)
+    if routed_profile is not None and owning and not _session_matches_profile(
+        db, owning, routed_profile
+    ):
+        return tool_error(f"around_message_id {around_message_id} not found", success=False)
     view, err = _loud(lambda: db.get_messages_around(session_id, around_message_id, window=window),
                       "get_messages_around failed: %s", "failed to load messages")
     if err:
@@ -495,7 +611,8 @@ def _scroll(db, session_id: str, around_message_id: int, window: int = 5,
 
 
 def _dispatch(query, role_filter, limit, db, current_session_id, session_id,
-              around_message_id, window, sort, profile, detail, owned_dbs) -> str:
+              around_message_id, window, sort, profile, detail, owned_dbs,
+              trusted_cross_profile: bool = False) -> str:
     """Mode dispatch (see module docstring); scroll wins when an anchor is set.
     Profile DBs opened here are appended to *owned_dbs* for the caller to close."""
     # A raw `@session:<profile>/<id>` link as session_id: ids never contain "/", so
@@ -506,8 +623,52 @@ def _dispatch(query, role_filter, limit, db, current_session_id, session_id,
             session_id = emb_id
             if emb_profile and (profile is None or not str(profile).strip()):
                 profile = emb_profile
-    # Cross-profile: swap in the named profile's DB (read-only) for every shape;
-    # current-lineage guards key off ids that won't collide, so they stay inert.
+    managed_scope = bool(os.getenv("HERMES_SHARED_AUTH_FILE", "").strip())
+    selector_profile = _routed_profile(db, current_session_id) if managed_scope else None
+    if managed_scope and selector_profile is None:
+        try:
+            from hermes_cli.managed_profile_scope import managed_profile_name
+
+            selector_profile = _canonical_profile_name(managed_profile_name())
+        except Exception:
+            # No persisted route and no validated process identity means a
+            # managed shared DB cannot be safely searched by the agent.
+            selector_profile = None
+    managed_local_db = managed_scope and _is_managed_profile_database(db)
+    if managed_local_db:
+        try:
+            from hermes_cli.managed_profile_scope import managed_profile_name
+
+            selector_profile = _canonical_profile_name(managed_profile_name())
+        except Exception:
+            pass
+    if managed_scope and not managed_local_db and selector_profile is None:
+        return tool_error(
+            "managed session scope is unavailable for this request",
+            success=False,
+        )
+    routed_profile = selector_profile if managed_scope and not managed_local_db else None
+
+    # Model-facing calls are profile-local. An explicit own-profile selector is
+    # harmless; a sibling selector can never widen the read scope. The trusted
+    # wrapper below is the only explicit cross-profile boundary.
+    if (
+        managed_scope
+        and profile is not None
+        and str(profile).strip()
+        and not trusted_cross_profile
+    ):
+        if selector_profile == _canonical_profile_name(profile):
+            profile = None
+        else:
+            return tool_error(
+                "cross-profile session access is unavailable to agent-facing session_search",
+                success=False,
+            )
+
+    # Trusted cross-profile reads swap in the named profile DB read-only. The
+    # DB boundary is then the authorization boundary, so no caller filter is
+    # inherited from the source profile.
     try:
         profile_db = _resolve_profile_db(profile)
     except Exception as e:
@@ -515,25 +676,38 @@ def _dispatch(query, role_filter, limit, db, current_session_id, session_id,
     if profile_db is not None:
         db, current_session_id = profile_db, None
         owned_dbs.append(profile_db)
+        routed_profile = None
     if isinstance(session_id, str) and session_id.strip():
         if around_message_id is not None:
-            return _scroll(db, session_id.strip(), around_message_id, window, current_session_id)
-        return _read_with_profile_fallback(db, session_id.strip(), profile)
+            return _scroll(
+                db, session_id.strip(), around_message_id, window,
+                current_session_id, routed_profile)
+        return _read_with_profile_fallback(
+            db, session_id.strip(), profile, routed_profile,
+            allow_fallback=trusted_cross_profile or not managed_scope)
     limit = _clamp_int(limit, 3, 1, 10)
     if not query or not isinstance(query, str) or not query.strip():
-        return _list_recent_sessions(db, limit, current_session_id, link_profile=profile)
+        return _list_recent_sessions(
+            db, limit, current_session_id,
+            link_profile=profile or routed_profile,
+            routed_profile=routed_profile)
     sort_norm = sort.strip().lower() if isinstance(sort, str) else None
     return _discover(
         db=db, query=query.strip(), limit=limit, sort=sort_norm if sort_norm in ("newest", "oldest") else None,
         role_filter=([r.strip() for r in role_filter.split(",") if r.strip()] or None) if isinstance(role_filter, str) else None,
         detail="full" if isinstance(detail, str) and detail.strip().lower() == "full" else "adaptive",
-        current_session_id=current_session_id, link_profile=profile)
+        current_session_id=current_session_id,
+        link_profile=profile or routed_profile,
+        routed_profile=routed_profile)
 
 
-def session_search(query: str = "", role_filter: str = None, limit: int = 3, db=None,
-                   current_session_id: str = None, session_id: str = None, around_message_id: int = None,
-                   window: int = 5, sort: str = None, profile: str = None, detail: str = "adaptive") -> str:
-    """Run session search, closing DBs opened here. Positional order is frozen for old callers."""
+def _run_session_search(
+    query: str = "", role_filter: str = None, limit: int = 3, db=None,
+    current_session_id: str = None, session_id: str = None, around_message_id: int = None,
+    window: int = 5, sort: str = None, profile: str = None, detail: str = "adaptive",
+    *, trusted_cross_profile: bool,
+) -> str:
+    """Run session search and close databases opened by this invocation."""
     from hermes_state import format_session_db_unavailable
     from hermes_state_registry import acquire, release_or_close
     owned_dbs: List[Any] = []
@@ -543,11 +717,41 @@ def session_search(query: str = "", role_filter: str = None, limit: int = 3, db=
             return tool_error(format_session_db_unavailable(), success=False)
         owned_dbs.append(db)
     try:
-        return _dispatch(query, role_filter, limit, db, current_session_id, session_id,
-                         around_message_id, window, sort, profile, detail, owned_dbs)
+        return _dispatch(
+            query, role_filter, limit, db, current_session_id, session_id,
+            around_message_id, window, sort, profile, detail, owned_dbs,
+            trusted_cross_profile=trusted_cross_profile)
     finally:
         for owned_db in reversed(owned_dbs):
             _quiet(lambda: release_or_close(owned_db), None, "Failed to close session_search SessionDB")
+
+
+def session_search(
+    query: str = "", role_filter: str = None, limit: int = 3, db=None,
+    current_session_id: str = None, session_id: str = None, around_message_id: int = None,
+    window: int = 5, sort: str = None, profile: str = None,
+    detail: str = "adaptive",
+) -> str:
+    """Run profile-local, agent-facing session search."""
+    return _run_session_search(
+        query=query, role_filter=role_filter, limit=limit, db=db,
+        current_session_id=current_session_id, session_id=session_id,
+        around_message_id=around_message_id, window=window, sort=sort,
+        profile=profile, detail=detail, trusted_cross_profile=False)
+
+
+def session_search_trusted(
+    query: str = "", role_filter: str = None, limit: int = 3, db=None,
+    current_session_id: str = None, session_id: str = None, around_message_id: int = None,
+    window: int = 5, sort: str = None, profile: str = None,
+    detail: str = "adaptive",
+) -> str:
+    """Explicit non-agent boundary for authorized cross-profile reads."""
+    return _run_session_search(
+        query=query, role_filter=role_filter, limit=limit, db=db,
+        current_session_id=current_session_id, session_id=session_id,
+        around_message_id=around_message_id, window=window, sort=sort,
+        profile=profile, detail=detail, trusted_cross_profile=True)
 
 
 def check_session_search_requirements() -> bool:
@@ -648,15 +852,6 @@ SESSION_SEARCH_SCHEMA = {
                     "'user,assistant' (tool output is usually noise). Pass "
                     "'user,assistant,tool' to include tool output (debugging tool "
                     "behaviour) or 'tool' to search tool output only."
-                ),
-            },
-            "profile": {
-                "type": "string",
-                "description": (
-                    "Optional. Read sessions from another Hermes profile's database "
-                    "(read-only). Use when resolving an `@session:<profile>/<id>` link: "
-                    "pass the profile segment here with session_id as the id segment. "
-                    "Omit to use the current profile."
                 ),
             },
         },

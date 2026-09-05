@@ -280,6 +280,105 @@ def _graceful_restart_via_sigusr1(pid: int, drain_timeout: float) -> bool:
     return _wait_for_pid_exit(pid, max(drain_timeout, 1.0))
 
 
+def _runtime_status_matches_identity(
+    record: object, identity: tuple[int, float]
+) -> bool:
+    """Return whether one runtime-status record names ``identity`` exactly."""
+    if not isinstance(record, dict):
+        return False
+    try:
+        pid = int(record.get("pid"))
+        start_time = float(record.get("start_time"))
+    except (TypeError, ValueError):
+        return False
+    return pid == identity[0] and abs(start_time - identity[1]) <= 0.001
+
+
+def _wait_for_managed_external_gateway_replacement(
+    previous_identity: tuple[int, float], timeout: float = 30.0
+) -> bool:
+    """Wait for one profile-local external-supervisor replacement."""
+    from gateway.status import (
+        get_running_pid_identity_strict,
+        get_runtime_status_running_pid,
+        read_runtime_status,
+    )
+
+    pid_path = Path(get_hermes_home()) / "gateway.pid"
+    expected_home = Path(get_hermes_home())
+    deadline = time.monotonic() + max(timeout, 1.0)
+    while time.monotonic() < deadline:
+        try:
+            replacement = get_running_pid_identity_strict(pid_path)
+        except RuntimeError:
+            replacement = None
+        if replacement is not None and replacement[0] != previous_identity[0]:
+            argv = _capture_gateway_argv(replacement[0])
+            if argv and "--external-supervisor" in argv:
+                runtime = read_runtime_status()
+                if isinstance(runtime, dict) and _runtime_status_matches_identity(
+                    runtime, replacement
+                ):
+                    if runtime.get("gateway_state") == "startup_failed":
+                        return False
+                    if (
+                        runtime.get("gateway_state") == "running"
+                        and get_runtime_status_running_pid(
+                            runtime, expected_home=expected_home
+                        )
+                        == replacement[0]
+                    ):
+                        return True
+        time.sleep(0.25)
+    return False
+
+
+def _restart_managed_external_gateway_if_applicable() -> bool:
+    """Restart a gateway owned by a managed flat-profile supervisor.
+
+    Outside managed-flat mode this returns ``False`` so upstream restart
+    behavior remains unchanged. Once detected, ambiguous identity fails closed
+    instead of falling through to a manual credential-incomplete launch.
+    """
+    from hermes_cli.profiles import _flat_managed_profile
+
+    if _flat_managed_profile() is None:
+        return False
+
+    from gateway.status import get_running_pid_identity_strict
+
+    pid_path = Path(get_hermes_home()) / "gateway.pid"
+    try:
+        identity = get_running_pid_identity_strict(pid_path)
+    except RuntimeError:
+        print_error("Managed gateway restart unavailable: gateway identity is invalid.")
+        raise SystemExit(1)
+    if identity is None:
+        print_error("Managed gateway restart unavailable: no profile-local gateway is running.")
+        raise SystemExit(1)
+
+    pid = identity[0]
+    argv = _capture_gateway_argv(pid)
+    if not argv or "--external-supervisor" not in argv:
+        print_error("Managed gateway restart unavailable: supervisor identity is invalid.")
+        raise SystemExit(1)
+
+    wait_budget = _get_restart_exit_wait_budget()
+    print(
+        "⏳ Managed gateway restarting gracefully — "
+        f"waiting up to {wait_budget:.0f}s for in-flight turns and drain..."
+    )
+    if not _graceful_restart_via_sigusr1(pid, wait_budget):
+        print_error("Managed gateway restart failed before supervisor handoff.")
+        raise SystemExit(1)
+    if not _wait_for_managed_external_gateway_replacement(identity):
+        print_error("Managed gateway restart failed: replacement was not observed.")
+        raise SystemExit(1)
+
+    print("✓ Managed gateway restarted through its external supervisor")
+    return True
+
+
 def _wait_for_pid_exit(pid: int, timeout: float) -> bool:
     """Wait up to ``timeout``s for ``pid`` to exit; True once gone. (``launchctl bootstrap`` fails EIO
     while the previous instance still drains, so teardown callers must wait for the real exit.)"""
@@ -6014,6 +6113,11 @@ def _cmd_restart(args):
     _refuse_from_inside_gateway("restart", "restart loops")
     system = getattr(args, "system", False)
     restart_all = getattr(args, "all", False)
+    # Managed flat-profile services are owned by an external supervisor. Hand
+    # the restart to the running gateway (SIGUSR1 -> drain/exit) and require a
+    # fresh supervisor-owned replacement; never fall through to manual launch.
+    if not restart_all and _restart_managed_external_gateway_if_applicable():
+        return
     if restart_all and _dispatch_all_via_service_manager_if_s6("restart"):
         return
     if not restart_all and _dispatch_via_service_manager_if_s6("restart"):

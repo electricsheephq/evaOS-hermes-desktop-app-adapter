@@ -1156,3 +1156,42 @@ class TestNewResetLineageBrowse:
         sids = [r["session_id"] for r in result["results"]]
         assert "s_legacy_child" in sids
 
+
+def test_managed_session_search_hides_sibling_profile(db, tmp_path, monkeypatch):
+    from pathlib import Path
+
+    root = tmp_path / ".hermes"
+    profile_home = root / "profiles" / "main"
+    profile_home.mkdir(parents=True)
+    shared = root / "shared-auth" / "auth.json"
+    shared.parent.mkdir()
+    shared.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setenv("HERMES_HOME", str(profile_home))
+    monkeypatch.setenv("HERMES_SHARED_AUTH_FILE", str(shared))
+
+    db.create_session(
+        "main_current", source="cli", session_key="agent:main:current", profile_name="main"
+    )
+    db.create_session(
+        "main_session", source="cli", session_key="agent:main:session", profile_name="main"
+    )
+    db.append_message("main_session", role="user", content="profile boundary marker")
+    db.create_session(
+        "sibling_session", source="cli", session_key="agent:jarvis:session", profile_name="jarvis"
+    )
+    db.append_message("sibling_session", role="user", content="profile boundary marker")
+    db._conn.commit()
+
+    discovered = json.loads(
+        session_search(query="profile boundary marker", db=db, current_session_id="main_current", limit=5)
+    )
+    assert [row["session_id"] for row in discovered["results"]] == ["main_session"]
+
+    read = json.loads(
+        session_search(session_id="sibling_session", db=db, current_session_id="main_current")
+    )
+    assert read["success"] is False
+    assert "profile boundary marker" not in json.dumps(read)
+
+    assert "profile" not in SESSION_SEARCH_SCHEMA["parameters"]["properties"]

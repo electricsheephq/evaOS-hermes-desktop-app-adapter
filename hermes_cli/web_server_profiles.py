@@ -115,6 +115,20 @@ def _fallback_profile_entry(profiles_mod, name: str, home: Path, *, is_default: 
 
 def _fallback_profile_dicts(profiles_mod) -> List[Dict[str, Any]]:
     profiles: List[Dict[str, Any]] = []
+    try:
+        from hermes_cli.managed_profile_scope import managed_profile_name
+        from hermes_constants import get_hermes_home
+
+        owner = managed_profile_name()
+        if owner is not None:
+            home = get_hermes_home()
+            return [_fallback_profile_entry(
+                profiles_mod, owner, home, is_default=owner == "default",
+                has_env=(home / ".env").exists(),
+                gateway_running=lambda: profiles_mod._check_gateway_running(home))]
+    except Exception:
+        _log.debug("managed profile fallback unavailable", exc_info=True)
+
     default_home = profiles_mod._get_default_hermes_home()
     if default_home.is_dir():
         profiles.append(_fallback_profile_entry(
@@ -145,6 +159,7 @@ def _fallback_profile_dicts(profiles_mod) -> List[Dict[str, Any]]:
 def _resolve_profile_dir(name: str) -> Path:
     """Validate ``name`` and resolve to its directory or raise an HTTPException."""
     from hermes_cli import profiles as profiles_mod
+    name = _managed_profile_or_http(name)
     try:
         profiles_mod.validate_profile_name(name)
     except ValueError as e:
@@ -152,6 +167,26 @@ def _resolve_profile_dir(name: str) -> Path:
     if not profiles_mod.profile_exists(name):
         raise HTTPException(status_code=404, detail=f"Profile '{name}' does not exist.")
     return profiles_mod.get_profile_dir(name)
+
+
+def _managed_profile_or_http(
+    profile: Optional[str], *, selectors_for_current: tuple[str, ...] = ()
+) -> str:
+    """Resolve a dashboard selector against the managed process profile."""
+    from hermes_cli.managed_profile_scope import (
+        ManagedProfileScopeError,
+        require_managed_profile,
+    )
+
+    try:
+        return require_managed_profile(
+            profile,
+            selectors_for_current=selectors_for_current,
+        )
+    except ManagedProfileScopeError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 def _write_profile_mcp_servers(profile_dir: Path, servers: List["MCPServerCreate"]) -> int:
@@ -211,6 +246,7 @@ def _profile_scope(profile: Optional[str]):
     since #65828 its directory lookups resolve at call time through the same contextvar override set in step
     1.
     """
+    profile = _managed_profile_or_http(profile)
     from hermes_constants import get_hermes_home
     from tools import skills_tool as _skills_tool
     from tools import skill_manager_tool as _skill_mgr
@@ -234,6 +270,7 @@ def _config_profile_scope(profile: Optional[str]):
     contextvar, never the process-global skills-module attributes ``_profile_scope`` swaps
     (holding those across an ``await`` lets a concurrent request restore THIS request's dir
     on its ``finally``). None/""/"current" = no override."""
+    profile = _managed_profile_or_http(profile)
     if _is_current_profile(profile):
         yield None
         return
@@ -362,7 +399,11 @@ def _profile_cli_args(profile: Optional[str]) -> List[str]:
     a fresh ``hermes`` subprocess whose ``_apply_profile_override()`` reads ``-p`` from argv —
     the only mechanism that reaches import-time-bound globals like ``skills_hub.SKILLS_DIR``."""
     requested = (profile or "").strip()
-    if not requested or requested.lower() in {"current", "default"}:
+    resolved = _managed_profile_or_http(requested)
+    if not requested or requested.lower() == "current":
+        return []
+    requested = resolved
+    if requested.lower() == "default":
         return []
     from hermes_cli import profiles as profiles_mod
     _resolve_profile_dir(requested)
