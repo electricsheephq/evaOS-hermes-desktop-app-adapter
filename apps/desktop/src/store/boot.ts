@@ -30,6 +30,14 @@ function clampProgress(value: number) {
 
 export function applyDesktopBootProgress(progress: DesktopBootProgress) {
   const current = $desktopBoot.get()
+
+  // A hard renderer failure is terminal for this boot cycle. The native
+  // operation that lost the deadline can still report progress; it must not
+  // re-arm the failed cycle. Explicit retry uses resumeDesktopBootForRetry.
+  if (current.error && !current.running && !progress.error) {
+    return
+  }
+
   const nextProgress = clampProgress(progress.progress)
   const mergedProgress = progress.running ? Math.max(current.progress, nextProgress) : nextProgress
 
