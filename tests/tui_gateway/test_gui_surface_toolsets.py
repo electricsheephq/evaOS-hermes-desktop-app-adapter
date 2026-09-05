@@ -17,19 +17,23 @@ import pytest
 import tui_gateway.server as server
 from toolsets import TOOLSETS, resolve_toolset
 
-GUI_TOOLS = {
-    "annotate_preview",
+GUI_TOOLS_P1 = {
     "desktop_preview",
-    "drive_preview",
     "close_terminal",
     "focus_pane",
     "read_terminal",
-    "read_window_below",
     "react_to_message",
-    "setup_mcp",
-    "show_tip",
-    "gui_tour",
 }
+GUI_TOOLS_P2 = {
+    "annotate_preview",
+    "drive_preview",
+    "read_window_below",
+    "setup_mcp",
+    "gui_tour",
+    "apply_layout",
+}
+GUI_TOOLS_P3 = {"show_tip"}
+GUI_TOOLS = GUI_TOOLS_P1 | GUI_TOOLS_P2 | GUI_TOOLS_P3
 
 
 @pytest.fixture
@@ -43,13 +47,14 @@ def no_desktop_env(monkeypatch):
 
 class TestDesktopUiToolset:
     def test_holds_exactly_the_gui_affordances(self):
-        # apply_layout registers into desktop_ui via the registry (not the
-        # static toolsets.py list), so force discovery first — otherwise the
-        # result depends on which earlier test imported tool modules
-        # (pre-existing ordering flake, surfaced by the #97979 test sweep).
+        # Force discovery first so registry additions do not depend on which
+        # earlier test imported tool modules (pre-existing ordering flake,
+        # surfaced by the #97979 test sweep).
         from tools.registry import discover_builtin_tools
         discover_builtin_tools()
-        assert set(resolve_toolset("desktop_ui")) == GUI_TOOLS | {"apply_layout"}
+        assert set(resolve_toolset("desktop_ui")) == GUI_TOOLS_P1
+        assert set(resolve_toolset("desktop_ui_v2")) == GUI_TOOLS_P2
+        assert set(resolve_toolset("desktop_ui_v3")) == GUI_TOOLS_P3
 
     def test_stays_off_the_core_tool_list(self):
         """Core ships on every API call — a GUI-only tool must not be there."""
@@ -60,7 +65,7 @@ class TestDesktopUiToolset:
     def test_no_platform_bundle_carries_it(self):
         """Messaging/CLI bundles must not pick these up by listing them."""
         for name, spec in TOOLSETS.items():
-            if name == "desktop_ui":
+            if name in {"desktop_ui", "desktop_ui_v2", "desktop_ui_v3"}:
                 continue
             assert GUI_TOOLS.isdisjoint(set(spec.get("tools") or ())), name
 
