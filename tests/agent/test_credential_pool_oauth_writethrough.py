@@ -108,8 +108,8 @@ def test_global_write_through_preserves_concurrent_root_update(
     writer_done = threading.Event()
     real_auth_load = A._load_auth_store
 
-    def paused_helper_load(path=None):
-        store = real_auth_load(path)
+    def paused_helper_load(path=None, **kwargs):
+        store = real_auth_load(path, **kwargs)
         if threading.current_thread().name == "profile-write-through":
             target_holder = A._auth_lock_holder_for(root_path)
             if getattr(target_holder, "depth", 0) > 0:
@@ -523,7 +523,7 @@ def test_managed_codex_pools_share_the_source_refresh_lock(monkeypatch, tmp_path
         return {"access_token": f"new-access-{sequence}", "refresh_token": f"new-refresh-{sequence}", "last_refresh": "2026-08-29T00:00:00Z"}
 
     monkeypatch.setattr(CP, "_auth_store_lock", tracking_lock)
-    monkeypatch.setattr(CredentialPool, "_sync_codex_entry_from_auth_store", sync_from_shared)
+    monkeypatch.setattr(CredentialPool, "_sync_entry_from_auth_store", sync_from_shared)
     monkeypatch.setattr(CredentialPool, "_persist", persist_to_shared)
     monkeypatch.setattr(CredentialPool, "_sync_device_code_entry_to_auth_store", lambda self, updated: None)
     monkeypatch.setattr(CredentialPool, "_entry_needs_refresh", lambda self, current: current.access_token == "old-access")
@@ -574,6 +574,7 @@ def test_terminal_quarantine_updates_managed_shared_source(profile_and_root, mon
     _write_store(root_path, {"version": 1, "providers": {provider: {"tokens": {"access_token": "shared-access", "refresh_token": "shared-refresh"}}}})
     if os.name != "nt":
         root_path.chmod(0o660)
+        os.chown(root_path, -1, os.getgid())
     monkeypatch.setenv("HERMES_SHARED_AUTH_FILE", str(root_path))
     monkeypatch.setattr(CP, "_global_auth_file_path", lambda: root_path)
     monkeypatch.setattr(CP, "_same_path", lambda left, right: left == right)

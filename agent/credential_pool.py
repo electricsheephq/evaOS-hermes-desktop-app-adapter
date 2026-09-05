@@ -1408,6 +1408,10 @@ class CredentialPool:
                     _store_provider_state(auth_store, self.provider, state, set_active=False)
                     _save_auth_store(auth_store)
         except Exception as exc:
+            if os.getenv("HERMES_SHARED_AUTH_FILE", "").strip():
+                raise RuntimeError(
+                    f"managed shared auth sync failed for {self.provider}"
+                ) from exc
             logger.debug("Failed to sync %s pool entry back to auth store: %s", self.provider, exc)
 
     def _apply_entry_to_singleton_state(self, entry: PooledCredential, state: Dict[str, Any]) -> bool:
