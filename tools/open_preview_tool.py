@@ -41,7 +41,7 @@ def open_preview_tool(url: str, label: str = "") -> str:
         {"url": target, "label": label},
         "Failed to open the preview pane: ",
         "The preview pane is only available in the Hermes desktop app.",
-        {"success": True, "url": target, "label": label})
+        {"success": True, "status": "dispatched", "url": target, "label": label})
 
 
 # ---- BEGIN PLUGIN-COMPAT (revert-scheduled; see COMPAT_MANIFEST.md) ----

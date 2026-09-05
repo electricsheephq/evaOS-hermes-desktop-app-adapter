@@ -880,7 +880,8 @@ def _deferred_build_agent_kwargs(current: dict, session_db) -> dict:
     runtime identity (like the eager resume's overrides splat) so the build can't drop the provider. No
     stored runtime, or an unroutable provider → this session's picked model/effort/tier, else the default."""
     kw = {"session_db": session_db, "context_cwd_is_launch_artifact": _context_cwd_is_launch_artifact(current),
-          "platform_override": _session_source(current)}
+          "platform_override": _session_source(current),
+          "desktop_ui_protocol_override": current.get("desktop_ui_protocol")}
     if resume_sid := current.get("resume_session_id"):
         kw["session_id"] = resume_sid
     resume_overrides = current.get("resume_runtime_overrides")
@@ -1233,6 +1234,12 @@ _EXPIRING_REQUESTS = frozenset({
 
 
 def _block(event: str, sid: str, payload: dict, timeout: float | None = 300, batch_qids: list[str] | None = None) -> str:
+    # Check before registering a pending request so a legacy or non-Desktop
+    # client never waits for a responder it cannot implement.  The same check
+    # is repeated immediately before emit to close the lifecycle-downgrade race.
+    if event in _DESKTOP_UI_EVENT_REQUIREMENTS:
+        if error := _desktop_ui_emitter_protocol_error(sid, event):
+            return error
     rid = uuid.uuid4().hex[:8]
     ev = threading.Event()
     with _prompt_lock:
@@ -1245,6 +1252,9 @@ def _block(event: str, sid: str, payload: dict, timeout: float | None = 300, bat
             _batch_clarify[rid] = {"qids": list(batch_qids), "answers": {}}
     answered, batch_answers = False, None
     try:
+        if event in _DESKTOP_UI_EVENT_REQUIREMENTS:
+            if error := _desktop_ui_emitter_protocol_error(sid, event):
+                return error
         _emit(event, sid, payload)
         # Event semantics: None → wait forever (clarify_timeout <= 0; released only by a real answer or
         # session.interrupt), 0 → return immediately, > 0 → bounded wait.
@@ -1755,11 +1765,234 @@ def _load_tool_progress_mode() -> str:
     return mode if mode in _TOOL_PROGRESS_MODES else "all"
 
 
-def _gui_surface_toolsets(platform: str) -> set[str]:
+DESKTOP_UI_PROTOCOL_LEGACY = 1
+DESKTOP_UI_PROTOCOL_CURRENT = 3
+
+
+def _negotiate_desktop_ui_protocol(platform: str, requested=None) -> int:
+    """Resolve a client-declared Desktop UI protocol without granting access.
+
+    ``source`` remains the authorization boundary.  Missing or invalid Desktop
+    markers are the legacy surface; newer markers are clamped to this runtime's
+    highest responder level.  Non-Desktop sessions always negotiate zero.
+    """
+    if platform != "desktop":
+        return 0
+    if isinstance(requested, bool) or not isinstance(requested, int):
+        return DESKTOP_UI_PROTOCOL_LEGACY
+    return max(DESKTOP_UI_PROTOCOL_LEGACY, min(requested, DESKTOP_UI_PROTOCOL_CURRENT))
+
+
+_DESKTOP_UI_EVENT_REQUIREMENTS = {
+    "terminal.read.request": (1, "read_terminal"),
+    "terminal.close": (1, "close_terminal"),
+    "preview.open": (1, "desktop_preview.open"),
+    "pane.reveal": (1, "focus_pane"),
+    "message.reaction": (1, "react_to_message"),
+    "preview.read.request": (2, "desktop_preview.read"),
+    "preview.close": (2, "desktop_preview.close"),
+    "preview.act.request": (2, "drive_preview"),
+    "window.read.request": (2, "read_window_below"),
+    "mcp.setup.request": (2, "setup_mcp"),
+    "tour.request": (2, "gui_tour"),
+    "layout.apply": (2, "apply_layout"),
+    "tip.show": (3, "show_tip"),
+}
+
+
+def _desktop_ui_protocol_for_session(sid: str) -> int:
+    """Return the normalized UI level for an existing live session."""
+    with _sessions_lock:
+        session = _sessions.get(sid)
+        if session is None and sid:
+            session = next(
+                (candidate for candidate in _sessions.values()
+                 if str(candidate.get("session_key") or "") == sid),
+                None)
+        if not isinstance(session, dict):
+            return 0
+        source = str(session.get("source") or "").strip()
+        requested = session.get("desktop_ui_protocol")
+    if source != "desktop":
+        return 0
+    # A stored zero is meaningful when a non-Desktop client reattached to an
+    # existing record.  Do not reinterpret it as a missing legacy marker.
+    if type(requested) is int and 0 <= requested <= DESKTOP_UI_PROTOCOL_CURRENT:
+        return requested
+    return _negotiate_desktop_ui_protocol(source, requested)
+
+
+def _desktop_ui_session_ref(sid: str) -> str:
+    """Stable redacted correlation id; never log a raw session identifier."""
+    return hashlib.sha256(str(sid or "").encode("utf-8")).hexdigest()[:12]
+
+
+def _log_desktop_ui_lifecycle(
+    sid: str,
+    tool_name: str,
+    outcome: str,
+    *,
+    required_protocol: int,
+    negotiated_protocol: int,
+    latency_ms: int = 0,
+) -> None:
+    logger.debug(
+        "desktop-ui lifecycle tool=%s outcome=%s required_protocol=%d "
+        "negotiated_protocol=%d session_ref=%s latency_ms=%d",
+        tool_name,
+        outcome,
+        required_protocol,
+        negotiated_protocol,
+        _desktop_ui_session_ref(sid),
+        max(0, int(latency_ms)),
+    )
+
+
+def _desktop_ui_protocol_error(
+    sid: str, tool_name: str, required_protocol: int
+) -> str | None:
+    negotiated = _desktop_ui_protocol_for_session(sid)
+    if negotiated >= required_protocol:
+        return None
+    _log_desktop_ui_lifecycle(
+        sid,
+        tool_name,
+        "protocol_blocked",
+        required_protocol=required_protocol,
+        negotiated_protocol=negotiated,
+    )
+    if negotiated == 0:
+        message = f"{tool_name} is only available to the Desktop client that owns this session."
+        code = "desktop_ui_unavailable"
+    else:
+        message = f"This Desktop client needs an update before it can use {tool_name}."
+        code = "desktop_ui_protocol_upgrade_required"
+    return json.dumps({
+        "error": message,
+        "code": code,
+        "required_protocol": required_protocol,
+        "negotiated_protocol": negotiated,
+    }, ensure_ascii=False)
+
+
+def _desktop_ui_emitter_protocol_error(sid: str, event: str) -> str | None:
+    requirement = _DESKTOP_UI_EVENT_REQUIREMENTS.get(event)
+    if requirement is None:
+        _log_desktop_ui_lifecycle(
+            sid,
+            event,
+            "protocol_blocked",
+            required_protocol=DESKTOP_UI_PROTOCOL_CURRENT,
+            negotiated_protocol=_desktop_ui_protocol_for_session(sid),
+        )
+        return json.dumps({
+            "error": "The requested Desktop UI action is unavailable.",
+            "code": "desktop_ui_action_unavailable",
+            "required_protocol": DESKTOP_UI_PROTOCOL_CURRENT,
+            "negotiated_protocol": _desktop_ui_protocol_for_session(sid),
+        }, ensure_ascii=False)
+    required, tool_name = requirement
+    return _desktop_ui_protocol_error(sid, tool_name, required)
+
+
+def _desktop_ui_protocol_level(sid: str) -> int:
+    return _desktop_ui_protocol_for_session(sid)
+
+
+def _bind_session_attachment(
+    session: dict,
+    source: str | None,
+    requested_desktop_ui_protocol=None,
+    *,
+    transport=None,
+) -> tuple[str, int]:
+    """Atomically bind caller source, protocol and viewer ownership.
+
+    Stored session metadata is historical context, never attachment authority.
+    A reconnect records the exact source/protocol pair alongside its transport;
+    disconnect can therefore restore a surviving viewer without inheriting the
+    departing client's capability level.
+    """
+    resolved_source = _resolve_session_source(source)
+    protocol = _negotiate_desktop_ui_protocol(
+        resolved_source, requested_desktop_ui_protocol)
+    lock = session.setdefault("history_lock", threading.Lock())
+    with lock:
+        session["source"] = resolved_source
+        session["desktop_ui_protocol"] = protocol
+        if transport is not None:
+            session["transport"] = transport
+            session.setdefault("viewers", {})[transport] = {
+                "attached_at": time.time(),
+                "source": resolved_source,
+                "desktop_ui_protocol": protocol,
+            }
+    return resolved_source, protocol
+
+
+def _desktop_ui_request(sid: str, tool_name: str, required_protocol: int, request) -> str:
+    """Run a blocking renderer request only after the session-level guard."""
+    if error := _desktop_ui_protocol_error(sid, tool_name, required_protocol):
+        return error
+    started = time.monotonic()
+    try:
+        result = request()
+    except Exception:
+        _log_desktop_ui_lifecycle(
+            sid,
+            tool_name,
+            "error",
+            required_protocol=required_protocol,
+            negotiated_protocol=_desktop_ui_protocol_for_session(sid),
+            latency_ms=int((time.monotonic() - started) * 1000),
+        )
+        raise
+    expired = not result or (tool_name == "gui_tour" and result == _TOUR_BRIDGE_UNAVAILABLE)
+    _log_desktop_ui_lifecycle(
+        sid,
+        tool_name,
+        "expired" if expired else "responded",
+        required_protocol=required_protocol,
+        negotiated_protocol=_desktop_ui_protocol_for_session(sid),
+        latency_ms=int((time.monotonic() - started) * 1000),
+    )
+    return result
+
+
+def _desktop_ui_emit(sid: str, event: str, payload: dict) -> None:
+    """Guard the final fire-and-forget renderer write and record its outcome."""
+    if error := _desktop_ui_emitter_protocol_error(sid, event):
+        return
+    _emit(event, sid, payload)
+    required, tool_name = _DESKTOP_UI_EVENT_REQUIREMENTS[event]
+    _log_desktop_ui_lifecycle(
+        sid,
+        tool_name,
+        "dispatched",
+        required_protocol=required,
+        negotiated_protocol=_desktop_ui_protocol_for_session(sid),
+    )
+
+
+def _gui_surface_toolsets(platform: str, desktop_ui_protocol=None) -> set[str]:
     """Toolsets that exist because of the CLIENT (both off ``_HERMES_CORE_TOOLS``; this is the one gate).
     ``platform`` is the SESSION's source, never a process env var: the desktop may drive a URL/cloud
-    backend where ``HERMES_DESKTOP`` is unset (AGENTS.md surface rule)."""
-    return {"project", "desktop_ui"} if platform == "desktop" else {"project"}
+    backend where ``HERMES_DESKTOP`` is unset (AGENTS.md surface rule).
+
+    An explicit protocol is the negotiated GUI capability view and therefore
+    contains only protocol toolsets.  The legacy no-argument view retains the
+    project surface for existing callers; session toolset assembly adds that
+    always-available project surface back when it passes a negotiated level.
+    """
+    surfaces = set() if desktop_ui_protocol is not None else {"project"}
+    if platform == "desktop":
+        surfaces.add("desktop_ui")
+        negotiated = _negotiate_desktop_ui_protocol(platform, desktop_ui_protocol)
+        if negotiated >= 2:
+            surfaces.add("desktop_ui_v2")
+        if negotiated >= 3:
+            surfaces.add("desktop_ui_v3")
+    return surfaces
 
 
 def _tui_notice(text: str) -> None:
@@ -1808,7 +2041,7 @@ def _resolve_explicit_toolsets(explicit: list[str], validate_toolset) -> list[st
     return (built_in + mcp_valid) or False
 
 
-def _load_enabled_toolsets(platform: str | None = None) -> list[str] | None:
+def _load_enabled_toolsets(platform: str | None = None, desktop_ui_protocol=None) -> list[str] | None:
     """The agent's toolsets for this session (None = all): an explicit HERMES_TUI_TOOLSETS pin; else the
     coding posture (coding_context collapses to coding toolset + enabled MCP servers in a code workspace);
     else the configured CLI toolsets. Client-surface toolsets fold in here — only this surface can answer them."""
@@ -1820,7 +2053,7 @@ def _load_enabled_toolsets(platform: str | None = None) -> list[str] | None:
             from agent.coding_context import coding_selection
             selection = coding_selection(platform=session_platform)
             if selection is not None:
-                return sorted({*selection, *_gui_surface_toolsets(session_platform)})
+                return sorted({*selection, "project", *_gui_surface_toolsets(session_platform, desktop_ui_protocol)})
     try:
         from toolsets import validate_toolset
     except Exception:
@@ -1842,7 +2075,7 @@ def _load_enabled_toolsets(platform: str | None = None) -> list[str] | None:
         enabled = _get_platform_tools(cfg, "cli", include_default_mcp_servers=True)
         if fallback_notice is not None:
             _tui_notice(fallback_notice)
-        return sorted(enabled | _gui_surface_toolsets(session_platform)) if enabled else None
+        return sorted(enabled | {"project"} | _gui_surface_toolsets(session_platform, desktop_ui_protocol)) if enabled else None
     except Exception:
         if fallback_notice is not None:
             _tui_notice("[tui] no valid HERMES_TUI_TOOLSETS entries and configured CLI toolsets could not be loaded; enabling all toolsets")
@@ -2260,7 +2493,8 @@ def _make_agent(
     sid: str, key: str, session_id: str | None = None, session_db=None,
     model_override: dict | str | None = None, provider_override: str | None = None,
     reasoning_config_override: dict | None = None, service_tier_override: str | None = None,
-    platform_override: str | None = None, context_cwd_is_launch_artifact: bool | None = None):
+    platform_override: str | None = None, context_cwd_is_launch_artifact: bool | None = None,
+    desktop_ui_protocol_override=None):
     # AC-4 test seam: dead unless armed by the isolated certify harness.
     from tui_gateway.synthetic_turn import maybe_build_synthetic_agent
     synthetic = maybe_build_synthetic_agent(session_id or key, model_override)
@@ -2287,7 +2521,7 @@ def _make_agent(
         reasoning_config=(
             reasoning_config_override if reasoning_config_override is not None else _load_reasoning_config(str(model or ""))),
         service_tier=service_tier_override if service_tier_override is not None else _load_service_tier(),
-        enabled_toolsets=_load_enabled_toolsets(platform),
+        enabled_toolsets=_load_enabled_toolsets(platform, desktop_ui_protocol_override),
         # OpenRouter provider_routing prefs (gateway + CLI parity).
         providers_allowed=_pr.get("only"), providers_ignored=_pr.get("ignore"), providers_order=_pr.get("order"),
         provider_sort=_pr.get("sort"), provider_require_parameters=_pr.get("require_parameters", False),
@@ -2339,15 +2573,18 @@ def _hydrate_session_cwd(sid: str, key: str, session_db, profile_home: str | Non
 def _init_session(
     sid: str, key: str, agent, history: list, cols: int = 80, cwd: str | None = None,
     session_db=None, source: str | None = None, profile_home: str | None = None,
-    explicit_cwd: bool = False):
+    explicit_cwd: bool = False, desktop_ui_protocol=None):
     now = time.time()
+    resolved_source = _resolve_session_source(source)
     with _sessions_lock:
         _sessions[sid] = {
             "agent": agent, "session_key": key, "history": history, "history_lock": threading.Lock(),
             "history_version": 0, "inflight_turn": None, "created_at": now, "last_active": now,
             "running": False, "attached_images": [], "image_counter": 0, "cwd": cwd or _completion_cwd(),
             "explicit_cwd": bool(explicit_cwd), "cols": cols, "slash_worker": None,
-            "show_reasoning": _load_show_reasoning(), "source": _resolve_session_source(source),
+            "show_reasoning": _load_show_reasoning(), "source": resolved_source,
+            "desktop_ui_protocol": _negotiate_desktop_ui_protocol(
+                resolved_source, desktop_ui_protocol),
             "tool_progress_mode": _load_tool_progress_mode(), "edit_snapshots": {}, "tool_started_at": {},
             # Profile-scoped HERMES_HOME (None = launch); SessionBranch copies the parent's (same state.db).
             "profile_home": profile_home,
@@ -2402,7 +2639,7 @@ def _deferred_session_record(
     close_on_disconnect: bool = False, display_history_prefix: list | None = None,
     profile_home: Path | None = None, lazy: bool = False, model_override=None,
     resume_runtime_overrides: dict | None = None, todo_state: dict | None = None,
-    explicit_cwd: bool = False) -> dict:
+    explicit_cwd: bool = False, desktop_ui_protocol=None) -> dict:
     """A live-session record whose AIAgent is built later (lazy watch / cold resume) — _init_session's shape minus the agent."""
     now = time.time()
     return {
@@ -2416,7 +2653,9 @@ def _deferred_session_record(
         "profile_home": str(profile_home) if profile_home is not None else None,
         "resume_runtime_overrides": resume_runtime_overrides, "resume_session_id": session_key,
         "running": False, "session_key": session_key, "show_reasoning": _load_show_reasoning(),
-        "slash_worker": None, "source": source, "tool_progress_mode": _load_tool_progress_mode(),
+        "slash_worker": None, "source": source,
+        "desktop_ui_protocol": _negotiate_desktop_ui_protocol(source, desktop_ui_protocol),
+        "tool_progress_mode": _load_tool_progress_mode(),
         "tool_started_at": {}, "todo_state": todo_state,
         "transport": current_transport() or _stdio_transport,
     }
@@ -2696,7 +2935,14 @@ def _live_session_payload(
             session["transport"] = transport
             # Every transport that showed this session (pop-outs resume the same sid); on disconnect the last
             # viewer becomes the transport instead of the drop sentinel.
-            session.setdefault("viewers", {})[transport] = time.time()
+            viewers = session.setdefault("viewers", {})
+            prior_viewer = viewers.get(transport)
+            viewers[transport] = (
+                {**prior_viewer, "attached_at": time.time()}
+                if isinstance(prior_viewer, dict) else
+                {"attached_at": time.time(), "source": _session_source(session),
+                 "desktop_ui_protocol": session.get("desktop_ui_protocol")}
+            )
             # See #83716.
             if transport is not _detached_ws_transport:
                 _cancel_ws_orphan_reap(sid)  # the client is back — a pending ws-orphan reap must not fire

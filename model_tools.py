@@ -269,11 +269,17 @@ def _tool_defs_cache_key(
         cfg_fp = (cfg_stat.st_mtime_ns, cfg_stat.st_size)
     except (FileNotFoundError, OSError, ImportError):
         cfg_fp = None
+    try:
+        from tools import desktop_ui as _desktop_ui
+        desktop_ui_protocol = _desktop_ui.protocol_level()
+    except Exception:
+        desktop_ui_protocol = None
     return (
         registry.current_scope_key(), frozenset(enabled_toolsets) if enabled_toolsets is not None else None,
         frozenset(disabled_toolsets) if disabled_toolsets else None, registry._generation, cfg_fp,
         bool(os.environ.get("HERMES_KANBAN_TASK")), bool(skip_tool_search_assembly),
         _is_delegated_child_context(), _is_dispatcher_owned_worker(), profile_scope,
+        desktop_ui_protocol,
     )
 
 

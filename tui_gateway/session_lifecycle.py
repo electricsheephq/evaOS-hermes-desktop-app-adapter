@@ -562,9 +562,30 @@ def _close_sessions_for_transport(transport, *, end_reason: str = "ws_disconnect
                 viewers = current.get("viewers") or {}
                 # See #83716.
                 viewers.pop(transport, None)
-                live = [vt for vt, ts in sorted(viewers.items(), key=lambda kv: kv[1]) if not _transport_is_dead(vt)]
+                def _viewer_seen_at(value) -> float:
+                    if isinstance(value, dict):
+                        with contextlib.suppress(TypeError, ValueError):
+                            return float(value.get("attached_at") or 0.0)
+                        return 0.0
+                    with contextlib.suppress(TypeError, ValueError):
+                        return float(value or 0.0)
+                    return 0.0
+
+                live = [
+                    vt for vt, _state in sorted(
+                        viewers.items(), key=lambda kv: _viewer_seen_at(kv[1]))
+                    if not _transport_is_dead(vt)
+                ]
                 if live:
-                    current["transport"] = live[-1]
+                    surviving = live[-1]
+                    current["transport"] = surviving
+                    state = viewers.get(surviving)
+                    if isinstance(state, dict):
+                        source = str(state.get("source") or "").strip()
+                        if source:
+                            current["source"] = source
+                            current["desktop_ui_protocol"] = _negotiate_desktop_ui_protocol(
+                                source, state.get("desktop_ui_protocol"))
                 else:
                     current["transport"] = _detached_ws_transport
                     current.pop("_client_gone_interrupt_requested", None)

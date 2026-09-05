@@ -180,7 +180,7 @@ INLINE_TOOL_EXECUTORS: Dict[str, InlineToolExecutor] = {
         ("key", "key"), ("submit", "submit"), ("amount", "amount"), ("to", "to"), ("limit", "max"),
     ),
     "annotate_preview": _callback_tool(
-        "tools.annotate_preview_tool", "annotate_preview_tool", "drive_preview_callback",
+        "tools.annotate_preview_tool", "annotate_preview_tool", "annotate_preview_callback",
         ("action", "action", "add"), ("ref", "ref"), ("selector", "selector"), ("label", "label"),
     ),
     "read_window_below": _callback_tool(

@@ -296,6 +296,8 @@ def _create_overrides(params: dict) -> tuple:
 @method("session.create")
 def _(rid, params: dict) -> dict:
     (sid, source), key = _new_runtime_ids(params), _new_session_key()
+    desktop_ui_protocol = _negotiate_desktop_ui_protocol(
+        source, params.get("desktop_ui_protocol"))
     history = _coerce_seed_history(params.get("messages"))
     # Branch: links back so list_sessions_rich keeps it visible and the sidebar nests it.
     parent_session_id = _str_param(params, "parent_session_id") or None
@@ -326,6 +328,7 @@ def _(rid, params: dict) -> dict:
             "follow_profile_config": _flag(params, "follow_profile_config"),
             "profile_home": str(profile_home) if profile_home is not None else None,
             "running": False, "session_key": key, "show_reasoning": _load_show_reasoning(), "source": source,
+            "desktop_ui_protocol": desktop_ui_protocol,
             "slash_worker": None, "tool_progress_mode": _load_tool_progress_mode(), "tool_started_at": {},
             "transport": current_transport() or _stdio_transport}
         _register_session_cwd(_sessions[sid])
@@ -454,6 +457,7 @@ class _Resume:
         self.profile = (params.get("profile") or "").strip() or None
         self.profile_home = _profile_home(self.profile)
         self.lazy, self.defer_history = _flag(params, "lazy"), _flag(params, "defer_history")
+        self.requested_desktop_ui_protocol = params.get("desktop_ui_protocol")
         # Desktop hydrates over REST; suppress the duplicate WS copy only when asked.
         self.omit_messages, self.eager_build = _flag(params, "omit_messages"), _flag(params, "eager_build")
 
@@ -472,6 +476,7 @@ class _Resume:
         return _deferred_session_record(
             self.target, cols=self.cols, cwd=cwd, history=history, lease=None, source=source,
             close_on_disconnect=_flag(self.params, "close_on_disconnect"),
+            desktop_ui_protocol=self.requested_desktop_ui_protocol,
             profile_home=self.profile_home, explicit_cwd=bool(self.profile_resume_cwd), **extra)
 
     def claim(self, sid: str, record: dict) -> dict | None:
@@ -524,6 +529,12 @@ def _resume_live_unpersisted(ctx: _Resume, live_sid: str, live: dict) -> dict:
     if ctx.owns_db:
         _release_db(ctx.db)
     live["last_active"] = time.time()
+    _bind_session_attachment(
+        live,
+        _resolve_session_source(_str_param(ctx.params, "source") or None),
+        ctx.requested_desktop_ui_protocol,
+        transport=current_transport(),
+    )
     if (transport := current_transport()) is not None:
         # This resume reattaches the live record. A lazy session (no state.db row yet — every fresh Bot
         # Chat) that was sentinel-parked by a WS drop MUST be rebound here, or it keeps the drop sentinel
@@ -531,7 +542,14 @@ def _resume_live_unpersisted(ctx: _Resume, live_sid: str, live: dict) -> dict:
         # unpersisted sibling of the storm-killer paths (#91276).
         with live.setdefault("history_lock", threading.Lock()):
             live["transport"] = transport
-            live.setdefault("viewers", {})[transport] = time.time()
+            viewers = live.setdefault("viewers", {})
+            prior_viewer = viewers.get(transport)
+            viewers[transport] = (
+                {**prior_viewer, "attached_at": time.time()}
+                if isinstance(prior_viewer, dict) else
+                {"attached_at": time.time(), "source": _session_source(live),
+                 "desktop_ui_protocol": live.get("desktop_ui_protocol")}
+            )
     _cancel_ws_orphan_reap(live_sid)
     history = live.get("history") or []
     return _ok(ctx.rid, _attach_todo_state({
@@ -635,6 +653,12 @@ def _resume_reuse_live(ctx: _Resume, sid: str, session: dict) -> dict:
             return _err(ctx.rid, 4007, "session no longer live; retry resume")
         if session.get("_client_gone_interrupt_requested"):
             return _err(ctx.rid, 4009, "session disconnect interrupt settling")
+        _bind_session_attachment(
+            session,
+            _resolve_session_source(_str_param(ctx.params, "source") or None),
+            ctx.requested_desktop_ui_protocol,
+            transport=current_transport() or _stdio_transport,
+        )
         _cancel_ws_orphan_reap(sid)  # unconditionally: the fast path must never race the reap Timer
         payload = _live_session_payload(sid, session, cols=ctx.cols, touch=True, omit_messages=ctx.omit_messages,
                                         transport=current_transport() or _stdio_transport)
@@ -742,6 +766,8 @@ def _resume_eager(ctx: _Resume) -> dict:
             stored_runtime_overrides = _stored_session_runtime_overrides(ctx.found)
             agent = _make_agent_in_context(
                 sid, ctx.target, session_db=ctx.db, platform_override=source,
+                desktop_ui_protocol_override=_negotiate_desktop_ui_protocol(
+                    source, ctx.requested_desktop_ui_protocol),
                 context_cwd_is_launch_artifact=(source in _LAUNCH_CWD_NOT_A_WORKSPACE and not ctx.profile_resume_cwd),
                 **stored_runtime_overrides)
         except Exception as e:
@@ -755,7 +781,9 @@ def _resume_eager(ctx: _Resume) -> dict:
         try:
             with _profile_build_scope(ctx.profile_home):
                 _init_session(sid, ctx.target, agent, history, cols=ctx.cols, cwd=ctx.profile_resume_cwd,
-                              session_db=ctx.db, source=source, explicit_cwd=bool(ctx.profile_resume_cwd))
+                              session_db=ctx.db, source=source,
+                              desktop_ui_protocol=ctx.requested_desktop_ui_protocol,
+                              explicit_cwd=bool(ctx.profile_resume_cwd))
                 # Ownership TRANSFER: the agent holds the handle for life (AIAgent.close() releases it). The
                 # owns_db drop is UNCONDITIONAL — the session is registered against the handle, so the finally
                 # must not close it even if the transfer was refused (a leak beats "closed database" every
@@ -890,6 +918,12 @@ def _(rid, params: dict) -> dict:
 @_session_method("session.activate")
 def _(rid, params: dict, session: dict) -> dict:
     """Attach the frontend to a live TUI session without closing the previously focused one."""
+    _bind_session_attachment(
+        session,
+        _resolve_session_source(_str_param(params, "source") or None),
+        params.get("desktop_ui_protocol"),
+        transport=current_transport() or _stdio_transport,
+    )
     return _ok(rid, _live_session_payload(
         str(params.get("session_id") or ""), session, touch=True, transport=current_transport() or _stdio_transport,
         omit_messages=is_truthy_value(params.get("omit_messages", False))))
@@ -1848,9 +1882,11 @@ def _build_branch_agent(session: dict, new_sid: str, new_key: str, history: list
     try:
         with _profile_build_scope(parent_home):
             agent = _make_agent_in_context(new_sid, new_key, session_db=branch_db, platform_override=source,
+                                           desktop_ui_protocol_override=session.get("desktop_ui_protocol"),
                                            context_cwd_is_launch_artifact=_context_cwd_is_launch_artifact(session))
             _init_session(new_sid, new_key, agent, list(history), cols=session.get("cols", 80),
                           cwd=_session_cwd(session), session_db=branch_db, source=source, profile_home=parent_home,
+                          desktop_ui_protocol=session.get("desktop_ui_protocol"),
                           explicit_cwd=bool(session.get("explicit_cwd")))
             _transfer_db_to_agent(agent, branch_db)
             branch_owns_db = False

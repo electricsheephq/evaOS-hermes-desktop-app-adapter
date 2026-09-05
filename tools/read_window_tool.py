@@ -41,7 +41,7 @@ READ_WINDOW_BELOW_SCHEMA = {
 
 registry.register(
     name="read_window_below",
-    toolset="desktop_ui",
+    toolset="desktop_ui_v2",
     schema=READ_WINDOW_BELOW_SCHEMA,
     handler=lambda args, **kw: read_window_below_tool(callback=kw.get("callback")),
     emoji="🪟",

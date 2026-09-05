@@ -483,11 +483,14 @@ def _wire_desktop_sinks() -> None:
         process_registry.on_output = lambda session, chunk: _emit(
             "agent.terminal.output", _owner_sid(session), {"process_id": session.id, "chunk": chunk})
     if getattr(process_registry, "on_close", None) is None:
-        process_registry.on_close = lambda session, pid: _emit("terminal.close", _owner_sid(session), {"process_id": pid})
+        process_registry.on_close = lambda session, pid: _desktop_ui_emit(
+            _owner_sid(session), "terminal.close", {"process_id": pid})
     if not _desktop_ui_wired:
         with contextlib.suppress(Exception):
             from tools import desktop_ui
-            desktop_ui.set_emitter(lambda sid, event, payload: _emit(event, sid, payload))
+            desktop_ui.set_protocol_resolver(_desktop_ui_emitter_protocol_error)
+            desktop_ui.set_protocol_level_resolver(_desktop_ui_protocol_level)
+            desktop_ui.set_emitter(_desktop_ui_emit)
             _desktop_ui_wired = True
 
 

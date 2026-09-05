@@ -65,7 +65,9 @@ def _compute_host_turn_frame(
         "model_override": session.get("model_override"),
         "reasoning_config_override": session.get("create_reasoning_override"),
         "service_tier_override": session.get("create_service_tier_override"),
-        "source": _session_source(session), "attached_images": attached_images,
+        "source": _session_source(session),
+        "desktop_ui_protocol": session.get("desktop_ui_protocol"),
+        "attached_images": attached_images,
         "queued_prompt_generation": queued_prompt_generation}
 
 

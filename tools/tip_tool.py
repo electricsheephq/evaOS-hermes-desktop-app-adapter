@@ -24,6 +24,8 @@ def tip_tool(text: str, selector: str, title: str = "", side: str = "") -> str:
         return tool_error(f"side must be one of: {', '.join(SIDES)}.")
     payload = {"selector": selector, "text": text,
                **{k: v for k, v in (("title", title), ("side", side)) if v}}
+    if error := desktop_ui.protocol_error("tip.show"):
+        return error
     try:
         ok = desktop_ui.emit("tip.show", payload)
     except Exception as exc:
@@ -75,7 +77,7 @@ def check_tips_enabled() -> bool:
 
 
 registry.register(
-    name="show_tip", toolset="desktop_ui", schema=TIP_SCHEMA, check_fn=check_tips_enabled,
+    name="show_tip", toolset="desktop_ui_v3", schema=TIP_SCHEMA, check_fn=check_tips_enabled,
     handler=lambda args, **kw: tip_tool(
         **{k: args.get(k, "") for k in ("text", "selector", "title", "side")}),
     emoji="💡")

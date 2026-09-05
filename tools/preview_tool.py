@@ -32,11 +32,32 @@ _ACTIONS = {
 }
 
 
+def _schema_protocol_actions() -> dict:
+    """Expose only actions implemented by the attached renderer.
+
+    The handler remains defensive because a warm agent can retain a schema while
+    a different Desktop client reattaches to the session.
+    """
+    level = desktop_ui.protocol_level()
+    actions = ["open"] if level == 1 else ["open", "close", "read"]
+    parameters = PREVIEW_SCHEMA["parameters"]
+    return {"parameters": {
+        **parameters,
+        "properties": {
+            **parameters["properties"],
+            "action": {**parameters["properties"]["action"], "enum": actions},
+        },
+    }}
+
+
 def _handle_preview(args, **kw):
     """Non-read actions only: action=read is dispatched at the agent level."""
     fn = _ACTIONS.get((args.get("action") or "").strip())
     if fn is None:
         return tool_error("action must be one of: open, close, read.")
+    if (action := (args.get("action") or "").strip()) == "read":
+        if error := desktop_ui.protocol_error("preview.read.request"):
+            return error
     return fn(args)
 
 
@@ -74,6 +95,7 @@ registry.register(
     toolset="desktop_ui",
     schema=PREVIEW_SCHEMA,
     handler=_handle_preview,
+    dynamic_schema_overrides=_schema_protocol_actions,
     emoji="🖼️",
 )
 

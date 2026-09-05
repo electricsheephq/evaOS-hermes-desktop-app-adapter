@@ -45,7 +45,7 @@ APPLY_LAYOUT_SCHEMA = {
 
 registry.register(
     name="apply_layout",
-    toolset="desktop_ui",
+    toolset="desktop_ui_v2",
     schema=APPLY_LAYOUT_SCHEMA,
     handler=lambda args, **kw: apply_layout_tool(preset=args.get("preset", "")),
     emoji="🧱",

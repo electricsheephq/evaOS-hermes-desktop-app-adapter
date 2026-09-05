@@ -127,11 +127,16 @@ TOOLSETS = {
     # gateway (tui_gateway/server.py::_load_enabled_toolsets) — never by a
     # process env var, which is blind to a desktop client on a remote backend.
     "desktop_ui": _ts(
-        "Desktop GUI affordances — in-app terminal/browser panes, pane focus, "
-        "reactions (GUI sessions only)",
-        ["read_terminal", "close_terminal", "desktop_preview", "drive_preview",
-         "annotate_preview", "read_window_below", "focus_pane", "react_to_message",
-         "setup_mcp", "gui_tour", "show_tip"],
+        "Desktop GUI protocol 1 — terminal read/close, preview open, pane focus, reactions",
+        ["read_terminal", "close_terminal", "desktop_preview", "focus_pane", "react_to_message"],
+    ),
+    "desktop_ui_v2": _ts(
+        "Desktop GUI protocol 2 — preview read/close and renderer responders",
+        ["drive_preview", "annotate_preview", "read_window_below", "setup_mcp", "gui_tour", "apply_layout"],
+    ),
+    "desktop_ui_v3": _ts(
+        "Desktop GUI protocol 3 — in-app tips",
+        ["show_tip"],
     ),
     "clarify": _ts("Ask the user clarifying questions (multiple-choice or open-ended)", ["clarify"]),
     "code_execution": _ts("Run Python scripts that call tools programmatically (reduces LLM round trips)", ["execute_code"]),

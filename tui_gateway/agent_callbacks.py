@@ -76,12 +76,15 @@ def _mirror_subagent_to_child(event_type: str, payload: dict) -> None:
 
 
 def _agent_cbs(sid: str) -> dict:
-    def _read_block(event: str, timeout: int):
+    def _read_block(event: str, tool_name: str, timeout: int):
         # read_terminal / read_preview (desktop GUI): blocking bridge like clarify; the preview
         # read gets longer since a URL tab extracts text from a live page.
-        return lambda start=None, count=None: _block(
-            event, sid, {k: v for k, v in (("start", start), ("count", count)) if v is not None},
-            timeout=timeout)
+        return lambda start=None, count=None: _desktop_ui_request(
+            sid, tool_name, 1 if tool_name == "read_terminal" else 2,
+            lambda: _block(
+                event, sid,
+                {k: v for k, v in (("start", start), ("count", count)) if v is not None},
+                timeout=timeout))
 
     callbacks = {
         "tool_start_callback": lambda tc_id, name, args: _on_tool_start(sid, tc_id, name, args),
@@ -102,18 +105,28 @@ def _agent_cbs(sid: str) -> dict:
         "notice_clear_callback": lambda key: _emit("notification.clear", sid, {"key": key}),
         "clarify_callback": lambda q, c, multi_select=False, questions=None: (
             _clarify_block(sid, q, c, multi_select=multi_select, questions=questions)),
-        "read_terminal_callback": _read_block("terminal.read.request", 30),
-        "read_preview_callback": _read_block("preview.read.request", 45),
+        "read_terminal_callback": _read_block("terminal.read.request", "read_terminal", 30),
+        "read_preview_callback": _read_block("preview.read.request", "desktop_preview.read", 45),
         # drive_preview / annotate_preview (desktop GUI): same budget as the preview read it ends with.
-        "drive_preview_callback": lambda payload: _block("preview.act.request", sid, dict(payload), timeout=45),
+        "drive_preview_callback": lambda payload: _desktop_ui_request(
+            sid, "drive_preview", 2,
+            lambda: _block("preview.act.request", sid, dict(payload), timeout=45)),
+        "annotate_preview_callback": lambda payload: _desktop_ui_request(
+            sid, "annotate_preview", 2,
+            lambda: _block("preview.act.request", sid, dict(payload), timeout=45)),
         # read_window_below (desktop GUI): main process enumerates native windows.
-        "read_window_below_callback": lambda: _block("window.read.request", sid, {}, timeout=30),
+        "read_window_below_callback": lambda: _desktop_ui_request(
+            sid, "read_window_below", 2,
+            lambda: _block("window.read.request", sid, {}, timeout=30)),
         # setup_mcp (desktop GUI): consent card + install/enable/OAuth; long timeout on purpose
         # (typing an API key, browser OAuth) and, like clarify, a late answer is tolerated.
-        "setup_mcp_callback": lambda server, action, reason: _block(
-            "mcp.setup.request", sid, {"server": server, "action": action, "reason": reason}, timeout=600),
+        "setup_mcp_callback": lambda server, action, reason: _desktop_ui_request(
+            sid, "setup_mcp", 2,
+            lambda: _block("mcp.setup.request", sid,
+                           {"server": server, "action": action, "reason": reason}, timeout=600)),
         # tour (desktop GUI): renderer drives driver.js and answers tour.respond.
-        "tour_callback": lambda payload: _tour_request(sid, payload)}
+        "tour_callback": lambda payload: _desktop_ui_request(
+            sid, "gui_tour", 2, lambda: _tour_request(sid, payload))}
 
     # Interim assistant commentary (text alongside tool calls), gated on display.interim_assistant_
     # messages; _run_prompt_submit overwrites it per turn and clears it so a stale closure can't fire.
@@ -367,6 +380,7 @@ def _reset_session_agent(sid: str, session: dict) -> dict:
         new_agent = _make_agent(
             sid, session["session_key"], session_id=session["session_key"],
             platform_override=_session_source(session),
+            desktop_ui_protocol_override=session.get("desktop_ui_protocol"),
             context_cwd_is_launch_artifact=_context_cwd_is_launch_artifact(session))
     finally:
         _clear_session_context(tokens)

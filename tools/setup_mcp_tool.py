@@ -96,7 +96,7 @@ SETUP_MCP_SCHEMA = {
 
 registry.register(
     name="setup_mcp",
-    toolset="desktop_ui",
+    toolset="desktop_ui_v2",
     schema=SETUP_MCP_SCHEMA,
     handler=lambda args, **kw: setup_mcp_tool(
         server=args.get("server", ""),

@@ -137,7 +137,7 @@ def check_tours_enabled() -> bool:
 
 
 registry.register(
-    name="gui_tour", toolset="desktop_ui", schema=TOUR_SCHEMA, check_fn=check_tours_enabled,
+    name="gui_tour", toolset="desktop_ui_v2", schema=TOUR_SCHEMA, check_fn=check_tours_enabled,
     handler=lambda args, **kw: tour_tool(
         action=args.get("action", ""), callback=kw.get("callback"),
         **{k: args.get(k) for k in ("surface", "selector", "title", "text", "side", "steps",

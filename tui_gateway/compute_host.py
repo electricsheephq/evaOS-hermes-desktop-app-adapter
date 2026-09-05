@@ -259,7 +259,12 @@ class ComputeHost:
         sid = str(frame.get("sid") or "")
         session = server._sessions.get(sid)
         if session is not None:
-            session["transport"] = self._transport
+            server._bind_session_attachment(
+                session,
+                frame.get("source"),
+                frame.get("desktop_ui_protocol"),
+                transport=self._transport,
+            )
             if frame.get("cols") is not None:
                 session["cols"] = int(frame.get("cols") or 80)
             for key in ("cwd", "profile_home"):
@@ -294,6 +299,7 @@ class ComputeHost:
                 reasoning_config_override=frame.get("reasoning_config_override"),
                 service_tier_override=frame.get("service_tier_override"),
                 platform_override=frame.get("source"),
+                desktop_ui_protocol_override=frame.get("desktop_ui_protocol"),
                 context_cwd_is_launch_artifact=bool(
                     frame.get("context_cwd_is_launch_artifact", False)),
                 session_db=session_db)
@@ -317,7 +323,8 @@ class ComputeHost:
                 server._init_session(
                     sid, key, agent, list(history), cols=int(frame.get("cols") or 80),
                     cwd=str(frame.get("cwd") or "") or None, session_db=session_db,
-                    source=frame.get("source"))
+                    source=frame.get("source"),
+                    desktop_ui_protocol=frame.get("desktop_ui_protocol"))
             finally:
                 reset_transport(token)
         except Exception:
@@ -334,6 +341,9 @@ class ComputeHost:
                 "tool_progress_mode": server._load_tool_progress_mode(), "edit_snapshots": {},
                 "tool_started_at": {}, "model_override": frame.get("model_override"),
                 "source": server._sanitize_client_source(frame.get("source")),
+                "desktop_ui_protocol": server._negotiate_desktop_ui_protocol(
+                    server._sanitize_client_source(frame.get("source")),
+                    frame.get("desktop_ui_protocol")),
                 "transport": self._transport}
         session = server._sessions[sid]
         session["transport"] = self._transport
