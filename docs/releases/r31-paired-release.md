@@ -2,6 +2,8 @@
 
 Status: planned runtime and Desktop ports are integrated; focused source gates pass. Exact-source CI/security and independent implementation review remain pending before merge. Artifacts and protected canaries have not started. Canonical release gate [#255](https://github.com/electricsheephq/evaOS-hermes-desktop-app-adapter/issues/255), epic #252 and milestone 12.
 
+The current MCP correction restores existing profile-owned live connections after the upstream module split, including same-name discovery and profile-specific shutdown. Its focused RED/GREEN receipts are in the [ledger](../r31-managed-delta.md). Prior-head CI and review cannot satisfy the final corrected-head gate. This repair changes neither the update path nor the persistent data format.
+
 ## Identity set
 
 | Surface | Frozen input / planned output |
