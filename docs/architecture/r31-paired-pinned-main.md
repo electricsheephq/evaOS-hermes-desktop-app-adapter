@@ -40,6 +40,8 @@ Schema filtering is action-aware, not just tool-name-aware. Independently enforc
 
 Keep the managed early return before upstream's heuristic active-profile migration; test boot and reconnect without removing the feature for unmanaged users. Preserve existing managed config values through v39→v40; if upstream normalizes defaults, use backward-compatible in-memory interpretation instead of deleting persisted settings.
 
+The first compatibility probe confirmed the v40 automatic migration removes a prior TTL value. For an existing managed scope, the candidate therefore validates the file but skips automatic config/dotenv migration. Existing v39 bytes and version remain intact; current defaults and managed policy are interpreted in memory. Unmanaged migrations remain unchanged. This is a code update, not a configuration-format transition.
+
 Exercise old FTS-v1 and candidate-created stores through old → new write/restart → old read/append. Do not run optimize-storage, rebuild databases or convert stores during rollback. Any incompatible persistent write blocks promotion.
 
 LCM remains v0.20.0 at `49e99a272d2d461e5c90732e7ef2bc20e96f0826`. Actual plugin loading, context calls and native dispatch must pass before/after the September 14 import cutoff with overrides disabled. A required external import correction is a narrow separate change, not engine replacement.
