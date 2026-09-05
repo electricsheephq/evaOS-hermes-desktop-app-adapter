@@ -24,6 +24,7 @@ import type {
   StaleAuxAssignment
 } from '@/hermes'
 import { useI18n } from '@/i18n'
+import { isManagedEvaosAgent, managedProviderDisplayValue, sanitizeManagedBrandText } from '@/i18n/managed-brand'
 import { isCodeSkewRestartRequired } from '@/lib/code-skew-error'
 import { AlertTriangle, Cpu, Loader2 } from '@/lib/icons'
 import { DEFAULT_REASONING_EFFORT, REASONING_EFFORT_VALUES } from '@/lib/reasoning-effort'
@@ -192,6 +193,7 @@ interface ModelSettingsProps {
 export function ModelSettings({ onMainModelChanged, scopeProfile }: ModelSettingsProps) {
   const { t } = useI18n()
   const m = t.settings.model
+  const managedEva = isManagedEvaosAgent()
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [skewRestart, setSkewRestart] = useState(false)
@@ -835,7 +837,7 @@ export function ModelSettings({ onMainModelChanged, scopeProfile }: ModelSetting
             <SelectContent>
               {mainProviderOptions.map(provider => (
                 <SelectItem key={provider.slug || 'none'} value={provider.slug || 'none'}>
-                  {provider.name}
+                  {managedProviderDisplayValue(provider.slug, provider.name, managedEva)}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -867,7 +869,12 @@ export function ModelSettings({ onMainModelChanged, scopeProfile }: ModelSetting
               </>
             ) : (
               <Button onClick={startProviderSetup} size="sm" variant="textStrong">
-                Set up {selectedProviderRow?.name ?? 'provider'}
+                Set up{' '}
+                {managedProviderDisplayValue(
+                  selectedProviderRow?.slug,
+                  selectedProviderRow?.name ?? 'provider',
+                  managedEva
+                )}
               </Button>
             )
           ) : (
@@ -898,8 +905,12 @@ export function ModelSettings({ onMainModelChanged, scopeProfile }: ModelSetting
         {needsSetup && !setupIsApiKey && selectedProviderRow && (
           <p className="mt-2 text-xs text-muted-foreground">
             {selectedProviderRow?.auth_type === 'api_key'
-              ? `${selectedProviderRow?.name} needs an API key — set it up to choose a model.`
-              : `${selectedProviderRow?.name} signs in through your browser — Hermes runs the flow for you.`}
+              ? `${managedProviderDisplayValue(selectedProviderRow.slug, selectedProviderRow.name, managedEva)} needs an API key — set it up to choose a model.`
+              : managedEva
+                ? sanitizeManagedBrandText(
+                    `${managedProviderDisplayValue(selectedProviderRow.slug, selectedProviderRow.name, true)} signs in through your browser — Hermes runs the flow for you.`
+                  )
+                : `${selectedProviderRow.name} signs in through your browser — Hermes runs the flow for you.`}
           </p>
         )}
         {config && mainModel && (reasoningSupported || fastSupported) && (
@@ -1033,7 +1044,7 @@ export function ModelSettings({ onMainModelChanged, scopeProfile }: ModelSetting
                           <SelectContent>
                             {providerOptions.map(provider => (
                               <SelectItem key={provider.slug || 'none'} value={provider.slug || 'none'}>
-                                {provider.name}
+                                {managedProviderDisplayValue(provider.slug, provider.name, managedEva)}
                               </SelectItem>
                             ))}
                           </SelectContent>

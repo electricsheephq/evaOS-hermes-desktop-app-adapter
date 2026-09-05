@@ -1,12 +1,20 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 
+import { PageLoader } from '@/components/page-loader'
 import { Button } from '@/components/ui/button'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Tip } from '@/components/ui/tooltip'
-import type { DesktopAuthProvider, DesktopCloudAgent, DesktopCloudOrg, DesktopConnectionProbeResult } from '@/global'
+import type {
+  DesktopAuthProvider,
+  DesktopCloudAgent,
+  DesktopCloudOrg,
+  DesktopConnectionProbeResult,
+  EvaManagedStatus
+} from '@/global'
 import { useI18n } from '@/i18n'
+import { managedVendorDisplayName } from '@/i18n/managed-brand'
 import { ExternalLink } from '@/lib/external-link'
 import {
   AlertCircle,
@@ -82,6 +90,48 @@ const EMPTY_STATE: GatewaySettingsState = {
   sshRemoteProfile: ''
 }
 
+const SAFE_MANAGED_BROKER_CODES = new Set([
+  'callback-handler-mismatch',
+  'callback-handler-registration-failed',
+  'callback-handler-repair-failed',
+  'callback-handler-untrusted',
+  'callback-noncanonical-install',
+  'ambiguous_hermes_agent_binding',
+  'client_agent_override_not_allowed',
+  'client_customer_override_not_allowed',
+  'client_download_override_not_allowed',
+  'company_brain_denied',
+  'eva_desktop_session_required',
+  'evaos_agent_download_forbidden',
+  'evaos_agent_download_unavailable',
+  'feature_not_enabled',
+  'invalid_client_surface',
+  'invalid_eva_runtime',
+  'invalid_hermes_agent_binding',
+  'invalid_launch_mode',
+  'invalid_release_track',
+  'invalid_request',
+  'missing_hermes_agent_binding',
+  'missing_runtime_permission',
+  'provider_ambiguous',
+  'revoke_upstream_failed'
+])
+
+export function safeManagedErrorMessage(
+  error: unknown,
+  fallback: string,
+  failedWithCode: (code: string) => string = code => `Electric Sheep request failed [code: ${code}]`
+): string {
+  const message = error instanceof Error ? error.message.trim() : ''
+  const brokerCode = message.match(/\[code: ([a-z][a-z0-9]*(?:[_-][a-z0-9]+)*)\]/)?.[1]
+
+  if (brokerCode && brokerCode.length <= 64 && SAFE_MANAGED_BROKER_CODES.has(brokerCode)) {
+    return failedWithCode(brokerCode)
+  }
+
+  return fallback
+}
+
 export function normalizeGatewaySettingsState(
   config: Partial<GatewaySettingsState> | null | undefined
 ): GatewaySettingsState {
@@ -147,11 +197,138 @@ function ModeCard({
   )
 }
 
+// Managed evaOS Agent connections are assigned by Electric Sheep. Keep the
+// local/remote/cloud/SSH connection editor out of this path: those controls
+// would expose unsupported endpoint, token, or profile overrides.
+function EvaManagedGatewaySettings({ embedded = false }: { embedded?: boolean } = {}) {
+  const { t } = useI18n()
+  const g = t.settings.gateway.managed
+  const businessDisplayName = managedVendorDisplayName(g.accountTitle)
+  const [status, setStatus] = useState<EvaManagedStatus | null>(null)
+  const [busy, setBusy] = useState<'refresh' | 'sign-in' | 'sign-out' | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  const managedFailureForCode = (code: string) =>
+    code.startsWith('callback-') ? g.callbackHandlerUnavailable : g.failedWithCode(code)
+
+  useEffect(() => {
+    let cancelled = false
+    void window.hermesDesktop.eva
+      .status()
+      .then(next => {
+        if (!cancelled) {
+          setStatus(next)
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setError(g.failed)
+        }
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [g.failed])
+
+  const run = async (action: 'refresh' | 'sign-in' | 'sign-out') => {
+    setBusy(action)
+    setError(null)
+
+    try {
+      if (action === 'sign-out') {
+        await window.hermesDesktop.eva.signOut()
+        setStatus(await window.hermesDesktop.eva.status())
+      } else {
+        const next =
+          action === 'sign-in' ? await window.hermesDesktop.eva.signIn() : await window.hermesDesktop.eva.refresh()
+
+        setStatus(next)
+      }
+    } catch (err) {
+      setError(safeManagedErrorMessage(err, g.failed, managedFailureForCode))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  if (!status && !error) {
+    return (
+      <PageLoader
+        className="-mt-[calc(var(--titlebar-height)+1rem)] h-[calc(100%+var(--titlebar-height)+1rem)]"
+        label={g.loading}
+      />
+    )
+  }
+
+  return (
+    <SettingsContent bare={embedded}>
+      <div className="mx-auto w-full max-w-2xl space-y-4 pt-4">
+        <div className="rounded-xl border border-border/70 bg-muted/20 p-4">
+          <div className="flex items-start gap-3">
+            <Globe className="mt-0.5 size-5 text-primary" />
+            <div>
+              <h2 className="font-semibold">{g.title}</h2>
+              <p className="mt-1 text-sm text-muted-foreground">{g.description}</p>
+            </div>
+          </div>
+        </div>
+
+        {status ? (
+          <div className="overflow-hidden rounded-xl border border-border/70">
+            <ListRow description={status.email ?? g.notSignedIn} title={g.accountTitle} />
+            <ListRow description={businessDisplayName} title={g.businessTitle} />
+            <ListRow
+              description={status.agentDisplayName ?? g.assignedAfterSignIn}
+              title={g.agentTitle}
+            />
+            <ListRow description={status.updateChannel} title={g.updateChannelTitle} />
+          </div>
+        ) : null}
+
+        {error ? (
+          <div className="rounded-xl border border-destructive/35 bg-destructive/5 p-3 text-sm text-destructive">
+            {error}
+          </div>
+        ) : null}
+
+        <div className="flex flex-wrap gap-2">
+          {status?.signedOut || !status?.desktopSessionActive ? (
+            <Button disabled={busy !== null} onClick={() => void run('sign-in')}>
+              {busy === 'sign-in' ? <Loader2 className="size-4 animate-spin" /> : <LogIn className="size-4" />}
+              {g.signIn}
+            </Button>
+          ) : (
+            <>
+              <Button disabled={busy !== null} onClick={() => void run('refresh')} variant="outline">
+                {busy === 'refresh' ? <Loader2 className="size-4 animate-spin" /> : <Check className="size-4" />}
+                {g.refresh}
+              </Button>
+              <Button disabled={busy !== null} onClick={() => void run('sign-out')} variant="outline">
+                {busy === 'sign-out' ? <Loader2 className="size-4 animate-spin" /> : null}
+                {g.signOut}
+              </Button>
+            </>
+          )}
+        </div>
+      </div>
+    </SettingsContent>
+  )
+}
+
 // `embedded` trims the page chrome for reuse inside the boot-failure recovery
 // card: the outer title/intro, the "Save for next restart" action, and the
 // Diagnostics row are redundant there (the card owns its header + a single
 // reconnect action), so only the connection controls render.
 export function GatewaySettings({ embedded = false }: { embedded?: boolean } = {}) {
+  if (window.hermesDesktop?.eva) {
+    return <EvaManagedGatewaySettings embedded={embedded} />
+  }
+
+  return <UnmanagedGatewaySettings embedded={embedded} />
+}
+
+function UnmanagedGatewaySettings({ embedded = false }: { embedded?: boolean } = {}) {
   const { t } = useI18n()
   const g = t.settings.gateway
   const [loading, setLoading] = useState(true)

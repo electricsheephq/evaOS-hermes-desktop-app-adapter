@@ -160,6 +160,8 @@ export interface Translations {
       signInIncompleteTitle: string
       signInIncompleteMessage: string
       signInFailed: string
+      managedAssignmentHint: string
+      managedSignInFailed: string
       signInToRemoteGateway: string
       signInWithProvider: (provider: string) => string
       identityProvider: string
@@ -243,6 +245,16 @@ export interface Translations {
 
   remoteDisplayBanner: {
     message: (reason: string) => string
+  }
+
+  delegatedSupport: {
+    actingForCustomer: (customer: string) => string
+    assignedAgent: (agent: string) => string
+    endsIn: (countdown: string) => string
+    endSession: string
+    endingSession: string
+    unavailable: string
+    endFailed: string
   }
 
   billingBlock: {
@@ -590,6 +602,16 @@ export interface Translations {
       minAgo: (count: number) => string
       hoursAgo: (count: number) => string
       daysAgo: (count: number) => string
+      managed: {
+        businessTitle: string
+        businessDescription: string
+        updateChannelTitle: string
+        updateChannelDescription: (channel: string) => string
+        attributionTitle: string
+        attributionDescription: string
+        distributionTitle: string
+        distributionDescription: string
+      }
     }
     config: {
       none: string
@@ -723,6 +745,23 @@ export interface Translations {
       scopeNotRestored: (profile: string, error: string) => string
     }
     gateway: {
+      managed: {
+        loading: string
+        title: string
+        description: string
+        accountTitle: string
+        notSignedIn: string
+        businessTitle: string
+        assignedAfterSignIn: string
+        agentTitle: string
+        updateChannelTitle: string
+        signIn: string
+        refresh: string
+        signOut: string
+        failed: string
+        callbackHandlerUnavailable: string
+        failedWithCode: (code: string) => string
+      }
       loading: string
       unavailableTitle: string
       unavailableDesc: string
@@ -1083,6 +1122,9 @@ export interface Translations {
       collapse: string
       connectAnother: string
       otherProviders: string
+      reauthenticate: string
+      managedUnavailable: string
+      managedUnavailableDescription: string
       disconnect: string
       disconnectInTerminal: string
       removeConfirm: (provider: string) => string
@@ -1163,6 +1205,8 @@ export interface Translations {
       nousAuthDoneTitle: string
       nousAuthDoneMessage: string
       nousAuthFailed: string
+      managedUnavailableTitle: string
+      managedUnavailableMessage: (provider: string) => string
       noApiKeyRequired: string
       postSetupHint: (step: string) => string
       postSetupInstalledHint: string
@@ -2457,6 +2501,8 @@ export interface Translations {
     chooseLater: string
     recommended: string
     connected: string
+    managedUnavailable: string
+    managedUnavailableDescription: string
     featuredPitch: string
     fireworksPitch: string
     localModelsTitle: string

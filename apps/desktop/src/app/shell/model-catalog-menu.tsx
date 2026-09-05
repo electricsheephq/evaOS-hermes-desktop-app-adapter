@@ -21,6 +21,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import type { HermesGateway } from '@/hermes'
 import { getLocalModelsStatus } from '@/hermes'
 import { useI18n } from '@/i18n'
+import { isManagedEvaosAgent, managedProviderDisplayValue } from '@/i18n/managed-brand'
 import { modelOptionsQueryKey, requestModelOptions } from '@/lib/model-options'
 import { displayModelName, modelDisplayParts } from '@/lib/model-status-label'
 import { DEFAULT_REASONING_EFFORT, reasoningEffortLabel } from '@/lib/reasoning-effort'
@@ -139,6 +140,7 @@ export function ModelCatalogMenu({
   const { t } = useI18n()
   const copy = t.shell.modelMenu
   const copyPicker = t.modelPicker
+  const managedEva = isManagedEvaosAgent()
   const closeMenu = useContext(ModelMenuCloseContext)
   const [search, setSearch] = useState('')
   const collapsedProviders = useStoreCollapsed()
@@ -162,7 +164,7 @@ export function ModelCatalogMenu({
   // Every local-models read in this menu sits behind the --local launch
   // flag: no status polling, no download rows, and the llamacpp provider
   // group hides even when models are staged (the flag is strict).
-  const localModelsEnabled = $localModelsEnabled.get()
+  const localModelsEnabled = !managedEva && $localModelsEnabled.get()
 
   // Live load state for the managed local server: which model is loading
   // into memory right now, with a REAL percent (per-tensor callback relayed
@@ -481,7 +483,10 @@ export function ModelCatalogMenu({
                   textValue=""
                 >
                   <span className="truncate">
-                    <HighlightMatches query={search} text={group.provider.name} />
+                    <HighlightMatches
+                      query={search}
+                      text={managedProviderDisplayValue(group.provider.slug, group.provider.name, managedEva)}
+                    />
                   </span>
                   <DisclosureCaret
                     className="shrink-0 text-(--ui-text-tertiary) opacity-0 transition group-hover/label:opacity-100"

@@ -32,6 +32,7 @@ import type {
   ToolsetConfig,
   ToolsetModelsResponse
 } from '@/types/hermes'
+import { isManagedEvaosAgent, managedProviderDisplayValue } from '@/i18n/managed-brand'
 
 import { EnvVarActionsMenu, EnvVarActionsTrigger, EnvVarContextMenu } from './env-var-actions-menu'
 import { Pill } from './primitives'
@@ -516,6 +517,7 @@ function ModelCatalogPicker({ toolset, providerName, isActiveBackend, profile }:
 export function ToolsetConfigPanel({ toolset, onConfiguredChange, profile }: ToolsetConfigPanelProps) {
   const { t } = useI18n()
   const copy = t.settings.toolsets
+  const managedEva = isManagedEvaosAgent()
   const [cfg, setCfg] = useState<ToolsetConfig | null>(null)
   const [loading, setLoading] = useState(true)
   const [selecting, setSelecting] = useState<string | null>(null)
@@ -596,6 +598,21 @@ export function ToolsetConfigPanel({ toolset, onConfiguredChange, profile }: Too
       return
     }
 
+    const providerDisplayName = managedProviderDisplayValue(provider.name, provider.name, managedEva)
+
+    // Managed agents cannot complete the local provider entitlement flow.
+    // Fail closed unless the backend has already confirmed this provider is
+    // ready, so a failed selection cannot be persisted first.
+    if (managedEva && provider.requires_nous_auth && providerStatus(provider, envState) !== 'ready') {
+      notify({
+        kind: 'warning',
+        title: copy.managedUnavailableTitle,
+        message: copy.managedUnavailableMessage(providerDisplayName)
+      })
+
+      return
+    }
+
     providerChoiceClaimedRef.current = true
     setExpandedProvider(provider.name)
     setSelecting(provider.name)
@@ -622,14 +639,14 @@ export function ToolsetConfigPanel({ toolset, onConfiguredChange, profile }: Too
         notify({
           kind: 'warning',
           title: copy.nousAuthNeededTitle,
-          message: copy.nousAuthNeededMessage(provider.name),
+          message: copy.nousAuthNeededMessage(providerDisplayName),
           action: { label: copy.nousAuthSignIn, onClick: () => void signInToNousPortal() }
         })
 
         return
       }
 
-      notify({ kind: 'success', title: copy.selectedTitle, message: copy.selectedMessage(provider.name) })
+      notify({ kind: 'success', title: copy.selectedTitle, message: copy.selectedMessage(providerDisplayName) })
       onConfiguredChange?.()
     } catch (err) {
       notifyError(err, copy.failedSelect(provider.name))
@@ -701,6 +718,7 @@ export function ToolsetConfigPanel({ toolset, onConfiguredChange, profile }: Too
 
   async function handleSelectCapability(provider: ToolProvider, capability: 'search' | 'extract') {
     setSelecting(provider.name)
+    const providerDisplayName = managedProviderDisplayValue(provider.name, provider.name, managedEva)
 
     try {
       await selectToolsetProvider(toolset, provider.name, capability, profile)
@@ -719,7 +737,7 @@ export function ToolsetConfigPanel({ toolset, onConfiguredChange, profile }: Too
       notify({
         kind: 'success',
         title: copy.selectedTitle,
-        message: copy.webCapabilitySelectedMessage(provider.name, capability)
+        message: copy.webCapabilitySelectedMessage(providerDisplayName, capability)
       })
       onConfiguredChange?.()
     } catch (err) {
@@ -770,6 +788,7 @@ export function ToolsetConfigPanel({ toolset, onConfiguredChange, profile }: Too
         const webCaps = toolset === 'web' ? (provider.capabilities ?? []) : []
         const isSearchBackend = Boolean(provider.web_backend && cfg.active_search_backend === provider.web_backend)
         const isExtractBackend = Boolean(provider.web_backend && cfg.active_extract_backend === provider.web_backend)
+        const providerDisplayName = managedProviderDisplayValue(provider.name, provider.name, managedEva)
 
         return (
           <div className="overflow-hidden rounded-xl bg-background/60" key={provider.name}>
@@ -789,8 +808,8 @@ export function ToolsetConfigPanel({ toolset, onConfiguredChange, profile }: Too
               type="button"
             >
               <span className="flex min-w-0 items-center gap-2">
-                <span className="truncate text-sm font-medium">{provider.name}</span>
-                {provider.badge && <Pill>{provider.badge}</Pill>}
+                <span className="truncate text-sm font-medium">{providerDisplayName}</span>
+                {provider.badge && <Pill>{managedProviderDisplayValue(provider.name, provider.badge, managedEva)}</Pill>}
                 {isBackendActive && (
                   <Pill tone="primary">
                     <Check className="size-3" />
@@ -813,7 +832,11 @@ export function ToolsetConfigPanel({ toolset, onConfiguredChange, profile }: Too
 
             {isExpanded && (
               <div className="grid gap-2 bg-muted/20 p-3">
-                {provider.tag && <p className="text-[0.72rem] text-muted-foreground">{provider.tag}</p>}
+                {provider.tag && (
+                  <p className="text-[0.72rem] text-muted-foreground">
+                    {managedProviderDisplayValue(provider.name, provider.tag, managedEva)}
+                  </p>
+                )}
                 {(toolset !== 'web' || webCaps.length === 0) && (
                   // Explicit activation — the old row-click-selects UX gave no
                   // signal about which backend was actually in use and made

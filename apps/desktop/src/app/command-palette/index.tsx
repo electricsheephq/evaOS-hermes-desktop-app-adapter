@@ -20,6 +20,7 @@ import { KbdCombo } from '@/components/ui/kbd'
 import { getHermesConfigRecord, listAllProfileSessions } from '@/hermes'
 import { useMediaQuery } from '@/hooks/use-media-query'
 import { useI18n } from '@/i18n'
+import { isManagedEvaosAgent } from '@/i18n/managed-brand'
 import { sessionTitle } from '@/lib/chat-runtime'
 import {
   Activity,
@@ -550,6 +551,7 @@ export function CommandPalette() {
 
 function CommandPaletteBody({ onExited }: { onExited: () => void }) {
   const { t } = useI18n()
+  const managedEva = isManagedEvaosAgent()
   const pendingPage = useStore($commandPalettePage)
   const pendingSeed = useStore($commandPaletteSeed)
   const bindings = useStore($bindings)
@@ -587,7 +589,7 @@ function CommandPaletteBody({ onExited }: { onExited: () => void }) {
   const backendApply = useStore($backendUpdateApply)
 
   const updateVersionLabel = useMemo(() => {
-    const backend = connection?.mode === 'remote'
+    const backend = connection?.mode === 'remote' && !managedEva
     const apply = backend ? backendApply : clientApply
     const status = backend ? backendStatus : clientStatus
 
@@ -602,7 +604,7 @@ function CommandPaletteBody({ onExited }: { onExited: () => void }) {
       updateAvailable: status?.updateAvailable,
       version: backend ? status?.currentVersion : desktopVersion?.appVersion
     }).label
-  }, [backendApply, backendStatus, clientApply, clientStatus, connection?.mode, desktopVersion?.appVersion, t])
+  }, [backendApply, backendStatus, clientApply, clientStatus, connection?.mode, desktopVersion?.appVersion, managedEva, t])
 
   // cmdk's onSelect doesn't forward the triggering event — keep the last
   // click/keydown modifiers so session rows can honour ⌘-Enter / ⌘-click.
@@ -912,19 +914,25 @@ function CommandPaletteBody({ onExited }: { onExited: () => void }) {
             label: cc.sections.usage,
             run: go(`${COMMAND_CENTER_ROUTE}?section=usage`)
           },
-          {
-            icon: RefreshCw,
-            id: 'cc-restart-gateway',
-            keywords: ['gateway', 'restart', 'messaging', 'reconnect', 'system'],
-            label: cc.restartGateway,
-            run: () => void runGatewayRestart()
-          },
+          ...(!managedEva
+            ? [
+                {
+                  icon: RefreshCw,
+                  id: 'cc-restart-gateway',
+                  keywords: ['gateway', 'restart', 'messaging', 'reconnect', 'system'],
+                  label: cc.restartGateway,
+                  run: () => void runGatewayRestart()
+                }
+              ]
+            : []),
           {
             detail: updateVersionLabel,
             icon: Download,
-            id: 'cc-update-hermes',
-            keywords: ['update', 'upgrade', 'hermes', 'version', 'system', 'restart'],
-            label: cc.updateHermes,
+            id: managedEva ? 'cc-update-evaos-agent' : 'cc-update-hermes',
+            keywords: managedEva
+              ? ['update', 'upgrade', 'evaos', 'agent', 'version']
+              : ['update', 'upgrade', 'hermes', 'version', 'system', 'restart'],
+            label: managedEva ? t.settings.about.updates : cc.updateHermes,
             run: () => requestActiveUpdate()
           },
           {
@@ -1012,6 +1020,7 @@ function CommandPaletteBody({ onExited }: { onExited: () => void }) {
     selectTick,
     settingsSectionLabel,
     t,
+    managedEva,
     updateVersionLabel
   ])
 

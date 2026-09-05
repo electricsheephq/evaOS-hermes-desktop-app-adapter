@@ -71,6 +71,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup()
   $confirmRequest.set(null)
+  Reflect.deleteProperty(window, 'hermesDesktop')
   vi.restoreAllMocks()
   vi.clearAllMocks()
 })
@@ -93,6 +94,60 @@ async function renderProvidersSettings() {
 }
 
 describe('ProvidersSettings', () => {
+  it('keeps managed Accounts allow-by-default while hiding promotional rows', async () => {
+    Object.defineProperty(window, 'hermesDesktop', {
+      configurable: true,
+      value: { eva: {} },
+      writable: true
+    })
+    listOAuthProviders.mockResolvedValue({
+      providers: [
+        provider('nous', true),
+        provider('openai-codex', true),
+        provider('minimax-oauth', false)
+      ]
+    })
+
+    await renderProvidersSettings()
+
+    expect(screen.queryByText('Electric Sheep account')).toBeNull()
+    expect(screen.queryByText('Nous Portal')).toBeNull()
+    expect(screen.queryByText('Fireworks AI')).toBeNull()
+    expect(await screen.findByText('ChatGPT or Codex Subscription')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Reauthenticate' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Remove ChatGPT or Codex Subscription' })).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reauthenticate' }))
+    expect(startManualProviderOAuth).toHaveBeenCalledWith('openai-codex')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Connect another provider' }))
+    expect(await screen.findByText('MiniMax')).toBeTruthy()
+  })
+
+  it('keeps local-CLI providers visible but unavailable for managed accounts', async () => {
+    Object.defineProperty(window, 'hermesDesktop', {
+      configurable: true,
+      value: { eva: {} },
+      writable: true
+    })
+    listOAuthProviders.mockResolvedValue({
+      providers: [
+        provider('qwen-oauth', false, {
+          flow: 'external',
+          name: 'Qwen (via Qwen CLI)'
+        })
+      ]
+    })
+
+    await renderProvidersSettings()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Other providers' }))
+    expect(await screen.findByText('Qwen Code')).toBeTruthy()
+    expect(screen.getByText('Unavailable')).toBeTruthy()
+    expect((screen.getByRole('button', { name: /Qwen Code/ }) as HTMLButtonElement).disabled).toBe(true)
+    expect(startManualProviderOAuth).not.toHaveBeenCalled()
+  })
+
   it('disconnects a connected provider account and refreshes the accounts list', async () => {
     await renderProvidersSettings()
 
@@ -233,5 +288,21 @@ describe('ProvidersSettings', () => {
     fireEvent.click(row)
 
     await waitFor(() => expect(startManualLocalEndpoint).toHaveBeenCalledWith(null))
+  })
+
+  it('does not expose the local/custom endpoint entry for managed accounts', async () => {
+    Object.defineProperty(window, 'hermesDesktop', {
+      configurable: true,
+      value: { eva: {} },
+      writable: true
+    })
+    getEnvVars.mockResolvedValue({})
+    listOAuthProviders.mockResolvedValue({ providers: [] })
+
+    const { ProvidersSettings } = await import('./providers-settings')
+    render(<ProvidersSettings onClose={vi.fn()} onViewChange={vi.fn()} view="keys" />)
+
+    await waitFor(() => expect(screen.queryByText('Local / custom endpoint')).toBeNull())
+    expect(startManualLocalEndpoint).not.toHaveBeenCalled()
   })
 })

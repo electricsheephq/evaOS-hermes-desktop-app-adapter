@@ -82,6 +82,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup()
+  Reflect.deleteProperty(window, 'hermesDesktop')
   vi.clearAllMocks()
   profileSwitchHandler = null
 })
@@ -126,6 +127,31 @@ describe('ModelSettings profile scope', () => {
 })
 
 describe('ModelSettings', () => {
+  it('renders backend Nous labels and setup copy with managed customer branding', async () => {
+    Object.defineProperty(window, 'hermesDesktop', {
+      configurable: true,
+      value: { eva: {} },
+      writable: true
+    })
+    getGlobalModelOptions.mockResolvedValue({
+      providers: [
+        {
+          name: 'Nous Portal',
+          slug: 'nous',
+          models: [],
+          authenticated: false,
+          auth_type: 'oauth'
+        }
+      ]
+    })
+
+    await renderModelSettings()
+
+    expect(await screen.findByText('Electric Sheep account')).toBeTruthy()
+    expect(screen.getByText(/evaOS Agent runs the flow for you/)).toBeTruthy()
+    expect(screen.queryByText(/Nous Portal|Hermes runs the flow/)).toBeNull()
+  })
+
   it('loads the current main model and lists configured providers only', async () => {
     await renderModelSettings()
 

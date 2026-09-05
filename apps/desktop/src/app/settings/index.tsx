@@ -7,6 +7,7 @@ import { KbdCombo } from '@/components/ui/kbd'
 import { Tip } from '@/components/ui/tooltip'
 import { getHermesConfigDefaults, getHermesConfigRecord, saveHermesConfig } from '@/hermes'
 import { useI18n } from '@/i18n'
+import { isManagedEvaosAgent } from '@/i18n/managed-brand'
 import { triggerHaptic } from '@/lib/haptics'
 import {
   Archive,
@@ -28,6 +29,7 @@ import {
 } from '@/lib/icons'
 import { isEditableTarget } from '@/lib/keybinds/combo'
 import { typeToFocusChar } from '@/lib/keybinds/composer-focus-keys'
+import { isManagedSettingsViewVisible } from '@/lib/managed-ui-policy'
 import { cn } from '@/lib/utils'
 import { $commandPaletteOpen, openCommandPalettePage } from '@/store/command-palette'
 import { confirm } from '@/store/confirm'
@@ -71,8 +73,11 @@ const SETTINGS_VIEWS: readonly SettingsViewId[] = [
   'about'
 ]
 
+const MANAGED_SETTINGS_VIEWS = SETTINGS_VIEWS.filter(view => isManagedSettingsViewVisible(view, true))
+
 export function SettingsView({ onClose, onConfigSaved, onMainModelChanged }: SettingsPageProps) {
   const { t } = useI18n()
+  const managedEva = isManagedEvaosAgent()
   const navigate = useNavigate()
   const { hash, pathname, search } = useLocation()
 
@@ -90,7 +95,8 @@ export function SettingsView({ onClose, onConfigSaved, onMainModelChanged }: Set
     }
   }, [navigate, search])
 
-  const [activeView, setActiveView] = useRouteEnumParam('tab', SETTINGS_VIEWS, 'config:model' as SettingsViewId)
+  const availableViews = managedEva ? MANAGED_SETTINGS_VIEWS : SETTINGS_VIEWS
+  const [activeView, setActiveView] = useRouteEnumParam('tab', availableViews, 'config:model' as SettingsViewId)
 
   // Connections merged into the unified Gateways page: land old
   // `?tab=connections` routes/bookmarks there instead of a dead entry.
@@ -101,7 +107,10 @@ export function SettingsView({ onClose, onConfigSaved, onMainModelChanged }: Set
   }, [activeView, setActiveView])
   // Providers subnav (Accounts vs API keys) lives in its own param so each
   // sub-view is deep-linkable and survives a refresh.
-  const [providerView, setProviderView] = useRouteEnumParam<ProviderView>('pview', PROVIDER_VIEWS, 'accounts')
+  const providerViews = managedEva
+    ? PROVIDER_VIEWS.filter(view => view !== 'custom-endpoints' && view !== 'local')
+    : PROVIDER_VIEWS
+  const [providerView, setProviderView] = useRouteEnumParam<ProviderView>('pview', providerViews, 'accounts')
   const [keysView] = useRouteEnumParam<KeysView>('kview', KEYS_VIEWS, 'tools')
 
   // Jump to a section + its sub-view in one navigate. Two sequential setters
@@ -169,7 +178,7 @@ export function SettingsView({ onClose, onConfigSaved, onMainModelChanged }: Set
     }
   }
 
-  const navGroups: OverlayNavGroup[] = useMemo(
+  const allNavGroups: OverlayNavGroup[] = useMemo(
     () => [
       ...SECTIONS.map(s => {
         const view = `config:${s.id}` as SettingsViewId
@@ -213,18 +222,22 @@ export function SettingsView({ onClose, onConfigSaved, onMainModelChanged }: Set
             label: t.settings.nav.providerApiKeys,
             onSelect: () => openProviderView('keys')
           },
-          {
-            active: activeView === 'providers' && providerView === 'custom-endpoints',
-            icon: Globe,
-            id: 'pview:custom-endpoints',
-            label: t.settings.nav.providerCustomEndpoints,
-            onSelect: () => openProviderView('custom-endpoints')
-          },
+          ...(!managedEva
+            ? [
+                {
+                  active: activeView === 'providers' && providerView === 'custom-endpoints',
+                  icon: Globe,
+                  id: 'pview:custom-endpoints',
+                  label: t.settings.nav.providerCustomEndpoints,
+                  onSelect: () => openProviderView('custom-endpoints')
+                }
+              ]
+            : []),
           // Local models ships behind the --local launch flag: no flag, no
           // nav entry (the pane itself also refuses to render, so a stale
           // ?pview=local deep link falls back to accounts-shaped emptiness
           // rather than a hidden feature).
-          ...($localModelsEnabled.get()
+          ...($localModelsEnabled.get() && !managedEva
             ? [
                 {
                   active: activeView === 'providers' && providerView === 'local',
@@ -302,8 +315,12 @@ export function SettingsView({ onClose, onConfigSaved, onMainModelChanged }: Set
         onSelect: () => setActiveView('about')
       }
     ],
-    [activeView, keysView, providerView, t, setActiveView, openProviderView, openKeysView]
+    [activeView, keysView, managedEva, providerView, t, setActiveView, openProviderView, openKeysView]
   )
+
+  const navGroups = managedEva
+    ? allNavGroups.filter(group => isManagedSettingsViewVisible(group.id, true))
+    : allNavGroups
 
   // Type-to-search: printable keystrokes on the Settings surface (outside any
   // field) open the settings-scoped palette, seeded with the character — same

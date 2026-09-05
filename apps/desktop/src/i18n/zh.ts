@@ -115,6 +115,8 @@ export const zh: Translations = {
       signInIncompleteTitle: '登录未完成',
       signInIncompleteMessage: '登录窗口在认证完成前关闭。',
       signInFailed: '登录失败',
+      managedAssignmentHint: '你的业务分配由 Electric Sheep 选择。如果访问权限已更改或撤销，请重新登录。',
+      managedSignInFailed: '无法登录托管访问。请重试。',
       signInToRemoteGateway: '登录远程网关',
       signInWithProvider: provider => `使用 ${provider} 登录`,
       identityProvider: '你的身份提供方'
@@ -196,6 +198,16 @@ export const zh: Translations = {
 
   remoteDisplayBanner: {
     message: reason => `软件渲染已启用 — 检测到远程显示（${reason}）。为防止画面闪烁，已禁用 GPU 加速。`
+  },
+
+  delegatedSupport: {
+    actingForCustomer: customer => `正在代表 ${customer}`,
+    assignedAgent: agent => `智能体：${agent}`,
+    endsIn: countdown => `${countdown} 后结束`,
+    endSession: '结束支持会话',
+    endingSession: '正在结束支持会话…',
+    unavailable: '支持会话状态不可用。',
+    endFailed: '无法结束支持会话。请重试。'
   },
 
   billingBlock: {
@@ -907,7 +919,17 @@ export const zh: Translations = {
       justNow: '刚刚',
       minAgo: count => `${count} 分钟前`,
       hoursAgo: count => `${count} 小时前`,
-      daysAgo: count => `${count} 天前`
+      daysAgo: count => `${count} 天前`,
+      managed: {
+        businessTitle: '托管企业 Beta',
+        businessDescription: '你的账户、分配的智能体、访问策略和软件更新由 Electric Sheep 管理。',
+        updateChannelTitle: '更新通道',
+        updateChannelDescription: channel => `${channel} · Electric Sheep 签名更新`,
+        attributionTitle: '开源归属',
+        attributionDescription: '基于 Nous Research 的 Hermes Agent，依据 MIT 许可证使用。',
+        distributionTitle: '分发方式',
+        distributionDescription: '已签名的 Apple Silicon 托管企业 Beta，并非公开版本。'
+      }
     },
     config: {
       none: '无',
@@ -1046,6 +1068,23 @@ export const zh: Translations = {
       scopeNotRestored: (profile: string, error: string) => `Profile“${profile}”未恢复：${error}`
     },
     gateway: {
+      managed: {
+        loading: '正在加载托管 evaOS Agent 访问权限…',
+        title: '由 Electric Sheep 管理',
+        description: 'evaOS Agent 只能连接到业务管理员分配的智能体。本地后端、自定义网关 URL、原始会话令牌和外部网关覆盖均已禁用。',
+        accountTitle: 'Electric Sheep 账户',
+        notSignedIn: '未登录',
+        businessTitle: '业务',
+        assignedAfterSignIn: '登录后分配',
+        agentTitle: '已分配智能体',
+        updateChannelTitle: '更新通道',
+        signIn: '登录 evaOS Agent',
+        refresh: '刷新分配的访问权限',
+        signOut: '退出登录',
+        failed: '无法加载托管访问权限。请重试或联系 Electric Sheep 支持。',
+        callbackHandlerUnavailable: '另一个 evaOS Agent 副本正在处理登录链接。请仅保留 Applications 中的已安装应用，重新打开后再试。',
+        failedWithCode: code => `Electric Sheep 请求失败 [代码：${code}]`
+      },
       loading: '正在加载网关设置...',
       unavailableTitle: '网关设置不可用',
       unavailableDesc: '桌面 IPC 桥未暴露网关设置。',
@@ -1433,6 +1472,9 @@ export const zh: Translations = {
       collapse: '收起',
       connectAnother: '连接其他提供方',
       otherProviders: '其他提供方',
+      reauthenticate: '重新认证',
+      managedUnavailable: '不可用',
+      managedUnavailableDescription: '此提供方需要本地 CLI 登录，无法配置分配给你的托管智能体。',
       disconnect: '断开连接',
       disconnectInTerminal: '断开连接（在终端中运行移除命令）',
       removeConfirm: provider => `移除 ${provider}？`,
@@ -1514,6 +1556,8 @@ export const zh: Translations = {
       nousAuthDoneTitle: '已连接 Nous Portal',
       nousAuthDoneMessage: '订阅后端现已激活。',
       nousAuthFailed: 'Nous Portal 登录未完成',
+      managedUnavailableTitle: '提供方不可用',
+      managedUnavailableMessage: provider => `${provider} 不适用于你的托管智能体。`,
       noApiKeyRequired: '不需要 API 密钥。',
       postSetupHint: step => `此后端需要一次性安装 (${step})。将在此机器上执行，可能需要几分钟。`,
       postSetupInstalledHint: '已安装。仅在出现问题时才需要重新运行安装。',
@@ -3045,6 +3089,8 @@ export const zh: Translations = {
     chooseLater: '稍后再选择提供方',
     recommended: '推荐',
     connected: '已连接',
+    managedUnavailable: '不可用',
+    managedUnavailableDescription: '此提供方需要本地 CLI 登录，无法配置分配给你的托管智能体。',
     featuredPitch: '一个订阅，300+ 前沿模型 — 运行 Hermes 的推荐方式',
     fireworksPitch: '直接模型 API — Fireworks 托管的前沿模型',
     localModelsTitle: '本地运行模型',

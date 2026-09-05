@@ -7,6 +7,7 @@ import { Input } from '@/components/ui/input'
 import { Progress } from '@/components/ui/progress'
 import { getGlobalModelOptions } from '@/hermes'
 import { useI18n } from '@/i18n'
+import { isManagedEvaosAgent } from '@/i18n/managed-brand'
 import { Check, ChevronDown, ChevronLeft, KeyRound, Loader2 } from '@/lib/icons'
 import { isProviderSetupErrorMessage } from '@/lib/provider-setup-errors'
 import { cn } from '@/lib/utils'
@@ -36,6 +37,7 @@ import {
   LocalModelsProviderRow,
   OpenRouterProviderRow,
   ProviderRow,
+  managedOAuthProviders,
   sortProviders
 } from './providers'
 
@@ -46,6 +48,8 @@ export {
   LocalModelsProviderRow,
   OpenRouterProviderRow,
   ProviderRow,
+  isManagedLocalCliProviderUnavailable,
+  managedOAuthProviders,
   providerTitle,
   sortProviders
 } from './providers'
@@ -182,7 +186,21 @@ function useApiKeyCatalog(): ApiKeyOption[] {
 // → surface-out (520ms, held back by [transition-delay:660ms]). Finalize after.
 const ONBOARDING_EXIT_MS = 1180
 
-export function DesktopOnboardingOverlay({
+export function DesktopOnboardingOverlay(props: DesktopOnboardingOverlayProps) {
+  const onboarding = useStore($desktopOnboarding)
+
+  // Managed evaOS Agent authenticates through Electric Sheep and connects to
+  // the administrator-assigned runtime. Do not surface unmanaged first-run
+  // provider setup or local endpoint onboarding on that path. Manual mode is
+  // explicitly entered from Settings for a supported provider re-auth flow.
+  if (isManagedEvaosAgent() && !onboarding.manual) {
+    return null
+  }
+
+  return <DesktopProviderOnboardingOverlay {...props} />
+}
+
+function DesktopProviderOnboardingOverlay({
   enabled,
   onCompleted,
   profile,
@@ -430,6 +448,7 @@ const persistShowAll = (value: boolean) => {
 export function Picker({ ctx }: { ctx: OnboardingContext }) {
   const { t } = useI18n()
   const { localEndpoint, manual, mode, providers } = useStore($desktopOnboarding)
+  const managedEva = isManagedEvaosAgent()
   const [showAll, setShowAll] = useState(readShowAll)
   // Which key-form option to preselect when we flip to 'apikey' mode. The
   // OpenRouter row selects its key; the generic link lands on the first option.
@@ -441,7 +460,8 @@ export function Picker({ ctx }: { ctx: OnboardingContext }) {
   }
 
   const ordered = useMemo(() => (providers ? sortProviders(providers) : []), [providers])
-  const hasOauth = ordered.length > 0
+  const availableProviders = managedEva ? managedOAuthProviders(ordered, true) : ordered
+  const hasOauth = availableProviders.length > 0
   const apiKeyOptions = useApiKeyCatalog()
 
   // localEndpoint forces the key form regardless of `mode` (which a manual
@@ -472,8 +492,12 @@ export function Picker({ ctx }: { ctx: OnboardingContext }) {
   }
 
   const select = (p: OAuthProvider) => void startProviderOAuth(p, ctx)
-  const featured = ordered.find(p => p.id === FEATURED_ID) ?? null
-  const rest = featured ? ordered.filter(p => p.id !== FEATURED_ID) : ordered
+  const featured = managedEva ? null : availableProviders.find(p => p.id === FEATURED_ID) ?? null
+  const rest = managedEva
+    ? availableProviders
+    : featured
+      ? availableProviders.filter(p => p.id !== FEATURED_ID)
+      : availableProviders
   // Collapse the secondary providers behind a disclosure whenever Nous Portal
   // is present to anchor the choice — otherwise show the full list. The
   // Fireworks/OpenRouter key rows always live behind the disclosure, so the
@@ -503,7 +527,7 @@ export function Picker({ ctx }: { ctx: OnboardingContext }) {
         {/* The no-account path: everything runs on this machine. Shipped
             behind the --local launch flag. (Fireworks moved into the
             expanded list on main.) */}
-        {$localModelsEnabled.get() ? <LocalModelsProviderRow onClick={openLocalModels} /> : null}
+        {$localModelsEnabled.get() && !managedEva ? <LocalModelsProviderRow onClick={openLocalModels} /> : null}
         {showRest ? (
           <>
             {/* Fireworks leads the expanded list, matching CANONICAL_PROVIDERS

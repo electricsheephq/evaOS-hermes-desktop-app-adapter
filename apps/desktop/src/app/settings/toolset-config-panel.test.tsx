@@ -154,6 +154,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup()
+  Reflect.deleteProperty(window, 'hermesDesktop')
   vi.clearAllMocks()
 })
 
@@ -812,6 +813,36 @@ describe('ToolsetConfigPanel', () => {
           }
         ]
       })
+
+    it('does not offer a Nous Portal escape from a managed toolset response', async () => {
+      const { notify } = await import('@/store/notifications')
+      Object.defineProperty(window, 'hermesDesktop', {
+        configurable: true,
+        value: { eva: {} },
+        writable: true
+      })
+      getToolsetConfig.mockResolvedValue(nousBrowserConfig())
+
+      const { ToolsetConfigPanel } = await import('./toolset-config-panel')
+      render(<ToolsetConfigPanel onConfiguredChange={vi.fn()} toolset="browser" />)
+
+      const managedRow = await screen.findByRole('button', { name: /Electric Sheep managed service/ })
+      await waitFor(() => expect(managedRow.getAttribute('aria-expanded')).toBe('true'))
+      expect(screen.getByText('managed')).toBeTruthy()
+      expect(screen.getByText('Managed Browser Use included with your managed agent')).toBeTruthy()
+      expect(screen.queryByText(/Nous Subscription/)).toBeNull()
+      fireEvent.click(await screen.findByRole('button', { name: /Use this backend/ }))
+
+      await waitFor(() =>
+        expect(notify).toHaveBeenCalledWith({
+          kind: 'warning',
+          title: 'Provider unavailable',
+          message: 'Electric Sheep managed service (Browser Use cloud) is not available for your managed agent.'
+        })
+      )
+      expect(selectToolsetProvider).not.toHaveBeenCalled()
+      expect(startOAuthLogin).not.toHaveBeenCalled()
+    })
 
     it('surfaces a sign-in notice when the PUT reports needs_nous_auth', async () => {
       // Regression (Windows 11 Capabilities journey): the GUI wrote

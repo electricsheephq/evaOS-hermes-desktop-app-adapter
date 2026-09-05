@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { getGlobalModelOptions } from '@/hermes'
 import { useI18n } from '@/i18n'
+import { isManagedEvaosAgent, managedProviderDisplayValue } from '@/i18n/managed-brand'
 import { Plus, X } from '@/lib/icons'
 import { cn } from '@/lib/utils'
 
@@ -73,6 +74,7 @@ export function FallbackModelsField({
 }) {
   const { t } = useI18n()
   const m = t.settings.model
+  const managedEva = isManagedEvaosAgent()
 
   const modelOptions = useQuery({
     queryKey: ['model-options', 'global'],
@@ -131,7 +133,7 @@ export function FallbackModelsField({
               <SelectContent>
                 {providers.map(provider => (
                   <SelectItem key={provider.slug} value={provider.slug}>
-                    {provider.name}
+                    {managedProviderDisplayValue(provider.slug, provider.name, managedEva)}
                   </SelectItem>
                 ))}
               </SelectContent>

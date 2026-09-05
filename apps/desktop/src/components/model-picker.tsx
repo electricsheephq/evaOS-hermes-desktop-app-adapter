@@ -22,6 +22,7 @@ import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, Command
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from './ui/dialog'
 import { HighlightMatches } from './ui/highlight-matches'
 import { Skeleton } from './ui/skeleton'
+import { isManagedEvaosAgent, managedProviderDisplayValue } from '../i18n/managed-brand'
 
 interface ModelPickerDialogProps {
   open: boolean
@@ -58,6 +59,7 @@ export function ModelPickerDialog({
 }: ModelPickerDialogProps) {
   const { t } = useI18n()
   const copy = t.modelPicker
+  const managedEva = isManagedEvaosAgent()
   // Own the search term so we can filter manually. cmdk's built-in
   // shouldFilter reorders items by its fuzzy-match score (≈alphabetical with
   // an empty query), which destroys the backend's curated order. We disable
@@ -78,7 +80,7 @@ export function ModelPickerDialog({
   // "nothing loading" (remote-only installs have no local-models routes).
   // Every local-models read here sits behind the --local launch flag (strict:
   // the llamacpp provider group hides even with staged models on disk).
-  const localModelsEnabled = $localModelsEnabled.get()
+  const localModelsEnabled = !managedEva && $localModelsEnabled.get()
 
   const localStatus = useQuery({
     queryKey: ['local-models-loading', profile],
@@ -276,7 +278,7 @@ function ModelResults({
   // The local provider sits behind the --local launch flag (strict: staged
   // models on disk don't show without it). Module-level read — a launch flag
   // can't change mid-session.
-  const localModelsShown = $localModelsEnabled.get()
+  const localModelsShown = !managedEva && $localModelsEnabled.get()
 
   const configured = providers.filter(
     p => (p.models ?? []).length > 0 && (localModelsShown || p.slug !== LOCAL_PROVIDER_SLUG)
@@ -498,6 +500,7 @@ function LoadingResults() {
 function ProviderHeading({ provider }: { provider: ModelOptionProvider }) {
   const { t } = useI18n()
   const copy = t.modelPicker
+  const managedEva = isManagedEvaosAgent()
 
   // free_tier is only set for Nous. true → "Free tier", false → "Pro".
   const tierBadge =
@@ -513,7 +516,7 @@ function ProviderHeading({ provider }: { provider: ModelOptionProvider }) {
 
   return (
     <span className="flex min-w-0 items-center gap-2">
-      <span className="truncate">{provider.name}</span>
+      <span className="truncate">{managedProviderDisplayValue(provider.slug, provider.name, managedEva)}</span>
       <span className="font-mono text-xs font-normal normal-case tracking-normal text-muted-foreground">
         {provider.slug} · {provider.total_models ?? provider.models?.length ?? 0}
       </span>

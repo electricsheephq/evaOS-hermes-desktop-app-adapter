@@ -117,6 +117,16 @@ export function GatewayConnectingOverlay() {
     }
   }, [phase, previewing])
 
+  // Managed evaOS Agent pauses boot while Electric Sheep enrollment or
+  // sign-in owns the screen. Do not leave the connecting scrim over the
+  // Settings recovery surface during that flow.
+  const managedEnrollmentPending =
+    boot.phase === 'renderer.enrollment' || boot.phase === 'eva.sign-in-required' || boot.phase === 'eva.sign-in'
+
+  if (managedEnrollmentPending && !previewing) {
+    return null
+  }
+
   // Boot failed — BootFailureOverlay owns the screen; don't linger behind it.
   if (boot.error && !previewing) {
     return null
