@@ -5,6 +5,8 @@ and tool deregistration. Origin state and patchable helpers are read through ``_
 
 import asyncio
 import logging
+import os
+import re
 import time
 from dataclasses import dataclass
 from typing import Optional
@@ -122,6 +124,117 @@ class MCPServerRunMixin:
         self._reconnect_event.clear()
         return "reconnect"
 
+    def _validate_evaos_lease_config(self, config: dict) -> None:
+        """Reject connection and credential overrides for managed MCP auth."""
+        if self._auth_type != "evaos_lease":
+            return
+        from tools.evaos_mcp_lease import EvaosLeaseError
+
+        conflicting = {
+            "url", "headers", "command", "args", "env", "transport",
+            "oauth", "client_cert", "identity_header",
+        } & set(config)
+        if conflicting or config.get("ssl_verify") is False:
+            raise EvaosLeaseError(
+                "managed MCP config may specify only root-configured app "
+                "identity plus non-credential runtime options"
+            )
+        app_slug = config.get("app_slug")
+        if not isinstance(app_slug, str) or re.fullmatch(
+            r"[a-z0-9][a-z0-9_-]{0,127}", app_slug
+        ) is None:
+            raise EvaosLeaseError("managed MCP app slug is invalid")
+        external_user_id = config.get("external_user_id")
+        account_id = config.get("account_id")
+        customer_id = config.get("customer_id")
+        agent_id = config.get("agent_id")
+        has_profile_identity = external_user_id is not None
+        has_agent_identity = customer_id is not None or agent_id is not None
+        if has_profile_identity and has_agent_identity:
+            raise EvaosLeaseError(
+                "managed MCP profile and agent identity modes are mutually exclusive"
+            )
+        if not has_agent_identity and (external_user_id is None) != (account_id is None):
+            raise EvaosLeaseError(
+                "managed MCP external_user_id and account_id must be configured together"
+            )
+        if external_user_id is not None:
+            if not isinstance(external_user_id, str) or re.fullmatch(
+                r"[A-Za-z0-9._:-]{1,180}", external_user_id
+            ) is None:
+                raise EvaosLeaseError("managed MCP external user id is invalid")
+            if not isinstance(account_id, str) or re.fullmatch(
+                r"apn_[A-Za-z0-9_-]+", account_id
+            ) is None:
+                raise EvaosLeaseError("managed MCP account id is invalid")
+        if has_agent_identity and (
+            not isinstance(customer_id, str)
+            or re.fullmatch(r"[A-Za-z0-9._:-]{1,180}", customer_id) is None
+            or not isinstance(agent_id, str)
+            or re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,63}", agent_id) is None
+            or (
+                account_id is not None
+                and (
+                    not isinstance(account_id, str)
+                    or re.fullmatch(r"apn_[A-Za-z0-9_-]+", account_id) is None
+                )
+            )
+        ):
+            raise EvaosLeaseError(
+                "managed MCP customer_id and agent_id must be valid together"
+            )
+
+        # The user config may add or edit MCP entries. Lease identity is
+        # authoritative only when this exact server and identity tuple also
+        # exist in the root-owned managed overlay.
+        from hermes_cli.managed_profile_scope import managed_profile_name
+
+        try:
+            managed_profile = managed_profile_name()
+        except Exception as exc:
+            raise EvaosLeaseError(
+                "managed MCP profile authority is unavailable"
+            ) from exc
+        if managed_profile is not None:
+            from hermes_cli import managed_scope
+
+            managed_servers = managed_scope.apply_managed_overlay({}).get(
+                "mcp_servers"
+            )
+            authority = (
+                managed_servers.get(self.name)
+                if isinstance(managed_servers, dict)
+                else None
+            )
+            authority_fields = (
+                "auth",
+                "app_slug",
+                "external_user_id",
+                "account_id",
+                "customer_id",
+                "agent_id",
+            )
+            if (
+                not isinstance(authority, dict)
+                or authority.get("auth") != "evaos_lease"
+                or any(
+                    config.get(field) != authority.get(field)
+                    for field in authority_fields
+                )
+            ):
+                raise EvaosLeaseError(
+                    "managed MCP lease identity is not root-configured"
+                )
+
+    def _warn_evaos_lease_failure(self, exc: Exception) -> None:
+        if self._evaos_lease_warning_emitted:
+            return
+        self._evaos_lease_warning_emitted = True
+        logger.warning(
+            "MCP server '%s' profile '%s': managed Pipedream lease mint failed: %s",
+            self.name, os.path.basename(self.registration_home), exc,
+        )
+
     async def _park(self, revival_reason: str) -> bool:
         """Drop this server's tools and wait for a reconnect request; True when shutdown came instead.
         The run task must NOT exit (it is the only ``_reconnect_event`` listener, so returning
@@ -163,26 +276,33 @@ class MCPServerRunMixin:
         elicitation_config = config.get("elicitation", {})
         self._elicitation = (_sampling.ElicitationHandler(self.name, elicitation_config, owner=self)
                              if elicitation_config.get("enabled", True) and _core._MCP_ELICITATION_TYPES else None)
+        try:
+            self._validate_evaos_lease_config(config)
+        except Exception as exc:
+            logger.warning("MCP server '%s': %s", self.name, exc)
+            self._publish_error(exc)
+            return False
         if "url" in config and "command" in config:
             logger.warning("MCP server '%s' has both 'url' and 'command' in config. Using HTTP transport "
                            "('url'). Remove 'command' to silence this warning.", self.name)
         if not self._is_http():
             return True
-        try:
-            _errors._validate_remote_mcp_url(self.name, config.get("url"))
-            # Content-type preflight (Streamable HTTP only; SSE serves text/event-stream): a
-            # web-app root returns HTML and would hang the SDK for connect_timeout. Skipped once
-            # _ready was ever set and for OAuth servers (a token-less probe sees HTML/401).
-            if (config.get("transport") != "sse" and not config.get("skip_preflight")
-                    and not self._ready.is_set() and self._auth_type != "oauth"):
-                await self._preflight_content_type(
-                    config["url"], headers=dict(config.get("headers") or {}),
-                    ssl_verify=config.get("ssl_verify", True),
-                    client_cert=_errors._resolve_client_cert(self.name, config))
-        except (_errors.InvalidMcpUrlError, _errors.NonMcpEndpointError) as exc:
-            logger.warning("%s", exc)
-            self._publish_error(exc)  # fail fast and non-retryably
-            return False
+        if self._auth_type != "evaos_lease":
+            try:
+                _errors._validate_remote_mcp_url(self.name, config.get("url"))
+                # Content-type preflight (Streamable HTTP only; SSE serves text/event-stream): a
+                # web-app root returns HTML and would hang the SDK for connect_timeout. Skipped once
+                # _ready was ever set and for OAuth servers (a token-less probe sees HTML/401).
+                if (config.get("transport") != "sse" and not config.get("skip_preflight")
+                        and not self._ready.is_set() and self._auth_type != "oauth"):
+                    await self._preflight_content_type(
+                        config["url"], headers=dict(config.get("headers") or {}),
+                        ssl_verify=config.get("ssl_verify", True),
+                        client_cert=_errors._resolve_client_cert(self.name, config))
+            except (_errors.InvalidMcpUrlError, _errors.NonMcpEndpointError) as exc:
+                logger.warning("%s", exc)
+                self._publish_error(exc)  # fail fast and non-retryably
+                return False
         return True
 
     def _publish_error(self, exc: BaseException) -> None:

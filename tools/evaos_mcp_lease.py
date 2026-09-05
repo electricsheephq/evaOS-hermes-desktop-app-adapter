@@ -27,7 +27,12 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable, Mapping, Optional
 from urllib.parse import urlparse
 
-import httpx
+from tools.mcp_tool import sdk_httpx
+
+
+_SDK_HTTPX = sdk_httpx()
+if _SDK_HTTPX is None:  # pragma: no cover - lease auth requires the MCP HTTP SDK
+    raise ImportError("managed MCP lease auth requires an MCP HTTP transport")
 
 
 _APP_SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,127}$")
@@ -38,8 +43,11 @@ _AGENT_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 _CREDENTIAL_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
 _MAX_ERROR_BODY_LENGTH = 512
 _SENSITIVE_ERROR_VALUE_RE = re.compile(
-    r"(?i)\b(?:authorization|proxy-authorization|cookie|set-cookie|"
-    r"x-[\w-]*(?:secret|token|key))\s*[:=]\s*(?:Bearer\s+)?[^,;\s}]+"
+    r"(?i)[\"']?(?:authorization|proxy-authorization|cookie|set-cookie|"
+    r"x-[\w-]*(?:secret|token|key)|(?:access|refresh|id)[_-]?token|"
+    r"(?:api|client|private)[_-]?(?:key|secret)|token|secret|key)"
+    r"[\"']?\s*[:=]\s*[\"']?"
+    r"(?:Bearer\s+)?[^\"',;\s}]+"
 )
 _BEARER_TOKEN_RE = re.compile(r"(?i)\bBearer\s+\S+")
 _LEASE_ENDPOINT_PATH = "/functions/v1/desktop-runtime-session"
@@ -362,9 +370,10 @@ async def _default_transport(
     headers: Mapping[str, str],
     payload: Mapping[str, str],
 ):
-    async with httpx.AsyncClient(
+    async with _SDK_HTTPX.AsyncClient(
         follow_redirects=False,
-        timeout=httpx.Timeout(15.0),
+        timeout=_SDK_HTTPX.Timeout(15.0),
+        trust_env=False,
     ) as client:
         return await client.post(url, headers=headers, json=payload)
 
@@ -562,7 +571,7 @@ class EvaosLeaseManager:
         )
 
 
-class EvaosLeaseHttpAuth(httpx.Auth):
+class EvaosLeaseHttpAuth(_SDK_HTTPX.Auth):
     """Apply the active lease and retry one HTTP request after a 401."""
 
     requires_request_body = True
@@ -574,14 +583,14 @@ class EvaosLeaseHttpAuth(httpx.Auth):
         return "EvaosLeaseHttpAuth(manager=<redacted>)"
 
     @staticmethod
-    def _apply(request: httpx.Request, lease: EvaosMcpLease) -> None:
-        request.url = httpx.URL(lease.mcp_url)
+    def _apply(request: _SDK_HTTPX.Request, lease: EvaosMcpLease) -> None:
+        request.url = _SDK_HTTPX.URL(lease.mcp_url)
         for name in _REQUIRED_LEASE_HEADERS:
             request.headers.pop(name, None)
             request.headers.pop(name.lower(), None)
         request.headers.update(lease.headers)
 
-    async def async_auth_flow(self, request: httpx.Request):
+    async def async_auth_flow(self, request: _SDK_HTTPX.Request):
         lease = await self._manager.get_lease()
         self._apply(request, lease)
         response = yield request

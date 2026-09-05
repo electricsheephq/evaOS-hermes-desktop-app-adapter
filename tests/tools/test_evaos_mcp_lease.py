@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import os
+import tomllib
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from types import SimpleNamespace
 
-import httpx
 import pytest
 
 from tools.evaos_mcp_lease import (
@@ -16,7 +18,49 @@ from tools.evaos_mcp_lease import (
     EvaosLeaseSource,
 )
 from tools.mcp_schema_cache import config_fingerprint
-from tools.mcp_tool import MCPServerTask
+from tools.mcp_tool import MCPServerTask, sdk_httpx
+
+
+httpx = sdk_httpx()
+
+
+def test_lease_auth_binds_to_the_sdk_http_stack():
+    assert httpx.__name__ == "httpx2"
+    assert issubclass(EvaosLeaseHttpAuth, httpx.Auth)
+
+
+@pytest.mark.asyncio
+async def test_broker_mint_transport_ignores_proxy_environment(monkeypatch):
+    from tools import evaos_mcp_lease as lease_module
+
+    observed = {}
+
+    class Client:
+        def __init__(self, **kwargs):
+            observed.update(kwargs)
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, _exc_type, _exc, _tb):
+            return False
+
+        async def post(self, url, *, headers, json):
+            observed.update(url=url, headers=headers, payload=json)
+            return _Response(200, {})
+
+    monkeypatch.setenv("HTTPS_PROXY", "https://profile-proxy.invalid")
+    monkeypatch.setenv("SSL_CERT_FILE", "/profile-controlled/ca.pem")
+    monkeypatch.setattr(lease_module._SDK_HTTPX, "AsyncClient", Client)
+
+    await lease_module._default_transport(
+        "https://example.supabase.co/functions/v1/desktop-runtime-session",
+        {"X-Test": "redacted"},
+        {"action": "pipedream_mcp_lease", "app_slug": "google_sheets"},
+    )
+
+    assert observed["trust_env"] is False
+    assert observed["follow_redirects"] is False
 
 class _Response:
     def __init__(self, status_code: int, payload: dict, *, text: str = ""):
@@ -241,6 +285,35 @@ async def test_lease_mint_401_surfaces_sanitized_server_body(tmp_path):
     assert str(caught.value) == (
         "managed MCP lease rejected (401): Pipedream MCP grant is required"
     )
+
+
+@pytest.mark.asyncio
+async def test_lease_mint_redacts_compact_json_credentials(tmp_path):
+    now = datetime(2026, 8, 8, tzinfo=timezone.utc)
+    source, _ = _source(tmp_path)
+
+    async def transport(url, headers, payload):
+        return _Response(
+            401,
+            {},
+            text=(
+                '{"Authorization":"lease-token-under-test",'
+                '"x-api-key":"api-key-under-test",'
+                '"access_token":"access-token-under-test",'
+                '"refresh_token":"refresh-token-under-test"}'
+            ),
+        )
+
+    manager = EvaosLeaseManager(source=source, transport=transport, now=lambda: now)
+    with pytest.raises(EvaosLeaseError) as caught:
+        await manager.get_lease()
+
+    detail = str(caught.value)
+    assert "lease-token-under-test" not in detail
+    assert "api-key-under-test" not in detail
+    assert "access-token-under-test" not in detail
+    assert "refresh-token-under-test" not in detail
+    assert "[redacted]" in detail
 
 
 def test_source_rejects_cross_profile_and_unsafe_files(tmp_path):
@@ -540,14 +613,19 @@ async def test_managed_config_mounts_through_r5_lease(
         async def __aexit__(self, _exc_type, _exc, _tb):
             return False
 
-    def capture_transport(url, **kwargs):
-        mounted.update(url=url, **kwargs)
+    def capture_transport(url, *, http_client):
+        mounted.update(
+            url=url,
+            headers=http_client.headers,
+            auth=http_client.auth,
+            trust_env=http_client._trust_env,
+        )
         return CaptureTransport()
 
     monkeypatch.setattr(mcp_tool_module, "_MCP_HTTP_AVAILABLE", True)
-    monkeypatch.setattr(mcp_tool_module, "_MCP_NEW_HTTP", False)
+    monkeypatch.setattr(mcp_tool_module, "_MCP_NEW_HTTP", True)
     monkeypatch.setattr(
-        mcp_tool_module, "streamablehttp_client", capture_transport
+        mcp_tool_module, "streamable_http_client", capture_transport
     )
 
     config = {
@@ -584,6 +662,7 @@ async def test_managed_config_mounts_through_r5_lease(
         datetime.now(timezone.utc) + timedelta(minutes=10)
     )["headers"]
     assert isinstance(mounted["auth"], EvaosLeaseHttpAuth)
+    assert mounted["trust_env"] is False
 
 
 def test_identity_keyed_managed_config_remains_tolerated():
@@ -644,6 +723,7 @@ async def test_lease_mint_failure_warning_is_once_and_profile_scoped(
         {"headers": {"Authorization": "static-secret"}},
         {"command": "fake-mcp"},
         {"transport": "sse"},
+        {"identity_header": {"name": "X-User", "value": "override"}},
         {"ssl_verify": False},
         {"app_slug": "Google Sheets"},
     ],
@@ -904,14 +984,18 @@ async def test_managed_config_direct_identity_reaches_the_mint_body(
         async def __aexit__(self, _exc_type, _exc, _tb):
             return False
 
-    def capture_transport(url, **kwargs):
-        mounted.update(url=url, **kwargs)
+    def capture_transport(url, *, http_client):
+        mounted.update(
+            url=url,
+            headers=http_client.headers,
+            auth=http_client.auth,
+        )
         return CaptureTransport()
 
     monkeypatch.setattr(mcp_tool_module, "_MCP_HTTP_AVAILABLE", True)
-    monkeypatch.setattr(mcp_tool_module, "_MCP_NEW_HTTP", False)
+    monkeypatch.setattr(mcp_tool_module, "_MCP_NEW_HTTP", True)
     monkeypatch.setattr(
-        mcp_tool_module, "streamablehttp_client", capture_transport
+        mcp_tool_module, "streamable_http_client", capture_transport
     )
 
     config = {
@@ -955,6 +1039,67 @@ def test_managed_config_accepts_exact_agent_account_mode():
     )
 
 
+def test_managed_runtime_binds_lease_identity_to_root_overlay(monkeypatch):
+    from hermes_cli import managed_profile_scope, managed_scope
+
+    authority = {
+        "auth": "evaos_lease",
+        "app_slug": "google_sheets",
+        "lazy": True,
+        "customer_id": DIRECT_CUSTOMER_ID,
+        "agent_id": DIRECT_AGENT_ID,
+        "account_id": DIRECT_ACCOUNT_ID,
+    }
+    monkeypatch.setattr(managed_profile_scope, "managed_profile_name", lambda: "main")
+    monkeypatch.setattr(
+        managed_scope,
+        "load_managed_config",
+        lambda: {"mcp_servers": {"pipedream-google-sheets": authority}},
+    )
+
+    task = MCPServerTask("pipedream-google-sheets")
+    task._auth_type = "evaos_lease"
+    task._validate_evaos_lease_config({**authority, "tools": {"include": ["read"]}})
+
+    forged = {**authority, "agent_id": "sibling"}
+    with pytest.raises(EvaosLeaseError, match="not root-configured"):
+        task._validate_evaos_lease_config(forged)
+
+    alternate = MCPServerTask("profile-added-server")
+    alternate._auth_type = "evaos_lease"
+    with pytest.raises(EvaosLeaseError, match="not root-configured"):
+        alternate._validate_evaos_lease_config(authority)
+
+
+def test_managed_runtime_expands_root_overlay_lease_identity(monkeypatch):
+    from hermes_cli import managed_profile_scope, managed_scope
+
+    monkeypatch.setenv("EVAOS_TEST_APP_SLUG", "google_sheets")
+    monkeypatch.setenv("EVAOS_TEST_AGENT_ID", DIRECT_AGENT_ID)
+    raw_authority = {
+        "auth": "evaos_lease",
+        "app_slug": "${EVAOS_TEST_APP_SLUG}",
+        "customer_id": DIRECT_CUSTOMER_ID,
+        "agent_id": "${EVAOS_TEST_AGENT_ID}",
+        "account_id": DIRECT_ACCOUNT_ID,
+    }
+    effective_authority = {
+        **raw_authority,
+        "app_slug": "google_sheets",
+        "agent_id": DIRECT_AGENT_ID,
+    }
+    monkeypatch.setattr(managed_profile_scope, "managed_profile_name", lambda: "main")
+    monkeypatch.setattr(
+        managed_scope,
+        "load_managed_config",
+        lambda: {"mcp_servers": {"pipedream-google-sheets": raw_authority}},
+    )
+
+    task = MCPServerTask("pipedream-google-sheets")
+    task._auth_type = "evaos_lease"
+    task._validate_evaos_lease_config(effective_authority)
+
+
 def test_managed_config_rejects_mixed_profile_and_agent_identity():
     task = MCPServerTask("pipedream-google-sheets")
     task._auth_type = "evaos_lease"
@@ -992,3 +1137,92 @@ def test_one_field_managed_identity_is_rejected(partial):
                 **partial,
             }
         )
+
+
+@pytest.mark.asyncio
+async def test_lp2_layer0_source_contract_probe(tmp_path):
+    """Secret-free source probe for the Layer-0 request/response contract."""
+    now = datetime(2026, 8, 20, tzinfo=timezone.utc)
+    source = _direct_source(tmp_path)
+    observed = {}
+
+    async def transport(url, headers, payload):
+        observed.update(url=url, headers=headers, payload=payload)
+        return _Response(
+            200,
+            _direct_lease_payload(now + timedelta(hours=1)),
+        )
+
+    lease = await EvaosLeaseManager(
+        source=source,
+        transport=transport,
+        now=lambda: now,
+    ).get_lease()
+
+    assert observed["payload"] == {
+        "action": "pipedream_mcp_lease",
+        "app_slug": "google_sheets",
+        "external_user_id": DIRECT_EXTERNAL_USER_ID,
+        "account_id": DIRECT_ACCOUNT_ID,
+    }
+    assert set(observed["headers"]) == {
+        "Content-Type",
+        "X-Evaos-Desktop-Broker-Secret",
+    }
+    assert lease.headers["x-pd-external-user-id"] == DIRECT_EXTERNAL_USER_ID
+    assert lease.headers["x-pd-account-id"] == DIRECT_ACCOUNT_ID
+
+
+def test_mcp2_snake_case_tool_schema_is_written_to_cache(monkeypatch):
+    from tools import mcp_schema_cache, mcp_tool as mcp_tool_module
+    from tools import registry as registry_module
+    from tools.registry import ToolRegistry
+
+    captured = {}
+
+    def capture_cache(_name, _fingerprint, **kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr(registry_module, "registry", ToolRegistry())
+    monkeypatch.setattr(mcp_schema_cache, "write_cache_entry", capture_cache)
+    monkeypatch.setattr(
+        mcp_tool_module,
+        "_track_mcp_tool_server",
+        lambda _tool_name, _server_name: None,
+    )
+    task = MCPServerTask("lease-schema-probe")
+    task._tools = [
+        SimpleNamespace(
+            name="read_sheet",
+            description="Read a sheet",
+            input_schema={"type": "object", "properties": {"id": {"type": "string"}}},
+            annotations=None,
+        )
+    ]
+
+    registered = mcp_tool_module._register_server_tools(
+        "lease-schema-probe",
+        task,
+        {"auth": "evaos_lease", "app_slug": "google_sheets"},
+    )
+
+    assert registered == ["mcp__lease_schema_probe__read_sheet"]
+    assert captured["tools"][0]["inputSchema"] == task._tools[0].input_schema
+
+
+def test_locked_mcp2_dependency_contract_matches_declared_extras():
+    root = Path(__file__).resolve().parents[2]
+    project = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+    lock = tomllib.loads((root / "uv.lock").read_text(encoding="utf-8"))
+    extras = project["project"]["optional-dependencies"]
+
+    packages = {package["name"]: package for package in lock["package"]}
+    for extra in ("dev", "mcp", "computer-use"):
+        pins = {
+            requirement.split("==", 1)[0]: requirement.split("==", 1)[1]
+            for requirement in extras[extra]
+            if "==" in requirement
+        }
+        for package in ("mcp", "httpx2"):
+            assert package in pins
+            assert packages[package]["version"] == pins[package]

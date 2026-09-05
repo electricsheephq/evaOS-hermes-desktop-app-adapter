@@ -362,10 +362,17 @@ class MCPServerTransportMixin:
 
     def _streamable_http_transport(self, url: str, headers: dict, connect_timeout: float,
                                    ssl_verify, client_cert, oauth_auth,
-                                   strict_cfg_headers: bool, configured_header_names: set):
+                                   strict_cfg_headers: bool, configured_header_names: set,
+                                   managed_lease_auth=None):
         """Streamable HTTP context manager: mcp >= 1.24.0 gets a caller-owned httpx client; on the
         deprecated API (mcp < 1.24.0) the SDK owns the client."""
+        managed_lease = managed_lease_auth is not None
         if not _core._MCP_NEW_HTTP:
+            if managed_lease:
+                raise ImportError(
+                    f"MCP server '{self.name}' requires mcp >= 1.24.0 to "
+                    "disable environment proxying for managed lease auth."
+                )
             if strict_cfg_headers:  # fail closed: without an owned client redirects can't be hooked
                 raise ImportError(f"MCP server '{self.name}' requires mcp >= 1.24.0 to "
                                   "enforce the portable redirect-header boundary "
@@ -377,10 +384,13 @@ class MCPServerTransportMixin:
         httpx = _core.sdk_httpx()
         _strip_auth_on_cross_origin_redirect = _make_redirect_header_stripper(
             httpx.URL(url), strict=strict_cfg_headers, configured_header_names=configured_header_names)
-        client_kwargs: dict = {"follow_redirects": True, "timeout": httpx.Timeout(float(connect_timeout), read=300.0),
+        client_kwargs: dict = {"follow_redirects": not managed_lease,
+                               "timeout": httpx.Timeout(float(connect_timeout), read=300.0),
                                "verify": ssl_verify, **({"headers": headers} if headers else {}),
                                "event_hooks": {"response": [_strip_auth_on_cross_origin_redirect]},
-                               **_present(auth=oauth_auth, cert=client_cert)}
+                               **_present(auth=managed_lease_auth or oauth_auth, cert=client_cert)}
+        if managed_lease:
+            client_kwargs["trust_env"] = False
 
         @asynccontextmanager
         async def _owned_client_streams():  # the SDK skips cleanup when http_client is provided
@@ -396,8 +406,37 @@ class MCPServerTransportMixin:
             raise ImportError(f"MCP server '{self.name}' requires HTTP transport but "
                               "mcp.client.streamable_http is not available. "
                               "Upgrade the mcp package to get HTTP support.")
-        url = config["url"]
-        headers = dict(config.get("headers") or {})
+        _lease_auth = None
+        if self._auth_type == "evaos_lease":
+            from tools.evaos_mcp_lease import (
+                EvaosLeaseHttpAuth,
+                EvaosLeaseManager,
+                EvaosLeaseSource,
+            )
+
+            if self._evaos_lease_manager is None:
+                source = EvaosLeaseSource(
+                    profile_key=self.registration_home,
+                    app_slug=config["app_slug"],
+                    external_user_id=config.get("external_user_id"),
+                    account_id=config.get("account_id"),
+                    customer_id=config.get("customer_id"),
+                    agent_id=config.get("agent_id"),
+                )
+                self._evaos_lease_manager = EvaosLeaseManager(
+                    source=source,
+                    on_mint_failure=self._warn_evaos_lease_failure,
+                )
+                self._evaos_lease_auth = EvaosLeaseHttpAuth(
+                    self._evaos_lease_manager
+                )
+            lease = await self._evaos_lease_manager.get_lease()
+            url = lease.mcp_url
+            headers = dict(lease.headers)
+            _lease_auth = self._evaos_lease_auth
+        else:
+            url = config["url"]
+            headers = dict(config.get("headers") or {})
         # Agent Plugins v1 strict_redirect_headers: configured headers MUST NOT follow a cross-origin
         # redirect — capture their names BEFORE client-generated headers are merged in.
         configured_header_names = {key.lower() for key in headers}
@@ -412,7 +451,8 @@ class MCPServerTransportMixin:
         if config.get("transport") == "sse":
             transport, label = self._sse_transport(*common), "SSE"
         else:
-            transport = self._streamable_http_transport(*common, configured_header_names)
+            transport = self._streamable_http_transport(
+                *common, configured_header_names, managed_lease_auth=_lease_auth)
             label = "HTTP" if _core._MCP_NEW_HTTP else "legacy HTTP"
         return await self._serve_transport(transport, label, float(connect_timeout))
 

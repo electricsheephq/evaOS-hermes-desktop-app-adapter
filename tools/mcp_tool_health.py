@@ -24,7 +24,7 @@ class MCPServerHealthMixin:
     __slots__ = ()
 
     def _is_http(self) -> bool:
-        return "url" in self._config
+        return "url" in self._config or self._auth_type == "evaos_lease"
 
     def _is_recycled_stdio(self) -> bool:
         """True when a stdio server was intentionally recycled."""
