@@ -84,11 +84,21 @@ def _filter_mcp_children(pids: set) -> set:
     return kept
 
 
-def _clear_connect_cooldowns() -> None:
-    """Drop connect-retry cooldowns: a restart must re-attempt every server immediately, not
-    honour a stale per-server backoff. Caller holds ``_core._lock``."""
-    _core._server_connect_retry_after.clear()
-    _core._server_connect_failures.clear()
+def _clear_connect_cooldowns(scope: Optional[str] = None) -> None:
+    """Drop connect-retry cooldowns for one profile, or all profiles when unscoped.
+    Caller holds ``_core._lock``."""
+    if scope is None:
+        _core._server_connect_retry_after.clear()
+        _core._server_connect_failures.clear()
+        return
+    from hermes_constants import hermes_home_key
+    for state_map in (_core._server_connect_retry_after, _core._server_connect_failures):
+        for state_key in list(state_map):
+            owner_scope = _core._server_scope_keys.get(state_key)
+            if owner_scope is None and isinstance(state_key, tuple):
+                owner_scope = hermes_home_key(state_key[0])
+            if owner_scope == scope:
+                state_map.pop(state_key, None)
 
 
 def shutdown_mcp_servers(*, scope: Optional[str] = None):
@@ -113,10 +123,10 @@ def shutdown_mcp_servers(*, scope: Optional[str] = None):
                 if isinstance(result, Exception):
                     logger.debug("Error closing MCP server '%s': %s", server.name, result)
             with _core._lock:
+                _clear_connect_cooldowns(scope)
                 for state_key in selected:
                     _core._servers.pop(state_key, None)
                     _core._server_scope_keys.pop(state_key, None)
-                _clear_connect_cooldowns()
 
         with _core._lock:
             loop = _core._mcp_loop
@@ -133,7 +143,7 @@ def shutdown_mcp_servers(*, scope: Optional[str] = None):
     # (a server that failed to connect is never in ``_servers`` — the most likely state for
     # stale backoff entries), no connect-cooldown state may survive shutdown.
     with _core._lock:
-        _clear_connect_cooldowns()
+        _clear_connect_cooldowns(scope)
     _loop._stop_mcp_loop(only_if_idle=scope is not None)
 
 
