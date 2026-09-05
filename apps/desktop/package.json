@@ -1,13 +1,13 @@
 {
-  "name": "hermes",
-  "productName": "Hermes",
+  "name": "evaos-agent",
+  "productName": "evaOS Agent",
   "private": true,
-  "version": "0.17.0",
-  "description": "Native desktop shell for Hermes Agent.",
-  "author": "Nous Research",
+  "version": "2026.9.5-es.1",
+  "description": "Managed business agent client by Electric Sheep.",
+  "author": "Electric Sheep",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/NousResearch/hermes-agent.git"
+    "url": "git+https://github.com/electricsheephq/evaOS-hermes-desktop-app-adapter.git"
   },
   "type": "module",
   "main": "dist/electron-main.mjs",
@@ -70,12 +70,17 @@
     "check:test:desktop:platforms": "npm run test:desktop:platforms",
     "check:test:desktop:all": "npm run test:desktop:all",
     "check:lint": "npm run typecheck && npm run lint",
-    "check": "npm run check:lint && npm run test:ui && npm run test:desktop:platforms && npm run test:desktop:all",
+    "check": "npm run check:lint && npm run test:ui && npm run test:desktop:platforms && npm run test:desktop:all && npm run check:test:managed",
     "test:e2e": "npm run build && playwright test e2e/",
     "test:e2e:visual": "npm run build && WLR_BACKENDS=headless WLR_NO_HARDWARE_CURSORS=1 cage -- npx playwright test e2e/ --reporter=list",
     "test:e2e:update-snapshots": "npm run build && WLR_BACKENDS=headless WLR_NO_HARDWARE_CURSORS=1 cage -- npx playwright test e2e/ --reporter=list --update-snapshots",
     "repro:short-session-hang": "node scripts/run-short-session-hang-repro.mjs",
-    "repro:short-session-hang:test": "node --test scripts/run-short-session-hang-repro.test.mjs"
+    "repro:short-session-hang:test": "node --test scripts/run-short-session-hang-repro.test.mjs",
+    "dist:mac:arm64:release": "npm run build && cross-env EVAOS_MANAGED_RELEASE=1 npm run builder -- --mac --arm64",
+    "test:managed": "node --test electron/eva-app-updater.test.cjs electron/eva-managed-main-contract.test.cjs electron/eva-managed-scenarios.test.cjs electron/eva-managed.test.cjs electron/eva-protocol-handler.test.cjs electron/eva-runtime.test.cjs electron/eva-ws-relay.test.cjs e2e/verify-managed-reports.test.mjs scripts/notarize.test.mjs scripts/sign-mac.test.mjs scripts/verify-managed-update-release.test.mjs",
+    "release:refresh-and-verify:mac": "node scripts/refresh-managed-update-metadata.mjs",
+    "release:verify:mac": "node scripts/verify-managed-update-release.mjs",
+    "check:test:managed": "npm run test:managed"
   },
   "dependencies": {
     "@assistant-ui/core": "0.2.23",
@@ -118,6 +123,7 @@
     "dnd-core": "14.0.1",
     "dompurify": "3.4.13",
     "driver.js": "1.8.0",
+    "electron-updater": "6.8.9",
     "emojibase-data": "16.0.3",
     "fflate": "0.8.3",
     "frimousse": "0.3.0",
@@ -186,19 +192,31 @@
   },
   "build": {
     "electronVersion": "40.10.2",
-    "appId": "com.nousresearch.hermes",
-    "productName": "Hermes",
-    "executableName": "Hermes",
+    "appId": "com.electricsheephq.evaos.agent",
+    "productName": "evaOS Agent",
+    "executableName": "evaOS Agent",
     "protocols": [
       {
-        "name": "Hermes Protocol",
+        "name": "evaOS Agent Protocol",
         "schemes": [
-          "hermes"
+          "evaos-agent"
         ]
       }
     ],
-    "artifactName": "Hermes-${version}-${os}-${arch}.${ext}",
-    "icon": "assets/icon",
+    "artifactName": "evaOS-Agent-${version}-${arch}.${ext}",
+    "detectUpdateChannel": false,
+    "electronUpdaterCompatibility": ">=2.16",
+    "publish": [
+      {
+        "provider": "generic",
+        "url": "https://github.com/electricsheephq/evaOS-hermes-desktop-app-adapter/releases/latest/download/",
+        "channel": "latest"
+      }
+    ],
+    "releaseInfo": {
+      "releaseNotesFile": "release-notes.md"
+    },
+    "icon": "assets/eva",
     "directories": {
       "output": "release"
     },
@@ -217,8 +235,12 @@
         "to": "install-stamp.json"
       },
       {
-        "from": "assets/icon.ico",
-        "to": "icon.ico"
+        "from": "assets/eva.ico",
+        "to": "eva.ico"
+      },
+      {
+        "from": "../../LICENSE",
+        "to": "licenses/evaOS-Agent-MIT-LICENSE.txt"
       }
     ],
     "asar": true,
@@ -229,23 +251,25 @@
       "dist/**"
     ],
     "mac": {
-      "category": "public.app-category.developer-tools",
+      "sign": "scripts/sign-mac.mjs",
+      "category": "public.app-category.productivity",
       "entitlements": "electron/entitlements.mac.plist",
       "entitlementsInherit": "electron/entitlements.mac.inherit.plist",
+      "forceCodeSigning": true,
       "extendInfo": {
-        "CFBundleDisplayName": "Hermes",
-        "CFBundleExecutable": "Hermes",
-        "CFBundleName": "Hermes",
-        "NSAudioCaptureUsageDescription": "Hermes uses audio capture for voice conversations.",
-        "NSCameraUsageDescription": "Hermes uses the camera when a plugin or feature you enable requests it.",
-        "NSMicrophoneUsageDescription": "Hermes uses the microphone for voice input and voice conversations.",
-        "NSCalendarsUsageDescription": "Hermes needs access to Calendar to provide requested meeting and scheduling support.",
-        "NSCalendarsFullAccessUsageDescription": "Hermes needs full access to Calendar to read and manage events when explicitly requested.",
-        "NSRemindersUsageDescription": "Hermes needs access to Reminders to provide requested personal-assistant and scheduling support.",
-        "NSRemindersFullAccessUsageDescription": "Hermes needs full access to Reminders to read and manage reminders when explicitly requested.",
-        "NSScreenCaptureUsageDescription": "Hermes captures the screen when you ask the agent to screenshot or record it.",
-        "NSLocalNetworkUsageDescription": "Hermes connects to devices on your local network when a plugin or feature you enable requests it.",
-        "NSAppleMusicUsageDescription": "Hermes accesses your music library when a plugin or feature you enable requests it."
+        "CFBundleDisplayName": "evaOS Agent",
+        "CFBundleExecutable": "evaOS Agent",
+        "CFBundleName": "evaOS Agent",
+        "NSAudioCaptureUsageDescription": "evaOS Agent uses audio capture for voice conversations.",
+        "NSCameraUsageDescription": "evaOS Agent uses the camera when a plugin or feature you enable requests it.",
+        "NSMicrophoneUsageDescription": "evaOS Agent uses the microphone for voice input and voice conversations.",
+        "NSCalendarsUsageDescription": "evaOS Agent needs access to Calendar to provide requested meeting and scheduling support.",
+        "NSCalendarsFullAccessUsageDescription": "evaOS Agent needs full access to Calendar to read and manage events when explicitly requested.",
+        "NSRemindersUsageDescription": "evaOS Agent needs access to Reminders to provide requested personal-assistant and scheduling support.",
+        "NSRemindersFullAccessUsageDescription": "evaOS Agent needs full access to Reminders to read and manage reminders when explicitly requested.",
+        "NSScreenCaptureUsageDescription": "evaOS Agent captures the screen when you ask the agent to screenshot or record it.",
+        "NSLocalNetworkUsageDescription": "evaOS Agent connects to devices on your local network when a plugin or feature you enable requests it.",
+        "NSAppleMusicUsageDescription": "evaOS Agent accesses your music library when a plugin or feature you enable requests it."
       },
       "gatekeeperAssess": false,
       "hardenedRuntime": true,
@@ -255,7 +279,7 @@
       ]
     },
     "dmg": {
-      "title": "Install Hermes",
+      "title": "Install evaOS Agent",
       "backgroundColor": "#f5f5f7",
       "iconSize": 96,
       "window": {
@@ -277,7 +301,7 @@
       ]
     },
     "win": {
-      "legalTrademarks": "Hermes",
+      "legalTrademarks": "evaOS Agent by Electric Sheep",
       "target": [
         "nsis",
         "msi"
@@ -285,9 +309,9 @@
       "signAndEditExecutable": false
     },
     "linux": {
-      "category": "Development",
-      "maintainer": "Nous Research <support@nousresearch.com>",
-      "synopsis": "Native desktop shell for Hermes Agent.",
+      "category": "Office",
+      "maintainer": "Electric Sheep",
+      "synopsis": "Managed business agent client by Electric Sheep.",
       "target": [
         "AppImage",
         "deb",
@@ -298,8 +322,8 @@
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "perMachine": false,
-      "shortcutName": "Hermes",
-      "uninstallDisplayName": "Hermes",
+      "shortcutName": "evaOS Agent",
+      "uninstallDisplayName": "evaOS Agent",
       "warningsAsErrors": false
     }
   }

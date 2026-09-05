@@ -43,6 +43,7 @@ jobs:
       python: ${{ steps.classify.outputs.python }}
       python_prod: ${{ steps.classify.outputs.python_prod }}
       frontend: ${{ steps.classify.outputs.frontend }}
+      managed_desktop: ${{ steps.classify.outputs.managed_desktop }}
       site: ${{ steps.classify.outputs.site }}
       scan: ${{ steps.classify.outputs.scan }}
       deps: ${{ steps.classify.outputs.deps }}
@@ -144,6 +145,12 @@ jobs:
     if: needs.detect.outputs.site == 'true'
     uses: ./.github/workflows/docs-site-checks.yml
 
+  e2e-desktop-managed:
+    name: Managed Desktop E2E
+    needs: detect
+    if: needs.detect.outputs.managed_desktop == 'true'
+    uses: ./.github/workflows/e2e-desktop-managed.yml
+
   history-check:
     name: Deny unrelated histories
     needs: detect
@@ -240,6 +247,7 @@ jobs:
       - installer-tests
       - rust-tests
       - e2e-desktop
+      - e2e-desktop-managed
       - docs-site
       - history-check
       - contributor-check
@@ -274,13 +282,20 @@ jobs:
           print(f'needs-json={json.dumps(compact)}')
           with open('$GITHUB_OUTPUT', 'a') as f:
               f.write(f'needs-json={json.dumps(compact)}\n')
-          failed = [name for name, info in needs.items() if info['result'] == 'failure']
+          failed = [name for name, info in needs.items() if info['result'] in ('failure', 'cancelled')]
+          managed_required = needs['detect']['outputs']['managed_desktop'] == 'true'
+          managed_result = needs['e2e-desktop-managed']['result']
+          managed_gate_failed = managed_required and managed_result != 'success'
           for name, info in sorted(needs.items()):
               result = info['result']
-              icon = '✅' if result in ('success', 'skipped') else '❌'
+              required_managed_failure = name == 'e2e-desktop-managed' and managed_gate_failed
+              icon = '✅' if result in ('success', 'skipped') and not required_managed_failure else '❌'
               print(f'{icon} {name}: {result}')
           if failed:
               print(f'::error::{len(failed)} job(s) failed: {\", \".join(failed)}')
+              sys.exit(1)
+          if managed_gate_failed:
+              print(f'::error::Managed-product changes require successful managed Desktop E2E; result was {managed_result}')
               sys.exit(1)
           print('All checks passed (or were skipped)')
           "

@@ -17,6 +17,7 @@ Lanes:
 * ``docker`` — any product change + docker meta
 * ``nix``         — ``nix flake check``: the flake inputs and any product change.
 * ``frontend``    — TS typecheck matrix + desktop build.
+* ``managed_desktop`` — managed Desktop E2E for any Python product or frontend change.
 * ``site``        — Docusaurus + generated skill docs.
 * ``scan``        — supply-chain scan (Python files, .pth, setup hooks).
 * ``deps``        — pyproject.toml dependency bounds check.
@@ -225,6 +226,7 @@ def classify(files: list[str]) -> dict[str, bool]:
         "docker": docker_meta or python_prod or frontend,
         "docker_meta": docker_meta,
         "frontend": frontend,
+        "managed_desktop": python_prod or frontend,
         "site": any(f.startswith(_SITE) for f in files),
         "scan": any(_is_scan(f) for f in files),
         "deps": deps,
@@ -243,6 +245,7 @@ def classify(files: list[str]) -> dict[str, bool]:
         ret["docker"] = True
         ret["docker_meta"] = True
         ret["frontend"] = True
+        ret["managed_desktop"] = True
         ret["site"] = True
         ret["scan"] = True
         ret["deps"] = True
