@@ -24,7 +24,16 @@ def client(tmp_path, monkeypatch):
 
     test_client = TestClient(web_server.app)
     test_client.headers[web_server._SESSION_HEADER_NAME] = web_server._SESSION_TOKEN
-    return test_client
+    yield test_client
+
+    # A terminal job status is published just before the worker's finally
+    # releases its single-flight lock. Do not tear down its patched leaves or
+    # start the next test while that worker still owns the operation.
+    from hermes_cli.web_routers import local_models
+
+    assert local_models._QUICKSTART_LOCK.acquire(timeout=10), "quickstart worker did not exit"
+    local_models._QUICKSTART_LOCK.release()
+    test_client.close()
 
 
 def _wait_job(client, job_id: str, timeout: float = 10.0) -> dict:

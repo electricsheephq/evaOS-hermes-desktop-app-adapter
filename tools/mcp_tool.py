@@ -441,14 +441,32 @@ _server_error_counts: Dict[str, int] = {}
 _server_breaker_opened_at: Dict[str, float] = {}
 _CIRCUIT_BREAKER_THRESHOLD, _CIRCUIT_BREAKER_COOLDOWN_SEC = 3, 60.0
 
+# State identity for profile-owned MCP metadata. Single-profile callers retain raw server-name
+# keys; multiplexed callers add the canonical Hermes home so equal server names cannot share
+# approval metadata.
+_ServerStateKey = str | tuple[str, str]
+
+
+def _server_state_key(server_name: str, registration_home: Optional[str] = None) -> _ServerStateKey:
+    """Return the process-local identity for one profile-owned server."""
+    from agent.secret_scope import is_multiplex_active
+    if not is_multiplex_active():
+        return server_name
+    if registration_home is None:
+        from hermes_constants import get_hermes_home
+        registration_home = get_hermes_home()
+    home = os.path.realpath(os.path.expanduser(str(registration_home)))
+    return (home, server_name)
+
+
 # Trust-tier gating (``trust: full | untrusted``): on an untrusted server every write-capable
 # call (discovery-time ``readOnlyHint`` not exactly True; malformed fails closed) needs approval
 # before the RPC fires. A lying readOnlyHint can only skip approval for calls the operator was
 # already warned about, never widen access. Missing trust = full; unrecognized = untrusted (a
 # typo must never disable the gate). Classified at CALL time from DISCOVERY data: no schema
 # mutation, prompt cache intact.
-_server_trust_levels: Dict[str, str] = {}
-_tool_read_only_hints: Dict[str, Dict[str, bool]] = {}
+_server_trust_levels: Dict[_ServerStateKey, str] = {}
+_tool_read_only_hints: Dict[_ServerStateKey, Dict[str, bool]] = {}
 
 _TRUST_FULL, _TRUST_UNTRUSTED = "full", "untrusted"
 

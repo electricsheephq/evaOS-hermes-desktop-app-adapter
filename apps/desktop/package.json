@@ -77,7 +77,7 @@
     "repro:short-session-hang": "node scripts/run-short-session-hang-repro.mjs",
     "repro:short-session-hang:test": "node --test scripts/run-short-session-hang-repro.test.mjs",
     "dist:mac:arm64:release": "npm run build && cross-env EVAOS_MANAGED_RELEASE=1 npm run builder -- --mac --arm64",
-    "test:managed": "node --test electron/eva-app-updater.test.cjs electron/eva-managed-main-contract.test.cjs electron/eva-managed-scenarios.test.cjs electron/eva-managed.test.cjs electron/eva-protocol-handler.test.cjs electron/eva-runtime.test.cjs electron/eva-ws-relay.test.cjs e2e/verify-managed-reports.test.mjs scripts/notarize.test.mjs scripts/sign-mac.test.mjs scripts/verify-managed-update-release.test.mjs",
+    "test:managed": "node --test electron/eva-app-updater.test.cjs electron/eva-managed-main-contract.test.cjs electron/eva-managed-scenarios.test.cjs electron/eva-managed.test.cjs electron/eva-protocol-handler.test.cjs electron/eva-runtime.test.cjs electron/eva-ws-relay.test.cjs electron/r31-managed-profile-bypass.test.cjs e2e/verify-managed-reports.test.mjs scripts/notarize.test.mjs scripts/sign-mac.test.mjs scripts/verify-managed-update-release.test.mjs",
     "release:refresh-and-verify:mac": "node scripts/refresh-managed-update-metadata.mjs",
     "release:verify:mac": "node scripts/verify-managed-update-release.mjs",
     "check:test:managed": "npm run test:managed"

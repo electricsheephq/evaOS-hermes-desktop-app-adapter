@@ -50,9 +50,9 @@ def _clean_manager_cache(tmp_path, monkeypatch):
     modules_before = set(sys.modules)
     multiplex_before = is_multiplex_active()
     set_multiplex_active(True)
-    plugins_mod.reset_plugin_managers()
+    plugins_mod._reset_plugin_managers_for_tests()
     yield
-    plugins_mod.reset_plugin_managers()
+    plugins_mod._reset_plugin_managers_for_tests()
     set_multiplex_active(multiplex_before)
     for name in set(sys.modules) - modules_before:
         if name.startswith("hermes_plugins."):

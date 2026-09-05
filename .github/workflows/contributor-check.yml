@@ -47,9 +47,11 @@ jobs:
           # legacy AUTHOR_MAP in scripts/release.py.
           MISSING=""
           while IFS= read -r email; do
-            # Skip teknium and bot emails
+            # Skip teknium, bots, and the machine-artifact mapping deliberately
+            # retired in upstream fcdae2cf0b. Reintroducing its case-only filename
+            # makes Mac/Windows checkouts permanently dirty.
             case "$email" in
-              *teknium*|*noreply@github.com*|*dependabot*|*github-actions*|*anthropic.com*|*cursor.com*)
+              *teknium*|*noreply@github.com*|*dependabot*|*github-actions*|*anthropic.com*|*cursor.com*|agent@Agents-Mac-mini.local)
                 continue ;;
             esac
 

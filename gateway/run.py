@@ -1553,6 +1553,15 @@ class SecondaryPortBindingConfigError(MultiplexConfigError):
     listener (/p/<profile>/), so this is always a misconfiguration and is skipped, not fatal."""
 
 
+class ProfileConnectivityError(MultiplexConfigError):
+    """A served profile did not come online and the operator demanded it.
+
+    Adapter failures remain log-and-continue by default. The opt-in
+    ``gateway.require_all_profiles_connected`` gate makes an offline served
+    profile a fatal startup configuration error for consolidated gateways.
+    """
+
+
 class HygieneTurnHoldExceeded(Exception):
     """Hygiene-compression turn-hold budget elapsed mid-stream. Availability boundary, not a failure:
     must NOT take the idle-timeout path (AGENT_COMPRESSION_TIMEOUT, "no output", failure cooldown)."""
@@ -3339,6 +3348,12 @@ class GatewayRunner(
         self._session_db_init_error: Optional[str] = None
         # Non-default profiles' adapters by profile then Platform; self.adapters stays the default's map.
         self._profile_adapters: Dict[str, Dict[Platform, BasePlatformAdapter]] = {}
+        # Per-profile startup failures are recorded while secondary adapters are
+        # brought up and consulted only by the opt-in connectivity assertion.
+        self._profile_startup_failures: Dict[str, List[str]] = {}
+        # Relay-only secondaries intentionally end with no adapter: ingress is
+        # shared by the active profile, so the connectivity gate exempts them.
+        self._profile_relay_served: set[str] = set()
         self._warn_if_docker_media_delivery_is_risky()
         _gateway_runner_ref = _weakref.ref(self)
 

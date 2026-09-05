@@ -128,6 +128,8 @@ export const ru = defineLocale({
       signInIncompleteTitle: 'Вход не завершён',
       signInIncompleteMessage: 'Окно входа закрылось до завершения аутентификации.',
       signInFailed: 'Не удалось войти',
+      managedAssignmentHint: 'Ваше рабочее назначение выбирает Electric Sheep. Если доступ изменён или отозван, войдите снова.',
+      managedSignInFailed: 'Не удалось войти в управляемый доступ. Повторите попытку.',
       signInToRemoteGateway: 'Войти в удалённый шлюз',
       signInWithProvider: provider => `Войти через ${provider}`,
       identityProvider: 'вашему провайдеру аутентификации'

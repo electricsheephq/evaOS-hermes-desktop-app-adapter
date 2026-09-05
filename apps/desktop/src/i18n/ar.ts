@@ -127,6 +127,8 @@ export const ar = defineLocale({
       signInIncompleteTitle: 'تسجيل الدخول غير مكتمل',
       signInIncompleteMessage: 'أغلقت نافذة تسجيل الدخول قبل اكتمال المصادقة.',
       signInFailed: 'فشل تسجيل الدخول',
+      managedAssignmentHint: 'تحدد Electric Sheep تعيين أعمالك. سجل الدخول مرة أخرى إذا تغير الوصول أو أُلغي.',
+      managedSignInFailed: 'تعذر تسجيل الدخول إلى الوصول المُدار. حاول مرة أخرى.',
       signInToRemoteGateway: 'تسجيل الدخول للبوابة البعيدة',
       signInWithProvider: provider => `تسجيل الدخول عبر ${provider}`,
       identityProvider: 'مزود الهوية'

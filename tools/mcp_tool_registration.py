@@ -47,13 +47,18 @@ def _annotation_read_only_hint(mcp_tool: Any) -> bool:
     return hint is True
 
 
-def _record_tool_trust_metadata(server_name: str, config: dict, tools: List[Any]) -> None:
+def _record_tool_trust_metadata(server_name: str, config: dict, tools: List[Any],
+                                registration_home: Optional[str] = None) -> None:
     """Capture per-server trust and per-tool readOnlyHint at discovery — the security boundary: the call-time gate
     classifies from data we control, never re-read server-supplied state."""
+    state_key = _core._server_state_key(server_name, registration_home)
     with _core._lock:
-        _core._server_trust_levels[server_name] = _normalize_server_trust((config or {}).get("trust"))
-        hints = _core._tool_read_only_hints.setdefault(server_name, {})
-        hints.update({t.name: _annotation_read_only_hint(t) for t in tools if getattr(t, "name", None)})
+        _core._server_trust_levels[state_key] = _normalize_server_trust((config or {}).get("trust"))
+        _core._tool_read_only_hints[state_key] = {
+            t.name: _annotation_read_only_hint(t)
+            for t in tools
+            if getattr(t, "name", None)
+        }
 
 
 def _track_mcp_tool_server(tool_name: str, server_name: str) -> None:
@@ -151,7 +156,7 @@ class _Candidate:
 
 
 def _tool_candidates(name: str, tools: Iterable[Any], should_register: Callable[[str], bool],
-                     tool_timeout) -> List[_Candidate]:
+                     tool_timeout, registration_home: Optional[str] = None) -> List[_Candidate]:
     """Native tools (live SDK objects or cache stand-ins) -> candidates. The injection scan runs on
     BOTH paths: the cache file is user-writable JSON."""
     out: List[_Candidate] = []
@@ -161,7 +166,7 @@ def _tool_candidates(name: str, tools: Iterable[Any], should_register: Callable[
             continue
         _schema._scan_mcp_description(name, t.name, t.description or "")
         schema = _schema._convert_mcp_schema(name, t)
-        handler = _handlers._make_tool_handler(name, t.name, tool_timeout)
+        handler = _handlers._make_tool_handler(name, t.name, tool_timeout, registration_home)
         out.append(_Candidate(schema["name"], f"tool {t.name!r}", schema, handler))
     return out
 
@@ -291,8 +296,9 @@ def _register_server_tools(name: str, server: "MCPServerTask", config: dict) -> 
     refresh); returns the names. Toolset aliases derive from the live registry, not
     ``toolsets.TOOLSETS``; lossy normalization collisions (``read-file``/``read_file``) fail closed."""
     should_register = _make_tool_filter(name, config)
-    _record_tool_trust_metadata(name, config, server._tools)
-    candidates = _tool_candidates(name, server._tools, should_register, server.tool_timeout)
+    _record_tool_trust_metadata(name, config, server._tools, server.registration_home)
+    candidates = _tool_candidates(name, server._tools, should_register, server.tool_timeout,
+                                  server.registration_home)
     candidates += _utility_candidates(name, _select_utility_schemas(name, server, config), server.tool_timeout)
     registered = _register_candidates(
         name, _resolve_name_collisions(name, candidates),
@@ -302,7 +308,8 @@ def _register_server_tools(name: str, server: "MCPServerTask", config: dict) -> 
     return registered
 
 
-def _register_from_cache_sync(name: str, config: dict, entry: dict) -> List[str]:
+def _register_from_cache_sync(name: str, config: dict, entry: dict,
+                              registration_home: Optional[str] = None) -> List[str]:
     """Lazy startup: register from a cached manifest with no child process (first real call goes
     through ``_ensure_lazy_server_connected``). Trust metadata is recorded first so the
     call-time gate is identical for live and cached registrations.
@@ -311,10 +318,14 @@ def _register_from_cache_sync(name: str, config: dict, entry: dict) -> List[str]
     call routes through ``_get_connected_server_for_call`` → ``_ensure_lazy_server_connected``.
     """
     from tools.mcp_schema_cache import config_fingerprint, tools_from_cache_entry, utility_tools_from_cache_entry
+    if registration_home is None:
+        from hermes_constants import get_hermes_home
+        registration_home = str(get_hermes_home())
     tool_timeout = _resolve_tool_timeout(config)
     cached_tools = _cached_tools(tools_from_cache_entry(entry))
-    _record_tool_trust_metadata(name, config, cached_tools)
-    candidates = _tool_candidates(name, cached_tools, _make_tool_filter(name, config), tool_timeout)
+    _record_tool_trust_metadata(name, config, cached_tools, registration_home)
+    candidates = _tool_candidates(name, cached_tools, _make_tool_filter(name, config), tool_timeout,
+                                  registration_home)
     candidates += _utility_candidates(name, utility_tools_from_cache_entry(entry), tool_timeout)
     registered = _register_candidates(
         name, candidates, check_fn=_make_check_fn(name), scope=_core._mcp_registry_scope, lazy=True)

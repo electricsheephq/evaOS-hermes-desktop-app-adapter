@@ -120,7 +120,7 @@ def test_profile_managed_mcp_is_discoverable_with_isolated_env(
     tmp_path, monkeypatch
 ):
     from hermes_cli import mcp_startup
-    from tools.mcp_tool import _load_mcp_config
+    from tools.mcp_tool_config import _load_mcp_config
 
     _, jane, _ = _setup_scopes(tmp_path, monkeypatch)
     with _profile_scope(jane):
@@ -143,7 +143,7 @@ def test_profile_without_managed_mcp_sees_only_profile_config(
     tmp_path, monkeypatch
 ):
     from hermes_cli import mcp_startup
-    from tools.mcp_tool import _load_mcp_config
+    from tools.mcp_tool_config import _load_mcp_config
 
     _, _, louis = _setup_scopes(tmp_path, monkeypatch)
     with _profile_scope(louis):
@@ -158,7 +158,7 @@ def test_profile_without_managed_mcp_sees_only_profile_config(
 
 def test_base_scope_mcp_config_is_unchanged(tmp_path, monkeypatch):
     from hermes_cli import mcp_startup
-    from tools.mcp_tool import _load_mcp_config
+    from tools.mcp_tool_config import _load_mcp_config
 
     _setup_scopes(tmp_path, monkeypatch)
     assert mcp_startup._has_configured_mcp_servers() is True
@@ -177,6 +177,7 @@ def test_multiplex_sessions_discover_managed_mcp_per_profile(
     from hermes_cli import mcp_startup
     from hermes_constants import get_hermes_home
     from tools import mcp_tool
+    from tools.mcp_tool_config import _load_mcp_config
     from tools import registry as registry_mod
     from tools.registry import ToolRegistry
     from tui_gateway import entry
@@ -201,7 +202,7 @@ def test_multiplex_sessions_discover_managed_mcp_per_profile(
         seen_secret_scopes.append(
             (home, (scope or {}).get("PROFILE_MCP_TOKEN"))
         )
-        for server_name in mcp_tool._load_mcp_config():
+        for server_name in _load_mcp_config():
             tool_name = f"mcp__{server_name}__whoami"
             fresh_registry.register(
                 name=tool_name,
@@ -212,15 +213,19 @@ def test_multiplex_sessions_discover_managed_mcp_per_profile(
                     "parameters": {"type": "object", "properties": {}},
                 },
                 handler=lambda _args: "ok",
-                registration_home_override=home,
+                scope=home,
             )
-            state_key = mcp_tool._server_state_key(server_name, home)
+            # The split MCP core keys live servers by name and records their
+            # immutable profile owner separately; do not recreate the removed
+            # monolith's tuple-key facade in this fixture.
+            state_key = server_name
             with mcp_tool._lock:
                 mcp_tool._servers[state_key] = SimpleNamespace(
                     session=object(),
                     _registered_tool_names=[tool_name],
                     _sampling=None,
                 )
+                mcp_tool._server_scope_keys[state_key] = home
             added_state_keys.append(state_key)
 
     monkeypatch.setattr(
@@ -296,6 +301,7 @@ def test_multiplex_sessions_discover_managed_mcp_per_profile(
         for state_key in added_state_keys:
             with mcp_tool._lock:
                 mcp_tool._servers.pop(state_key, None)
+                mcp_tool._server_scope_keys.pop(state_key, None)
         mcp_startup._mcp_discovery_threads.clear()
         mcp_startup._mcp_discovery_started_scopes.clear()
         entry._mcp_discovery_enabled = previous_enabled
@@ -319,7 +325,7 @@ def test_single_profile_discovery_keeps_legacy_process_slot(
         lambda: seen.append("base"),
     )
     monkeypatch.setattr(
-        "tools.mcp_tool.get_mcp_status",
+        "tools.mcp_tool_discovery.get_mcp_status",
         lambda: [{"connected": True}],
     )
     mcp_startup._mcp_discovery_started = False

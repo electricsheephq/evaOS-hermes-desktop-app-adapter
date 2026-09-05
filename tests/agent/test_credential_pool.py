@@ -1227,7 +1227,7 @@ def test_least_used_strategy_selects_lowest_count(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(
         "agent.credential_pool._seed_from_singletons",
-        lambda provider, entries: (False, set()),
+        lambda provider, entries, **kwargs: (False, set()),
     )
     monkeypatch.setattr(
         "agent.credential_pool._seed_from_env",

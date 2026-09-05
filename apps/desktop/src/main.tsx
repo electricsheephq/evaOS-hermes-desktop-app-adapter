@@ -25,6 +25,7 @@ import { RootErrorBoundary } from './components/error-boundary'
 import { HapticsProvider } from './components/haptics-provider'
 import { RootTooltipProvider } from './components/ui/tooltip'
 import { I18nProvider } from './i18n'
+import { isManagedEvaosAgent, sanitizeManagedBrandText } from './i18n/managed-brand'
 import { installClipboardShim } from './lib/clipboard'
 import { queryClient } from './lib/query-client'
 import { installRendererAnimationPauseState } from './lib/renderer-loop-pause'
@@ -49,6 +50,10 @@ const winParam = new URLSearchParams(window.location.search).get('win')
 
 if (winParam === 'hud') {
   document.title = 'Hermes HUD'
+}
+
+if (isManagedEvaosAgent()) {
+  document.title = sanitizeManagedBrandText(document.title)
 }
 
 if (winParam === 'overlay') {

@@ -775,9 +775,9 @@ def test_reload_mcp_preserves_session_protocol_surface(monkeypatch):
 
 
 def test_legacy_open_preview_description_does_not_name_v2_only_tools():
-    from tools.open_preview_tool import OPEN_PREVIEW_SCHEMA
+    from tools.preview_tool import PREVIEW_SCHEMA
 
-    description = OPEN_PREVIEW_SCHEMA["description"]
+    description = PREVIEW_SCHEMA["description"]
     assert "read_preview" not in description
     assert "close_preview" not in description
 

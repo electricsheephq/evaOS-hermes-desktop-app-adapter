@@ -1595,7 +1595,7 @@ def _env_ref_lookup(name: str) -> Optional[str]:
     return _get_secret(name)
 
 
-def _env_expand_match(m: re.Match) -> str:
+def _env_expand_match(m: re.Match, env=None) -> str:
     """Expand one ``${VAR}`` (legacy bare name) or ``${env:VAR}`` (Cursor-style SecretRef).
     Other SecretRef sources (``file:``, ``bitwarden:``, ``vault:``...) are NOT resolved here:
     external backends inject their values into the environment at startup (the ``secrets:``
@@ -1612,7 +1612,7 @@ def _env_expand_match(m: re.Match) -> str:
                 "startup, so reference the variable as ${env:NAME} instead",
                 raw, inner.split(":", 1)[0])
         return raw  # non-env source, or empty ``${env:}``
-    val = _env_ref_lookup(name)
+    val = _env_ref_lookup(name) if env is None else env.get(name)
     if val is not None:
         return val
     if inner.startswith("env:"):
@@ -1637,18 +1637,18 @@ def _env_ref_var_name(ref: str) -> Optional[str]:
     return ref
 
 
-def _expand_env_vars(obj):
+def _expand_env_vars(obj, env=None):
     """Recursively expand ``${VAR}`` / ``${env:VAR}`` in string values (keys/non-strings untouched)."""
     if isinstance(obj, str):
-        return _ENV_REF_RE.sub(_env_expand_match, obj)
+        return _ENV_REF_RE.sub(lambda match: _env_expand_match(match, env), obj)
     if isinstance(obj, dict):
-        return {k: _expand_env_vars(v) for k, v in obj.items()}
+        return {k: _expand_env_vars(v, env) for k, v in obj.items()}
     if isinstance(obj, list):
-        return [_expand_env_vars(item) for item in obj]
+        return [_expand_env_vars(item, env) for item in obj]
     return obj
 
 
-def _env_ref_snapshot(obj, snapshot=None):
+def _env_ref_snapshot(obj, snapshot=None, env=None):
     """Map each env-sourced ``${...}`` ref in *obj* to its current value.
     Stored with cached ``load_config()`` results so a cache hit can detect that the expansion was
     made against a different environment (load before ``load_hermes_dotenv()``, in-process
@@ -1662,13 +1662,13 @@ def _env_ref_snapshot(obj, snapshot=None):
         for raw in _ENV_REF_RE.findall(obj):
             name = _env_ref_var_name(raw)
             if name is not None:
-                snapshot[name] = _env_ref_lookup(name)
+                snapshot[name] = _env_ref_lookup(name) if env is None else env.get(name)
     elif isinstance(obj, dict):
         for value in obj.values():
-            _env_ref_snapshot(value, snapshot)
+            _env_ref_snapshot(value, snapshot, env)
     elif isinstance(obj, list):
         for item in obj:
-            _env_ref_snapshot(item, snapshot)
+            _env_ref_snapshot(item, snapshot, env)
     return snapshot
 
 
@@ -2194,7 +2194,7 @@ def _last_known_good_fallback(config_path: Path, path_key: str, cache_sig, exc: 
 def _merge_managed_overlay(expanded: Dict[str, Any]) -> Tuple[Dict[str, Any], Any]:
     """Apply the managed-scope overlay; returns ``(merged, managed_config_or_falsy)``.
     Managed wins at the leaf and is applied AFTER user expansion so a user ``${VAR}`` cannot shadow
-    a managed literal: managed values expand only against the process environment. This
+    a managed literal: managed values expand against the trusted managed env, then process env. This
     deliberately inverts the usual env-over-config precedence for the keys the managed layer pins
     (docs/design/managed-scope.md §4.1)."""
     managed_config = managed_scope.load_managed_config()
@@ -2206,7 +2206,7 @@ def _merge_managed_overlay(expanded: Dict[str, Any]) -> Tuple[Dict[str, Any], An
     if isinstance(managed_normalized.get("model"), str):
         managed_normalized = dict(managed_normalized)
         managed_normalized["model"] = {"default": managed_normalized["model"]}
-    return _deep_merge(expanded, _expand_env_vars(managed_normalized)), managed_config
+    return _deep_merge(expanded, managed_scope.expand_managed_config(managed_normalized)), managed_config
 
 
 def _load_config_impl(*, want_deepcopy: bool) -> Dict[str, Any]:
@@ -2225,7 +2225,11 @@ def _load_config_impl(*, want_deepcopy: bool) -> Dict[str, Any]:
             # Without this, a load_config() that ran before load_hermes_dotenv() pins unexpanded literals
             # (e.g. auxiliary.<task>.api_key) for the life of the process (#58514).
             env_snapshot = cached[5] if len(cached) > 5 else {}
-            if all(_env_ref_lookup(k) == v for k, v in env_snapshot.items()):
+            managed_snapshot = cached[6] if len(cached) > 6 else {}
+            managed_env = dict(os.environ)
+            managed_env.update(managed_scope.load_managed_env())
+            if (all(_env_ref_lookup(k) == v for k, v in env_snapshot.items())
+                    and all(managed_env.get(k) == v for k, v in managed_snapshot.items())):
                 return copy.deepcopy(cached[4]) if want_deepcopy else cached[4]
 
         config = copy.deepcopy(DEFAULT_CONFIG)
@@ -2257,9 +2261,12 @@ def _load_config_impl(*, want_deepcopy: bool) -> Dict[str, Any]:
             # records the values this expansion was made against so later loads detect drift.
             cached_copy = copy.deepcopy(expanded)
             env_snapshot = _env_ref_snapshot(normalized)
+            managed_snapshot = {}
             if managed_config:
-                _env_ref_snapshot(managed_config, env_snapshot)
-            _LOAD_CONFIG_CACHE[path_key] = (*cache_sig, cached_copy, env_snapshot)
+                managed_env = dict(os.environ)
+                managed_env.update(managed_scope.load_managed_env())
+                _env_ref_snapshot(managed_config, managed_snapshot, managed_env)
+            _LOAD_CONFIG_CACHE[path_key] = (*cache_sig, cached_copy, env_snapshot, managed_snapshot)
             # Readonly path returns the same object later calls will see (identity invariant).
             if not want_deepcopy:
                 return cached_copy

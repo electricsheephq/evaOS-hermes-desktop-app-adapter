@@ -29,6 +29,11 @@ from pathlib import Path
 from hermes_constants import get_hermes_home
 
 
+# Only the exactly-once marker is protected; engine shutdown itself runs outside
+# this lock so unrelated agents can release their resources independently.
+_CONTEXT_ENGINE_SHUTDOWN_LOCK = threading.RLock()
+
+
 def _launch_cwd_for_session(source: str) -> Optional[str]:
     """cwd to stamp on a new session row (``hermes -c`` / ``--resume``), or None.
 
@@ -908,6 +913,17 @@ class AIAgent(
         # never double-extract.
         session_messages = getattr(self, "_session_messages", None)
         _quietly(self.shutdown_memory_provider, session_messages if isinstance(session_messages, list) else None)
+        try:
+            shutdown_context_engine = None
+            with _CONTEXT_ENGINE_SHUTDOWN_LOCK:
+                if not getattr(self, "_context_engine_shutdown", False):
+                    self._context_engine_shutdown = True
+                    context_engine = getattr(self, "context_compressor", None)
+                    shutdown_context_engine = getattr(context_engine, "shutdown", None)
+            if callable(shutdown_context_engine):
+                shutdown_context_engine()
+        except Exception:
+            logger.debug("Context engine shutdown failed", exc_info=True)
         self._close_task_resources(getattr(self, "session_id", None) or "")
         self._close_active_children(soft=False)
         _quietly(self._drop_shared_client, lambda c: self._close_openai_client(c, reason="agent_close", shared=True))
@@ -997,6 +1013,10 @@ class AIAgent(
             _quietly(lambda: session_db.end_session(session_id, "agent_close"))
         if getattr(self, "_owns_session_db", False) and session_db is not None:
             self._owns_session_db = False
+            # Detach the owned handle before release. A repeated close must
+            # not end_session() on a closed DB and trigger its write-recovery
+            # reopen path. Borrowed handles remain attached and untouched.
+            self._session_db = None
             # Shared instances no-op on close(); release the refcount so the registry closes on the last caller.
             # See #90837.
             from hermes_state_registry import release_or_close

@@ -564,6 +564,9 @@ class GatewayConfig:
     # session keys, per-profile adapters/credentials). Allowlist None = serve all; [] = default only.
     multiplex_profiles: bool = False
     multiplex_profile_allowlist: Optional[List[str]] = None
+    # Refuse to finish startup when a served profile has no adapter online.
+    # Off by default so one transient credential failure does not stop a gateway.
+    require_all_profiles_connected: bool = False
     # Public HTTPS endpoint for scoped RoomLink calls (an API key alone must never advertise a
     # route); HERMES_ROOM_LINK_URL overrides.
     room_link_url: Optional[str] = None
@@ -593,6 +596,7 @@ class GatewayConfig:
         "write_sessions_json", "always_log_local", "filter_silence_narration", "stt_enabled",
         "stt_echo_transcripts", "group_sessions_per_user", "thread_sessions_per_user",
         "max_concurrent_sessions", "multiplex_profiles", "multiplex_profile_allowlist",
+        "require_all_profiles_connected",
         "room_link_url", "systemd_watchdog_seconds", "loop_watchdog",
         "loop_watchdog_probe_interval_s", "loop_watchdog_probe_timeout_s",
         "loop_watchdog_max_strikes", "unauthorized_dm_behavior",
@@ -755,6 +759,9 @@ class GatewayConfig:
             stt_echo_transcripts=_coerce_bool(stt_setting("stt_echo_transcripts", "echo_transcripts"), True),
             multiplex_profiles=_coerce_bool(multiplex_profiles, False),
             multiplex_profile_allowlist=pick("multiplex_profile_allowlist"),
+            require_all_profiles_connected=_coerce_bool(
+                pick("require_all_profiles_connected"), False
+            ),
             room_link_url=room_link_url if isinstance(room_link_url, str) else None,
             systemd_watchdog_seconds=systemd_watchdog_seconds,
             loop_watchdog=_coerce_bool(pick("loop_watchdog"), True),

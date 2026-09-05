@@ -779,14 +779,17 @@ def _file_lock(
         managed_lock_fd = -1
     else:
         if msvcrt and (not lock_path.exists() or lock_path.stat().st_size == 0):
-            lock_path.write_text(" ", encoding="utf-8")
+            # The first byte is only a prerequisite for msvcrt.locking. A
+            # concurrent holder may win between the size check and this
+            # convenience write; the lock-acquisition loop below owns the
+            # contention retry and will handle that case.
+            try:
+                lock_path.write_text(" ", encoding="utf-8")
+            except (OSError, PermissionError):
+                pass
         lock_file = lock_path.open("r+" if msvcrt else "a+", encoding="utf-8")
     try:
         with lock_file:
-            if msvcrt and lock_file.tell() == 0:
-                lock_file.write(" ")
-                lock_file.flush()
-                lock_file.seek(0)
             deadline = time.monotonic() + max(1.0, timeout_seconds)
             while True:
                 try:

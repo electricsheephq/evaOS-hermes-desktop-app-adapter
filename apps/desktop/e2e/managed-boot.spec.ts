@@ -47,7 +47,37 @@ test.describe('managed signed-out boot', () => {
       runtimeSessionActive: false,
       customerId: null,
       agentId: null,
-      updateChannel: 'managed-beta',
+      updateChannel: 'managed-beta'
     })
+  })
+
+  test('the real preload denies unenrolled, wrong-owner and local-terminal requests', async () => {
+    const errors = await fixture!.page.evaluate(async () => {
+      const desktop = Reflect.get(window, 'hermesDesktop') as {
+        getConnection: (profile?: string) => Promise<unknown>
+        getConnectionFor: (payload: { connectionId: string; profile: string }) => Promise<unknown>
+        openSessionInTerminal: (sessionId: string) => Promise<unknown>
+      }
+      const rejection = async (request: () => Promise<unknown>) => {
+        try {
+          await request()
+          return 'unexpected success'
+        } catch (error) {
+          return String(error)
+        }
+      }
+
+      return {
+        unenrolled: await rejection(() => desktop.getConnection()),
+        wrongOwner: await rejection(() =>
+          desktop.getConnectionFor({ connectionId: 'synthetic-workstation', profile: 'synthetic-owner' })
+        ),
+        terminal: await rejection(() => desktop.openSessionInTerminal('synthetic-session'))
+      }
+    })
+
+    expect(errors.unenrolled).toContain('sign-in-required')
+    expect(errors.wrongOwner).toContain('outside the managed runtime route')
+    expect(errors.terminal).toContain('managed-terminal-unavailable')
   })
 })

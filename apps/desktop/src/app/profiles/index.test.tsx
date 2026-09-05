@@ -16,7 +16,10 @@ import { ProfilesView } from './index'
 // stranding it on a dead backend. The drift that motivated the fix got in
 // precisely because nothing rendered this view.
 
-afterEach(cleanup)
+afterEach(() => {
+  cleanup()
+  vi.unstubAllGlobals()
+})
 
 // Real i18n (useI18n falls back to English with no provider), so labels are the
 // actual strings — no brittle key snapshot to maintain here.
@@ -119,6 +122,28 @@ async function deleteTheNamedProfile() {
 }
 
 describe('ProfilesView', () => {
+  it('shows managed profiles without create, rename or delete actions', async () => {
+    vi.stubGlobal('hermesDesktop', { eva: {} })
+    vi.mocked(refreshProfiles).mockResolvedValue([makeProfile('default', true), makeProfile(NAMED_PROFILE)])
+
+    await renderProfilesView()
+
+    expect(screen.getAllByRole('button', { name: NAMED_PROFILE })).toHaveLength(1)
+    expect(screen.queryByRole('button', { name: 'New profile' })).toBeNull()
+    expect(screen.queryByRole('button', { name: NAMED_PROFILE, expanded: false })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Default', expanded: false })).toBeNull()
+    expect(screen.queryByRole('dialog', { name: /new profile|rename|delete/i })).toBeNull()
+  })
+
+  it('does not offer creation for an empty managed assignment', async () => {
+    vi.stubGlobal('hermesDesktop', { eva: {} })
+    vi.mocked(refreshProfiles).mockResolvedValue([])
+
+    await renderProfilesView()
+
+    expect(screen.queryByRole('button', { name: 'New profile' })).toBeNull()
+  })
+
   it('opens the shared create dialog with the SOUL.md field (parity with the rail)', async () => {
     vi.mocked(refreshProfiles).mockResolvedValue([])
 

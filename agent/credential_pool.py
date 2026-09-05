@@ -2994,11 +2994,31 @@ def load_pool(provider: str) -> CredentialPool:
         changed |= _normalize_pool_priorities(provider, entries)
     else:
         changed = raw_needs_sanitization or raw_needs_auth_normalization
-        changed |= _reconcile_profile_pool_sources(
-            provider,
-            entries,
-            allow_global_provider_fallback=not managed_shared,
+        borrowing_root_grant = (
+            provider in SINGLE_USE_REFRESH_POOL_PROVIDERS
+            and bool(disk_ids)
+            and not _profile_owns_pool_provider(provider)
         )
+        if borrowing_root_grant:
+            # Rows read through the global-root fallback are seeded from the
+            # root's singleton files, which this profile cannot see. Keep
+            # those borrowed rows in memory and out of the profile's
+            # write-through pruning; the owning root store remains the place
+            # where stale singleton rows are removed.
+            borrowed = [entry for entry in entries if entry.id in disk_ids]
+            others = [entry for entry in entries if entry.id not in disk_ids]
+            changed |= _reconcile_profile_pool_sources(
+                provider,
+                others,
+                allow_global_provider_fallback=not managed_shared,
+            )
+            entries[:] = borrowed + others
+        else:
+            changed |= _reconcile_profile_pool_sources(
+                provider,
+                entries,
+                allow_global_provider_fallback=not managed_shared,
+            )
 
     if changed:
         new_ids = {entry.id for entry in entries}

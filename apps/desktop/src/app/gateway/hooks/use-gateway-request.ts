@@ -8,6 +8,49 @@ import { $gateway, ensureActiveGatewayOpen, isActivePrimary } from '@/store/gate
 import { $activeGatewayProfile } from '@/store/profile'
 import { $gatewayState, setConnection } from '@/store/session'
 
+function waitForGatewayOpen(gateway: HermesGateway, timeoutMs = RECONNECT_ATTEMPT_TIMEOUT_MS): Promise<void> {
+  if (gateway.connectionState === 'open') {
+    return Promise.resolve()
+  }
+
+  return new Promise((resolve, reject) => {
+    let settled = false
+    let offState = () => {}
+
+    const finish = (error?: Error) => {
+      if (settled) {
+        return
+      }
+
+      settled = true
+      clearTimeout(timer)
+      offState()
+
+      if (error) {
+        reject(error)
+      } else {
+        resolve()
+      }
+    }
+
+    const timer = window.setTimeout(() => finish(new Error('Could not connect to evaOS Agent gateway')), timeoutMs)
+
+    offState = gateway.onState(state => {
+      if (state === 'open') {
+        finish()
+      } else if (state === 'closed' || state === 'error') {
+        finish(new Error('Could not connect to evaOS Agent gateway'))
+      }
+    })
+
+    // onState reports the current state synchronously. If that completed the
+    // promise before it returned its unsubscribe function, detach now.
+    if (settled) {
+      offState()
+    }
+  })
+}
+
 export function useGatewayRequest() {
   const gatewayState = useStore($gatewayState)
   // Reactive companion to `gatewayRef`. The ref exists so `requestGateway`
@@ -46,14 +89,19 @@ export function useGatewayRequest() {
     []
   )
 
-  const ensureGatewayOpen = useCallback(async () => {
+  const ensureGatewayOpen = useCallback(async (force = false) => {
     const existing = gatewayRef.current
 
     if (!existing) {
       return null
     }
 
-    if (gatewayStateRef.current === 'open') {
+    // The nanostore is UI projection, not transport truth. During a remote
+    // relay drop it can briefly remain "open" after the actual socket has
+    // closed; trusting it here returns the dead client and makes the retry
+    // fail with the same "gateway is not connected" error. Read the live
+    // gateway state before deciding that no reconnect is needed.
+    if (!force && existing.connectionState === 'open') {
       return existing
     }
 
@@ -101,6 +149,10 @@ export function useGatewayRequest() {
         )
 
         await existing.connect(wsUrl)
+        // The boot reconnect loop may already own an in-flight connect().
+        // JsonRpcGatewayClient.connect() returns immediately in that case, so
+        // wait for its state transition before retrying the failed request.
+        await waitForGatewayOpen(existing)
 
         return existing
       } catch (error) {
@@ -139,7 +191,7 @@ export function useGatewayRequest() {
         // single-use ticket). Background profiles stay on the registry's
         // connection-owned reconnect path, including composite remote/SSH
         // sources.
-        const recovered = isActivePrimary() ? await ensureGatewayOpen() : await ensureActiveGatewayOpen()
+        const recovered = isActivePrimary() ? await ensureGatewayOpen(true) : await ensureActiveGatewayOpen()
 
         if (!recovered) {
           // Prefer the reauth error from the failed reconnect (OAuth session

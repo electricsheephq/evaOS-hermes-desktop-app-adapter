@@ -441,10 +441,17 @@ def _reapply_terminal_config_bridge(home_path: Path) -> None:
 
 
 def _apply_managed_env() -> None:
-    """Apply the managed-scope .env last, with override, so it beats user/shell. Does NOT stop the agent
-    from later mutating os.environ (v1 relies on filesystem permissions). Fail-open: never blocks startup."""
+    """Apply the process home's managed env, never a routed profile's private mapping."""
     try:
         from hermes_cli import managed_scope
+        from hermes_constants import get_hermes_home, get_hermes_home_override
+
+        if (os.environ.get("EVAOS_HERMES_MANAGED_PROFILE_ROOT")
+                and get_hermes_home_override() is not None
+                and get_hermes_home().resolve() != Path(
+                    os.environ.get("HERMES_HOME", Path.home() / ".hermes")
+                ).resolve()):
+            return
 
         managed_dir = managed_scope.get_managed_dir()
     except Exception:  # noqa: BLE001 — managed scope must never block startup

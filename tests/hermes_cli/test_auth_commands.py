@@ -747,7 +747,7 @@ def test_auth_remove_reindexes_priorities(tmp_path, monkeypatch):
     monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
     monkeypatch.setattr(
         "agent.credential_pool._seed_from_singletons",
-        lambda provider, entries: (False, set()),
+        lambda provider, entries, **kwargs: (False, set()),
     )
     _write_auth_store(
         tmp_path,

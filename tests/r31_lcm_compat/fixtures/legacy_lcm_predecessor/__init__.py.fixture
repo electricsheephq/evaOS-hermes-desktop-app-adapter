@@ -1,4 +1,4 @@
-"""A frozen pre-decomposition plugin used only to exercise the real loader gate.
+"""A frozen external pre-decomposition plugin fixture for the real loader gate.
 
 This deliberately imports one of the paths retained by the September 2026
 plugin-compat window.  It is not an LCM implementation and must never be used

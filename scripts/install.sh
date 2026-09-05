@@ -1776,6 +1776,24 @@ run_locked_uv_sync() {
     return "$sync_rc"
 }
 
+run_project_uv_pip_install() {
+    # The fallback still needs this checkout's quarantine/exemption policy.
+    # Use the same config isolation as locked sync rather than duplicating an
+    # absolute cutoff that drifts from upstream's relative [tool.uv] policy.
+    local isolated_uv_config
+    local install_rc
+    isolated_uv_config="$(mktemp -d)" || return 1
+    (
+        unset UV_NO_CONFIG UV_CONFIG_FILE
+        export XDG_CONFIG_HOME="$isolated_uv_config"
+        export XDG_CONFIG_DIRS="$isolated_uv_config"
+        $UV_CMD pip install "$@"
+    )
+    install_rc=$?
+    rmdir "$isolated_uv_config" 2>/dev/null || true
+    return "$install_rc"
+}
+
 install_deps() {
     log_info "Installing dependencies..."
 
@@ -2008,7 +2026,7 @@ PY
     install_tier() {
         local name="$1"; local spec="$2"
         log_info "Trying tier: $name ..."
-        if $UV_CMD pip install -e "$spec" 2>"$ALL_INSTALL_LOG"; then
+        if run_project_uv_pip_install -e "$spec" 2>"$ALL_INSTALL_LOG"; then
             log_success "Main package installed ($name)"
             _installed=true
             _tier_name="$name"
@@ -3451,7 +3469,7 @@ install_desktop_voice_deps() {
         return 0
     fi
     log_info "Installing voice + wake-word dependencies (onnxruntime, faster-whisper — 1-3min)..."
-    if (cd "$INSTALL_DIR" && $UV_CMD pip install -e ".[wake,voice]") ; then
+    if (cd "$INSTALL_DIR" && run_project_uv_pip_install -e ".[wake,voice]") ; then
         log_success "Voice + wake-word dependencies installed"
     else
         log_warn "Voice/wake dependency install failed — they will lazy-install at first use"

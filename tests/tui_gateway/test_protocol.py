@@ -321,7 +321,17 @@ def test_block_and_respond(capture):
 def test_sensitive_prompt_timeout_emits_expiry(capture, event):
     server, buf = capture
 
-    assert server._block(event, "s1", {}, timeout=0) == ""
+    # Terminal reads are Desktop-only.  Establish the same owning session a real Desktop request
+    # carries so expiry behavior is tested after authorization, not against the immediate deny path.
+    server._sessions["s1"] = {
+        "source": "desktop",
+        "desktop_ui_protocol": 1,
+        "history_lock": threading.Lock(),
+    }
+    try:
+        assert server._block(event, "s1", {}, timeout=0) == ""
+    finally:
+        server._sessions.pop("s1", None)
 
     messages = [json.loads(line) for line in buf.getvalue().splitlines()]
     request, expiry = [message["params"] for message in messages]

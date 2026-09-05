@@ -132,6 +132,7 @@ def test_routed_profiles_do_not_share_cached_terminal_environment(tmp_path, monk
     from agent.secret_scope import is_multiplex_active, set_multiplex_active
     from gateway.run import _profile_runtime_scope
     from tools import file_tools, terminal_tool
+    from tools import terminal_tool_backends
 
     local_home, docker_home = _gateway_and_routed_homes(
         tmp_path,
@@ -162,8 +163,10 @@ def test_routed_profiles_do_not_share_cached_terminal_environment(tmp_path, monk
         "_check_all_guards",
         lambda *args, **kwargs: {"approved": True},
     )
+    # ``_create_configured_env`` now lives in the lifecycle module and
+    # resolves the backend builder there; patch the defining backend seam.
     monkeypatch.setattr(
-        terminal_tool,
+        terminal_tool_backends,
         "_create_environment",
         _fake_create_environment,
     )

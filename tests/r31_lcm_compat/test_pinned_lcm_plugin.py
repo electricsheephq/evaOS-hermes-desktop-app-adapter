@@ -293,7 +293,14 @@ def test_real_old_target_old_preserves_one_lcm_store(
 def _install_predecessor_fixture(hermes_home: Path) -> None:
     source = Path(__file__).parent / "fixtures" / "legacy_lcm_predecessor"
     (hermes_home / "plugins").mkdir(parents=True)
-    shutil.copytree(source, hermes_home / "plugins" / "legacy-lcm-predecessor")
+    destination = hermes_home / "plugins" / "legacy-lcm-predecessor"
+    shutil.copytree(source, destination)
+    # This is intentionally old third-party source, not a first-party import.
+    # Materialize it only inside the isolated plugin-loader fixture.
+    (destination / "__init__.py").write_text(
+        (source / "__init__.py.fixture").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
     _write_config(hermes_home, "legacy-lcm-predecessor")
 
 

@@ -838,22 +838,98 @@ class GatewayAdapterLifecycleMixin:
         active = get_active_profile_name() or "default"
         connected = 0
         claimed = self._primary_resource_claims(active)
+        self._profile_startup_failures = {}
+        self._profile_relay_served = set()
+        served_secondaries: list[str] = []
         profile_homes = _multiplex_profile_homes(self.config)
         for profile_name, profile_home in profile_homes:
             if profile_name == active:
                 continue  # handled by the primary startup loop
+            served_secondaries.append(profile_name)
             try:
                 connected += await self._start_one_profile_adapters(profile_name, profile_home, claimed)
             except SecondaryPortBindingConfigError as e:
                 logger.warning(
                     "Skipping secondary profile '%s' due to port-binding config error: %s", profile_name, e,
                 )
+                self._record_profile_startup_failure(
+                    profile_name, "*", f"port-binding config error: {e}"
+                )
             except MultiplexConfigError:
                 raise
             except Exception as e:
                 logger.error("Failed to start adapters for profile '%s': %s", profile_name, e, exc_info=True)
+                self._record_profile_startup_failure(
+                    profile_name, "*", f"profile startup raised {e}"
+                )
+        self._assert_all_profiles_connected(served_secondaries, active)
         self._record_served_profiles(active, profile_homes)
         return connected
+
+    def _assert_all_profiles_connected(
+        self, served_secondaries: list[str], active: str = ""
+    ) -> None:
+        """Refuse startup when an opted-in served profile stayed offline.
+
+        The default remains log-and-continue. Relay-only secondaries are
+        exempt from the empty-adapter check because Relay ingress is shared by
+        the active profile; recorded adapter failures still make them fail.
+        """
+        if getattr(self.config, "require_all_profiles_connected", False) is not True:
+            return
+
+        recorded = getattr(self, "_profile_startup_failures", None) or {}
+        relay_served = getattr(self, "_profile_relay_served", None) or set()
+        no_adapter_reason = (
+            "no platform adapter connected (check that this profile's "
+            "config.yaml enables a platform and its credentials are present)"
+        )
+        offline: Dict[str, List[str]] = {}
+        profile_adapters = getattr(self, "_profile_adapters", None) or {}
+        for profile_name in served_secondaries:
+            reasons = list(recorded.get(profile_name, ()))
+            if not profile_adapters.get(profile_name) and profile_name not in relay_served:
+                reasons.append(no_adapter_reason)
+            if reasons:
+                offline[profile_name] = reasons
+
+        checked = len(served_secondaries) + (1 if active else 0)
+        if active:
+            active_reasons = [
+                f"{platform.value}: queued for background reconnection"
+                for platform in getattr(self, "_failed_platforms", {})
+            ]
+            if not getattr(self, "adapters", {}) and active not in relay_served:
+                active_reasons.append(no_adapter_reason)
+            if active_reasons:
+                offline[active] = active_reasons
+
+        if not offline:
+            logger.info(
+                "[MULTIPLEX] require_all_profiles_connected: all %d served "
+                "profile(s) connected", checked,
+            )
+            return
+
+        detail = "; ".join(
+            f"{name} ({', '.join(reasons)})" for name, reasons in sorted(offline.items())
+        )
+        from gateway.run import ProfileConnectivityError
+        raise ProfileConnectivityError(
+            "gateway.require_all_profiles_connected is on and "
+            f"{len(offline)} of {checked} served profile(s) did not come online: "
+            f"{detail}. Fix the profile(s) or turn the flag off."
+        )
+
+    def _record_profile_startup_failure(
+        self, profile_name: str, platform_value: str, reason: str
+    ) -> None:
+        """Record a secondary startup failure for the optional connectivity gate."""
+        failures = getattr(self, "_profile_startup_failures", None)
+        if failures is None:
+            failures = {}
+            self._profile_startup_failures = failures
+        failures.setdefault(profile_name, []).append(f"{platform_value}: {reason}")
 
     def _primary_resource_claims(self, active: str) -> Dict[tuple, str]:
         """Resource claim -> owning profile for every live or queued primary adapter (credential:
@@ -971,6 +1047,10 @@ class GatewayAdapterLifecycleMixin:
         multiplex = self._multiplex_on()
         profile_map = self._profile_adapters.setdefault(profile_name, {})
         connected = 0
+
+        def _record_failure(platform_value: str, reason: str) -> None:
+            self._record_profile_startup_failure(profile_name, platform_value, reason)
+
         for platform, platform_config in profile_cfg.platforms.items():
             if not platform_config.enabled:
                 continue
@@ -983,20 +1063,33 @@ class GatewayAdapterLifecycleMixin:
                 continue
             # Relay/WhatsApp are shared process-level ingress under multiplex; a secondary would retry-loop.
             if multiplex and platform in (Platform.RELAY, Platform.WHATSAPP):
+                if platform is Platform.RELAY:
+                    relay_served = getattr(self, "_profile_relay_served", None)
+                    if relay_served is None:
+                        relay_served = self._profile_relay_served = set()
+                    relay_served.add(profile_name)
                 continue
             adapter = None
-            with _log_suppressed(
-                logging.ERROR, "[MULTIPLEX] Profile '%s': _create_adapter('%s') raised %s", profile_name,
-                platform.value, exc_info=True,
-            ):
+            creation_failed = False
+            try:
                 with _profile_runtime_scope(profile_home, hydrate_secrets=False):
                     adapter = self._create_adapter(platform, platform_config)
-                if not adapter:
+            except Exception as e:
+                logger.error(
+                    "[MULTIPLEX] Profile '%s': _create_adapter('%s') raised %s",
+                    profile_name, platform.value, e, exc_info=True,
+                )
+                _record_failure(platform.value, f"adapter creation raised {e}")
+                creation_failed = True
+            if not adapter:
+                if not creation_failed:
                     logger.warning(
                         "[MULTIPLEX] Profile '%s': skipping platform '%s' - adapter creation returned None",
                         profile_name, platform.value,
                     )
             if not adapter:
+                if not creation_failed:
+                    _record_failure(platform.value, "adapter creation returned None")
                 continue
             # Same-token / same-listener conflict detection — refuse a duplicate poll or bind.
             credential_claim = self._adapter_credential_claim(platform, adapter)
@@ -1004,6 +1097,7 @@ class GatewayAdapterLifecycleMixin:
             if self._refuse_duplicate_claim(
                 credential_claim, claimed, profile_name, platform, "credential"
             ) or self._refuse_duplicate_claim(listener_claim, claimed, profile_name, platform, "listener"):
+                _record_failure(platform.value, "duplicate credential or listener claim")
                 continue
             self._configure_profile_adapter(adapter, profile_name, platform)
             try:
@@ -1011,8 +1105,10 @@ class GatewayAdapterLifecycleMixin:
                     success = await self._connect_initial_adapter_with_timeout(adapter, platform)
                 if not success:
                     logger.warning("✗ %s failed to connect (profile: %s)", platform.value, profile_name)
+                    _record_failure(platform.value, "failed to connect")
             except Exception as e:
                 logger.error("✗ %s error (profile: %s): %s", platform.value, profile_name, e)
+                _record_failure(platform.value, f"connect raised {e}")
                 success = False
             if not success:
                 await self._safe_adapter_disconnect(adapter, platform)

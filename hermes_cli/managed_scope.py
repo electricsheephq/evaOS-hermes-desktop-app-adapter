@@ -39,12 +39,17 @@ def get_managed_dir() -> Optional[Path]:
     """Resolve the managed-scope directory, or None when no scope is present.
 
     Priority: ``$HERMES_MANAGED_DIR`` (IT-only bootstrap override; never persisted to any .env;
-    honored only when non-empty AND the directory exists), then ``/etc/hermes`` when it exists.
+    honored only when non-empty AND the directory exists), then the selected profile under
+    ``EVAOS_HERMES_MANAGED_PROFILE_ROOT``, then ``/etc/hermes`` when it exists.
     A missing directory resolves to None — the common case, so it must be cheap + side-effect-free.
     """
     override = os.environ.get("HERMES_MANAGED_DIR", "").strip()
     if override:
         p = Path(override)
+    elif profile_root := os.environ.get("EVAOS_HERMES_MANAGED_PROFILE_ROOT", "").strip():
+        from hermes_constants import get_hermes_home
+
+        p = Path(profile_root) / get_hermes_home().name
     elif _under_pytest():
         return None
     else:
@@ -138,11 +143,21 @@ def load_managed_env() -> Dict[str, str]:
     return _load_managed_file(".env", _ENV_CACHE, _parse_env)
 
 
+def expand_managed_config(config: Optional[dict] = None) -> dict:
+    """Expand trusted administrator refs without changing the shared process env."""
+    from hermes_cli.config import _expand_env_vars
+
+    managed = load_managed_config() if config is None else config
+    env = dict(os.environ)
+    env.update(load_managed_env())
+    return _expand_env_vars(managed, env=env)
+
+
 def apply_managed_overlay(config: dict) -> dict:
     """Overlay administrator-pinned config values on top of an already-built dict.
 
-    ``${VAR}`` refs in the managed config expand against the PROCESS env only, so a user cannot
-    shadow a managed literal via a ref they control; a bare root ``model: x/y`` string is promoted
+    ``${VAR}`` refs expand against the profile's managed env, then the process env, never the
+    writable profile env. A bare root ``model: x/y`` string is promoted
     to ``model.default`` so it can't clobber the dict shape callers expect; managed values
     deep-merge ON TOP per leaf while sibling keys stay user-controlled. Fail-open: returns
     ``config`` unchanged when no scope is present or on any error. Mutates and returns ``config``.
@@ -152,8 +167,8 @@ def apply_managed_overlay(config: dict) -> dict:
         if not managed:
             return config
         # Imported lazily to avoid an import cycle (config imports managed_scope).
-        from hermes_cli.config import _deep_merge, _expand_env_vars, _normalize_root_model_keys
-        managed_expanded = _normalize_root_model_keys(_expand_env_vars(managed))
+        from hermes_cli.config import _deep_merge, _normalize_root_model_keys
+        managed_expanded = _normalize_root_model_keys(expand_managed_config(managed))
         # _normalize_root_model_keys only promotes the string when root provider/base_url
         # keys exist to migrate; handle the bare case here (matches cli.py) so _deep_merge
         # never replaces the caller's ``model`` dict with a string.

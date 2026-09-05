@@ -778,6 +778,24 @@ def _current_session_steer_authority(session_id: str) -> tuple[Transport | None,
         return transport, session
 
 
+def _release_rpc_thread_read_connection() -> None:
+    """Release a worker-local SessionDB reader when the pool supports explicit release.
+
+    Older SessionDB implementations kept one read connection in thread-local storage.  Current
+    implementations use a bounded pool and release readers at the end of their read context; the
+    optional call keeps the worker cleanup hook compatible with both ownership models without
+    changing the shared database's lifetime.
+    """
+    db = _db
+    release = getattr(db, "release_current_thread_read_connection", None)
+    if not callable(release):
+        return
+    try:
+        release()
+    except Exception:
+        logger.debug("RPC worker SessionDB reader release failed", exc_info=True)
+
+
 def dispatch(req: dict, transport: Optional[Transport] = None) -> dict | None:
     """Route inbound RPCs — long handlers to the pool (returns None; the worker writes its own
     response via the bound transport), everything else inline (returns the response dict).
@@ -798,6 +816,8 @@ def dispatch(req: dict, transport: Optional[Transport] = None) -> dict | None:
                 resp = handle_request(req)
             except Exception as exc:
                 resp = _err(req.get("id"), -32000, f"handler error: {exc}")
+            finally:
+                _release_rpc_thread_read_connection()
             if resp is not None:
                 t.write(resp)
         _pool.submit(lambda: ctx.run(run))
