@@ -7,18 +7,18 @@ adapter) and the TUI notification poller only watched process completions.
 ``last_event_id`` stayed 0 forever and no notification was ever delivered.
 
 These tests cover the delivery half that now lives in tui_gateway/server.py:
-``_collect_kanban_notifications`` (durable cursor claim + formatting),
-post-acceptance completion, and ``_format_kanban_event_text``.
+``_collect_kanban_notifications`` (cursor claim + formatting + archive-only
+unsubscribe) and ``_format_kanban_event_text``.
 """
 
-import threading
 from types import SimpleNamespace
 from unittest.mock import patch
 
 from hermes_cli import kanban_db as kb
+from hermes_cli import kanban_db_connect as kbc
+from hermes_cli import kanban_db_notify as kbn
 from tui_gateway.server import (
     _collect_kanban_notifications,
-    _complete_accepted_kanban_claims,
     _format_kanban_event_text,
 )
 
@@ -26,33 +26,21 @@ SESSION_KEY = "tui-session-key-1"
 
 
 def _session(key: str = SESSION_KEY) -> dict:
-    return {"session_key": key, "history_lock": threading.Lock()}
-
-
-def _accept_claims(session: dict) -> None:
-    with session["history_lock"]:
-        for claim in session.get("_kanban_delivery_claims") or []:
-            claim["accepted"] = True
-    _complete_accepted_kanban_claims(session)
-
-
-def test_accepted_claim_completion_ignores_uninitialized_session():
-    """A poller racing session initialization must not crash the gateway."""
-    _complete_accepted_kanban_claims({})
+    return {"session_key": key}
 
 
 def _create_subscribed_task(*, chat_id: str = SESSION_KEY, platform: str = "tui"):
-    conn = kb.connect()
+    conn = kbc.connect()
     try:
         tid = kb.create_task(conn, title="notify tui", assignee="worker")
-        kb.add_notify_sub(conn, task_id=tid, platform=platform, chat_id=chat_id)
+        kbn.add_notify_sub(conn, task_id=tid, platform=platform, chat_id=chat_id)
         return tid
     finally:
         conn.close()
 
 
 def _complete(tid: str, summary: str = "all done") -> None:
-    conn = kb.connect()
+    conn = kbc.connect()
     try:
         kb.complete_task(conn, tid, summary=summary)
     finally:
@@ -60,67 +48,97 @@ def _complete(tid: str, summary: str = "all done") -> None:
 
 
 def _sub_rows(tid: str) -> list:
-    conn = kb.connect()
+    conn = kbc.connect()
     try:
-        return kb.list_notify_subs(conn, task_id=tid)
+        return kbn.list_notify_subs(conn, task_id=tid)
     finally:
         conn.close()
 
 
 class TestCollectKanbanNotifications:
     def test_zero_sub_board_is_never_opened_writable(self):
-        conn = kb.connect()
+        conn = kbc.connect()
         conn.close()
         kb.create_board("second-board")
 
-        with patch.object(kb, "connect", wraps=kb.connect) as spy_connect:
+        with patch.object(kbc, "connect", wraps=kbc.connect) as spy_connect:
             texts = _collect_kanban_notifications(_session())
 
         assert texts == []
         spy_connect.assert_not_called()
 
-    def test_delivers_completed_event_and_unsubscribes_after_acceptance(self):
+    def test_done_reopen_notifies_once_per_event_until_archive(self):
         tid = _create_subscribed_task()
         _complete(tid, summary="shipped the fix")
-        session = _session()
 
-        texts = _collect_kanban_notifications(session)
+        first = _collect_kanban_notifications(_session())
 
-        assert len(texts) == 1
-        assert tid in texts[0]
-        assert "done" in texts[0]
-        assert "shipped the fix" in texts[0]
-        assert _sub_rows(tid)[0]["pending_event_ids"]
-        _accept_claims(session)
-        # Task is at a final status -> subscription removed after acceptance.
+        assert len(first) == 1
+        assert tid in first[0]
+        assert "done" in first[0]
+        assert "shipped the fix" in first[0]
+        rows = _sub_rows(tid)
+        assert len(rows) == 1, "done must retain the originating session"
+        first_cursor = rows[0]["last_event_id"]
+
+        # The retained subscription must not replay the completed event.
+        assert _collect_kanban_notifications(_session()) == []
+
+        conn = kbc.connect()
+        try:
+            with kb.write_txn(conn):
+                conn.execute(
+                    "UPDATE tasks SET status = 'ready' WHERE id = ?", (tid,)
+                )
+                kb._append_event(conn, tid, "status", {"status": "ready"})
+            assert kb.complete_task(conn, tid, summary="review corrections")
+        finally:
+            conn.close()
+
+        reopened = _collect_kanban_notifications(_session())
+
+        assert len(reopened) == 2
+        assert "ready" in reopened[0]
+        assert "review corrections" in reopened[1]
+        rows = _sub_rows(tid)
+        assert len(rows) == 1
+        assert rows[0]["chat_id"] == SESSION_KEY
+        assert rows[0]["last_event_id"] > first_cursor
+        assert _collect_kanban_notifications(_session()) == []
+
+        conn = kbc.connect()
+        try:
+            assert kb.archive_task(conn, tid)
+        finally:
+            conn.close()
+
+        # Archive is notification-terminal and removes the retained route.
+        assert _collect_kanban_notifications(_session()) == []
         assert _sub_rows(tid) == []
 
     def test_matching_tui_sub_delivers_and_advances_cursor(self):
         tid = _create_subscribed_task()
         pre_cursor = _sub_rows(tid)[0]["last_event_id"]
-        conn = kb.connect()
+        conn = kbc.connect()
         try:
             kb.block_task(conn, tid, reason="waiting on review")
         finally:
             conn.close()
 
-        session = _session()
-        with patch.object(kb, "connect", wraps=kb.connect) as spy_connect:
-            first = _collect_kanban_notifications(session)
-            second = _collect_kanban_notifications(session)
+        with patch.object(kbc, "connect", wraps=kbc.connect) as spy_connect:
+            first = _collect_kanban_notifications(_session())
+            second = _collect_kanban_notifications(_session())
 
         assert len(first) == 1
         assert "blocked" in first[0]
         assert "waiting on review" in first[0]
         assert second == []
         assert spy_connect.called
-        _accept_claims(session)
         # Blocked is not a final status -> subscription stays alive so a
         # respawned task's next terminal event still reaches the user.
         rows = _sub_rows(tid)
         assert len(rows) == 1
         assert rows[0]["last_event_id"] > pre_cursor
-        assert not rows[0]["pending_event_ids"]
 
     def test_non_tui_subscription_does_not_open_board_writable(self):
         tid = _create_subscribed_task(platform="telegram", chat_id="chat-1")
@@ -129,7 +147,7 @@ class TestCollectKanbanNotifications:
         pre_cursor = _sub_rows(tid)[0]["last_event_id"]
         _complete(tid)
 
-        with patch.object(kb, "connect", wraps=kb.connect) as spy_connect:
+        with patch.object(kbc, "connect", wraps=kbc.connect) as spy_connect:
             texts = _collect_kanban_notifications(_session())
 
         assert texts == []
@@ -143,7 +161,7 @@ class TestCollectKanbanNotifications:
         pre_cursor = _sub_rows(tid)[0]["last_event_id"]
         _complete(tid)
 
-        with patch.object(kb, "connect", wraps=kb.connect) as spy_connect:
+        with patch.object(kbc, "connect", wraps=kbc.connect) as spy_connect:
             texts = _collect_kanban_notifications(_session())
 
         assert texts == []
@@ -159,8 +177,8 @@ class TestCollectKanbanNotifications:
         def fail_probe(*args, **kwargs):
             raise OSError("probe unavailable")
 
-        monkeypatch.setattr(kb, "count_notify_subs", fail_probe)
-        with patch.object(kb, "connect", wraps=kb.connect) as spy_connect:
+        monkeypatch.setattr(kbn, "count_notify_subs", fail_probe)
+        with patch.object(kbc, "connect", wraps=kbc.connect) as spy_connect:
             texts = _collect_kanban_notifications(_session())
 
         assert len(texts) == 1
@@ -197,7 +215,6 @@ class TestCollectKanbanNotifications:
         session = {
             "session_key": SESSION_KEY,
             "profile_home": str(other_profile_home),
-            "history_lock": threading.Lock(),
         }
         # Simulate the strictest case: a context-local profile override is
         # active while the poller collects (as a profile-bound RPC would set).
@@ -210,8 +227,11 @@ class TestCollectKanbanNotifications:
         assert len(texts) == 1
         assert tid in texts[0]
         assert "cross-profile delivery" in texts[0]
-        _accept_claims(session)
-        assert _sub_rows(tid) == []
+        # Completion is reversible, so the shared-board subscription remains
+        # owned by this exact Desktop session until the task is archived.
+        rows = _sub_rows(tid)
+        assert len(rows) == 1
+        assert rows[0]["chat_id"] == SESSION_KEY
 
 
 class TestFormatKanbanEventText:
@@ -253,7 +273,7 @@ class TestNotificationPollerLoopKanbanWiring:
     busy-session pending buffer that flushes once the session goes idle.
     """
 
-    def _start_poller(self, session: dict, monkeypatch, submit=None):
+    def _start_poller(self, session: dict, monkeypatch):
         import threading
         import tui_gateway.server as server
 
@@ -263,15 +283,11 @@ class TestNotificationPollerLoopKanbanWiring:
         monkeypatch.setattr(
             server, "_emit", lambda event, sid, payload=None: emits.append((event, payload))
         )
-        if submit is None:
-            def submit(rid, sid, sess, text, *, on_turn_recorded=None):
-                submits.append(text)
-                server._emit("message.start", sid)
-                if on_turn_recorded is not None:
-                    on_turn_recorded()
-                return True
-
-        monkeypatch.setattr(server, "_run_prompt_submit", submit)
+        monkeypatch.setattr(
+            server,
+            "_run_prompt_submit",
+            lambda rid, sid, sess, text: submits.append(text),
+        )
         stop = threading.Event()
         thread = threading.Thread(
             target=server._notification_poller_loop,
@@ -320,65 +336,6 @@ class TestNotificationPollerLoopKanbanWiring:
         assert session["running"] is True  # poller claimed the turn
         assert not session.get("_kanban_pending")
 
-    def test_claim_ack_waits_for_durable_turn_record(self, monkeypatch):
-        tid = _create_subscribed_task()
-        _complete(tid, summary="record before ack")
-        session = self._poller_session(running=False)
-        recorded_callbacks = []
-
-        def accept(_rid, _sid, _session, _text, *, on_turn_recorded=None):
-            recorded_callbacks.append(on_turn_recorded)
-            return True
-
-        stop, thread, _emits, _submits = self._start_poller(
-            session,
-            monkeypatch,
-            submit=accept,
-        )
-        try:
-            assert self._wait_for(lambda: recorded_callbacks)
-            rows = _sub_rows(tid)
-            assert len(rows) == 1
-            assert rows[0]["pending_event_ids"]
-
-            recorded_callbacks[0]()
-            assert self._wait_for(lambda: _sub_rows(tid) == [])
-        finally:
-            stop.set()
-            thread.join(timeout=5)
-
-    def test_failed_claim_ack_keeps_sqlite_claim_for_retry(
-        self, monkeypatch
-    ):
-        import tui_gateway.server as server
-
-        tid = _create_subscribed_task()
-        _complete(tid, summary="retry after failed ack")
-        session = self._poller_session(running=False)
-        monkeypatch.setattr(
-            server,
-            "_complete_accepted_kanban_claims",
-            lambda *_args, **_kwargs: False,
-        )
-
-        stop, thread, _emits, submits = self._start_poller(
-            session,
-            monkeypatch,
-        )
-        try:
-            assert self._wait_for(lambda: submits)
-            assert self._wait_for(
-                lambda: not session.get("_kanban_delivery_claims")
-            )
-        finally:
-            stop.set()
-            thread.join(timeout=5)
-
-        rows = _sub_rows(tid)
-        assert len(rows) == 1
-        assert rows[0]["pending_event_ids"]
-        assert not session.get("_kanban_delivery_claim_keys")
-
     def test_busy_session_buffers_then_flushes_when_idle(self, monkeypatch):
         tid = _create_subscribed_task()
         _complete(tid, summary="buffered while busy")
@@ -405,51 +362,3 @@ class TestNotificationPollerLoopKanbanWiring:
         assert any(tid in text for text in submits), submits
         assert session["_kanban_pending"] == []
         assert session["running"] is True
-
-    def test_rejected_dispatch_replays_from_sqlite_after_fresh_session(
-        self, monkeypatch
-    ):
-        tid = _create_subscribed_task()
-        _complete(tid, summary="survive gateway restart")
-        rejected = self._poller_session(running=False)
-
-        stop, thread, _emits, _submits = self._start_poller(
-            rejected,
-            monkeypatch,
-            submit=lambda *_args, **_kwargs: False,
-        )
-        thread.join(timeout=5)
-        stop.set()
-
-        assert not thread.is_alive()
-        assert rejected["running"] is False
-        pending_rows = _sub_rows(tid)
-        assert len(pending_rows) == 1
-        assert pending_rows[0]["pending_event_ids"]
-
-        # A fresh session dictionary models a replacement gateway process:
-        # no in-memory claim or pending text survives, only the SQLite row.
-        resumed = self._poller_session(running=False)
-        delivered: list[str] = []
-
-        def accept(
-            _rid, _sid, _session, text, *, on_turn_recorded=None
-        ):
-            delivered.append(text)
-            if on_turn_recorded is not None:
-                on_turn_recorded()
-            return True
-
-        stop, thread, _emits, _submits = self._start_poller(
-            resumed,
-            monkeypatch,
-            submit=accept,
-        )
-        try:
-            assert self._wait_for(lambda: delivered), "durable claim was not replayed"
-        finally:
-            stop.set()
-            thread.join(timeout=5)
-
-        assert any(tid in text for text in delivered)
-        assert _sub_rows(tid) == []

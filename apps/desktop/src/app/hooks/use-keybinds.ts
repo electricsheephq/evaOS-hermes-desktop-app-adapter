@@ -16,7 +16,6 @@ import {
 } from '@/components/pane-shell/tree/store'
 import { setWorkspaceScope } from '@/components/pane-shell/workspace-scope'
 import { onReleaseTypingFocus } from '@/components/ui/keyboard-first'
-import { isManagedEvaosAgent } from '@/i18n/managed-brand'
 import { findBarClaimsCombo } from '@/lib/find-in-page'
 import { contributedKeybindHandler, PROFILE_SLOT_COUNT, SESSION_SLOT_COUNT } from '@/lib/keybinds/actions'
 import { actionAllowedInInput, comboFromEvent, isEditableTarget } from '@/lib/keybinds/combo'
@@ -98,35 +97,6 @@ export interface KeybindRuntimeDeps {
 }
 
 type HandlerMap = Record<string, () => void>
-
-export function terminalKeybindHandlers(managed = isManagedEvaosAgent()): HandlerMap {
-  if (managed) {
-    return {}
-  }
-
-  return {
-    'view.showTerminal': () => togglePaneVisible('terminal'),
-    'view.newTerminal': () => {
-      createTerminal()
-      setTerminalTakeover(true)
-    },
-    'view.nextTerminal': () => isPaneVisible('terminal') && cycleTerminal(1),
-    'view.prevTerminal': () => isPaneVisible('terminal') && cycleTerminal(-1),
-    'view.closeTerminal': () => isPaneVisible('terminal') && closeActiveTerminal()
-  }
-}
-
-function toggleRightSidebarFromKeybind(managed = isManagedEvaosAgent()): void {
-  if (layoutHasRootSide('right')) {
-    toggleFileBrowserOpen()
-
-    return
-  }
-
-  if (!managed) {
-    togglePaneVisible('terminal')
-  }
-}
 
 // Mount once near the top of the app. Owns the single global keydown listener
 // for every rebindable hotkey: it runs the matched action, or — while capture
@@ -275,7 +245,8 @@ export function useKeybinds(deps: KeybindRuntimeDeps): void {
     // ⌘J toggles the right sidebar — but a layout with no right side (e.g.
     // terminal-on-bottom) would leave it a dead key, so it falls back to the
     // terminal there. The single "secondary panel" toggle.
-    'view.toggleRightSidebar': () => toggleRightSidebarFromKeybind(),
+    'view.toggleRightSidebar': () =>
+      layoutHasRootSide('right') ? toggleFileBrowserOpen() : togglePaneVisible('terminal'),
     'view.toggleReview': toggleReview,
     'view.toggleStatusbar': toggleStatusbarVisible,
     'view.toggleTabStrip': () => void toggleTargetZoneTabStrip(),

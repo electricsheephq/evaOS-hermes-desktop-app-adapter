@@ -11,7 +11,6 @@ import {
   clampDataUrlReadMaxMb,
   DATA_URL_READ_DEFAULT_MAX_MB,
   dataUrlReadMaxBytesFromMb,
-  decryptSafeStorageValue,
   DEFAULT_FETCH_TIMEOUT_MS,
   enableBasicPasswordStoreEncryption,
   encryptDesktopSecret,
@@ -77,20 +76,6 @@ async function rejectsWithCode(promise, code: string) {
   })
 }
 
-function captureThrown(action: () => unknown): Error {
-  let thrown: unknown
-
-  try {
-    action()
-  } catch (error) {
-    thrown = error
-  }
-
-  assert.ok(thrown instanceof Error)
-
-  return thrown
-}
-
 test('clampDataUrlReadMaxMb defaults and bounds the attach size preference', () => {
   assert.equal(clampDataUrlReadMaxMb(undefined), DATA_URL_READ_DEFAULT_MAX_MB)
   assert.equal(clampDataUrlReadMaxMb(0), 1)
@@ -151,73 +136,6 @@ test('encryptDesktopSecret requires available secure storage', () => {
     () => encryptDesktopSecret('token', { isEncryptionAvailable: () => false, encryptString: () => Buffer.alloc(0) }),
     /Secure token storage is unavailable/
   )
-})
-
-test('encryptDesktopSecret gives managed users only branded secure-storage recovery', () => {
-  const unavailable = captureThrown(() =>
-    encryptDesktopSecret('token', { isEncryptionAvailable: () => false, encryptString: () => Buffer.alloc(0) }, true)
-  )
-
-  const failedEncryption = captureThrown(() =>
-    encryptDesktopSecret(
-      'token',
-      {
-        isEncryptionAvailable: () => true,
-        encryptString: () => {
-          throw new Error('keychain denied')
-        }
-      },
-      true
-    )
-  )
-
-  for (const error of [unavailable, failedEncryption]) {
-    assert.match(error.message, /evaOS Agent/)
-    assert.match(error.message, /Enable OS keychain access and try again/)
-    assert.match(error.message, /contact Electric Sheep support/)
-    assert.doesNotMatch(error.message, /HERMES_DESKTOP_REMOTE_(?:URL|TOKEN)/)
-  }
-})
-
-test('encryptDesktopSecret rejects Electron basic_text for managed secrets', () => {
-  const error = captureThrown(() =>
-    encryptDesktopSecret(
-      'token',
-      {
-        encryptString: value => Buffer.from(value),
-        getSelectedStorageBackend: () => 'basic_text',
-        isEncryptionAvailable: () => true
-      },
-      { managed: true }
-    )
-  )
-
-  assert.match(error.message, /secure storage/i)
-  assert.match(error.message, /evaOS Agent/)
-})
-
-test('encryptDesktopSecret preserves unmanaged environment fallback recovery', () => {
-  const unavailable = captureThrown(() =>
-    encryptDesktopSecret('token', { isEncryptionAvailable: () => false, encryptString: () => Buffer.alloc(0) }, false)
-  )
-
-  const failedEncryption = captureThrown(() =>
-    encryptDesktopSecret(
-      'token',
-      {
-        isEncryptionAvailable: () => true,
-        encryptString: () => {
-          throw new Error('keychain denied')
-        }
-      },
-      false
-    )
-  )
-
-  for (const error of [unavailable, failedEncryption]) {
-    assert.match(error.message, /HERMES_DESKTOP_REMOTE_URL/)
-    assert.match(error.message, /HERMES_DESKTOP_REMOTE_TOKEN/)
-  }
 })
 
 test('encryptDesktopSecret stores safeStorage base64 payload', () => {
@@ -1060,132 +978,6 @@ test('connection-config save and apply IPC handlers route payloads through coerc
       `${channel} must coerce its payload (the propagation seam) before persisting`
     )
   }
-})
-
-test('decryptSafeStorageValue preserves the ES17 eager macOS credential read', () => {
-  let decrypts = 0
-
-  const ciphertext = Buffer.from('ciphertext', 'utf8').toString('base64')
-
-  const safeStorageApi = {
-    decryptString: () => {
-      decrypts += 1
-
-      return 'desktop-session'
-    }
-  }
-
-  assert.equal(
-    decryptSafeStorageValue(ciphertext, safeStorageApi, { platform: 'darwin', appReady: false }),
-    'desktop-session'
-  )
-  assert.equal(decrypts, 1)
-
-  assert.equal(
-    decryptSafeStorageValue(ciphertext, safeStorageApi, { platform: 'darwin', appReady: true }),
-    'desktop-session'
-  )
-  assert.equal(decrypts, 2)
-})
-
-test('decryptSafeStorageValue preserves non-macOS behavior and fails closed', () => {
-  const ciphertext = Buffer.from('ciphertext', 'utf8').toString('base64')
-  let decrypts = 0
-
-  assert.equal(
-    decryptSafeStorageValue(
-      ciphertext,
-      {
-        decryptString: () => {
-          decrypts += 1
-
-          return 'desktop-session'
-        }
-      },
-      { platform: 'win32', appReady: false }
-    ),
-    'desktop-session'
-  )
-  assert.equal(decrypts, 1)
-
-  assert.equal(
-    decryptSafeStorageValue(
-      ciphertext,
-      {
-        decryptString: () => {
-          throw new Error('keychain denied')
-        }
-      },
-      { platform: 'darwin', appReady: true }
-    ),
-    ''
-  )
-})
-
-test('decryptSafeStorageValue reports only fixed failure categories without exposing errors or ciphertext', () => {
-  const ciphertext = Buffer.from('synthetic-encrypted-value').toString('base64')
-  const cases = [
-    ['safeStorage cannot be used before app is ready', 'not-ready'],
-    [
-      'Error while decrypting the ciphertext provided to safeStorage.decryptString. Decryption is not available.',
-      'unavailable'
-    ],
-    [
-      'Error while decrypting the ciphertext provided to safeStorage.decryptString. Ciphertext does not appear to be encrypted.',
-      'invalid-ciphertext'
-    ],
-    ['Error while decrypting the ciphertext provided to safeStorage.decryptString.', 'decrypt-failed'],
-    ['unexpected failure containing synthetic-private-value', 'unexpected']
-  ]
-
-  for (const [message, category] of cases) {
-    const failures: string[] = []
-    assert.equal(
-      decryptSafeStorageValue(
-        ciphertext,
-        {
-          decryptString: () => {
-            throw new Error(message)
-          }
-        },
-        { platform: 'darwin', appReady: true, onFailure: value => failures.push(value) }
-      ),
-      ''
-    )
-    assert.deepEqual(failures, [category])
-    assert.ok(!JSON.stringify(failures).includes(ciphertext))
-    assert.ok(!JSON.stringify(failures).includes('synthetic-private-value'))
-  }
-
-  const failures: string[] = []
-  assert.equal(
-    decryptSafeStorageValue(
-      ciphertext,
-      {
-        decryptString: () => 'synthetic-session'
-      },
-      { platform: 'darwin', appReady: true, onFailure: value => failures.push(value) }
-    ),
-    'synthetic-session'
-  )
-  assert.deepEqual(failures, [])
-  assert.doesNotThrow(() =>
-    decryptSafeStorageValue(
-      ciphertext,
-      {
-        decryptString: () => {
-          throw new Error('keychain denied')
-        }
-      },
-      {
-        platform: 'darwin',
-        appReady: true,
-        onFailure: () => {
-          throw new Error('logger failed')
-        }
-      }
-    )
-  )
 })
 
 test('whenReady enables basic password-store encryption before createWindow', () => {

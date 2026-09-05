@@ -1,7 +1,10 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import {
+  type CommandCatalogMeta,
+  type CommandsCatalogLike,
   desktopSkinSlashCompletions,
+  type DesktopSlashArgumentMode,
   desktopSlashCommandArgumentMode,
   desktopSlashDescription,
   desktopSlashUnavailableMessage,
@@ -11,14 +14,66 @@ import {
   isModelPickerCommand,
   isPickerCommand,
   rankSkillCommands,
-  resolveDesktopCommand
+  rememberDesktopCommandsCatalog,
+  resolveDesktopCommand,
+  slashCompletionGroup
 } from './desktop-slash-commands'
 
-afterEach(() => {
-  Reflect.deleteProperty(window, 'hermesDesktop')
-})
+function registryCatalog(
+  modes: Record<string, DesktopSlashArgumentMode | null>,
+  aliases: Record<string, string> = {}
+): CommandsCatalogLike {
+  const commands: Record<string, CommandCatalogMeta> = {}
+  const canon: Record<string, string> = {}
+
+  for (const [name, argument_mode] of Object.entries(modes)) {
+    commands[name] = { argument_mode, desktop: null }
+    canon[name] = name
+  }
+
+  for (const [alias, target] of Object.entries(aliases)) {
+    commands[alias] = commands[target]
+    canon[alias] = target
+  }
+
+  return { commands, canon }
+}
+
+const REGISTRY_CATALOG = registryCatalog(
+  {
+    '/approvals': 'options',
+    '/review': 'text',
+    '/refine': 'text',
+    '/usage': null,
+    '/version': null,
+    '/agents': null,
+    '/steer': 'text',
+    '/stop': null,
+    '/bg': 'text',
+    '/btw': 'text',
+    '/debug': null,
+    '/goal': 'mixed',
+    '/personality': 'options',
+    '/queue': 'text',
+    '/retry': null,
+    '/rollback': null,
+    '/tools': 'options',
+    '/undo': null,
+    '/loop': 'mixed',
+    '/lcm': 'text'
+  },
+  { '/tasks': '/agents', '/background': '/bg', '/q': '/queue', '/proactive': '/loop' }
+)
 
 describe('desktop slash command curation', () => {
+  beforeEach(() => {
+    rememberDesktopCommandsCatalog(REGISTRY_CATALOG)
+  })
+
+  afterEach(() => {
+    rememberDesktopCommandsCatalog(undefined)
+  })
+
   it('keeps core desktop chat commands in suggestions', () => {
     expect(isDesktopSlashSuggestion('/new')).toBe(true)
     expect(isDesktopSlashSuggestion('/branch')).toBe(true)
@@ -30,29 +85,37 @@ describe('desktop slash command curation', () => {
     expect(isDesktopSlashSuggestion('/approvals')).toBe(true)
     expect(isDesktopSlashCommand('/approvals')).toBe(true)
     expect(resolveDesktopCommand('/approvals')?.surface).toEqual({ kind: 'exec' })
+    expect(isDesktopSlashSuggestion('/review')).toBe(true)
+    expect(isDesktopSlashCommand('/review')).toBe(true)
+    expect(resolveDesktopCommand('/review')?.surface).toEqual({ kind: 'exec' })
+    expect(resolveDesktopCommand('/review')?.argumentMode).toBe('text')
+  })
+
+  it('treats registry and plugin commands as exec when the catalog says so', () => {
+    expect(resolveDesktopCommand('/refine')?.argumentMode).toBe('text')
+    expect(isDesktopSlashSuggestion('/refine')).toBe(true)
+    expect(isDesktopSlashSuggestion('/background')).toBe(false)
+    expect(isDesktopSlashCommand('/bg')).toBe(true)
+    expect(desktopSlashCommandArgumentMode('/bg')).toBe('text')
+    expect(isDesktopSlashCommand('/btw')).toBe(true)
+    expect(desktopSlashCommandArgumentMode('/btw')).toBe('text')
+    expect(resolveDesktopCommand('/lcm')?.surface).toEqual({ kind: 'exec' })
+    expect(desktopSlashCommandArgumentMode('/lcm')).toBe('text')
+  })
+
+  it('groups complete.slash rows by backend kind, not the desktop table', () => {
+    // A registry command the table has never heard of is still a command.
+    expect(slashCompletionGroup('/refine', 'command')).toBe('Commands')
+    expect(slashCompletionGroup('/docx', 'skill')).toBe('Skills')
+    // Older backends omit kind — fall back to the table.
+    expect(slashCompletionGroup('/new')).toBe('Commands')
+    expect(slashCompletionGroup('/docx')).toBe('Skills')
   })
 
   it('surfaces skill and quick commands (extensions) in suggestions and lets them run', () => {
     expect(isDesktopSlashSuggestion('/my-skill')).toBe(true)
     expect(isDesktopSlashSuggestion('/gif-search')).toBe(true)
     expect(isDesktopSlashCommand('/my-skill')).toBe(true)
-  })
-
-  it('denies managed billing commands without hiding user extension commands', () => {
-    Object.defineProperty(window, 'hermesDesktop', {
-      configurable: true,
-      value: { eva: {} },
-      writable: true
-    })
-
-    for (const command of ['/topup', '/subscription', '/upgrade']) {
-      expect(isDesktopSlashSuggestion(command)).toBe(false)
-      expect(isDesktopSlashCommand(command)).toBe(false)
-      expect(desktopSlashUnavailableMessage(command)).toContain('managed evaOS Agent')
-    }
-
-    expect(isDesktopSlashSuggestion('/my-billing-skill')).toBe(true)
-    expect(isDesktopSlashCommand('/my-billing-skill')).toBe(true)
   })
 
   it('hides terminal, messaging, and dedicated-UI commands from suggestions', () => {
@@ -116,6 +179,13 @@ describe('desktop slash command curation', () => {
     expect(desktopSlashUnavailableMessage('/wake')).toBeNull()
   })
 
+  it('routes /stop through the desktop action that cancels the active turn', () => {
+    expect(resolveDesktopCommand('/stop')?.surface).toEqual({ kind: 'action', action: 'stop' })
+    expect(isDesktopSlashSuggestion('/stop')).toBe(true)
+    expect(isDesktopSlashCommand('/stop')).toBe(true)
+    expect(desktopSlashUnavailableMessage('/stop')).toBeNull()
+  })
+
   it('treats /browser as an executable action command (local-gateway connect)', () => {
     // /browser used to be terminal-only; it now resolves to a desktop action
     // handler that routes browser.manage RPC when the gateway is local.
@@ -162,83 +232,16 @@ describe('desktop slash command curation', () => {
     }
   })
 
-  it('routes /reload-mcp through its confirmed current-session RPC', () => {
-    const command = resolveDesktopCommand('/reload-mcp')
-    const alias = resolveDesktopCommand('/reload_mcp')
-    expect(command?.surface.kind).toBe('rpc')
-    expect(alias?.name).toBe('/reload-mcp')
-    expect(isDesktopSlashSuggestion('/reload-mcp')).toBe(true)
-    expect(isDesktopSlashSuggestion('/reload_mcp')).toBe(false)
-    expect(desktopSlashCommandArgumentMode('/reload-mcp')).toBe('text')
-
-    if (command?.surface.kind !== 'rpc') {
-      return
-    }
-
-    expect(command.surface.rpc).toBe('reload.mcp')
-    expect(command.surface.timeoutMs).toBe(300_000)
-    expect(command.surface.fallbackToExec).toBe(false)
-    const context = { command: '/reload-mcp', name: 'reload-mcp', sessionId: 's-1' }
-    expect(command.surface.buildParams({ ...context, arg: '' })).toEqual({ session_id: 's-1' })
-    expect(command.surface.buildParams({ ...context, arg: 'now' })).toEqual({ session_id: 's-1', confirm: true })
-    expect(command.surface.buildParams({ ...context, arg: 'always' })).toEqual({
-      session_id: 's-1',
-      confirm: true,
-      always: true
-    })
-    expect(command.surface.buildParams({ ...context, arg: 'now please' })).toEqual({ session_id: 's-1' })
-  })
-
-  it('routes managed lifecycle commands to the current profile and session', () => {
-    Object.defineProperty(window, 'hermesDesktop', {
-      configurable: true,
-      value: { eva: {} },
-      writable: true
-    })
-
-    const skills = resolveDesktopCommand('/reload_skills')
-    expect(skills?.name).toBe('/reload-skills')
-    expect(skills?.surface.kind).toBe('rpc')
-    expect(isDesktopSlashSuggestion('/reload-skills')).toBe(true)
-    expect(desktopSlashDescription('/reload-skills')).toBe('Reload skills for the current profile and session')
-
-    if (skills?.surface.kind !== 'rpc') {
-      return
-    }
-
-    expect(skills.surface.rpc).toBe('skills.reload')
-    expect(
-      skills.surface.buildParams({
-        command: '/reload-skills',
-        name: 'reload-skills',
-        arg: 'other-profile',
-        sessionId: 's-1'
-      })
-    ).toEqual({ session_id: 's-1' })
-
-    expect(resolveDesktopCommand('/restart')?.surface).toEqual({ kind: 'action', action: 'restart' })
-    expect(isDesktopSlashSuggestion('/restart')).toBe(true)
-    expect(desktopSlashCommandArgumentMode('/restart')).toBe('text')
-  })
-
-  it('keeps managed lifecycle commands unavailable in an unmanaged desktop', () => {
-    expect(isDesktopSlashSuggestion('/reload-skills')).toBe(false)
-    expect(isDesktopSlashCommand('/reload-skills')).toBe(false)
-    expect(isDesktopSlashSuggestion('/restart')).toBe(false)
-    expect(isDesktopSlashCommand('/restart')).toBe(false)
-    expect(desktopSlashUnavailableMessage('/reload-skills')).toContain('terminal interface')
-    expect(desktopSlashUnavailableMessage('/restart')).toContain('terminal interface')
-  })
-
   it('keeps commands with richer CLI semantics on the slash worker', () => {
-    for (const name of ['/agents', '/steer', '/stop', '/usage']) {
+    for (const name of ['/agents', '/steer', '/usage']) {
       expect(resolveDesktopCommand(name)?.surface).toEqual({ kind: 'exec' })
     }
   })
 
   it('still routes commands without dedicated RPCs through exec()', () => {
+    // /btw is an action (prompt.btw) — the slash-worker print never reached Desktop.
     const execNames = [
-      '/background',
+      '/bg',
       '/debug',
       '/goal',
       '/personality',
@@ -253,6 +256,13 @@ describe('desktop slash command curation', () => {
     for (const name of execNames) {
       expect(resolveDesktopCommand(name)?.surface).toEqual({ kind: 'exec' })
     }
+  })
+
+  it('routes /btw to the prompt.btw side-question action', () => {
+    expect(resolveDesktopCommand('/btw')?.surface).toEqual({ kind: 'action', action: 'btw' })
+    expect(isDesktopSlashCommand('/btw')).toBe(true)
+    expect(isDesktopSlashSuggestion('/btw')).toBe(true)
+    expect(desktopSlashUnavailableMessage('/btw')).toBeNull()
   })
 
   it('distinguishes free prose from finite slash option lists', () => {
@@ -364,22 +374,6 @@ describe('desktop slash command curation', () => {
         display: '/skin midnight',
         meta: 'Midnight - Deep blue'
       }
-    ])
-  })
-
-  it('shows managed theme labels in /skin suggestions while legacy ids remain resolvable', () => {
-    const completions = desktopSkinSlashCompletions(
-      [
-        { name: 'nous', label: 'Blue', description: 'Blue glass' },
-        { name: 'ember', label: 'evaOS', description: 'evaOS warm' }
-      ],
-      'nous',
-      ''
-    )
-
-    expect(completions.slice(2)).toEqual([
-      { text: '/skin Blue', display: '/skin Blue', meta: 'Blue (current) - Blue glass' },
-      { text: '/skin evaOS', display: '/skin evaOS', meta: 'evaOS - evaOS warm' }
     ])
   })
 

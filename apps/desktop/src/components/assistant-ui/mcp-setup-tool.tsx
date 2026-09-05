@@ -19,7 +19,6 @@ import {
   getMcpOAuthFlow,
   installMcpCatalogEntry,
   type McpCatalogEntry,
-  type ProfileScope,
   removeMcpServer,
   setMcpServerEnabled
 } from '@/hermes'
@@ -34,8 +33,6 @@ import { cn } from '@/lib/utils'
 import { $gateway } from '@/store/gateway'
 import { clearMcpSetupRequest, type McpSetupOutcome, sessionMcpSetupRequest } from '@/store/mcp-setup'
 import { notifyError } from '@/store/notifications'
-import { assertSessionOwnerResolved } from '@/store/session-owner-resolution'
-import { knownOwnerForSession, requestForOwnedSession } from '@/store/session-states'
 import { invalidateMcpSuggestionIndex } from '@/store/suggestion-providers/mcp'
 
 import { selectMessageRunning } from './tool/fallback-model'
@@ -54,21 +51,6 @@ const CATALOG_INSTALL_POLL_MS = 1500
 // Thrown by the in-flight flow when the user cancels — the declined respond
 // has already been sent, so the catch path must swallow this, not report it.
 const CANCELLED = Symbol('mcp-setup-cancelled')
-
-/** Resolve the capability REST scope from the session that owns the blocking
- * setup request. A real session never falls back to whichever gateway is in
- * the foreground; unknown ownership fails closed before configuration writes. */
-function mcpSetupOwnerScope(sessionId: null | string): ProfileScope {
-  const owner = knownOwnerForSession(sessionId)
-
-  assertSessionOwnerResolved(owner, { method: 'mcp.setup', sessionId })
-
-  if (owner && typeof owner === 'object') {
-    return { connectionId: owner.connectionId, profile: owner.profile }
-  }
-
-  return owner
-}
 
 function readSetupArgs(args: unknown): SetupArgs {
   const row = parseMaybeObject(args)
@@ -224,16 +206,6 @@ function McpSetupPending({ args }: ToolCallMessagePartProps) {
         return
       }
 
-      // Resolve before clearing the card. If ownership is missing, leave the
-      // request visible and fail closed instead of sending to the foreground.
-      try {
-        mcpSetupOwnerScope(request.sessionId)
-      } catch (error) {
-        notifyError(error, copy.sendFailed)
-
-        return
-      }
-
       // Clear first: the answer is decided, and an in-flight RPC must not
       // leave a live card that can be answered a second time.
       clearMcpSetupRequest(request.requestId, request.sessionId)
@@ -246,12 +218,7 @@ function McpSetupPending({ args }: ToolCallMessagePartProps) {
       // the config landed, tools arrive next session — report it and move on.
       if (outcome.status === 'installed' || outcome.status === 'enabled' || outcome.status === 'authorized') {
         try {
-          await requestForOwnedSession(
-            request.sessionId,
-            gateway.request.bind(gateway) as typeof gateway.request,
-            'reload.mcp',
-            { confirm: true, session_id: request.sessionId ?? undefined }
-          )
+          await gateway.request('reload.mcp', { confirm: true, session_id: request.sessionId ?? undefined })
         } catch (error) {
           notifyError(error, copy.reloadFailed)
         }
@@ -261,15 +228,10 @@ function McpSetupPending({ args }: ToolCallMessagePartProps) {
       }
 
       try {
-        await requestForOwnedSession<{ status?: string }>(
-          request.sessionId,
-          gateway.request.bind(gateway) as typeof gateway.request,
-          'mcp.setup.respond',
-          {
-            request_id: request.requestId,
-            result: JSON.stringify(outcome)
-          }
-        )
+        await gateway.request<{ status?: string }>('mcp.setup.respond', {
+          request_id: request.requestId,
+          result: JSON.stringify(outcome)
+        })
         // tool.complete lands next → McpSetupSettled.
       } catch (error) {
         notifyError(error, copy.sendFailed)
@@ -301,10 +263,8 @@ function McpSetupPending({ args }: ToolCallMessagePartProps) {
     }
 
     try {
-      const scope = mcpSetupOwnerScope(sessionId)
-
       if (action === 'enable') {
-        await setMcpServerEnabled(server, true, scope)
+        await setMcpServerEnabled(server, true)
         triggerHaptic('submit')
         await respond({ server, status: 'enabled' })
 
@@ -314,10 +274,10 @@ function McpSetupPending({ args }: ToolCallMessagePartProps) {
       if (action === 'authorize') {
         const flow = await completeMcpDesktopOAuth({
           serverName: server,
-          start: name => authMcpServer(name, scope),
-          status: flowId => getMcpOAuthFlow(flowId, scope),
+          start: authMcpServer,
+          status: getMcpOAuthFlow,
           cancelled: () => cancelRef.current,
-          cancel: flowId => cancelMcpOAuthFlow(flowId, scope),
+          cancel: cancelMcpOAuthFlow,
           openExternal: url => window.hermesDesktop.openExternal(url)
         })
 
@@ -335,7 +295,7 @@ function McpSetupPending({ args }: ToolCallMessagePartProps) {
       let resolved = entry
 
       if (resolved === undefined) {
-        const catalog = await getMcpCatalog(scope)
+        const catalog = await getMcpCatalog()
         resolved = catalog.entries.find(candidate => candidate.name === server) ?? null
         setEntry(resolved)
       }
@@ -354,21 +314,21 @@ function McpSetupPending({ args }: ToolCallMessagePartProps) {
         // flow dies after the config write (cancel, closed OAuth tab), roll
         // the write back — decline means "no server", not an unauthorized
         // entry squatting in mcp_servers (authoritative-write rule).
-        await addMcpServer({ name: known.name, url: known.url }, scope)
+        await addMcpServer({ name: known.name, url: known.url })
 
         let flow
 
         try {
           flow = await completeMcpDesktopOAuth({
             serverName: known.name,
-            start: name => authMcpServer(name, scope),
-            status: flowId => getMcpOAuthFlow(flowId, scope),
+            start: authMcpServer,
+            status: getMcpOAuthFlow,
             cancelled: () => cancelRef.current,
-            cancel: flowId => cancelMcpOAuthFlow(flowId, scope),
+            cancel: cancelMcpOAuthFlow,
             openExternal: url => window.hermesDesktop.openExternal(url)
           })
         } catch (error) {
-          await removeMcpServer(known.name, scope).catch(() => {
+          await removeMcpServer(known.name).catch(() => {
             // Rollback is best-effort; the primary error/cancel wins.
           })
           throw error
@@ -389,13 +349,13 @@ function McpSetupPending({ args }: ToolCallMessagePartProps) {
         return
       }
 
-      const res = await installMcpCatalogEntry(server, envDraft, scope)
+      const res = await installMcpCatalogEntry(server, envDraft)
 
       // Git-backed entries clone in the background — poll to completion so a
       // non-zero exit surfaces as a real failure instead of a false success.
       if (res.background && res.action) {
         for (;;) {
-          const status = throwIfCancelled(await getActionStatus(res.action, 1, scope))
+          const status = throwIfCancelled(await getActionStatus(res.action, 1))
 
           if (!status.running) {
             if (status.exit_code !== 0) {
@@ -427,7 +387,7 @@ function McpSetupPending({ args }: ToolCallMessagePartProps) {
     } finally {
       setWorking(false)
     }
-  }, [action, copy, entry, envDraft, respond, server, sessionId])
+  }, [action, copy, entry, envDraft, respond, server])
 
   const title =
     action === 'enable'

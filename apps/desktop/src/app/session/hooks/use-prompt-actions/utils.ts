@@ -513,7 +513,6 @@ export function slashStatusText(command: string, output: string): string {
  * - `session.save`:     { file: "<absolute path>" }
  * - `session.usage`:    { calls, input, output, total, credits_lines? }
  * - `session.steer`:    { status: 'queued' | 'rejected', text }
- * - `reload.mcp`:       { status: 'confirm_required' | 'reloaded', message? }
  * - `process.stop`:     { killed: boolean }
  * - `agents.list`:      { processes: [{ session_id, command, status, uptime }] }
  *
@@ -526,7 +525,6 @@ export function renderRpcResult(response: unknown, name: string): string {
   }
 
   const r = response as Record<string, unknown>
-  const canonicalName = name.toLowerCase().replaceAll('_', '-')
 
   const summary = r.summary as { headline?: string; token_line?: string; note?: string; noop?: boolean } | undefined
 
@@ -542,18 +540,6 @@ export function renderRpcResult(response: unknown, name: string): string {
     }
 
     return lines.join('\n')
-  }
-
-  // reload.mcp — surface the backend's confirmation warning verbatim and a
-  // concise completion line instead of exposing the raw RPC envelope.
-  if (canonicalName === 'reload-mcp' && (r.status === 'confirm_required' || r.status === 'reloaded')) {
-    if (r.status === 'confirm_required') {
-      return typeof r.message === 'string' && r.message.trim()
-        ? r.message.trim()
-        : 'Reloading MCP servers requires confirmation. Run /reload-mcp now to continue.'
-    }
-
-    return 'MCP servers reloaded and tools refreshed for this session.'
   }
 
   // session.steer — { status: 'queued' | 'rejected', text }

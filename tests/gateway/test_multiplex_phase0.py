@@ -10,19 +10,12 @@ Covers the three Phase 0 deliverables:
 """
 import pytest
 from datetime import datetime
-from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import patch
 import yaml
 
 from hermes_constants import reset_hermes_home_override, set_hermes_home_override
 from gateway.config import GatewayConfig, Platform
-from gateway.session import (
-    MultiplexSessionCollisionError,
-    SessionEntry,
-    SessionSource,
-    SessionStore,
-    build_session_key,
-)
+from gateway.session import SessionSource, SessionStore, build_session_key
 
 
 def _src(**kw) -> SessionSource:
@@ -82,6 +75,39 @@ class TestMultiplexConfigFlag:
         cfg = GatewayConfig.from_dict({"multiplex_profiles": True})
         assert cfg.multiplex_profiles is True
 
+    def test_profile_allowlist_defaults_to_serve_all(self):
+        assert GatewayConfig().multiplex_profile_allowlist is None
+
+    def test_profile_allowlist_normalizes_and_round_trips(self):
+        cfg = GatewayConfig.from_dict(
+            {
+                "gateway": {
+                    "multiplex_profiles": True,
+                    "multiplex_profile_allowlist": [
+                        " Worker ",
+                        "worker",
+                        "Guest",
+                        "default",
+                        "bad/name",
+                        7,
+                    ],
+                }
+            }
+        )
+
+        assert cfg.multiplex_profile_allowlist == ["worker", "guest"]
+        restored = GatewayConfig.from_dict(cfg.to_dict())
+        assert restored.multiplex_profile_allowlist == ["worker", "guest"]
+
+    def test_invalid_profile_allowlist_fails_safe_to_default_only(self, caplog):
+        with caplog.at_level("WARNING", logger="gateway.config"):
+            cfg = GatewayConfig.from_dict(
+                {"gateway": {"multiplex_profile_allowlist": "worker"}}
+            )
+
+        assert cfg.multiplex_profile_allowlist == []
+        assert "serving only the default profile" in caplog.text
+
 
 class TestSessionStoreProfileResolution:
     """SessionStore._generate_session_key honors the flag: legacy namespace
@@ -109,27 +135,6 @@ class _RecoveringDB:
 
     def find_latest_gateway_session_for_peer(self, **_kwargs):
         return self.row
-
-    def reopen_session(self, session_id):
-        self.reopened.append(session_id)
-
-
-class _ExactOrPeerRecoveringDB:
-    """Model SessionDB's exact-key lookup followed by peer fallback."""
-
-    def __init__(self, rows):
-        self.rows = rows
-        self.calls = []
-        self.reopened = []
-
-    def find_latest_gateway_session_for_peer(self, **kwargs):
-        self.calls.append(kwargs)
-        exact = self.rows.get(kwargs["session_key"])
-        if exact is not None:
-            return exact
-        if kwargs.get("chat_id") is not None:
-            return next(iter(self.rows.values()), None)
-        return None
 
     def reopen_session(self, session_id):
         self.reopened.append(session_id)
@@ -168,206 +173,26 @@ class TestSessionStoreUnmultiplexedRecovery:
         assert recovered.session_key == "agent:main:telegram:dm:99"
         assert store._db.reopened == ["sess-coder"]
 
-
-class TestSessionStoreMultiplexRecovery:
-    def _store_with_rows(self, tmp_path, rows):
-        config = GatewayConfig(multiplex_profiles=True)
-        with patch("gateway.session.SessionStore._ensure_loaded"):
-            store = SessionStore(sessions_dir=tmp_path, config=config)
-        store._db = _ExactOrPeerRecoveringDB(rows)
-        store._loaded = True
-        return store
-
     @pytest.mark.parametrize(
-        "recover",
+        ("recovered_key", "adopted"),
         [
-            lambda store, key, source, now: store._recover_session_from_db(
-                session_key=key,
-                source=source,
-                now=now,
-            ),
-            lambda store, key, source, now: store._query_recoverable_session(
-                session_key=key,
-                source=source,
-                now=now,
-            ),
+            ("agent:coder:telegram:dm:99", False),  # sibling namespace → fail closed
+            ("agent:main:telegram:dm:99:v1", True),  # same namespace → adoptable
         ],
+        ids=["sibling-profile", "same-profile"],
     )
-    def test_missing_jarvis_key_never_adopts_default_peer_session(
-        self, tmp_path, recover
+    def test_flag_on_fences_recovery_by_requested_namespace(
+        self, tmp_path, recovered_key, adopted
     ):
-        rows = {
-            "agent:main:telegram:dm:99": {
-                "id": "sess-black-panther",
-                "started_at": 1700000000,
-                "session_key": "agent:main:telegram:dm:99",
-            }
-        }
-        store = self._store_with_rows(tmp_path, rows)
-        source = _src(
-            chat_id="99",
-            user_id="same-owner",
-            profile="jarvis",
-        )
-
-        recovered = recover(
-            store,
-            "agent:jarvis:telegram:dm:99",
-            source,
-            datetime.fromtimestamp(1700000001),
-        )
-
-        assert recovered is None
-        assert store._db.calls[-1]["chat_id"] is None
-        assert store._db.reopened == []
-
-    @pytest.mark.parametrize(
-        "recover",
-        [
-            lambda store, key, source, now: store._recover_session_from_db(
-                session_key=key,
-                source=source,
-                now=now,
-            ),
-            lambda store, key, source, now: store._query_recoverable_session(
-                session_key=key,
-                source=source,
-                now=now,
-            ),
-        ],
-    )
-    def test_exact_profile_key_recovery_still_works(self, tmp_path, recover):
-        key = "agent:jarvis:telegram:dm:99"
-        rows = {
-            key: {
-                "id": "sess-jarvis",
-                "started_at": 1700000000,
-                "session_key": key,
-            }
-        }
-        store = self._store_with_rows(tmp_path, rows)
-        source = _src(chat_id="99", user_id="same-owner", profile="jarvis")
-
-        recovered = recover(
-            store,
-            key,
-            source,
-            datetime.fromtimestamp(1700000001),
-        )
-
-        assert recovered is not None
-        assert recovered.session_id == "sess-jarvis"
-        assert recovered.session_key == key
-        assert store._db.calls[-1]["chat_id"] is None
-        assert store._db.reopened == ["sess-jarvis"]
-
-
-class TestMultiplexSessionCollisionInvariant:
-    def _store(self, tmp_path, entries):
-        config = GatewayConfig(multiplex_profiles=True)
-        with patch("gateway.session.SessionStore._ensure_loaded"):
-            store = SessionStore(sessions_dir=tmp_path, config=config)
-        store._db = None
-        store._loaded = True
-        store._entries = entries
-        return store
-
-    @staticmethod
-    def _entry(key, session_id):
-        now = datetime.fromtimestamp(1700000000)
-        return SessionEntry(
-            session_key=key,
-            session_id=session_id,
-            created_at=now,
-            updated_at=now,
-        )
-
-    def test_cross_profile_session_id_blocks_startup(self, tmp_path):
-        main_key = "agent:main:telegram:dm:99"
-        jarvis_key = "agent:jarvis:telegram:dm:99"
-        store = self._store(
-            tmp_path,
-            {
-                main_key: self._entry(main_key, "shared-session"),
-                jarvis_key: self._entry(jarvis_key, "shared-session"),
-            },
-        )
-
-        with pytest.raises(MultiplexSessionCollisionError) as exc:
-            store.assert_no_cross_profile_session_aliases()
-
-        assert "shared-session" not in str(exc.value)
-        assert main_key not in str(exc.value)
-        assert jarvis_key not in str(exc.value)
-
-    def test_same_profile_aliases_are_allowed(self, tmp_path):
-        first = "agent:jarvis:telegram:dm:99"
-        second = "agent:jarvis:telegram:dm:99:topic"
-        store = self._store(
-            tmp_path,
-            {
-                first: self._entry(first, "same-profile-session"),
-                second: self._entry(second, "same-profile-session"),
-            },
-        )
-
-        store.assert_no_cross_profile_session_aliases()
-
-    @pytest.mark.asyncio
-    async def test_gateway_aborts_before_connecting_adapters(self, tmp_path):
-        from gateway.run import GATEWAY_FATAL_CONFIG_EXIT_CODE, GatewayRunner
-
-        home_token = set_hermes_home_override(tmp_path)
-        try:
-            runner = GatewayRunner(GatewayConfig(multiplex_profiles=True))
-            collision_check = AsyncMock(
-                side_effect=MultiplexSessionCollisionError(
-                    "multiplex routing contains 1 active cross-profile "
-                    "session collision(s)"
-                )
+        """#74285: under multiplexing the guard compares the recovered row's
+        ``agent:<ns>:`` against the REQUESTED key, never the active profile."""
+        row = {"id": "sess", "started_at": 1700000000, "session_key": recovered_key}
+        store = self._store_with_row(tmp_path, row, multiplex_profiles=True)
+        store._db_pinned = store._db
+        with patch("hermes_cli.profiles.get_active_profile_name", return_value="coder"):
+            recovered = store._recover_session_from_db(
+                session_key="agent:main:telegram:dm:99",
+                source=_src(chat_id="99", chat_type="dm"),
+                now=datetime.fromtimestamp(1700000001),
             )
-            runner._async_session_store = SimpleNamespace(
-                _store=runner.session_store,
-                assert_no_cross_profile_session_aliases=collision_check,
-            )
-            runner._abort_startup_if_shutdown_requested = AsyncMock(
-                return_value=False
-            )
-            runner._start_loop_liveness_guards = Mock()
-            runner._request_clean_exit = Mock()
-            runner._create_adapter = Mock()
-
-            with (
-                patch("gateway.run.faulthandler.enable"),
-                patch("gateway.status.write_runtime_status"),
-                patch(
-                    "agent.monitoring.gateway_health_export."
-                    "start_gateway_health_export",
-                    return_value=SimpleNamespace(enabled=False),
-                ),
-                patch(
-                    "hermes_cli.security_advisories.detect_compromised",
-                    return_value=[],
-                ),
-            ):
-                result = await runner.start()
-
-            assert result is True
-            collision_check.assert_awaited_once()
-            runner._create_adapter.assert_not_called()
-            runner._request_clean_exit.assert_called_once()
-            assert runner._exit_code == GATEWAY_FATAL_CONFIG_EXIT_CODE
-        finally:
-            reset_hermes_home_override(home_token)
-
-    def test_invariant_is_inert_outside_multiplex(self, tmp_path):
-        store = self._store(tmp_path, {})
-        store.config.multiplex_profiles = False
-        first = "agent:main:telegram:dm:99"
-        second = "agent:jarvis:telegram:dm:99"
-        store._entries = {
-            first: self._entry(first, "legacy-shared-session"),
-            second: self._entry(second, "legacy-shared-session"),
-        }
-
-        store.assert_no_cross_profile_session_aliases()
+        assert (recovered is not None) is adopted

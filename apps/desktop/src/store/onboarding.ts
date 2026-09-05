@@ -2,7 +2,6 @@ import { atom } from 'nanostores'
 
 import {
   cancelOAuthSession,
-  getApiRequestProfile,
   getGlobalModelOptions,
   getRecommendedDefaultModel,
   listOAuthProviders,
@@ -12,6 +11,7 @@ import {
   submitOAuthCode,
   validateProviderCredential
 } from '@/hermes'
+import { translateNow } from '@/i18n'
 import { isProviderSetupErrorMessage } from '@/lib/provider-setup-errors'
 import { evaluateRuntimeReadiness, type RuntimeReadinessResult } from '@/lib/runtime-readiness'
 import { setMainModelAssignment } from '@/store/cron-model-impact'
@@ -160,7 +160,6 @@ const INITIAL: DesktopOnboardingState = {
 export const $desktopOnboarding = atom<DesktopOnboardingState>(INITIAL)
 
 let pollTimer: number | null = null
-let oauthFlowProfile: null | string = null
 let providersRefreshPromise: null | Promise<void> = null
 
 const errMessage = (e: unknown) => (e instanceof Error ? e.message : String(e))
@@ -177,6 +176,30 @@ function clearPoll() {
     window.clearInterval(pollTimer)
     pollTimer = null
   }
+
+  clearPollExpiry()
+}
+
+let pollExpiryTimer: number | null = null
+
+function clearPollExpiry() {
+  if (pollExpiryTimer !== null) {
+    window.clearTimeout(pollExpiryTimer)
+    pollExpiryTimer = null
+  }
+}
+
+/** Lapse a device-code session locally when its window expires, instead of
+ * polling a dead session forever. Uses the flow's own `expires_in`; the
+ * backend poller may still flip the session to error first, and its message
+ * (surfaced by `pollSession`) is preferred whenever it arrives in time. */
+function schedulePollExpiry(start: DeviceStart, onExpire: () => void) {
+  clearPollExpiry()
+  const ttlMs = Math.max(1, Number(start.expires_in) || 0) * 1000
+  pollExpiryTimer = window.setTimeout(() => {
+    pollExpiryTimer = null
+    onExpire()
+  }, ttlMs)
 }
 
 async function checkRuntime(ctx: OnboardingContext, requestedProvider?: string): Promise<RuntimeReadinessResult> {
@@ -194,7 +217,7 @@ function shouldPreserveConfiguredOnFallback(runtime: RuntimeReadinessResult, sta
 }
 
 function notifyReady(provider: string) {
-  notify({ kind: 'success', title: 'evaOS Agent is ready', message: `${provider} connected.` })
+  notify({ kind: 'success', title: 'Hermes is ready', message: `${provider} connected.` })
 }
 
 // Human-friendly labels for tools auto-routed through the Nous Tool Gateway,
@@ -222,7 +245,7 @@ function notifyGatewayTools(tools: string[] | undefined) {
   notify({
     durationMs: 8000,
     kind: 'info',
-    message: `${list} now run through your Electric Sheep account — no separate API keys needed.`,
+    message: `${list} now run through your Nous subscription — no separate API keys needed.`,
     title: 'Tool Gateway enabled'
   })
 }
@@ -369,8 +392,8 @@ function providerResolutionFailure(reason: null | string) {
   const detail = reason?.trim()
 
   return detail
-    ? `Connected, but evaOS Agent still cannot resolve a usable provider. ${detail}`
-    : 'Connected, but evaOS Agent still cannot resolve a usable provider.'
+    ? `Connected, but Hermes still cannot resolve a usable provider. ${detail}`
+    : 'Connected, but Hermes still cannot resolve a usable provider.'
 }
 
 async function refreshProviders() {
@@ -569,7 +592,7 @@ export async function refreshOnboarding(ctx: OnboardingContext) {
       kind: 'error',
       title: 'Runtime not ready',
       message:
-        'evaOS Agent could not verify the running backend on startup. Some features may be unavailable until the gateway is reachable.'
+        'Hermes Desktop could not verify the running backend on startup. Some features may be unavailable until the gateway is reachable.'
     })
 
     return false
@@ -619,10 +642,9 @@ export async function startProviderOAuth(provider: OAuthProvider, ctx: Onboardin
   }
 
   setFlow({ status: 'starting', provider })
-  oauthFlowProfile = getApiRequestProfile()
 
   try {
-    const start = await startOAuthLogin(provider.id, oauthFlowProfile)
+    const start = await startOAuthLogin(provider.id)
     const browserUrl = start.flow === 'device_code' ? start.verification_url : start.auth_url
     await openSignInUrl(browserUrl)
 
@@ -633,6 +655,14 @@ export async function startProviderOAuth(provider: OAuthProvider, ctx: Onboardin
     }
 
     setFlow({ status: 'polling', provider, start, copied: false })
+    schedulePollExpiry(start, () =>
+      setFlow({
+        status: 'error',
+        provider,
+        start,
+        message: translateNow('onboarding.signInExpired')
+      })
+    )
     pollTimer = window.setInterval(() => void pollSession(provider, start, ctx), POLL_MS)
   } catch (error) {
     setFlow({ status: 'error', provider, message: `Could not start sign-in: ${errMessage(error)}` })
@@ -642,7 +672,7 @@ export async function startProviderOAuth(provider: OAuthProvider, ctx: Onboardin
 // Poll a session-backed device-code flow until it resolves.
 async function pollSession(provider: OAuthProvider, start: DeviceStart, ctx: OnboardingContext) {
   try {
-    const { error_message, status } = await pollOAuthSession(provider.id, start.session_id, oauthFlowProfile)
+    const { error_message, status } = await pollOAuthSession(provider.id, start.session_id)
 
     if (status === 'approved') {
       clearPoll()
@@ -683,7 +713,7 @@ export async function submitOnboardingCode(ctx: OnboardingContext) {
   setFlow({ status: 'submitting', provider, start })
 
   try {
-    const resp = await submitOAuthCode(provider.id, start.session_id, code.trim(), oauthFlowProfile)
+    const resp = await submitOAuthCode(provider.id, start.session_id, code.trim())
 
     if (resp.ok && resp.status === 'approved') {
       setFlow({ status: 'success', provider })
@@ -707,10 +737,9 @@ export function cancelOnboardingFlow() {
   const sessionId = sessionIdFor($desktopOnboarding.get().flow)
 
   if (sessionId) {
-    cancelOAuthSession(sessionId, oauthFlowProfile).catch(() => undefined)
+    cancelOAuthSession(sessionId).catch(() => undefined)
   }
 
-  oauthFlowProfile = null
   setFlow({ status: 'idle' })
 }
 
@@ -773,7 +802,7 @@ export async function recheckExternalSignin(ctx: OnboardingContext) {
       provider,
       message:
         reason?.trim() ||
-        `evaOS Agent still cannot reach ${provider.name}. Run \`${provider.cli_command}\` in a terminal first.`
+        `Hermes still cannot reach ${provider.name}. Run \`${provider.cli_command}\` in a terminal first.`
     })
   )
 }
@@ -888,7 +917,7 @@ export async function saveOnboardingLocalEndpoint(baseUrl: string, apiKey: strin
     if (!runtime.ready) {
       const detail = (runtime.reason ?? '').trim()
 
-      return { ok: false, message: detail || `Saved, but evaOS Agent still cannot reach ${url}.` }
+      return { ok: false, message: detail || `Saved, but Hermes still cannot reach ${url}.` }
     }
 
     notifyReady('Local / custom endpoint')

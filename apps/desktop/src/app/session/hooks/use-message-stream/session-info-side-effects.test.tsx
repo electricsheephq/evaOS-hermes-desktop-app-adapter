@@ -2,19 +2,10 @@ import { QueryClient } from '@tanstack/react-query'
 import { act, cleanup } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-const onboardingMocks = vi.hoisted(() => ({
-  requestDesktopOnboardingForCredentialWarning: vi.fn()
-}))
-
-vi.mock('@/store/onboarding', () => ({
-  requestDesktopOnboardingForCredentialWarning: onboardingMocks.requestDesktopOnboardingForCredentialWarning
-}))
-
 import { isTargetSessionBusy } from '@/app/session/hooks/use-prompt-actions/utils'
 import type { ClientSessionState } from '@/app/types'
 import { createClientSessionState } from '@/lib/chat-runtime'
 import { modelOptionsQueryKey } from '@/lib/model-options'
-import { $activeGatewayProfile } from '@/store/profile'
 import { setCurrentModel, setCurrentProvider } from '@/store/session'
 
 import { type MessageStreamHarness, renderMessageStream } from './test-harness'
@@ -54,10 +45,8 @@ beforeEach(() => {
   refreshSessions = vi.fn<() => Promise<void>>(async () => undefined)
   hydrateFromStoredSession = vi.fn<() => Promise<void>>(async () => undefined)
   queryClient = new QueryClient()
-  $activeGatewayProfile.set(ACTIVE_PROFILE)
   setCurrentModel('')
   setCurrentProvider('')
-  onboardingMocks.requestDesktopOnboardingForCredentialWarning.mockClear()
 })
 
 afterEach(() => {
@@ -131,57 +120,7 @@ describe('session.info model-options invalidation gating', () => {
   })
 })
 
-describe('session.info credential-warning source isolation', () => {
-  const warning = "No API key configured for provider 'openrouter'. First message will fail."
-
-  it('does not replace the foreground warning from a background session', () => {
-    mountStream()
-
-    act(() =>
-      stream.handleEvent({
-        payload: { credential_warning: warning },
-        profile: ACTIVE_PROFILE,
-        session_id: 'session-background',
-        type: 'session.info'
-      })
-    )
-
-    expect(onboardingMocks.requestDesktopOnboardingForCredentialWarning).not.toHaveBeenCalled()
-  })
-
-  it('does not replace the foreground warning from a background gateway', () => {
-    mountStream()
-
-    act(() =>
-      stream.handleEvent({
-        payload: { credential_warning: warning },
-        profile: 'background-profile',
-        session_id: ACTIVE_SID,
-        type: 'session.info'
-      })
-    )
-
-    expect(onboardingMocks.requestDesktopOnboardingForCredentialWarning).not.toHaveBeenCalled()
-  })
-
-  it('updates the warning from the active session and gateway', () => {
-    mountStream()
-
-    act(() =>
-      stream.handleEvent({
-        payload: { credential_warning: warning },
-        profile: ACTIVE_PROFILE,
-        session_id: ACTIVE_SID,
-        type: 'session.info'
-      })
-    )
-
-    expect(onboardingMocks.requestDesktopOnboardingForCredentialWarning).toHaveBeenCalledOnce()
-    expect(onboardingMocks.requestDesktopOnboardingForCredentialWarning).toHaveBeenCalledWith(warning)
-  })
-})
-
-describe('session.info settles a turn that produced no assistant payload', () => {
+describe('session.info settles an incomplete live turn', () => {
   // #46517: a turn that ends without ever emitting an assistant payload (gateway
   // crash mid-stream, provider error before the first delta, agent-build
   // failure) never reaches message.complete, so session.info running=false is
@@ -322,6 +261,107 @@ describe('session.info settles a turn that produced no assistant payload', () =>
 
     expect(hydrateFromStoredSession).toHaveBeenCalledTimes(1)
     expect(refreshSessions).toHaveBeenCalledTimes(1)
+  })
+
+  it('hydrates a live turn that settles after an interim without message.complete', async () => {
+    mountStream()
+
+    startTurn(ACTIVE_SID)
+    act(() =>
+      stream.handleEvent({
+        payload: { already_streamed: true, text: 'Now checking the details before answering.' },
+        session_id: ACTIVE_SID,
+        type: 'message.interim'
+      })
+    )
+
+    expect(sessionStates!.get(ACTIVE_SID)?.sawAssistantPayload).toBe(true)
+
+    sessionInfo(ACTIVE_SID, { running: false })
+
+    expect(hydrateFromStoredSession).toHaveBeenCalledWith(3, null, ACTIVE_SID)
+  })
+})
+
+describe('empty message.complete after streamed text (#95514)', () => {
+  it('keeps streamed text and does not hydrate over it', () => {
+    mountStream()
+
+    act(() => stream.handleEvent({ payload: {}, session_id: ACTIVE_SID, type: 'message.start' }))
+    act(() =>
+      stream.handleEvent({
+        payload: { text: 'Already rendered answer.' },
+        session_id: ACTIVE_SID,
+        type: 'message.delta'
+      })
+    )
+    act(() => stream.handleEvent({ payload: { text: '' }, session_id: ACTIVE_SID, type: 'message.complete' }))
+
+    const assistant = stream.state(ACTIVE_SID).messages.find(message => message.role === 'assistant')
+    expect(assistant?.parts.filter(part => part.type === 'text').map(part => part.text)).toEqual([
+      'Already rendered answer.'
+    ])
+    expect(hydrateFromStoredSession).not.toHaveBeenCalled()
+  })
+
+  it('does not hydrate over interim-sealed text when streamId is already cleared', () => {
+    mountStream()
+
+    act(() => stream.handleEvent({ payload: {}, session_id: ACTIVE_SID, type: 'message.start' }))
+    act(() =>
+      stream.handleEvent({
+        payload: { text: 'Let me check the files.' },
+        session_id: ACTIVE_SID,
+        type: 'message.delta'
+      })
+    )
+    act(() =>
+      stream.handleEvent({
+        payload: { already_streamed: true, text: 'Let me check the files.' },
+        session_id: ACTIVE_SID,
+        type: 'message.interim'
+      })
+    )
+    act(() => stream.handleEvent({ payload: { text: '' }, session_id: ACTIVE_SID, type: 'message.complete' }))
+
+    const assistant = stream.state(ACTIVE_SID).messages.find(message => message.role === 'assistant')
+    expect(assistant?.parts.filter(part => part.type === 'text').map(part => part.text)).toEqual([
+      'Let me check the files.'
+    ])
+    expect(hydrateFromStoredSession).not.toHaveBeenCalled()
+  })
+
+  it('does not hydrate an adopted turn over streamed text on empty complete', () => {
+    mountStream()
+    act(() => {
+      const current = stream.states.get(ACTIVE_SID) ?? createClientSessionState()
+      stream.states.set(ACTIVE_SID, { ...current, adoptedRunningTurn: true })
+    })
+
+    act(() => stream.handleEvent({ payload: {}, session_id: ACTIVE_SID, type: 'message.start' }))
+    act(() =>
+      stream.handleEvent({
+        payload: { text: 'Already rendered answer.' },
+        session_id: ACTIVE_SID,
+        type: 'message.delta'
+      })
+    )
+    act(() => stream.handleEvent({ payload: { text: '' }, session_id: ACTIVE_SID, type: 'message.complete' }))
+
+    const assistant = stream.state(ACTIVE_SID).messages.find(message => message.role === 'assistant')
+    expect(assistant?.parts.filter(part => part.type === 'text').map(part => part.text)).toEqual([
+      'Already rendered answer.'
+    ])
+    expect(hydrateFromStoredSession).not.toHaveBeenCalled()
+  })
+
+  it('still hydrates an empty complete when this turn streamed no text', () => {
+    mountStream()
+
+    act(() => stream.handleEvent({ payload: {}, session_id: ACTIVE_SID, type: 'message.start' }))
+    act(() => stream.handleEvent({ payload: { text: '' }, session_id: ACTIVE_SID, type: 'message.complete' }))
+
+    expect(hydrateFromStoredSession).toHaveBeenCalled()
   })
 })
 

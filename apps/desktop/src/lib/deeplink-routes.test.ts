@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { formatBlueprintCommand, resolveDeepLinkAction } from './deeplink-routes'
+import { resolveDeepLinkAction } from './deeplink-routes'
 
 describe('resolveDeepLinkAction', () => {
   it('routes unified plugin install deeplinks', () => {
@@ -41,11 +41,5 @@ describe('resolveDeepLinkAction', () => {
       name: 'morning-brief',
       params: { time: '08:00' }
     })
-  })
-
-  it('quotes and escapes blueprint values before inserting a composer command', () => {
-    expect(formatBlueprintCommand('morning-brief', { value: 'one\\ two"three' })).toBe(
-      '/blueprint morning-brief value="one\\\\ two\\"three"'
-    )
   })
 })

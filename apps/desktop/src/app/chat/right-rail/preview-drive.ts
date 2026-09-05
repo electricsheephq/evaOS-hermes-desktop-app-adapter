@@ -21,11 +21,6 @@ export interface DrivePoint {
   y: number
 }
 
-/** Live ownership check supplied by an agent-driven caller. */
-export type PreviewDriveContinuation = () => boolean
-
-const ALWAYS_CONTINUE: PreviewDriveContinuation = () => true
-
 /** The pointer JUMPS. These few steps over a couple of frames exist only so the
  *  page receives a move stream at all — `:hover`, `pointerenter` and the menus
  *  that hang off them need more than a single teleport to resolve — not so the
@@ -64,18 +59,10 @@ const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 const easeOut = (t: number) => 1 - Math.pow(1 - t, 3)
 
 /** Walk the pointer to `to`, letting the page hover everything on the way. */
-export async function glideTo(
-  input: PreviewInputHandle,
-  to: DrivePoint,
-  shouldContinue: PreviewDriveContinuation = ALWAYS_CONTINUE
-): Promise<boolean> {
+export async function glideTo(input: PreviewInputHandle, to: DrivePoint): Promise<void> {
   const from = pointer
 
   for (let step = 1; step <= GLIDE_STEPS; step++) {
-    if (!shouldContinue()) {
-      return false
-    }
-
     const progress = easeOut(step / GLIDE_STEPS)
 
     input.send({
@@ -86,52 +73,28 @@ export async function glideTo(
     await wait(GLIDE_MS / GLIDE_STEPS)
   }
 
-  if (!shouldContinue()) {
-    return false
-  }
-
   pointer = to
   placed = true
-
-  return true
 }
 
 /** Press and release at the pointer's current spot. `clicks` of 3 selects the
  *  text under it, which is how a field gets cleared without a modifier key. */
-export async function clickAt(
-  input: PreviewInputHandle,
-  clicks = 1,
-  shouldContinue: PreviewDriveContinuation = ALWAYS_CONTINUE
-): Promise<boolean> {
+export async function clickAt(input: PreviewInputHandle, clicks = 1): Promise<void> {
   for (let click = 1; click <= clicks; click++) {
-    if (!shouldContinue()) {
-      return false
-    }
-
     input.send({ button: 'left', clickCount: click, type: 'mouseDown', x: pointer.x, y: pointer.y })
     input.send({ button: 'left', clickCount: click, type: 'mouseUp', x: pointer.x, y: pointer.y })
     await wait(KEY_MS)
   }
-
-  return shouldContinue()
 }
 
 /** Wheel `down` pixels' worth of notches at the pointer's current spot; negative
  *  scrolls up. Electron's wheel delta is the legacy `wheelDelta` sign — positive
  *  moves the content down, i.e. scrolls UP — so it is the inverse of the number
  *  a caller asks for, and of DOM `WheelEvent.deltaY`. */
-export async function wheelBy(
-  input: PreviewInputHandle,
-  down: number,
-  shouldContinue: PreviewDriveContinuation = ALWAYS_CONTINUE
-): Promise<boolean> {
+export async function wheelBy(input: PreviewInputHandle, down: number): Promise<void> {
   let sent = 0
 
   for (let step = 1; step <= WHEEL_STEPS; step++) {
-    if (!shouldContinue()) {
-      return false
-    }
-
     const so_far = Math.round(down * easeOut(step / WHEEL_STEPS))
     const notch = so_far - sent
 
@@ -143,26 +106,14 @@ export async function wheelBy(
 
     await wait(WHEEL_MS / WHEEL_STEPS)
   }
-
-  return shouldContinue()
 }
 
 /** Send one key the long way round, so a page watching any of the three sees it. */
-export async function pressKey(
-  input: PreviewInputHandle,
-  key: string,
-  shouldContinue: PreviewDriveContinuation = ALWAYS_CONTINUE
-): Promise<boolean> {
-  if (!shouldContinue()) {
-    return false
-  }
-
+export async function pressKey(input: PreviewInputHandle, key: string): Promise<void> {
   input.send({ keyCode: key, type: 'keyDown' })
   input.send({ keyCode: key, type: 'char' })
   input.send({ keyCode: key, type: 'keyUp' })
   await wait(KEY_MS)
-
-  return shouldContinue()
 }
 
 /** Select-all inside whatever has focus, which for a focused field is that
@@ -171,34 +122,17 @@ export async function pressKey(
  *  cursor whenever the target turns out not to be a field, and the agent was
  *  leaving pages with their body text highlighted. There is no `char` phase —
  *  a chord is not text entry, and sending one types a literal 'a'. */
-export async function selectAll(
-  input: PreviewInputHandle,
-  shouldContinue: PreviewDriveContinuation = ALWAYS_CONTINUE
-): Promise<boolean> {
-  if (!shouldContinue()) {
-    return false
-  }
-
+export async function selectAll(input: PreviewInputHandle): Promise<void> {
   const chord = ['control', 'meta']
 
   input.send({ keyCode: 'a', modifiers: chord, type: 'keyDown' })
   input.send({ keyCode: 'a', modifiers: chord, type: 'keyUp' })
   await wait(KEY_MS)
-
-  return shouldContinue()
 }
 
 /** Type `text` a character at a time into whatever currently has focus. */
-export async function typeText(
-  input: PreviewInputHandle,
-  text: string,
-  shouldContinue: PreviewDriveContinuation = ALWAYS_CONTINUE
-): Promise<boolean> {
+export async function typeText(input: PreviewInputHandle, text: string): Promise<void> {
   for (const character of text) {
-    if (!(await pressKey(input, character, shouldContinue))) {
-      return false
-    }
+    await pressKey(input, character)
   }
-
-  return shouldContinue()
 }

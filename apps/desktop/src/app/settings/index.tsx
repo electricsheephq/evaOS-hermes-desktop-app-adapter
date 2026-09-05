@@ -7,12 +7,12 @@ import { KbdCombo } from '@/components/ui/kbd'
 import { Tip } from '@/components/ui/tooltip'
 import { getHermesConfigDefaults, getHermesConfigRecord, saveHermesConfig } from '@/hermes'
 import { useI18n } from '@/i18n'
-import { isManagedEvaosAgent } from '@/i18n/managed-brand'
 import { triggerHaptic } from '@/lib/haptics'
 import {
   Archive,
   BarChart3,
   Bell,
+  Cpu,
   Download,
   Globe,
   Info,
@@ -28,11 +28,11 @@ import {
 } from '@/lib/icons'
 import { isEditableTarget } from '@/lib/keybinds/combo'
 import { typeToFocusChar } from '@/lib/keybinds/composer-focus-keys'
-import { isManagedSettingsViewVisible } from '@/lib/managed-ui-policy'
 import { cn } from '@/lib/utils'
 import { $commandPaletteOpen, openCommandPalettePage } from '@/store/command-palette'
 import { confirm } from '@/store/confirm'
 import { bindingsFor } from '@/store/keybinds'
+import { $localModelsEnabled } from '@/store/local-models-flag'
 import { notifyError } from '@/store/notifications'
 
 import { useRouteEnumParam } from '../hooks/use-route-enum-param'
@@ -71,11 +71,8 @@ const SETTINGS_VIEWS: readonly SettingsViewId[] = [
   'about'
 ]
 
-const MANAGED_SETTINGS_VIEWS = SETTINGS_VIEWS.filter(view => isManagedSettingsViewVisible(view, true))
-
 export function SettingsView({ onClose, onConfigSaved, onMainModelChanged }: SettingsPageProps) {
   const { t } = useI18n()
-  const managedEva = isManagedEvaosAgent()
   const navigate = useNavigate()
   const { hash, pathname, search } = useLocation()
 
@@ -93,9 +90,7 @@ export function SettingsView({ onClose, onConfigSaved, onMainModelChanged }: Set
     }
   }, [navigate, search])
 
-  const availableViews = managedEva ? MANAGED_SETTINGS_VIEWS : SETTINGS_VIEWS
-  const [activeView, setActiveView] = useRouteEnumParam('tab', availableViews, 'config:model' as SettingsViewId)
-  const effectiveView = activeView
+  const [activeView, setActiveView] = useRouteEnumParam('tab', SETTINGS_VIEWS, 'config:model' as SettingsViewId)
 
   // Connections merged into the unified Gateways page: land old
   // `?tab=connections` routes/bookmarks there instead of a dead entry.
@@ -174,7 +169,7 @@ export function SettingsView({ onClose, onConfigSaved, onMainModelChanged }: Set
     }
   }
 
-  const allNavGroups: OverlayNavGroup[] = useMemo(
+  const navGroups: OverlayNavGroup[] = useMemo(
     () => [
       ...SECTIONS.map(s => {
         const view = `config:${s.id}` as SettingsViewId
@@ -224,7 +219,22 @@ export function SettingsView({ onClose, onConfigSaved, onMainModelChanged }: Set
             id: 'pview:custom-endpoints',
             label: t.settings.nav.providerCustomEndpoints,
             onSelect: () => openProviderView('custom-endpoints')
-          }
+          },
+          // Local models ships behind the --local launch flag: no flag, no
+          // nav entry (the pane itself also refuses to render, so a stale
+          // ?pview=local deep link falls back to accounts-shaped emptiness
+          // rather than a hidden feature).
+          ...($localModelsEnabled.get()
+            ? [
+                {
+                  active: activeView === 'providers' && providerView === 'local',
+                  icon: Cpu,
+                  id: 'pview:local',
+                  label: t.settings.nav.providerLocalModels,
+                  onSelect: () => openProviderView('local')
+                }
+              ]
+            : [])
         ],
         gapBefore: true,
         icon: Zap,
@@ -294,10 +304,6 @@ export function SettingsView({ onClose, onConfigSaved, onMainModelChanged }: Set
     ],
     [activeView, keysView, providerView, t, setActiveView, openProviderView, openKeysView]
   )
-
-  const navGroups = managedEva
-    ? allNavGroups.filter(group => isManagedSettingsViewVisible(group.id, true))
-    : allNavGroups
 
   // Type-to-search: printable keystrokes on the Settings surface (outside any
   // field) open the settings-scoped palette, seeded with the character — same
@@ -382,24 +388,24 @@ export function SettingsView({ onClose, onConfigSaved, onMainModelChanged }: Set
   )
 
   const activeSettingsContent =
-    effectiveView === 'config:appearance' ? (
+    activeView === 'config:appearance' ? (
       <AppearanceSettings />
-    ) : effectiveView === 'about' ? (
+    ) : activeView === 'about' ? (
       <AboutSettings />
-    ) : effectiveView === 'gateway' || effectiveView === 'connections' ? (
+    ) : activeView === 'gateway' || activeView === 'connections' ? (
       // 'connections' renders the unified page too so the frame before
       // the alias redirect lands doesn't flash the fallback view.
       <GatewaySettings />
-    ) : effectiveView === 'keybinds' ? (
+    ) : activeView === 'keybinds' ? (
       <KeybindSettings />
-    ) : effectiveView.startsWith('config:') ? (
+    ) : activeView.startsWith('config:') ? (
       <ConfigSettings
-        activeSectionId={effectiveView.slice('config:'.length)}
+        activeSectionId={activeView.slice('config:'.length)}
         importInputRef={importInputRef}
         onConfigSaved={onConfigSaved}
         onMainModelChanged={onMainModelChanged}
       />
-    ) : effectiveView === 'providers' ? (
+    ) : activeView === 'providers' ? (
       <ProvidersSettings
         onClose={onClose}
         onConfigSaved={onConfigSaved}
@@ -407,13 +413,13 @@ export function SettingsView({ onClose, onConfigSaved, onMainModelChanged }: Set
         onViewChange={setProviderView}
         view={providerView}
       />
-    ) : effectiveView === 'keys' ? (
+    ) : activeView === 'keys' ? (
       <KeysSettings view={keysView} />
-    ) : effectiveView === 'notifications' ? (
+    ) : activeView === 'notifications' ? (
       <NotificationsSettings />
-    ) : effectiveView === 'billing' ? (
+    ) : activeView === 'billing' ? (
       <BillingSettings />
-    ) : effectiveView === 'plugins' ? (
+    ) : activeView === 'plugins' ? (
       <PluginsSettings />
     ) : (
       <SessionsSettings />

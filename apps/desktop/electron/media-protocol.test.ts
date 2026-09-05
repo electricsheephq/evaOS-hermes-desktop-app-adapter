@@ -59,32 +59,6 @@ describe('media protocol helpers', () => {
 })
 
 describe('createMediaProtocolHandler', () => {
-  it('routes managed remote media through the injected authenticated transport', async () => {
-    const fetchManaged = vi.fn(async (..._args: unknown[]) => new Response('managed', { status: 206 }))
-
-    const deps = dependencies({
-      fetchManaged: fetchManaged as MediaProtocolDependencies['fetchManaged']
-    })
-
-    const response = await createMediaProtocolHandler(deps)(
-      request('hermes-media://remote/%2Fsrv%2Foutputs%2Fclip.mp4?profile=reviewer', {
-        Authorization: 'Bearer renderer-secret',
-        Cookie: 'renderer=session',
-        Range: 'bytes=4-12'
-      })
-    )
-
-    expect(response.status).toBe(206)
-    expect(fetchManaged).toHaveBeenCalledOnce()
-    const [target, headers, method] = fetchManaged.mock.calls[0]
-    expect(target).toEqual({ filePath: '/srv/outputs/clip.mp4', profile: 'reviewer' })
-    expect((headers as Headers).get('range')).toBe('bytes=4-12')
-    expect((headers as Headers).get('authorization')).toBeNull()
-    expect((headers as Headers).get('cookie')).toBeNull()
-    expect(method).toBe('GET')
-    expect(deps.resolveRemoteConnection).not.toHaveBeenCalled()
-  })
-
   it('streams local media through the resolved local-file dependency', async () => {
     const deps = dependencies()
 

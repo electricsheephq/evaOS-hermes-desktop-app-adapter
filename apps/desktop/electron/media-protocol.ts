@@ -43,11 +43,6 @@ type MediaRequestMethod = 'GET' | 'HEAD'
 export interface MediaProtocolDependencies {
   ensureRemoteBearer: (baseUrl: string) => Promise<null | string>
   fetchLocal: (resolvedPath: string, headers: Headers, method: MediaRequestMethod) => Promise<Response>
-  fetchManaged?: (
-    target: Pick<MediaProtocolTarget, 'filePath' | 'profile'>,
-    headers: Headers,
-    method: MediaRequestMethod
-  ) => Promise<Response>
   fetchRemote: (url: string, headers: Headers, method: MediaRequestMethod) => Promise<Response>
   fetchRemoteWithCookies: (url: string, headers: Headers, method: MediaRequestMethod) => Promise<Response>
   resolveLocalFile: (filePath: string) => Promise<string>
@@ -150,14 +145,6 @@ export function createMediaProtocolHandler(dependencies: MediaProtocolDependenci
     }
 
     try {
-      if (dependencies.fetchManaged) {
-        return await dependencies.fetchManaged(
-          { filePath: target.filePath, profile: target.profile },
-          headers,
-          method
-        )
-      }
-
       const connection = await dependencies.resolveRemoteConnection({
         connectionId: target.connectionId,
         profile: target.profile

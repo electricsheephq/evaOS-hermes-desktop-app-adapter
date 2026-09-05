@@ -33,33 +33,26 @@ import {
 } from './git-worktree-ops'
 
 export interface GitIpcDeps {
-  assertLocalMutationAllowed: (operation: string) => void
   resolveGitBinary: () => string
   resolveGhBinary: () => string
 }
 
-export function registerGitIpc({ assertLocalMutationAllowed, resolveGitBinary, resolveGhBinary }: GitIpcDeps) {
+export function registerGitIpc({ resolveGitBinary, resolveGhBinary }: GitIpcDeps) {
   // Git-driven worktree management ("Start work" flow). Errors surface to the
   // renderer as rejected promises so it can toast a friendly message.
   ipcMain.handle('hermes:git:worktreeList', async (_event, repoPath) => listWorktrees(repoPath, resolveGitBinary()))
 
-  ipcMain.handle('hermes:git:worktreeAdd', async (_event, repoPath, options) => {
-    assertLocalMutationAllowed('Adding local Git worktrees')
+  ipcMain.handle('hermes:git:worktreeAdd', async (_event, repoPath, options) =>
+    addWorktree(repoPath, options || {}, resolveGitBinary())
+  )
 
-    return addWorktree(repoPath, options || {}, resolveGitBinary())
-  })
+  ipcMain.handle('hermes:git:worktreeRemove', async (_event, repoPath, worktreePath, options) =>
+    removeWorktree(repoPath, worktreePath, options || {}, resolveGitBinary())
+  )
 
-  ipcMain.handle('hermes:git:worktreeRemove', async (_event, repoPath, worktreePath, options) => {
-    assertLocalMutationAllowed('Removing local Git worktrees')
-
-    return removeWorktree(repoPath, worktreePath, options || {}, resolveGitBinary())
-  })
-
-  ipcMain.handle('hermes:git:branchSwitch', async (_event, repoPath, branch) => {
-    assertLocalMutationAllowed('Switching local Git branches')
-
-    return switchBranch(repoPath, branch, resolveGitBinary())
-  })
+  ipcMain.handle('hermes:git:branchSwitch', async (_event, repoPath, branch) =>
+    switchBranch(repoPath, branch, resolveGitBinary())
+  )
 
   ipcMain.handle('hermes:git:branchList', async (_event, repoPath) => listBranches(repoPath, resolveGitBinary()))
 
@@ -85,37 +78,25 @@ export function registerGitIpc({ assertLocalMutationAllowed, resolveGitBinary, r
   ipcMain.handle('hermes:git:fileDiff', async (_event, repoPath, filePath) =>
     fileDiffVsHead(repoPath, filePath, resolveGitBinary())
   )
-  ipcMain.handle('hermes:git:review:stage', async (_event, repoPath, filePath) => {
-    assertLocalMutationAllowed('Staging local Git changes')
-
-    return reviewStage(repoPath, filePath ?? null, resolveGitBinary())
-  })
-  ipcMain.handle('hermes:git:review:unstage', async (_event, repoPath, filePath) => {
-    assertLocalMutationAllowed('Unstaging local Git changes')
-
-    return reviewUnstage(repoPath, filePath ?? null, resolveGitBinary())
-  })
-  ipcMain.handle('hermes:git:review:revert', async (_event, repoPath, filePath) => {
-    assertLocalMutationAllowed('Reverting local Git changes')
-
-    return reviewRevert(repoPath, filePath ?? null, resolveGitBinary())
-  })
+  ipcMain.handle('hermes:git:review:stage', async (_event, repoPath, filePath) =>
+    reviewStage(repoPath, filePath ?? null, resolveGitBinary())
+  )
+  ipcMain.handle('hermes:git:review:unstage', async (_event, repoPath, filePath) =>
+    reviewUnstage(repoPath, filePath ?? null, resolveGitBinary())
+  )
+  ipcMain.handle('hermes:git:review:revert', async (_event, repoPath, filePath) =>
+    reviewRevert(repoPath, filePath ?? null, resolveGitBinary())
+  )
   ipcMain.handle('hermes:git:review:revParse', async (_event, repoPath, ref) =>
     reviewRevParse(repoPath, ref, resolveGitBinary())
   )
-  ipcMain.handle('hermes:git:review:commit', async (_event, repoPath, message, push) => {
-    assertLocalMutationAllowed('Committing local Git changes')
-
-    return reviewCommit(repoPath, message, Boolean(push), resolveGitBinary())
-  })
+  ipcMain.handle('hermes:git:review:commit', async (_event, repoPath, message, push) =>
+    reviewCommit(repoPath, message, Boolean(push), resolveGitBinary())
+  )
   ipcMain.handle('hermes:git:review:commitContext', async (_event, repoPath) =>
     reviewCommitContext(repoPath, resolveGitBinary())
   )
-  ipcMain.handle('hermes:git:review:push', async (_event, repoPath) => {
-    assertLocalMutationAllowed('Pushing local Git changes')
-
-    return reviewPush(repoPath, resolveGitBinary())
-  })
+  ipcMain.handle('hermes:git:review:push', async (_event, repoPath) => reviewPush(repoPath, resolveGitBinary()))
   ipcMain.handle('hermes:git:review:shipInfo', async (_event, repoPath) => reviewShipInfo(repoPath, resolveGhBinary()))
   ipcMain.handle('hermes:git:review:prList', async (_event, repoPath, branches, numbers) =>
     reviewPrList(repoPath, resolveGhBinary(), branches, numbers)
@@ -123,11 +104,9 @@ export function registerGitIpc({ assertLocalMutationAllowed, resolveGitBinary, r
   ipcMain.handle('hermes:git:review:fetchPrComment', async (_event, repoPath, url) =>
     reviewFetchPrComment(repoPath, resolveGhBinary(), url)
   )
-  ipcMain.handle('hermes:git:review:createPr', async (_event, repoPath) => {
-    assertLocalMutationAllowed('Creating pull requests from local Git state')
-
-    return reviewCreatePr(repoPath, resolveGitBinary(), resolveGhBinary())
-  })
+  ipcMain.handle('hermes:git:review:createPr', async (_event, repoPath) =>
+    reviewCreatePr(repoPath, resolveGitBinary(), resolveGhBinary())
+  )
 
   // Repo-first project discovery: scan bounded roots for git repos (pure fs walk,
   // no native addon). Never throws to the renderer — failures yield an empty list.

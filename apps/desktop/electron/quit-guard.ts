@@ -65,7 +65,7 @@ export interface QuitPrompt {
  * are the app replacing itself, not the user walking away, and a modal there
  * would strand the detached script waiting on a PID that never exits.
  */
-export function quitPromptFor(work: ActiveWork, quittingForHandoff: boolean, appName = 'Hermes'): null | QuitPrompt {
+export function quitPromptFor(work: ActiveWork, quittingForHandoff: boolean): null | QuitPrompt {
   if (quittingForHandoff || work.count < 1) {
     return null
   }
@@ -87,9 +87,6 @@ export function quitPromptFor(work: ActiveWork, quittingForHandoff: boolean, app
       .filter(line => line !== null)
       .join('\n')
       .trim(),
-    message:
-      work.count === 1
-        ? `${appName} is still working on 1 chat.`
-        : `${appName} is still working on ${work.count} chats.`
+    message: work.count === 1 ? 'Hermes is still working on 1 chat.' : `Hermes is still working on ${work.count} chats.`
   }
 }

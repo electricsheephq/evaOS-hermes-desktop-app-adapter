@@ -85,12 +85,6 @@ export const $rightRailActiveTabId = persistentAtom<RightRailTabId | null>(RIGHT
   encode: tabId => tabId ?? ''
 })
 
-/** Monotonic proof that one rail tab has remained continuously active. Tab id
- *  alone cannot distinguish A→B→A while an asynchronous Preview operation is
- *  in flight. This epoch is deliberately process-local: no continuation may
- *  survive an app restart. */
-export const $rightRailActiveTabEpoch = atom(0)
-
 export const $sidebarWidth: ReadableAtom<number> = computed($paneStates, states => {
   const override = states[CHAT_SIDEBAR_PANE_ID]?.widthOverride
 
@@ -405,6 +399,18 @@ export const $panesFlipped = persistentAtom(PANES_FLIPPED_STORAGE_KEY, false, Co
 export const $isSidebarResizing = atom(false)
 export const $sessionsLimit = atom(SIDEBAR_SESSIONS_PAGE_SIZE)
 
+// Live date/status divider ids (`list-group:yesterday`, …) currently in the
+// recents list. Not persisted — the open/closed choice lives on
+// `$sidebarWorkspaceNodeOpen`; this just names what's on screen so "Collapse
+// all" can fold every labelled bucket, including ones never toggled.
+export const $sidebarListGroupIds = atom<string[]>([])
+
+// Date/status dividers share `$sidebarWorkspaceNodeOpen` under this prefix so
+// they don't collide with repo paths.
+export function listGroupNodeId(key: string): string {
+  return `list-group:${key}`
+}
+
 // Resolve a node's open state against its default (absent = follow default).
 export function workspaceNodeOpen(id: string, defaultOpen = true): boolean {
   return $sidebarWorkspaceNodeOpen.get()[id] ?? defaultOpen
@@ -563,10 +569,6 @@ export function togglePanesFlipped() {
 }
 
 export function selectRightRailTab(id: RightRailTabId | null) {
-  if ($rightRailActiveTabId.get() !== id) {
-    $rightRailActiveTabEpoch.set($rightRailActiveTabEpoch.get() + 1)
-  }
-
   $rightRailActiveTabId.set(id)
 }
 

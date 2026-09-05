@@ -1,4 +1,3 @@
-import { isManagedEvaosAgent } from '@/i18n/managed-brand'
 import { isMissingRestEndpoint } from '@/lib/gateway-rpc'
 import { maybeBackfillLegacySessionOwners } from '@/lib/legacy-session-owner-backfill'
 import { stampRowsWithOwningConnection } from '@/lib/session-owner-stamp'
@@ -11,15 +10,7 @@ import type {
   SessionSearchResponse
 } from '@/types/hermes'
 
-import {
-  capabilityScoped,
-  connectionScoped,
-  getApiRequestConnection,
-  getApiRequestProfile,
-  hermesApi,
-  type ProfileScope,
-  profileScoped
-} from './client'
+import { capabilityScoped, getApiRequestConnection, hermesApi, type ProfileScope, profileScoped } from './client'
 
 const SESSION_LIST_REQUEST_TIMEOUT_MS = 60_000
 
@@ -115,22 +106,6 @@ export interface SessionSourceFilter {
   excludeSources?: string[]
 }
 
-function sessionListScope(profile: 'all' | (string & {})): { queryProfile: string; routingProfile: string } {
-  // A managed enrollment authorizes one concrete profile. Keep aggregate
-  // reads bound to that assignment while preserving explicit selectors so
-  // Electron can reject a mismatch before it reaches Hermes.
-  if (isManagedEvaosAgent()) {
-    const routingProfile = getApiRequestProfile() || 'default'
-
-    return {
-      queryProfile: profile === 'all' ? routingProfile : profile,
-      routingProfile
-    }
-  }
-
-  return { queryProfile: profile, routingProfile: 'default' }
-}
-
 export async function listAllProfileSessions(
   limit = 40,
   minMessages = 0,
@@ -145,14 +120,11 @@ export async function listAllProfileSessions(
     ? `&exclude_sources=${encodeURIComponent(filter.excludeSources.join(','))}`
     : ''
 
-  const scope = sessionListScope(profile)
-
-  const result = await window.hermesDesktop.api<PaginatedSessions>({
-    ...connectionScoped(),
+  const result = await hermesApi<PaginatedSessions>({
+    ...profileScoped(),
     path:
       `/api/profiles/sessions?limit=${limit}&offset=0&min_messages=${Math.max(0, minMessages)}` +
-      `&archived=${archived}&order=${order}&profile=${encodeURIComponent(scope.queryProfile)}${sourceParam}${excludeParam}`,
-    profile: scope.routingProfile,
+      `&archived=${archived}&order=${order}&profile=${encodeURIComponent(profile)}${sourceParam}${excludeParam}`,
     timeoutMs: SESSION_LIST_REQUEST_TIMEOUT_MS
   })
 
@@ -176,6 +148,11 @@ export interface SidebarSessionSlice {
   /** Per-profile tokens and spend over every session, not just this window.
    *  Absent from the legacy per-slice endpoint, which has no aggregate. */
   profiles_usage?: Record<string, { cost_usd: number; tokens: number }>
+  /** Profiles whose scan for THIS slice failed. Batched `/sidebar` stamps the
+   *  same profile errors on every slice (one DB open). Legacy per-slice calls
+   *  stamp only the slice that actually failed, so a cron I/O error cannot
+   *  carry-forward recents. */
+  errors?: Array<{ profile: string; error: string }>
 }
 
 /** Which profiles filled their per-profile window in a returned page. The
@@ -230,8 +207,7 @@ export function resetSidebarBatchCapability() {
 
 // Compatibility fallback: reassemble the three sidebar slices from the
 // per-slice endpoint, mirroring the batched route's semantics (min_messages=1,
-// archived excluded, recency order; recents follow the caller while cron and
-// messaging intentionally remain cross-profile as they were before batching).
+// archived excluded, recency order; every slice scoped to the caller's profile).
 // Rides the same Electron remote-splice
 // interception as the pre-batching desktop, so remote profiles stay correct.
 async function listSidebarSessionsLegacy(req: SidebarSessionsRequest): Promise<SidebarSessionsResponse> {
@@ -239,22 +215,30 @@ async function listSidebarSessionsLegacy(req: SidebarSessionsRequest): Promise<S
     listAllProfileSessions(req.recentsLimit, 1, 'exclude', 'recent', req.recentsProfile, {
       excludeSources: req.recentsExclude
     }),
-    listAllProfileSessions(req.cronLimit, 1, 'exclude', 'recent', 'all', { source: 'cron' }),
-    listAllProfileSessions(req.messagingLimit, 1, 'exclude', 'recent', 'all', {
+    listAllProfileSessions(req.cronLimit, 1, 'exclude', 'recent', req.recentsProfile, { source: 'cron' }),
+    listAllProfileSessions(req.messagingLimit, 1, 'exclude', 'recent', req.recentsProfile, {
       excludeSources: req.messagingExclude
     })
   ])
 
-  const errors = [...(recents.errors ?? []), ...(cron.errors ?? []), ...(messaging.errors ?? [])]
+  const recentsErrors = recents.errors ?? []
+  const cronErrors = cron.errors ?? []
+  const messagingErrors = messaging.errors ?? []
 
   return {
     recents: {
       profiles_truncated: profilesTruncatedFrom(recents.sessions, req.recentsLimit),
-      sessions: recents.sessions
+      sessions: recents.sessions,
+      ...(recentsErrors.length ? { errors: recentsErrors } : {})
     },
-    cron: { sessions: cron.sessions },
-    messaging: { sessions: messaging.sessions },
-    ...(errors.length ? { errors } : {})
+    cron: {
+      sessions: cron.sessions,
+      ...(cronErrors.length ? { errors: cronErrors } : {})
+    },
+    messaging: {
+      sessions: messaging.sessions,
+      ...(messagingErrors.length ? { errors: messagingErrors } : {})
+    }
   }
 }
 
@@ -317,9 +301,21 @@ export async function listSidebarSessions(req: SidebarSessionsRequest): Promise<
   }
 
   return {
-    recents: { ...result.recents, sessions: stampActiveConnectionOwner(result.recents?.sessions ?? []) },
-    cron: { ...result.cron, sessions: stampActiveConnectionOwner(result.cron?.sessions ?? []) },
-    messaging: { ...result.messaging, sessions: stampActiveConnectionOwner(result.messaging?.sessions ?? []) },
+    recents: {
+      ...result.recents,
+      sessions: stampActiveConnectionOwner(result.recents?.sessions ?? []),
+      ...(result.errors?.length ? { errors: result.errors } : {})
+    },
+    cron: {
+      ...result.cron,
+      sessions: stampActiveConnectionOwner(result.cron?.sessions ?? []),
+      ...(result.errors?.length ? { errors: result.errors } : {})
+    },
+    messaging: {
+      ...result.messaging,
+      sessions: stampActiveConnectionOwner(result.messaging?.sessions ?? []),
+      ...(result.errors?.length ? { errors: result.errors } : {})
+    },
     errors: result.errors
   }
 }
@@ -327,11 +323,17 @@ export async function listSidebarSessions(req: SidebarSessionsRequest): Promise<
 // Mutations take the owning `profile` so Electron can route them to the correct
 // remote backend or local profile scope. Omit for the current/default profile.
 export function setSessionArchived(id: string, archived: boolean, profile?: string | null): Promise<{ ok: boolean }> {
+  // Carry the owning profile IN THE PATCH BODY, mirroring renameSession — the
+  // backend reads its target DB from body.profile (_open_session_db_for_profile).
+  // Passing it only as request.profile (Electron routing) is not enough on a
+  // remote gateway with no remoteProfile alias: the archive lands on the wrong
+  // (default) state.db, no-ops on a missing row, and the archived/unarchived
+  // state silently fails to stick — the same class as the unscoped DELETE.
   return hermesApi<{ ok: boolean }>({
     ...(profile ? { profile } : {}),
     path: `/api/sessions/${encodeURIComponent(id)}`,
     method: 'PATCH',
-    body: { archived }
+    body: { archived, ...(profile ? { profile } : {}) }
   })
 }
 
@@ -340,11 +342,14 @@ export function setSessionArchived(id: string, archived: boolean, profile?: stri
 // pinned chat. Best-effort: the sidebar stays localStorage-driven for its own
 // display; this only feeds the backend policy.
 export function setSessionPinnedRemote(id: string, pinned: boolean, profile?: string | null): Promise<{ ok: boolean }> {
+  // Owning profile in the PATCH body (see setSessionArchived / renameSession):
+  // the handler reads its target DB from body.profile, so a remote/foreign
+  // profile's pin must travel in the body or it no-ops on the wrong state.db.
   return hermesApi<{ ok: boolean }>({
     ...(profile ? { profile } : {}),
     path: `/api/sessions/${encodeURIComponent(id)}`,
     method: 'PATCH',
-    body: { pinned }
+    body: { pinned, ...(profile ? { profile } : {}) }
   })
 }
 
@@ -353,11 +358,15 @@ export function setSessionPinnedRemote(id: string, pinned: boolean, profile?: st
 // routing as the other session mutations: a remote session's row lives only
 // on its remote host, so the owning profile must travel with the request.
 export function setSessionUnreadRemote(id: string, unread: boolean, profile?: string | null): Promise<{ ok: boolean }> {
+  // Owning profile in the PATCH body (see setSessionArchived / renameSession):
+  // the handler reads its target DB from body.profile, so a remote/foreign
+  // profile's unread toggle must travel in the body or it no-ops on the wrong
+  // state.db.
   return hermesApi<{ ok: boolean }>({
     ...(profile ? { profile } : {}),
     path: `/api/sessions/${encodeURIComponent(id)}`,
     method: 'PATCH',
-    body: { unread }
+    body: { unread, ...(profile ? { profile } : {}) }
   })
 }
 
@@ -555,9 +564,23 @@ export async function getAllSessionMessages(
 }
 
 export function deleteSession(id: string, profile?: ProfileScope): Promise<{ ok: boolean }> {
+  // Scope the DELETE to the owning profile IN THE URL, mirroring getSession /
+  // getSessionMessages. Passing the profile only via request.profile (which the
+  // Electron main process consumes for backend routing) is NOT enough: on a
+  // remote gateway whose connection has no remoteProfile alias, the main-process
+  // path rewrite leaves the URL unscoped, so the backend opens its OWN (default)
+  // state.db, fails to find another profile's session, and returns
+  // {ok:true, already_absent:true}. The row then vanishes optimistically but was
+  // never deleted and reappears on the next sidebar refresh — the "All Profiles
+  // delete doesn't stick" report. The endpoint already honours ?profile=
+  // (get/rename/messages all send it); DELETE was the one mutation that dropped
+  // it after the api/ split. request.profile stays on for per-profile remote
+  // override + global-remote routing (both re-read/re-append the param).
+  const suffix = sessionScopeQuery(profile)
+
   return hermesApi<{ ok: boolean }>({
     ...sessionScoped(profile),
-    path: `/api/sessions/${encodeURIComponent(id)}`,
+    path: `/api/sessions/${encodeURIComponent(id)}${suffix}`,
     method: 'DELETE'
   })
 }

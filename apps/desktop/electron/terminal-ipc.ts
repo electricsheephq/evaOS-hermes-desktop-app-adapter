@@ -13,12 +13,11 @@ import nodePty from 'node-pty'
 import { resolveTerminalConnectionForSender } from './connection-apply'
 import { ensureSpawnHelperExecutable } from './spawn-helper-perms'
 import { buildInteractiveSshArgs } from './ssh-connection'
+import { createTerminalOutputGate } from './terminal-output-gate'
 import { buildWindowsInteractiveCommand } from './windows-remote-lifecycle'
 
 export interface TerminalIpcDeps {
   isWindows: boolean
-  assertLocalMutationAllowed: (operation: string) => void
-  assertLocalTerminalAllowed: () => void
   findOnPath: (command: string) => null | string
   rememberLog: (line: string) => void
   activeSshTerminalTarget: (webContentsId: number) => unknown
@@ -34,8 +33,6 @@ export interface TerminalIpcApi {
 
 export function registerTerminalIpc({
   isWindows,
-  assertLocalMutationAllowed,
-  assertLocalTerminalAllowed,
   findOnPath,
   rememberLog,
   activeSshTerminalTarget,
@@ -288,7 +285,6 @@ export function registerTerminalIpc({
   }
 
   ipcMain.handle('hermes:terminal:start', async (event, payload = {}) => {
-    assertLocalTerminalAllowed()
     ensureNodePtySpawnHelper()
 
     const id = crypto.randomUUID()
@@ -317,12 +313,6 @@ export function registerTerminalIpc({
         )
       : nodePty.spawn(command, args, { cols, cwd, env: terminalShellEnv(), name: 'xterm-256color', rows })
 
-    terminalSessions.set(id, {
-      pty: ptyProcess,
-      webContentsId: event.sender.id,
-      ...(remote ? { sshScope: sshTarget.scope, remoteCwd: String(payload?.cwd || '') } : {})
-    })
-
     const send = (suffix, payload) => {
       if (event.sender.isDestroyed()) {
         return
@@ -331,19 +321,41 @@ export function registerTerminalIpc({
       event.sender.send(terminalChannel(id, suffix), payload)
     }
 
-    ptyProcess.onData(data => send('data', data))
+    const outputGate = createTerminalOutputGate({
+      onExitFlushed: () => terminalSessions.delete(id),
+      sendData: data => send('data', data),
+      sendExit: payload => send('exit', payload)
+    })
+
+    terminalSessions.set(id, {
+      outputGate,
+      pty: ptyProcess,
+      webContentsId: event.sender.id,
+      ...(remote ? { sshScope: sshTarget.scope, remoteCwd: String(payload?.cwd || '') } : {})
+    })
+
+    ptyProcess.onData(data => outputGate.data(data))
     ptyProcess.onExit(({ exitCode, signal }) => {
-      terminalSessions.delete(id)
-      send('exit', { code: exitCode, signal: signal || null })
+      outputGate.exit({ code: exitCode, signal: signal == null ? null : String(signal) })
     })
     event.sender.once('destroyed', () => disposeTerminalSession(id))
 
     return { cwd: remote ? null : cwd, id, shell: remote ? 'ssh' : name }
   })
 
-  ipcMain.handle('hermes:terminal:write', (_event, id, data) => {
-    assertLocalMutationAllowed('Writing to local terminal processes')
+  ipcMain.handle('hermes:terminal:attach', (event, id) => {
+    const sessionInfo = terminalSessions.get(String(id || ''))
 
+    if (!sessionInfo || sessionInfo.webContentsId !== event.sender.id) {
+      return false
+    }
+
+    sessionInfo.outputGate.attach()
+
+    return true
+  })
+
+  ipcMain.handle('hermes:terminal:write', (_event, id, data) => {
     const sessionInfo = terminalSessions.get(String(id || ''))
 
     if (!sessionInfo) {
@@ -356,8 +368,6 @@ export function registerTerminalIpc({
   })
 
   ipcMain.handle('hermes:terminal:resize', (_event, id, size = {}) => {
-    assertLocalMutationAllowed('Controlling local terminal processes')
-
     const sessionInfo = terminalSessions.get(String(id || ''))
 
     if (!sessionInfo) {
@@ -381,11 +391,7 @@ export function registerTerminalIpc({
     return sessionInfo.sshScope !== undefined ? null : readProcessCwd(sessionInfo.pty.pid)
   })
 
-  ipcMain.handle('hermes:terminal:dispose', (_event, id) => {
-    assertLocalMutationAllowed('Controlling local terminal processes')
-
-    return disposeTerminalSession(String(id || ''))
-  })
+  ipcMain.handle('hermes:terminal:dispose', (_event, id) => disposeTerminalSession(String(id || '')))
 
   return { disposeTerminalSession, disposeTerminalSessionsForSshScope, disposeAllTerminalSessions }
 }

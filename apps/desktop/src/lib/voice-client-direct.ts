@@ -1,4 +1,5 @@
-import { capabilityScoped, type ProfileScope } from '@/api/client'
+import { profileScoped } from '@/api/client'
+import { getApiRequestConnection, getApiRequestProfile, hermesApi } from '@/hermes'
 
 /**
  * Client-direct voice: call the active profile's STT/TTS providers straight
@@ -60,10 +61,8 @@ const CONFIG_TTL_MS = 60_000
 let cached: { key: string; at: number; config: VoiceClientConfig } | null = null
 let inflight: { key: string; promise: Promise<null | VoiceClientConfig> } | null = null
 
-function scopeKey(scope?: ProfileScope): string {
-  const resolved = capabilityScoped(scope)
-
-  return `${resolved.connectionId ?? 'local'}::${resolved.profile ?? 'default'}`
+function scopeKey(): string {
+  return `${getApiRequestConnection() ?? 'local'}::${getApiRequestProfile() ?? 'default'}`
 }
 
 /** Drop cached credentials (used by tests; scope changes rotate the key). */
@@ -72,8 +71,8 @@ export function clearVoiceClientConfigCache(): void {
   inflight = null
 }
 
-export async function fetchVoiceClientConfig(scope?: ProfileScope): Promise<null | VoiceClientConfig> {
-  const key = scopeKey(scope)
+export async function fetchVoiceClientConfig(): Promise<null | VoiceClientConfig> {
+  const key = scopeKey()
 
   if (cached && cached.key === key && Date.now() - cached.at < CONFIG_TTL_MS) {
     return cached.config
@@ -85,11 +84,11 @@ export async function fetchVoiceClientConfig(scope?: ProfileScope): Promise<null
 
   const promise = (async () => {
     try {
-      // capabilityScoped() resolves either the explicit session owner or the
-      // ambient foreground route. Calling the bridge directly preserves an
-      // explicit local owner instead of merging an ambient connection tag.
-      const response = await window.hermesDesktop.api<{ ok: boolean } & VoiceClientConfig>({
-        ...capabilityScoped(scope),
+      // hermesApi carries connectionScoped(); profileScoped() adds the
+      // profile — the same routing every relay audio call uses, so the
+      // config comes from the backend the user is actually talking to.
+      const response = await hermesApi<{ ok: boolean } & VoiceClientConfig>({
+        ...profileScoped(),
         path: '/api/audio/voice-config'
       })
 
@@ -142,14 +141,44 @@ async function providerErrorText(response: Response): Promise<string> {
 }
 
 /**
+ * Normalize an OpenAI-compatible transcription HTTP body to spoken text.
+ *
+ * Groq and OpenAI honor `response_format=text` and return a bare string.
+ * Mistral Voxtral ignores that flag and returns JSON
+ * `{ text, model, usage, ... }` — dumping that object into the Desktop
+ * composer is the dictation regression (plain speech becomes raw JSON).
+ */
+export function transcriptFromOpenAiMultipartBody(body: string): string {
+  const trimmed = String(body || '').trim()
+
+  if (!trimmed) {
+    return ''
+  }
+
+  if (trimmed.startsWith('{')) {
+    try {
+      const parsed = JSON.parse(trimmed) as { text?: unknown }
+
+      if (typeof parsed?.text === 'string') {
+        return parsed.text.trim()
+      }
+    } catch {
+      // Not JSON — treat the body as the transcript.
+    }
+  }
+
+  return trimmed
+}
+
+/**
  * Transcribe provider-direct. Returns the transcript ('' = silence), or null
  * when the profile's provider isn't client-callable — the caller relays.
  * Provider REJECTIONS throw: the configured provider said no, and silently
  * re-running the same request through the gateway would just fail again
  * slower and hide the real error.
  */
-export async function transcribeAudioClientDirect(audio: Blob, scope?: ProfileScope): Promise<null | string> {
-  const config = await fetchVoiceClientConfig(scope)
+export async function transcribeAudioClientDirect(audio: Blob): Promise<null | string> {
+  const config = await fetchVoiceClientConfig()
   const stt = config?.stt
 
   if (!stt || stt.mode !== 'direct') {
@@ -180,7 +209,7 @@ export async function transcribeAudioClientDirect(audio: Blob, scope?: ProfileSc
       throw new Error(`${stt.provider} STT error (HTTP ${response.status}): ${await providerErrorText(response)}`)
     }
 
-    return (await response.text()).trim()
+    return transcriptFromOpenAiMultipartBody(await response.text())
   }
 
   if (stt.wire === 'xai-stt') {

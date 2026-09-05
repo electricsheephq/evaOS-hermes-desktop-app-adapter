@@ -9,6 +9,7 @@ import {
   type PetChangeMeta,
   setChangeEventsAvailable
 } from '@/store/live-sync'
+import { markRuntimeGone } from '@/store/runtime-gone'
 import { dropSessionState, unbindTileRuntime } from '@/store/session-states'
 // Leaf import (not the `@/themes` barrel) to avoid pulling the ThemeProvider
 // module graph into the gateway event hot path.
@@ -21,17 +22,12 @@ export function handleLifecycleEvent(ctx: GatewayEventContext): boolean {
   const { deps, event, payload, fromActiveSource } = ctx
 
   if (event.type === 'gateway.ready') {
+    // Seed the active skin into the desktop theme registry without applying,
+    // so a fresh connect never overrides the user's persisted desktop theme.
+    ingestBackendSkin((payload as { skin?: HermesSkin } | undefined)?.skin, { apply: false })
     // Backends with the change watcher broadcast pet/cron/sessions change
     // events; consumers demote their legacy polls to slow backstops.
-
-    if (fromActiveSource()) {
-      // Seed only the active source's skin into the desktop theme registry
-      // without applying, so a fresh connect never overrides the user's
-      // persisted desktop theme and a background Bot Mode socket cannot
-      // replace the registry entry that later active events update.
-      ingestBackendSkin((payload as { skin?: HermesSkin } | undefined)?.skin, { apply: false })
-      setChangeEventsAvailable(Boolean((payload as { change_events?: boolean } | undefined)?.change_events))
-    }
+    setChangeEventsAvailable(Boolean((payload as { change_events?: boolean } | undefined)?.change_events))
 
     return true
   }
@@ -85,6 +81,8 @@ export function handleLifecycleEvent(ctx: GatewayEventContext): boolean {
     const reclaimedRuntimeId = String((payload as { session_id?: string } | undefined)?.session_id ?? '')
 
     if (reclaimedRuntimeId) {
+      // Heal while the cached stored-id mapping is still intact, then drop.
+      markRuntimeGone(reclaimedRuntimeId)
       dropSessionState(reclaimedRuntimeId)
       // A tile bound to the reclaimed runtime would otherwise render an
       // empty transcript forever: its view reads $sessionStates[runtime]

@@ -1,7 +1,9 @@
 import { atom, computed, type ReadableAtom } from 'nanostores'
 
 import { $clarifyRequest, $clarifyRequests } from './clarify'
+import { isSessionGone, isSessionGoneForBackgroundPolling, markSessionGone } from './runtime-gone'
 import { $activeSessionId } from './session'
+import { ambientRequestFor } from './session-gone-latch'
 import { requestForOwnedSession } from './session-states'
 
 // Blocking interactive prompts the gateway raises mid-turn. Each maps to a
@@ -85,16 +87,6 @@ interface ApprovalGateway {
   request: (method: string, params: Record<string, unknown>) => Promise<unknown>
 }
 
-type OwnedApprovalRequest = <R>(
-  method: string,
-  params?: Record<string, unknown>,
-  timeoutMs?: number,
-  signal?: AbortSignal
-) => Promise<R>
-
-const bindApprovalRequest = (gateway: ApprovalGateway): OwnedApprovalRequest =>
-  gateway.request.bind(gateway) as unknown as OwnedApprovalRequest
-
 interface PendingApprovalPayload {
   allow_permanent?: boolean
   choices?: unknown
@@ -130,24 +122,43 @@ export async function receiveApprovalRequest(gateway: ApprovalGateway | null, re
   setApprovalRequest(request)
 
   if (gateway && request.requestId && request.sessionId) {
-    await requestForOwnedSession(request.sessionId, bindApprovalRequest(gateway), 'approval.received', {
-      request_id: request.requestId,
-      session_id: request.sessionId
-    })
+    try {
+      await requestForOwnedSession(request.sessionId, ambientRequestFor(gateway), 'approval.received', {
+        request_id: request.requestId,
+        session_id: request.sessionId
+      })
+    } catch (error) {
+      if (isSessionGoneForBackgroundPolling(error)) {
+        markSessionGone(request.sessionId)
+
+        return
+      }
+
+      throw error
+    }
   }
 }
 
 export async function replayPendingApproval(gateway: ApprovalGateway | null, sessionId: string | null): Promise<void> {
-  if (!gateway || !sessionId) {
+  if (!gateway || !sessionId || isSessionGone(sessionId)) {
     return
   }
 
-  const rawResult = await requestForOwnedSession<{ approvals?: PendingApprovalPayload[] }>(
-    sessionId,
-    bindApprovalRequest(gateway),
-    'approval.pending',
-    { session_id: sessionId }
-  )
+  let rawResult: unknown
+
+  try {
+    rawResult = await requestForOwnedSession(sessionId, ambientRequestFor(gateway), 'approval.pending', {
+      session_id: sessionId
+    })
+  } catch (error) {
+    if (isSessionGoneForBackgroundPolling(error)) {
+      markSessionGone(sessionId)
+
+      return
+    }
+
+    throw error
+  }
 
   const result =
     rawResult && typeof rawResult === 'object' ? (rawResult as { approvals?: PendingApprovalPayload[] }) : {}

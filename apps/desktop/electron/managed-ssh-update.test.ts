@@ -288,7 +288,7 @@ test('POSIX managed launcher executes the updater command and atomically publish
       {
         ssh: { exec: async () => '' },
         platform: 'Linux',
-        hermesPath: process.platform === 'darwin' ? '/usr/bin/true' : '/bin/true',
+        hermesPath: '/bin/true',
         hermesHome: home
       },
       CORRELATION

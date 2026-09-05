@@ -251,82 +251,6 @@ class TestEnvFileParsing:
 
         assert ss.build_profile_secret_scope(profile) == {}
 
-    def test_managed_profile_env_wins_without_cross_profile_leakage(
-        self,
-        tmp_path,
-        monkeypatch,
-    ):
-        from hermes_cli import managed_scope
-
-        profile_root = tmp_path / "managed-profiles"
-        alpha_home = tmp_path / "profiles" / "alpha"
-        beta_home = tmp_path / "profiles" / "beta"
-        alpha_managed = profile_root / "alpha"
-        beta_managed = profile_root / "beta"
-        alpha_home.mkdir(parents=True)
-        beta_home.mkdir()
-        alpha_managed.mkdir(parents=True)
-        beta_managed.mkdir()
-        (alpha_home / ".env").write_text(
-            "API_SERVER_KEY=/user/alpha\n",
-            encoding="utf-8",
-        )
-        (beta_home / ".env").write_text(
-            "API_SERVER_KEY=/user/beta\n",
-            encoding="utf-8",
-        )
-        (alpha_managed / ".env").write_text(
-            "API_SERVER_KEY=%d/apikey-alpha\n"
-            "CREDENTIALS_DIRECTORY=/wrong/managed-alpha\n",
-            encoding="utf-8",
-        )
-        (beta_managed / ".env").write_text(
-            "API_SERVER_KEY=%d/apikey-beta\n"
-            "CREDENTIALS_DIRECTORY=/wrong/managed-beta\n",
-            encoding="utf-8",
-        )
-        monkeypatch.setenv(
-            "EVAOS_HERMES_MANAGED_PROFILE_ROOT",
-            str(profile_root),
-        )
-        monkeypatch.setenv(
-            "CREDENTIALS_DIRECTORY",
-            "/run/credentials/evaos-shared-gateway.service",
-        )
-        managed_scope.invalidate_managed_cache()
-
-        alpha_scope = ss.build_profile_secret_scope(alpha_home)
-        beta_scope = ss.build_profile_secret_scope(beta_home)
-
-        assert alpha_scope["API_SERVER_KEY"] == (
-            "%d/apikey-alpha"
-        )
-        assert beta_scope["API_SERVER_KEY"] == (
-            "%d/apikey-beta"
-        )
-        assert "CREDENTIALS_DIRECTORY" not in alpha_scope
-        assert "CREDENTIALS_DIRECTORY" not in beta_scope
-
-        ss.set_multiplex_active(True)
-        alpha_token = ss.set_secret_scope(alpha_scope)
-        try:
-            assert ss.get_secret("API_SERVER_KEY") == (
-                "%d/apikey-alpha"
-            )
-            assert ss.get_secret("CREDENTIALS_DIRECTORY") == (
-                "/run/credentials/evaos-shared-gateway.service"
-            )
-        finally:
-            ss.reset_secret_scope(alpha_token)
-
-        beta_token = ss.set_secret_scope(beta_scope)
-        try:
-            assert ss.get_secret("API_SERVER_KEY") == (
-                "%d/apikey-beta"
-            )
-        finally:
-            ss.reset_secret_scope(beta_token)
-
 
 class TestApiServerListenerGlobals:
     """API_SERVER listener settings are deployment config (#69379), not
@@ -363,3 +287,94 @@ class TestApiServerListenerGlobals:
         finally:
             ss.reset_secret_scope(token)
         assert not ss._is_global_env("API_SERVER_KEY")
+
+
+class TestRelayRoutingStampGlobals:
+    """GATEWAY_RELAY_* ROUTING stamps are deployment config, not profile
+    secrets: config's relay enablement/sweep and gateway.relay's readers
+    (relay_url(), registration, self-provision) must resolve the same
+    process-env value under any scope, or the gateway enters a split-brain
+    state (adapter registered but Platform.RELAY absent from config, or vice
+    versa). Auth material (GATEWAY_RELAY_SECRET / _ID / _DELIVERY_KEY and the
+    IDP_* credentials) stays profile-scoped with the fail-closed guard —
+    mirroring the API_SERVER_KEY line above and the terminal env blocklist
+    (tools/environments/local.py)."""
+
+    ROUTING_VARS = (
+        "GATEWAY_RELAY_URL",
+        "GATEWAY_RELAY_ENDPOINT",
+        "GATEWAY_RELAY_ALLOW_DIRECT_PLATFORMS",
+        "GATEWAY_RELAY_PLATFORMS",
+        "GATEWAY_RELAY_BOT_IDS",
+        "GATEWAY_RELAY_ROUTE_KEYS",
+        "GATEWAY_RELAY_INSTANCE_ID",
+        "GATEWAY_RELAY_WAKE_URL",
+        "GATEWAY_RELAY_DISPLAY_NAME",
+    )
+    AUTH_VARS = (
+        "GATEWAY_RELAY_SECRET",
+        "GATEWAY_RELAY_ID",
+        "GATEWAY_RELAY_DELIVERY_KEY",
+        "GATEWAY_RELAY_IDP_CLIENT_SECRET",
+        "GATEWAY_RELAY_IDP_CLIENT_ID",
+        "GATEWAY_RELAY_IDP_TOKEN_URL",
+    )
+
+    def test_routing_stamps_read_environ_even_when_scoped_multiplex(self, monkeypatch):
+        for name in self.ROUTING_VARS:
+            monkeypatch.setenv(name, f"deploy-{name.lower()}")
+        ss.set_multiplex_active(True)
+        token = ss.set_secret_scope({"TELEGRAM_BOT_TOKEN": "scoped"})
+        try:
+            for name in self.ROUTING_VARS:
+                assert ss.get_secret(name) == f"deploy-{name.lower()}", name
+        finally:
+            ss.reset_secret_scope(token)
+            ss.set_multiplex_active(False)
+
+    def test_relay_auth_material_stays_profile_scoped(self, monkeypatch):
+        for name in self.AUTH_VARS:
+            monkeypatch.setenv(name, "cross-profile-credential")
+        ss.set_multiplex_active(True)
+        token = ss.set_secret_scope({"OTHER": "x"})
+        try:
+            for name in self.AUTH_VARS:
+                # A scoped miss must NOT borrow the (potentially
+                # cross-profile) environ value: relay auth is a credential.
+                assert ss.get_secret(name) is None, name
+        finally:
+            ss.reset_secret_scope(token)
+            ss.set_multiplex_active(False)
+        for name in self.AUTH_VARS:
+            assert not ss._is_global_env(name), name
+
+
+class TestSecretScopeAcrossExecutorThreads:
+    """Multiplexed profile state must reach pool workers (see #95119).
+
+    The context-compression timeout fence runs auxiliary LLM calls in a
+    daemon thread pool.  Bundled CPython runtime builds omit
+    ``ThreadPoolExecutor``'s context propagation, so the profile secret
+    scope was absent in the worker and ``get_secret`` failed closed with
+    ``UnscopedSecretError``, silently degrading compression to lossy
+    deterministic summaries.  ``DaemonThreadPoolExecutor.submit`` restores
+    stdlib context semantics; these tests lock that in.
+    """
+
+    def test_scoped_read_works_in_daemon_pool_worker(self, monkeypatch):
+        from tools.daemon_pool import DaemonThreadPoolExecutor
+
+        monkeypatch.setenv("SURPLUS_API_KEY", "env-key")
+        ss.set_multiplex_active(True)
+        token = ss.set_secret_scope({"SURPLUS_API_KEY": "scope-key"})
+        pool = DaemonThreadPoolExecutor(max_workers=1)
+        try:
+            # The scope (authoritative under multiplex) must reach the worker.
+            seen = pool.submit(ss.get_secret, "SURPLUS_API_KEY").result(timeout=10)
+            assert seen == "scope-key"
+            # A scoped miss must still not borrow the (cross-profile) env value.
+            monkeypatch.setenv("OPENAI_API_KEY", "env-leak")
+            assert pool.submit(ss.get_secret, "OPENAI_API_KEY").result(timeout=10) is None
+        finally:
+            pool.shutdown(wait=True)
+            ss.reset_secret_scope(token)

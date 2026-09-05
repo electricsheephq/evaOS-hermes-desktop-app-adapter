@@ -6,12 +6,10 @@ import {
   getElevenLabsVoices,
   getMemoryProviderConfig,
   getStatus,
-  pollOAuthSession,
   restartGateway,
   saveMemoryProviderConfig,
   setApiRequestProfile,
   speakText,
-  startOAuthLogin,
   transcribeAudio,
   updateHermes
 } from './hermes'
@@ -65,25 +63,6 @@ describe('backend action helpers are profile-scoped', () => {
     }
   })
 
-  it('pins a restart and its status readback to an explicit profile', () => {
-    setApiRequestProfile('profile-selected-later')
-
-    void restartGateway('profile-at-invocation')
-    void getActionStatus('gateway-restart', 180, 'profile-at-invocation')
-
-    expect(api).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({ path: '/api/gateway/restart', profile: 'profile-at-invocation' })
-    )
-    expect(api).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        path: '/api/actions/gateway-restart/status?lines=180',
-        profile: 'profile-at-invocation'
-      })
-    )
-  })
-
   // Audio endpoints (transcribe / speak / voices) write to the active
   // profile's config in the settings UI but historically called the backend
   // without a profile scope, so playback used the default profile's TTS/voice
@@ -99,17 +78,6 @@ describe('backend action helpers are profile-scoped', () => {
 
     for (const call of api.mock.calls) {
       expect(call[0].profile).toBe('jarvis')
-    }
-  })
-
-  it('lets an OAuth flow stay pinned to the profile that started it', () => {
-    setApiRequestProfile('profile-b')
-
-    void startOAuthLogin('openai-codex', 'profile-a')
-    void pollOAuthSession('openai-codex', 'session-1', 'profile-a')
-
-    for (const call of api.mock.calls) {
-      expect(call[0].profile).toBe('profile-a')
     }
   })
 })

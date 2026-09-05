@@ -99,6 +99,18 @@ export function saveHermesConfig(config: HermesConfigRecord, profile?: null | st
   })
 }
 
+/** Capability-scoped counterpart of saveHermesConfig — writes the config of
+ *  the profile/connection the Capabilities scope selector points at (possibly
+ *  on another registered gateway), mirroring getHermesConfigRecord. */
+export function saveHermesConfigRecord(config: HermesConfigRecord, profile?: ProfileScope): Promise<{ ok: boolean }> {
+  return window.hermesDesktop.api<{ ok: boolean }>({
+    ...capabilityScoped(profile),
+    path: '/api/config',
+    method: 'PUT',
+    body: { config }
+  })
+}
+
 export function getEnvVars(profile?: null | string): Promise<Record<string, EnvVarInfo>> {
   return hermesApi<Record<string, EnvVarInfo>>({
     ...profileScoped(profile),
@@ -210,14 +222,9 @@ export function startOAuthLogin(providerId: string, profile?: ProfileScope): Pro
   })
 }
 
-export function submitOAuthCode(
-  providerId: string,
-  sessionId: string,
-  code: string,
-  profile?: ProfileScope
-): Promise<OAuthSubmitResponse> {
-  return window.hermesDesktop.api<OAuthSubmitResponse>({
-    ...capabilityScoped(profile),
+export function submitOAuthCode(providerId: string, sessionId: string, code: string): Promise<OAuthSubmitResponse> {
+  return hermesApi<OAuthSubmitResponse>({
+    ...profileScoped(),
     path: `/api/providers/oauth/${encodeURIComponent(providerId)}/submit`,
     method: 'POST',
     body: { session_id: sessionId, code }
@@ -235,9 +242,9 @@ export function pollOAuthSession(
   })
 }
 
-export function cancelOAuthSession(sessionId: string, profile?: ProfileScope): Promise<{ ok: boolean }> {
-  return window.hermesDesktop.api<{ ok: boolean }>({
-    ...capabilityScoped(profile),
+export function cancelOAuthSession(sessionId: string): Promise<{ ok: boolean }> {
+  return hermesApi<{ ok: boolean }>({
+    ...profileScoped(),
     path: `/api/providers/oauth/sessions/${encodeURIComponent(sessionId)}`,
     method: 'DELETE'
   })

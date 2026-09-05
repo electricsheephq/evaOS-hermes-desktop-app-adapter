@@ -5,7 +5,6 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { PaneVisibleContext } from '@/components/pane-shell/pane-visibility'
 import { $clarifyRequests } from '@/store/clarify'
 import type { ComposerAttachment } from '@/store/composer'
-import { $connectionsRegistry } from '@/store/connection-registry-state'
 import { $gateway } from '@/store/gateway'
 import {
   clearAllPrompts,
@@ -406,7 +405,6 @@ describe('useComposerSubmit with a clarify parked on the session', () => {
     cleanup()
     gatewayRequest.mockClear()
     $clarifyRequests.set({})
-    $connectionsRegistry.set(null)
     $gateway.set(null)
     vi.restoreAllMocks()
   })
@@ -441,22 +439,6 @@ describe('useComposerSubmit with a clarify parked on the session', () => {
 
     await waitFor(() => expect(onSteer).toHaveBeenCalledWith('change course'))
     expect(gatewayRequest).toHaveBeenCalledWith('clarify.respond', { request_id: 'req-runtime-session', answer: '' })
-  })
-
-  it('still submits typed text but keeps the clarify card when its registry owner is unknown', async () => {
-    $connectionsRegistry.set({ connections: [{ id: 'source-a' }] } as never)
-    parkClarify('runtime-session')
-    const { hook, onSubmit } = renderSubmitHook({ text: 'send this safely' })
-
-    act(() => {
-      hook.result.current.submitDraft()
-    })
-
-    await waitFor(() =>
-      expect(onSubmit).toHaveBeenCalledWith('send this safely', expect.objectContaining({ attachments: [] }))
-    )
-    expect(gatewayRequest).not.toHaveBeenCalled()
-    expect($clarifyRequests.get()['runtime-session']).toBeDefined()
   })
 
   it('leaves the question alone for an empty Enter (Stop, not an answer)', () => {

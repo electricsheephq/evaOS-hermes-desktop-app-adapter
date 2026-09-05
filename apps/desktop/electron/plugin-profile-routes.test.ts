@@ -1,16 +1,10 @@
 import { describe, expect, it, vi } from 'vitest'
 
 import {
-  assertEvaManagedConnectionId,
-  buildEvaManagedAgentRoster,
-  buildEvaManagedConnectionsRegistry,
-  buildEvaManagedProfileRoutes,
   buildOpaqueProfileRoutes,
   buildRegistryProfileRoutes,
-  EVA_MANAGED_CONNECTION_ID,
   isLocalEnumerationFailure,
   localRouteFallbackProfiles,
-  normalizeEvaManagedActiveRoute,
   type ProfileRouteConfig,
   registryGatewayWsUrl,
   undialedSshRouteSeeds
@@ -29,97 +23,6 @@ function config(overrides: Partial<ProfileRouteConfig> = {}): ProfileRouteConfig
     ...overrides
   }
 }
-
-describe('managed plugin profile routes', () => {
-  it('accepts only the opaque managed active route and forces registry scope', () => {
-    expect(
-      normalizeEvaManagedActiveRoute({
-        connectionId: EVA_MANAGED_CONNECTION_ID,
-        profile: ' research ',
-        registryScoped: false
-      })
-    ).toEqual({
-      connectionId: EVA_MANAGED_CONNECTION_ID,
-      profile: 'research',
-      registryScoped: true
-    })
-    expect(normalizeEvaManagedActiveRoute({ connectionId: 'saved-workstation-ssh', registryScoped: true })).toBeNull()
-    expect(normalizeEvaManagedActiveRoute(null)).toBeNull()
-  })
-
-  it('publishes one credential-free assigned-runtime connection without workstation sources', () => {
-    expect(buildEvaManagedConnectionsRegistry()).toEqual({
-      connections: [
-        {
-          authMode: 'oauth',
-          headerNames: [],
-          id: EVA_MANAGED_CONNECTION_ID,
-          kind: 'remote',
-          label: 'Assigned runtime',
-          tokenPreview: null,
-          tokenSet: false
-        }
-      ],
-      lastUsed: EVA_MANAGED_CONNECTION_ID,
-      launchMode: 'primary',
-      primary: EVA_MANAGED_CONNECTION_ID,
-      secureTokenStorage: true,
-      version: 2
-    })
-  })
-
-  it('publishes one opaque assigned-runtime roster without workstation sources', () => {
-    expect(buildEvaManagedAgentRoster(' research ')).toEqual({
-      agents: [
-        {
-          connectionId: EVA_MANAGED_CONNECTION_ID,
-          connectionKind: 'remote',
-          connectionLabel: 'Assigned runtime',
-          handle: 'research',
-          profile: 'research',
-          targetProfile: 'research'
-        }
-      ],
-      primaryConnectionId: EVA_MANAGED_CONNECTION_ID,
-      sources: [
-        {
-          connectionId: EVA_MANAGED_CONNECTION_ID,
-          kind: 'remote',
-          label: 'Assigned runtime',
-          reachable: true
-        }
-      ]
-    })
-
-    expect(buildEvaManagedAgentRoster('')).toMatchObject({
-      agents: [{ connectionId: EVA_MANAGED_CONNECTION_ID, handle: 'default', profile: 'default' }]
-    })
-  })
-
-  it('routes every managed profile through one opaque assigned-runtime identity', () => {
-    expect(buildEvaManagedProfileRoutes(['research', 'default', 'research', ''], 'default')).toEqual([
-      {
-        connectionId: EVA_MANAGED_CONNECTION_ID,
-        mode: 'remote',
-        profile: 'default',
-        targetProfile: 'default'
-      },
-      {
-        connectionId: EVA_MANAGED_CONNECTION_ID,
-        mode: 'remote',
-        profile: 'research',
-        targetProfile: 'research'
-      }
-    ])
-  })
-
-  it('accepts only the exact managed route identity', () => {
-    expect(assertEvaManagedConnectionId(EVA_MANAGED_CONNECTION_ID)).toBe(EVA_MANAGED_CONNECTION_ID)
-    expect(() => assertEvaManagedConnectionId('local')).toThrow(/managed runtime route/i)
-    expect(() => assertEvaManagedConnectionId(` ${EVA_MANAGED_CONNECTION_ID} `)).toThrow(/managed runtime route/i)
-    expect(() => assertEvaManagedConnectionId('')).toThrow(/managed runtime route/i)
-  })
-})
 
 describe('buildOpaqueProfileRoutes', () => {
   it('groups SSH aliases by their effective route without exposing endpoint data', async () => {

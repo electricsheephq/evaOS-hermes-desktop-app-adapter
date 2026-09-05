@@ -11,7 +11,6 @@ interface RouteResumeOptions {
   creatingSessionRef: MutableRefObject<boolean>
   currentView: string
   freshDraftReady: boolean
-  gatewayConnectionEpoch: number
   gatewayState: string | undefined
   locationPathname: string
   resumeSession: (sessionId: string, focus: boolean, ownerRoute?: SessionProfileRoute) => Promise<unknown>
@@ -75,7 +74,6 @@ export function useRouteResume({
   creatingSessionRef,
   currentView,
   freshDraftReady,
-  gatewayConnectionEpoch,
   gatewayState,
   locationPathname,
   resumeSession,
@@ -89,7 +87,6 @@ export function useRouteResume({
   startFreshSessionDraft
 }: RouteResumeOptions) {
   const lastPathnameRef = useRef<string | null>(null)
-  const lastGatewayConnectionEpochRef = useRef<number | null>(null)
   const seenGatewayStateRef = useRef(false)
   const wasGatewayOpenRef = useRef(false)
   // True until the FIRST resume this window dispatches. That resume is the
@@ -119,14 +116,7 @@ export function useRouteResume({
     // already open is not mistaken for "became open" and does not double-resume with the
     // pathname-driven initial resume below.
     const gatewayBecameOpen = seenGatewayStateRef.current && !wasGatewayOpenRef.current && gatewayOpen
-    // React can batch a fast closed -> connecting -> open cycle and render only
-    // the final "open" state. The socket listener's monotonic epoch still
-    // exposes that real reconnect.
-    const gatewayConnectionAdvanced =
-      lastGatewayConnectionEpochRef.current !== null && gatewayConnectionEpoch > lastGatewayConnectionEpochRef.current
-    const gatewayReopened = gatewayBecameOpen || gatewayConnectionAdvanced
     lastPathnameRef.current = locationPathname
-    lastGatewayConnectionEpochRef.current = gatewayConnectionEpoch
     seenGatewayStateRef.current = true
     wasGatewayOpenRef.current = gatewayOpen
 
@@ -169,7 +159,7 @@ export function useRouteResume({
       const shouldResume =
         pathnameChanged || (gatewayBecameOpen && !freshDraftReady) || stuckOnRoutedSession || explicitlyRequested
 
-      // On a reconnect re-resume even when the route looks
+      // On a reconnect (gatewayBecameOpen) re-resume even when the route looks
       // `alreadyActive`: the cached runtime id can be stale once the gateway
       // rebinds/reaps the session on its side, and trusting it strands Desktop on
       // a dead id ("session not found"). An explicit plugin reselect similarly
@@ -219,7 +209,6 @@ export function useRouteResume({
     creatingSessionRef,
     currentView,
     freshDraftReady,
-    gatewayConnectionEpoch,
     gatewayState,
     locationPathname,
     resumeSession,

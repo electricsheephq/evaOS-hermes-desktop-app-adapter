@@ -4,11 +4,12 @@ import { readActiveTerminal } from '@/app/right-sidebar/terminal/buffer'
 import { closeAgentTerminalByProc } from '@/app/right-sidebar/terminal/terminals'
 import type { PreviewActAction } from '@/lib/preview-act/act-in-page'
 import type { TourAction, TourStep } from '@/lib/tour'
-import { requestGatewayForAgent } from '@/store/gateway'
+import { $gateway } from '@/store/gateway'
 import { applyDesktopLayoutPreset, revealDesktopPane } from '@/store/pane-focus'
-import { captureActivePreviewSurface, ownsActivePreviewSurface } from '@/store/preview'
 import { recordAgentReaction } from '@/store/reactions-local'
 import { setMessages } from '@/store/session'
+import { $tipsEnabled, type ActiveTip, showTip } from '@/store/tips'
+import { $toursEnabled } from '@/store/tours'
 
 import type { GatewayEventContext } from './types'
 
@@ -44,29 +45,7 @@ const loadPreviewEngine = () => {
  *  (terminal/preview/window), agent terminal streaming, pane reveal, and
  *  message reactions. */
 export function handleDesktopBridgeEvent(ctx: GatewayEventContext): boolean {
-  const { event, payload } = ctx
-
-  // Runtime session ids are only unique within a gateway source. Requiring
-  // both the routed id and the composite (connection, profile) owner keeps a
-  // same-id background source from reading or driving the visible surface.
-  // Re-read both values after every async boundary: the user can switch the
-  // foreground chat while a webview read, IPC call, or lazy import is pending.
-  const ownsActiveSurfaceNow = () =>
-    Boolean(
-      ctx.sessionId &&
-        ctx.sessionId === ctx.deps.activeSessionIdRef.current &&
-        ctx.fromActiveSource()
-    )
-
-  const ownsActiveSurface = ownsActiveSurfaceNow()
-
-  const respondToSource = (method: string, params: Record<string, unknown>) =>
-    requestGatewayForAgent(
-      event.connectionId ?? null,
-      event.profile || ctx.deps.activeGatewayProfile,
-      method,
-      params
-    ).catch(() => undefined)
+  const { event, payload, isActiveEvent } = ctx
 
   if (event.type === 'terminal.read.request') {
     // read_terminal tool: serialize the renderer's xterm buffer and answer
@@ -76,9 +55,9 @@ export function handleDesktopBridgeEvent(ctx: GatewayEventContext): boolean {
     if (requestId) {
       const start = typeof payload?.start === 'number' ? payload.start : undefined
       const count = typeof payload?.count === 'number' ? payload.count : undefined
-      const result = ownsActiveSurface ? readActiveTerminal({ start, count }) : null
+      const result = readActiveTerminal({ start, count })
 
-      void respondToSource('terminal.read.respond', {
+      void $gateway.get()?.request('terminal.read.respond', {
         request_id: requestId,
         text: result ? JSON.stringify(result) : ''
       })
@@ -96,18 +75,12 @@ export function handleDesktopBridgeEvent(ctx: GatewayEventContext): boolean {
       const start = typeof payload?.start === 'number' ? payload.start : undefined
       const count = typeof payload?.count === 'number' ? payload.count : undefined
 
-      if (!ownsActiveSurface) {
-        void respondToSource('preview.read.respond', { request_id: requestId, text: '' })
-      } else {
-        void readActivePreview({ count, shouldNudge: ownsActiveSurfaceNow, start }).then(result => {
-          const ownedResult = ownsActiveSurfaceNow() ? result : null
-
-          void respondToSource('preview.read.respond', {
-            request_id: requestId,
-            text: ownedResult ? JSON.stringify(ownedResult) : ''
-          })
+      void readActivePreview({ count, start }).then(result => {
+        void $gateway.get()?.request('preview.read.respond', {
+          request_id: requestId,
+          text: result ? JSON.stringify(result) : ''
         })
-      }
+      })
     }
 
     return true
@@ -122,48 +95,35 @@ export function handleDesktopBridgeEvent(ctx: GatewayEventContext): boolean {
     const requestId = typeof payload?.request_id === 'string' ? payload.request_id : ''
 
     if (requestId) {
-      const denied = {
-        error: 'The in-app browser only takes actions in the session the user is looking at.',
-        success: false
-      }
-
       const answer = (result: unknown) =>
-        respondToSource('preview.act.respond', {
+        $gateway.get()?.request('preview.act.respond', {
           request_id: requestId,
           text: result ? JSON.stringify(result) : ''
         })
 
-      if (ownsActiveSurface) {
+      if (isActiveEvent) {
         void loadPreviewEngine()
           .then(run =>
-            ownsActiveSurfaceNow()
-              ? run(
-                  {
-                    amount: payload?.amount,
-                    key: payload?.key,
-                    kind: payload?.action ?? '',
-                    max: payload?.max,
-                    ref: payload?.ref,
-                    selector: payload?.selector,
-                    submit: payload?.submit,
-                    text: payload?.text,
-                    to: payload?.to as PreviewActAction['to']
-                  },
-                  ownsActiveSurfaceNow
-                )
-              : denied
+            run({
+              amount: payload?.amount,
+              key: payload?.key,
+              kind: payload?.action ?? '',
+              max: payload?.max,
+              ref: payload?.ref,
+              selector: payload?.selector,
+              submit: payload?.submit,
+              text: payload?.text,
+              to: payload?.to as PreviewActAction['to']
+            })
           )
-          .then(
-            result => answer(ownsActiveSurfaceNow() ? result : denied),
-            error =>
-              answer(
-                ownsActiveSurfaceNow()
-                  ? { error: error instanceof Error ? error.message : String(error), success: false }
-                  : denied
-              )
+          .then(answer, error =>
+            answer({ error: error instanceof Error ? error.message : String(error), success: false })
           )
       } else {
-        void answer(denied)
+        void answer({
+          error: 'The in-app browser only takes actions in the session the user is looking at.',
+          success: false
+        })
       }
     }
 
@@ -180,7 +140,7 @@ export function handleDesktopBridgeEvent(ctx: GatewayEventContext): boolean {
       const read = window.hermesDesktop?.readWindowBelow
 
       const answer = (result: unknown) =>
-        respondToSource('window.read.respond', {
+        $gateway.get()?.request('window.read.respond', {
           request_id: requestId,
           text: result ? JSON.stringify(result) : ''
         })
@@ -188,10 +148,7 @@ export function handleDesktopBridgeEvent(ctx: GatewayEventContext): boolean {
       // .catch: ipcRenderer.invoke rejects on an older shell without the
       // handler or a main-side throw — without an empty answer the tool
       // would stall its full 30s timeout.
-      void Promise.resolve(ownsActiveSurface && read ? read() : null).then(
-        result => answer(ownsActiveSurfaceNow() ? result : null),
-        () => answer(null)
-      )
+      void Promise.resolve(read ? read() : null).then(answer, () => answer(null))
     }
 
     return true
@@ -222,60 +179,68 @@ export function handleDesktopBridgeEvent(ctx: GatewayEventContext): boolean {
     const requestId = typeof payload?.request_id === 'string' ? payload.request_id : ''
 
     if (requestId) {
-      const denied = {
-        error: 'Tours only run in the session the user is looking at.',
-        success: false
-      }
-
-      const tourSurface = payload?.surface === 'preview' ? 'preview' : 'app'
-      const previewSurface = tourSurface === 'preview' ? captureActivePreviewSurface() : null
-
-      // A tour resolves its Preview runner only after the lazy module import.
-      // Retain the exact visible document across that gap: session/source
-      // ownership alone would allow A→B (or A→B→A) to paint the wrong page.
-      // A request made with no Preview may still return the existing no-page
-      // error, but it must not acquire a page that opened while importing.
-      const ownsTourSurfaceNow = () =>
-        ownsActiveSurfaceNow() &&
-        (tourSurface === 'app' ||
-          (previewSurface ? ownsActivePreviewSurface(previewSurface) : captureActivePreviewSurface() === null))
-
       const answer = (result: unknown) =>
-        respondToSource('tour.respond', {
+        $gateway.get()?.request('tour.respond', {
           request_id: requestId,
           text: result ? JSON.stringify(result) : ''
         })
 
-      if (ownsActiveSurface) {
+      if (!$toursEnabled.get()) {
+        // Refused in words, not silently dropped: the agent asked for a
+        // walkthrough it isn't getting, and a no-op would leave it narrating
+        // a spotlight the user can't see.
+        void answer({ error: 'The user has turned guided tours off.', success: false })
+      } else if (isActiveEvent) {
         void import('@/lib/tour')
           .then(({ runTour }) =>
-            ownsTourSurfaceNow()
-              ? runTour(
-                  {
-                    kind: (payload?.action ?? 'stop') as TourAction['kind'],
-                    selector: payload?.selector,
-                    side: payload?.side as TourStep['side'],
-                    startAt: payload?.step_index,
-                    steps: payload?.steps as TourStep[] | undefined,
-                    text: payload?.text,
-                    title: payload?.title
-                  },
-                  tourSurface
-                )
-              : denied
+            runTour(
+              {
+                kind: (payload?.action ?? 'stop') as TourAction['kind'],
+                selector: payload?.selector,
+                side: payload?.side as TourStep['side'],
+                startAt: payload?.step_index,
+                steps: payload?.steps as TourStep[] | undefined,
+                text: payload?.text,
+                title: payload?.title
+              },
+              payload?.surface === 'preview' ? 'preview' : 'app'
+            )
           )
-          .then(
-            result => answer(ownsTourSurfaceNow() ? result : denied),
-            error =>
-              answer(
-                ownsTourSurfaceNow()
-                  ? { error: error instanceof Error ? error.message : String(error), success: false }
-                  : denied
-              )
+          .then(answer, error =>
+            answer({ error: error instanceof Error ? error.message : String(error), success: false })
           )
       } else {
-        void answer(denied)
+        void answer({
+          error: 'Tours only run in the session the user is looking at.',
+          success: false
+        })
       }
+    }
+
+    return true
+  }
+
+  if (event.type === 'tip.show') {
+    // tip tool: point the accent bubble at something and say one line about
+    // it. Fire-and-forget — a tip is not a question, and blocking the turn on
+    // one would stall the sentence the agent is in the middle of, so there is
+    // nothing to answer and a refusal is simply a bubble that never appears.
+    // Active session only: a background turn must never paint on the user's
+    // screen (desktop AGENTS.md: offer, don't hijack).
+    const selector = typeof payload?.selector === 'string' ? payload.selector : ''
+    const text = typeof payload?.text === 'string' ? payload.text : ''
+
+    // A tip with nothing to point at is just a notification, and the app
+    // already has those. Dropping it here also stops a malformed event from
+    // replacing a rotation tip with a bubble that dismisses itself a frame
+    // later.
+    if ($tipsEnabled.get() && isActiveEvent && selector && text) {
+      showTip({
+        side: (payload?.side as ActiveTip['side']) ?? 'top',
+        targets: [selector],
+        text,
+        title: typeof payload?.title === 'string' ? payload.title : undefined
+      })
     }
 
     return true
@@ -286,7 +251,7 @@ export function handleDesktopBridgeEvent(ctx: GatewayEventContext): boolean {
     // response to an explicit user request. Active session only — a
     // background turn must never move the user's focus (desktop AGENTS.md:
     // offer, don't hijack).
-    if (ownsActiveSurface) {
+    if (isActiveEvent) {
       revealDesktopPane(payload?.pane ?? '')
     }
 
@@ -298,7 +263,7 @@ export function handleDesktopBridgeEvent(ctx: GatewayEventContext): boolean {
     // tool. Same contract as pane.reveal: active session only, and the
     // preset resolves against the SAME layouts registry the picker reads,
     // so core, plugin, and user presets are all addressable.
-    if (ownsActiveSurface) {
+    if (isActiveEvent) {
       applyDesktopLayoutPreset(typeof payload?.preset === 'string' ? payload.preset : '')
     }
 
@@ -313,7 +278,7 @@ export function handleDesktopBridgeEvent(ctx: GatewayEventContext): boolean {
     // keyed by ChatMessage identity.
     const reactedRowId = payload?.row_id
 
-    if (ownsActiveSurface && typeof reactedRowId === 'number') {
+    if (typeof reactedRowId === 'number') {
       const nextReactions = Array.isArray(payload?.reactions) ? payload.reactions : []
       const reactedRole = payload?.role === 'assistant' ? 'assistant' : 'user'
 

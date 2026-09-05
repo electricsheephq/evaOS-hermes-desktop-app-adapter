@@ -2,7 +2,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import type * as Nanostores from 'nanostores'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { deleteProfile, getProfileSoul } from '@/hermes'
+import { deleteProfile } from '@/hermes'
 import { retireLocalProfileGateways } from '@/store/gateway'
 import { refreshProfiles, selectProfile, setActiveProfile } from '@/store/profile'
 import type { ProfileInfo } from '@/types/hermes'
@@ -17,17 +17,6 @@ import { ProfilesView } from './index'
 // precisely because nothing rendered this view.
 
 afterEach(cleanup)
-
-const originalHermesDesktop = Object.getOwnPropertyDescriptor(window, 'hermesDesktop')
-
-afterEach(() => {
-  if (originalHermesDesktop) {
-    Object.defineProperty(window, 'hermesDesktop', originalHermesDesktop)
-  } else {
-    // @ts-expect-error Test cleanup restores the pre-test absence of the preload bridge.
-    delete window.hermesDesktop
-  }
-})
 
 // Real i18n (useI18n falls back to English with no provider), so labels are the
 // actual strings — no brittle key snapshot to maintain here.
@@ -130,117 +119,6 @@ async function deleteTheNamedProfile() {
 }
 
 describe('ProfilesView', () => {
-  it('renders the authorized managed label while profile operations retain the canonical id', async () => {
-    const canonicalProfile = 'e-managed-profile'
-
-    Object.defineProperty(window, 'hermesDesktop', {
-      configurable: true,
-      value: {
-        eva: {
-          status: vi.fn().mockResolvedValue({
-            agentDisplayName: 'Asuka',
-            agentId: 'enrollment-agent-id',
-            managed: true
-          })
-        },
-        profile: {
-          get: vi.fn().mockResolvedValue({ profile: canonicalProfile })
-        }
-      }
-    })
-    vi.mocked(refreshProfiles).mockResolvedValue([makeProfile(canonicalProfile)])
-
-    await renderProfilesView()
-
-    expect(await screen.findByRole('heading', { name: 'Asuka' })).toBeTruthy()
-    expect(await screen.findAllByRole('button', { name: 'Asuka' })).toHaveLength(2)
-    await waitFor(() => expect(getProfileSoul).toHaveBeenCalledWith(canonicalProfile))
-  })
-
-  it('reads display metadata after the active profile and retains the last valid label on refresh failure', async () => {
-    const canonicalProfile = 'e-managed-profile'
-    const callOrder: string[] = []
-
-    const getProfile = vi
-      .fn()
-      .mockImplementationOnce(async () => {
-        callOrder.push('profile')
-
-        return { profile: canonicalProfile }
-      })
-      .mockRejectedValueOnce(new Error('transient profile read failure'))
-
-    const getStatus = vi.fn().mockImplementation(async () => {
-      callOrder.push('status')
-
-      return { agentDisplayName: 'Asuka', managed: true }
-    })
-
-    Object.defineProperty(window, 'hermesDesktop', {
-      configurable: true,
-      value: {
-        eva: { status: getStatus },
-        profile: { get: getProfile }
-      }
-    })
-    vi.mocked(refreshProfiles).mockImplementation(async () => {
-      callOrder.push('list')
-
-      return [makeProfile(canonicalProfile)]
-    })
-
-    await renderProfilesView()
-
-    expect(await screen.findByRole('heading', { name: 'Asuka' })).toBeTruthy()
-    expect(callOrder).toEqual(['list', 'profile', 'status'])
-
-    fireEvent.keyDown(window, { key: 'r' })
-    await waitFor(() => expect(getProfile).toHaveBeenCalledTimes(2))
-    expect(getStatus).toHaveBeenCalledTimes(1)
-    expect(await screen.findByRole('heading', { name: 'Asuka' })).toBeTruthy()
-  })
-
-  it('coalesces overlapping managed refreshes before enrollment reads', async () => {
-    const canonicalProfile = 'e-managed-profile'
-    let resolveFirstProfile: ((value: { profile: string }) => void) | undefined
-
-    vi.mocked(refreshProfiles).mockClear()
-
-    const getProfile = vi
-      .fn()
-      .mockImplementationOnce(
-        () =>
-          new Promise<{ profile: string }>(resolve => {
-            resolveFirstProfile = resolve
-          })
-      )
-
-    const getStatus = vi.fn().mockResolvedValue({ agentDisplayName: 'Asuka current', managed: true })
-
-    Object.defineProperty(window, 'hermesDesktop', {
-      configurable: true,
-      value: {
-        eva: { status: getStatus },
-        profile: { get: getProfile }
-      }
-    })
-    vi.mocked(refreshProfiles).mockResolvedValue([makeProfile(canonicalProfile)])
-
-    render(<ProfilesView onClose={vi.fn()} />)
-    await waitFor(() => expect(getProfile).toHaveBeenCalledTimes(1))
-
-    fireEvent.keyDown(window, { key: 'r' })
-    expect(getProfile).toHaveBeenCalledTimes(1)
-
-    await act(async () => {
-      resolveFirstProfile?.({ profile: canonicalProfile })
-    })
-    await waitFor(() => expect(getStatus).toHaveBeenCalledTimes(1))
-
-    expect(await screen.findByRole('heading', { name: 'Asuka current' })).toBeTruthy()
-    expect(refreshProfiles).toHaveBeenCalledTimes(1)
-  })
-
   it('opens the shared create dialog with the SOUL.md field (parity with the rail)', async () => {
     vi.mocked(refreshProfiles).mockResolvedValue([])
 

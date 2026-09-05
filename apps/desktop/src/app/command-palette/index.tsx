@@ -56,6 +56,7 @@ import {
   Wrench,
   Zap
 } from '@/lib/icons'
+import { getServers } from '@/lib/mcp-servers'
 import { normalize } from '@/lib/text'
 import { cn } from '@/lib/utils'
 import { resolveVersionStatus } from '@/lib/version-status'
@@ -549,7 +550,6 @@ export function CommandPalette() {
 
 function CommandPaletteBody({ onExited }: { onExited: () => void }) {
   const { t } = useI18n()
-  const managedEva = Boolean(window.hermesDesktop?.eva)
   const pendingPage = useStore($commandPalettePage)
   const pendingSeed = useStore($commandPaletteSeed)
   const bindings = useStore($bindings)
@@ -587,7 +587,7 @@ function CommandPaletteBody({ onExited }: { onExited: () => void }) {
   const backendApply = useStore($backendUpdateApply)
 
   const updateVersionLabel = useMemo(() => {
-    const backend = connection?.mode === 'remote' && !managedEva
+    const backend = connection?.mode === 'remote'
     const apply = backend ? backendApply : clientApply
     const status = backend ? backendStatus : clientStatus
 
@@ -602,16 +602,7 @@ function CommandPaletteBody({ onExited }: { onExited: () => void }) {
       updateAvailable: status?.updateAvailable,
       version: backend ? status?.currentVersion : desktopVersion?.appVersion
     }).label
-  }, [
-    backendApply,
-    backendStatus,
-    clientApply,
-    clientStatus,
-    connection?.mode,
-    desktopVersion?.appVersion,
-    managedEva,
-    t
-  ])
+  }, [backendApply, backendStatus, clientApply, clientStatus, connection?.mode, desktopVersion?.appVersion, t])
 
   // cmdk's onSelect doesn't forward the triggering event — keep the last
   // click/keydown modifiers so session rows can honour ⌘-Enter / ⌘-click.
@@ -669,13 +660,9 @@ function CommandPaletteBody({ onExited }: { onExited: () => void }) {
     queryFn: () => listAllProfileSessions(200, 0, 'only')
   })
 
-  const mcpServers = useMemo(() => {
-    const raw = configQuery.data?.mcp_servers
-
-    return raw && typeof raw === 'object' && !Array.isArray(raw)
-      ? Object.keys(raw as Record<string, unknown>).sort()
-      : []
-  }, [configQuery.data])
+  // getServers is the shared choke point that also drops malformed (null/
+  // scalar) entries, so the palette never lists a server the MCP tab dropped.
+  const mcpServers = useMemo(() => Object.keys(getServers(configQuery.data ?? null)).sort(), [configQuery.data])
 
   const sessions = useMemo(() => (sessionsQuery.data?.sessions ?? []).map(toSessionEntry), [sessionsQuery.data])
   const archivedSessions = useMemo(() => (archivedQuery.data?.sessions ?? []).map(toSessionEntry), [archivedQuery.data])
@@ -867,13 +854,7 @@ function CommandPaletteBody({ onExited }: { onExited: () => void }) {
             label: t.shell.statusbar.cron,
             run: go(CRON_ROUTE)
           },
-          {
-            action: 'nav.profiles',
-            icon: Users,
-            id: 'nav-profiles',
-            label: t.profiles.title,
-            run: go(PROFILES_ROUTE)
-          },
+          { action: 'nav.profiles', icon: Users, id: 'nav-profiles', label: t.profiles.title, run: go(PROFILES_ROUTE) },
           { action: 'nav.agents', icon: Cpu, id: 'nav-agents', label: t.agents.title, run: go(AGENTS_ROUTE) },
           {
             icon: Starmap,
@@ -931,25 +912,19 @@ function CommandPaletteBody({ onExited }: { onExited: () => void }) {
             label: cc.sections.usage,
             run: go(`${COMMAND_CENTER_ROUTE}?section=usage`)
           },
-          ...(!managedEva
-            ? [
-                {
-                  icon: RefreshCw,
-                  id: 'cc-restart-gateway',
-                  keywords: ['gateway', 'restart', 'messaging', 'reconnect', 'system'],
-                  label: cc.restartGateway,
-                  run: () => void runGatewayRestart()
-                }
-              ]
-            : []),
+          {
+            icon: RefreshCw,
+            id: 'cc-restart-gateway',
+            keywords: ['gateway', 'restart', 'messaging', 'reconnect', 'system'],
+            label: cc.restartGateway,
+            run: () => void runGatewayRestart()
+          },
           {
             detail: updateVersionLabel,
             icon: Download,
-            id: managedEva ? 'cc-update-evaos-agent' : 'cc-update-hermes',
-            keywords: managedEva
-              ? ['update', 'upgrade', 'evaos', 'agent', 'version']
-              : ['update', 'upgrade', 'hermes', 'version', 'system', 'restart'],
-            label: managedEva ? t.settings.about.updates : cc.updateHermes,
+            id: 'cc-update-hermes',
+            keywords: ['update', 'upgrade', 'hermes', 'version', 'system', 'restart'],
+            label: cc.updateHermes,
             run: () => requestActiveUpdate()
           },
           {
@@ -1033,7 +1008,6 @@ function CommandPaletteBody({ onExited }: { onExited: () => void }) {
     contributedItems,
     dismissedAutoProjects,
     go,
-    managedEva,
     projectTree,
     selectTick,
     settingsSectionLabel,
@@ -1263,7 +1237,6 @@ function CommandPaletteBody({ onExited }: { onExited: () => void }) {
     availableThemes,
     go,
     goSession,
-    managedEva,
     mcpServers,
     mode,
     previewTheme,

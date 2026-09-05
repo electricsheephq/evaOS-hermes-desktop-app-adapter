@@ -1,9 +1,6 @@
 import { atom, computed } from 'nanostores'
 
 import { $gateway } from './gateway'
-import { assertSessionOwnerResolved } from './session-owner-resolution'
-import { requestForSessionProfile } from './session-request-router'
-import { knownOwnerForSession } from './session-states'
 
 /**
  * Pending `mcp.setup.request`s — the desktop half of the `setup_mcp` tool's
@@ -103,29 +100,12 @@ export async function skipMcpSetupRequest(sessionId: string | null | undefined):
     return false
   }
 
-  // Resolve the blocked session's owner while its request is still intact.
-  // Unknown multi-backend ownership fails closed and leaves the card visible
-  // instead of sending the decline to whichever gateway happens to be active.
-  const owner = knownOwnerForSession(request.sessionId)
-
-  try {
-    assertSessionOwnerResolved(owner, { method: 'mcp.setup.respond', sessionId: request.sessionId })
-  } catch {
-    return false
-  }
-
-  const gateway = $gateway.get()
-
-  if (!gateway) {
-    return false
-  }
-
-  // The answer and owner are now fixed. Clear before the in-flight RPC so the
-  // user cannot answer the same card twice.
+  // Clear first: the answer is already decided, and an in-flight RPC must not
+  // leave a live card the user can answer a second time.
   clearMcpSetupRequest(request.requestId, request.sessionId)
 
   try {
-    await requestForSessionProfile(owner, gateway.request.bind(gateway), 'mcp.setup.respond', {
+    await $gateway.get()?.request('mcp.setup.respond', {
       request_id: request.requestId,
       result: JSON.stringify({ server: request.server, status: 'declined' })
     })

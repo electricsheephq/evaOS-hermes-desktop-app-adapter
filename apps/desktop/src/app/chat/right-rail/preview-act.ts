@@ -29,18 +29,8 @@
 
 import { actEngineSource, type PreviewActAction, type PreviewActResult } from '@/lib/preview-act/act-in-page'
 import { watchInPage } from '@/lib/preview-act/watch-in-page'
-import { captureActivePreviewSurface, ownsActivePreviewSurface } from '@/store/preview'
 
-import {
-  clickAt,
-  glideTo,
-  pointerPlaced,
-  pressKey,
-  type PreviewDriveContinuation,
-  selectAll,
-  typeText,
-  wheelBy
-} from './preview-drive'
+import { clickAt, glideTo, pointerPlaced, pressKey, selectAll, typeText, wheelBy } from './preview-drive'
 import { activePreviewInput, type PreviewInputHandle } from './preview-input'
 import { activePreviewNav, type PreviewNavHandle } from './preview-nav'
 import { activePreviewScriptRunner, type PreviewScriptRunner } from './preview-script-runner'
@@ -72,13 +62,6 @@ const DRIVEN: readonly string[] = ['click', 'hover', 'press', 'type']
 const CLICKS: readonly string[] = ['click', 'type']
 
 const NOTHING_OPEN = 'No live page is open in the in-app browser — open one with open_preview first.'
-
-const ACTION_CANCELLED =
-  'The in-app browser action stopped because its session, tab, or page no longer owns the visible Preview.'
-
-const ALWAYS_CONTINUE: PreviewDriveContinuation = () => true
-
-const cancelledResult = (): PreviewActResult => ({ error: ACTION_CANCELLED, success: false })
 
 const NAVIGATED =
   'The page stopped answering right after — it is probably navigating. Call elements to see where you landed.'
@@ -309,23 +292,11 @@ ${preamble()}
  *  difference. */
 type Trip = { error: string; kind: 'failed' } | { kind: 'answered'; result: PreviewActResult } | { kind: 'silent' }
 
-async function runJson(
-  run: PreviewScriptRunner,
-  code: string,
-  shouldContinue: PreviewDriveContinuation = ALWAYS_CONTINUE
-): Promise<Trip> {
-  if (!shouldContinue()) {
-    return { error: ACTION_CANCELLED, kind: 'failed' }
-  }
-
+async function runJson(run: PreviewScriptRunner, code: string): Promise<Trip> {
   const raw = await Promise.race([
     run(code).catch((error: unknown) => new Error(String(error))),
     new Promise<undefined>(resolve => setTimeout(resolve, ACT_TIMEOUT_MS))
   ])
-
-  if (!shouldContinue()) {
-    return { error: ACTION_CANCELLED, kind: 'failed' }
-  }
 
   if (raw === undefined) {
     return { kind: 'silent' }
@@ -363,12 +334,11 @@ function describeDone(action: PreviewActAction, target: string): string {
 async function driveAction(
   run: PreviewScriptRunner,
   input: PreviewInputHandle,
-  action: PreviewActAction,
-  shouldContinue: PreviewDriveContinuation
+  action: PreviewActAction
 ): Promise<PreviewActResult> {
   // A key press must not be preceded by a click — that would activate the
   // control rather than type into it — so the page hands it focus instead.
-  const trip = await runJson(run, buildLocateScript(action, action.kind === 'press'), shouldContinue)
+  const trip = await runJson(run, buildLocateScript(action, action.kind === 'press'))
 
   if (trip.kind === 'failed') {
     return { error: trip.error, success: false }
@@ -388,14 +358,10 @@ async function driveAction(
     return { error: 'Could not work out where that element is on screen.', success: false }
   }
 
-  if (!(await glideTo(input, found.point, shouldContinue))) {
-    return cancelledResult()
-  }
+  await glideTo(input, found.point)
 
   if (action.kind === 'click') {
-    if (!(await clickAt(input, 1, shouldContinue))) {
-      return cancelledResult()
-    }
+    await clickAt(input)
   } else if (action.kind === 'type') {
     if (found.typable === false) {
       return {
@@ -404,49 +370,27 @@ async function driveAction(
       }
     }
 
-    if (!shouldContinue()) {
-      return cancelledResult()
-    }
-
     input.focus()
-
-    if (!(await clickAt(input, 1, shouldContinue))) {
-      return cancelledResult()
-    }
-
+    await clickAt(input)
     // Select-all inside the now-focused field, so typing replaces what is there
     // the way it would for a person. NOT a triple-click: that is a pointer
     // gesture and selects the paragraph under the cursor whenever the target
     // turns out not to be a field.
-    if (!(await selectAll(input, shouldContinue))) {
-      return cancelledResult()
-    }
-
-    if (!(await typeText(input, action.text ?? '', shouldContinue))) {
-      return cancelledResult()
-    }
+    await selectAll(input)
+    await typeText(input, action.text ?? '')
 
     if (action.submit) {
-      if (!(await pressKey(input, 'Enter', shouldContinue))) {
-        return cancelledResult()
-      }
+      await pressKey(input, 'Enter')
     }
   } else if (action.kind === 'press') {
-    if (!shouldContinue()) {
-      return cancelledResult()
-    }
-
     input.focus()
-
-    if (!(await pressKey(input, action.key || 'Enter', shouldContinue))) {
-      return cancelledResult()
-    }
+    await pressKey(input, action.key || 'Enter')
   }
   // hover is the glide and nothing else — the pointer is already sitting on the
   // target, which is the whole request.
 
   const target = String(found.acted || '').replace(/^looking at /, '')
-  const after = await runJson(run, buildFinishScript(SETTLE_MS), shouldContinue)
+  const after = await runJson(run, buildFinishScript(SETTLE_MS))
   const acted = describeDone(action, target)
 
   // The action itself already happened as real input, so a page that will not
@@ -500,12 +444,11 @@ ${preamble()}
 async function driveScroll(
   run: PreviewScriptRunner,
   input: PreviewInputHandle,
-  action: PreviewActAction,
-  shouldContinue: PreviewDriveContinuation
+  action: PreviewActAction
 ): Promise<PreviewActResult> {
   const far = action.amount ?? 0
 
-  const trip = await runJson(run, buildScrollAnchorScript(), shouldContinue)
+  const trip = await runJson(run, buildScrollAnchorScript())
 
   if (trip.kind === 'failed') {
     return { error: trip.error, success: false }
@@ -524,16 +467,12 @@ async function driveScroll(
   // A person does not move the mouse to scroll; the wheel turns wherever their
   // hand already is. Only send it somewhere if it has never been anywhere.
   if (!pointerPlaced() && anchor.point) {
-    if (!(await glideTo(input, anchor.point, shouldContinue))) {
-      return cancelledResult()
-    }
+    await glideTo(input, anchor.point)
   }
 
-  if (!(await wheelBy(input, action.amount ?? anchor.page ?? 600, shouldContinue))) {
-    return cancelledResult()
-  }
+  await wheelBy(input, action.amount ?? anchor.page ?? 600)
 
-  const after = await runJson(run, buildFinishScript(SETTLE_MS), shouldContinue)
+  const after = await runJson(run, buildFinishScript(SETTLE_MS))
 
   if (after.kind !== 'answered') {
     return { acted: 'scrolled the page', note: NAVIGATED, success: true }
@@ -544,21 +483,10 @@ async function driveScroll(
 
 /** Run one action against the ACTIVE preview tab's page. `kind` is a bare
  *  string: the verb arrives off the wire, and the history ones never reach
- *  the in-page engine. Agent-driven callers pass a live ownership check so an
- *  in-flight action stops before its next script, navigation, or input event
- *  when the visible session or Preview tab changes. */
+ *  the in-page engine. */
 export async function actOnActivePreview(
-  action: Omit<PreviewActAction, 'kind'> & { kind: string },
-  shouldContinue: PreviewDriveContinuation = ALWAYS_CONTINUE
+  action: Omit<PreviewActAction, 'kind'> & { kind: string }
 ): Promise<PreviewActResult> {
-  if (!shouldContinue()) {
-    return cancelledResult()
-  }
-
-  const ownerSurface = captureActivePreviewSurface()
-
-  const ownsActionSurface = () => shouldContinue() && ownsActivePreviewSurface(ownerSurface)
-
   const nav = NAV_ACTIONS.find(verb => verb === action.kind)
 
   if (nav) {
@@ -566,10 +494,6 @@ export async function actOnActivePreview(
 
     if (!handle) {
       return { error: NOTHING_OPEN, success: false }
-    }
-
-    if (!ownsActionSurface()) {
-      return cancelledResult()
     }
 
     handle[nav]()
@@ -599,7 +523,7 @@ export async function actOnActivePreview(
             ? buildPinScript(typed, typed.text || '')
             : buildUnpinScript(typed)
 
-    const trip = await runJson(run, mark, ownsActionSurface)
+    const trip = await runJson(run, mark)
 
     if (trip.kind === 'failed') {
       return { error: trip.error, success: false }
@@ -611,7 +535,7 @@ export async function actOnActivePreview(
   const input = activePreviewInput()
 
   if (input && DRIVEN.indexOf(typed.kind) !== -1) {
-    return driveAction(run, input, typed, ownsActionSurface)
+    return driveAction(run, input, typed)
   }
 
   // A plain page scroll is a wheel gesture. Jumping to an end is not — no hand
@@ -619,11 +543,11 @@ export async function actOnActivePreview(
   const plain = typed.kind === 'scroll' && !typed.to && !typed.ref && !typed.selector
 
   if (plain && input) {
-    return driveScroll(run, input, typed, ownsActionSurface)
+    return driveScroll(run, input, typed)
   }
 
   const settle = typed.kind === 'elements' ? 0 : SETTLE_MS
-  const scripted = await runJson(run, buildScriptedScript(typed, settle), ownsActionSurface)
+  const scripted = await runJson(run, buildScriptedScript(typed, settle))
 
   if (scripted.kind === 'failed') {
     return { error: scripted.error, success: false }

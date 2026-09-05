@@ -8,7 +8,7 @@ between ``HERMES_BACKEND_READY`` and the first prompt. Three fixes:
    subprocess when a Copilot env var is explicitly set (even if invalid).
 2. ``tui_gateway.ws.handle_ws`` runs ``resolve_skin()`` via
    ``asyncio.to_thread`` so the loop is not blocked by config/skin init.
-3. ``web_server._warm_gateway_module`` pre-imports the heavy module
+3. ``web_server_lifecycle._warm_gateway_module`` pre-imports the heavy module
    chains that the first WS connection + RPC burst would otherwise
    import on the loop thread.
 """
@@ -19,6 +19,7 @@ import sys
 from unittest.mock import patch, MagicMock
 
 import pytest
+import hermes_cli.web_server_lifecycle as _web_server_lifecycle
 
 
 # ─── Fix 1: copilot_auth skips gh CLI when env var is set ──────────────
@@ -141,11 +142,7 @@ def test_handle_ws_ready_payload_wires_skin_through_to_thread():
                     "method": "event",
                     "params": {
                         "type": "gateway.ready",
-                        "payload": {
-                            "skin": skin_payload,
-                            "change_events": True,
-                            "heartbeat": True,
-                        },
+                        "payload": {"skin": skin_payload, "change_events": True},
                     },
                 }
             )
@@ -154,52 +151,12 @@ def test_handle_ws_ready_payload_wires_skin_through_to_thread():
 
     assert frames[0]["params"]["payload"]["skin"] == {"palette": "wired"}
     assert frames[0]["params"]["payload"]["change_events"] is True
-    assert frames[0]["params"]["payload"]["heartbeat"] is True
     assert idents["skin_thread"] != idents["loop_thread"]
     # Belt and braces: the production site must still route through
     # to_thread — assert against the live source so a revert to inline
     # resolve_skin() cannot slip past the behavioral stub above.
     source = inspect.getsource(ws_mod.handle_ws)
     assert "to_thread(server.resolve_skin)" in source
-    assert '"heartbeat": True' in source
-
-
-def test_real_gateway_ready_frame_advertises_heartbeat():
-    import json
-
-    import tui_gateway.server as server_mod
-    import tui_gateway.ws as ws_mod
-
-    class _Socket:
-        scope = {}
-
-        def __init__(self):
-            self.frames = []
-
-        async def accept(self):
-            return None
-
-        async def send_text(self, frame):
-            self.frames.append(json.loads(frame))
-
-        async def receive_text(self):
-            raise RuntimeError("test disconnect")
-
-        async def close(self):
-            return None
-
-    socket = _Socket()
-    with (
-        patch.object(server_mod, "resolve_skin", return_value={"palette": "wired"}),
-        patch.object(server_mod, "_ensure_skin_watcher"),
-        patch.object(server_mod, "register_live_transport"),
-        patch.object(server_mod, "unregister_live_transport"),
-        patch.object(server_mod, "_release_wake_for_transport"),
-        patch.object(server_mod, "_close_sessions_for_transport", return_value=(0, 0)),
-    ):
-        asyncio.run(ws_mod.handle_ws(socket))
-
-    assert socket.frames[0]["params"]["payload"]["heartbeat"] is True
 
 
 # ─── Fix 3: _warm_gateway_module pre-imports heavy chains ──────────────
@@ -231,7 +188,7 @@ def test_warm_gateway_module_imports_cold_start_chains():
         "hermes_cli.model_switch",
     }
 
-    web_server_mod._warm_gateway_module()
+    _web_server_lifecycle._warm_gateway_module()
 
     missing = required - set(sys.modules)
     assert not missing, (

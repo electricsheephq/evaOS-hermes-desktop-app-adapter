@@ -2,10 +2,9 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { $desktopBoot } from '@/store/boot'
-import { $notifications, clearNotifications } from '@/store/notifications'
 import { $desktopOnboarding } from '@/store/onboarding'
 
-import { BootFailureOverlay, completeManagedSignIn } from './boot-failure-overlay'
+import { BootFailureOverlay } from './boot-failure-overlay'
 
 // Remote-backend users hit a hard boot failure that isn't OAuth reauth (token
 // auth, wrong URL, unreachable host). The recovery screen must let them fix the
@@ -49,7 +48,6 @@ const remoteToken = {
 }
 
 beforeEach(() => {
-  clearNotifications()
   $desktopOnboarding.set({
     configured: true,
     flow: { status: 'idle' },
@@ -64,66 +62,9 @@ beforeEach(() => {
   failBoot()
 })
 
-afterEach(() => {
-  cleanup()
-  clearNotifications()
-})
+afterEach(cleanup)
 
 describe('BootFailureOverlay', () => {
-  it('reloads only after managed sign-in succeeds', async () => {
-    const reload = vi.fn()
-
-    await expect(completeManagedSignIn(() => Promise.reject(new Error('sign-in failed')), reload)).rejects.toThrow(
-      'sign-in failed'
-    )
-    expect(reload).not.toHaveBeenCalled()
-
-    await completeManagedSignIn(() => Promise.resolve(), reload)
-    expect(reload).toHaveBeenCalledOnce()
-  })
-
-  it('localizes managed assignment recovery and keeps failed sign-in retryable', async () => {
-    const original = window.hermesDesktop
-    const signIn = vi.fn().mockRejectedValue(new Error('managed broker unavailable'))
-
-    Object.defineProperty(window, 'hermesDesktop', {
-      configurable: true,
-      value: { eva: { signIn } },
-      writable: true
-    })
-
-    try {
-      render(<BootFailureOverlay />)
-
-      expect(
-        screen.getByText(
-          'Your business assignment is selected by Electric Sheep. Sign in again if access was changed or revoked.'
-        )
-      ).toBeTruthy()
-
-      const button = screen.getByRole('button', { name: 'Sign in to evaOS Agent' })
-      expect(screen.queryByRole('button', { name: 'Sign in to remote gateway' })).toBeNull()
-      fireEvent.click(button)
-
-      await waitFor(() => expect(signIn).toHaveBeenCalledOnce())
-      await waitFor(() =>
-        expect($notifications.get()).toEqual([
-          expect.objectContaining({
-            kind: 'error',
-            title: 'Could not sign in to managed access. Try again.'
-          })
-        ])
-      )
-      expect((button as HTMLButtonElement).disabled).toBe(false)
-    } finally {
-      Object.defineProperty(window, 'hermesDesktop', {
-        configurable: true,
-        value: original,
-        writable: true
-      })
-    }
-  })
-
   it('swaps to the in-place gateway settings view (no route nav) and back', async () => {
     render(<BootFailureOverlay />)
 
@@ -200,6 +141,51 @@ describe('BootFailureOverlay', () => {
       expect(logout).toHaveBeenCalledTimes(1)
       expect(logout).toHaveBeenCalledWith(gatewayUrl)
       expect(login).toHaveBeenCalledTimes(1)
+    } finally {
+      restore()
+    }
+  })
+
+  it('recovers a cloud connection through the portal cascade instead of native OAuth', async () => {
+    const gatewayUrl = 'https://agent-1.agents.nousresearch.com'
+    const logout = vi.fn().mockResolvedValue({ ok: true, connected: false })
+    const nativeLogin = vi.fn().mockResolvedValue({ ok: true, connected: false })
+    const cloudStatus = vi.fn().mockResolvedValue({ portalBaseUrl: 'https://portal.nousresearch.com', signedIn: false })
+
+    const cloudLogin = vi.fn().mockResolvedValue({
+      ok: true,
+      portalBaseUrl: 'https://portal.nousresearch.com',
+      signedIn: true
+    })
+
+    const cloudAgentSignIn = vi.fn().mockResolvedValue({ baseUrl: gatewayUrl, connected: false })
+
+    const restore = stubDesktop(
+      {
+        ...remoteToken,
+        mode: 'cloud',
+        remoteAuthMode: 'oauth',
+        remoteOauthConnected: false,
+        remoteTokenSet: false,
+        remoteUrl: gatewayUrl
+      },
+      {
+        cloud: { status: cloudStatus, login: cloudLogin, agentSignIn: cloudAgentSignIn },
+        oauthLoginConnectionConfig: nativeLogin,
+        oauthLogoutConnectionConfig: logout,
+        probeConnectionConfig: vi.fn().mockResolvedValue({ providers: [{ id: 'nous', type: 'oauth' }] })
+      }
+    )
+
+    try {
+      render(<BootFailureOverlay />)
+      fireEvent.click(await screen.findByRole('button', { name: /sign in/i }))
+
+      await waitFor(() => expect(cloudAgentSignIn).toHaveBeenCalledWith(gatewayUrl))
+      expect(logout).toHaveBeenCalledWith(gatewayUrl)
+      expect(cloudStatus).toHaveBeenCalledTimes(1)
+      expect(cloudLogin).toHaveBeenCalledTimes(1)
+      expect(nativeLogin).not.toHaveBeenCalled()
     } finally {
       restore()
     }

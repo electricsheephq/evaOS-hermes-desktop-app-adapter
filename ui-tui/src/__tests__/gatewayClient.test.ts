@@ -97,7 +97,13 @@ const { FakeWebSocket } = vi.hoisted(() => {
 
 vi.mock('undici', () => ({ WebSocket: FakeWebSocket }))
 
-import { GatewayClient, RECONNECT_BASE_MS, RECONNECT_MAX_MS, WS_HEARTBEAT_DEAD_MS, WS_HEARTBEAT_INTERVAL_MS } from '../gatewayClient.js'
+import {
+  GatewayClient,
+  RECONNECT_BASE_MS,
+  RECONNECT_MAX_MS,
+  WS_HEARTBEAT_DEAD_MS,
+  WS_HEARTBEAT_INTERVAL_MS
+} from '../gatewayClient.js'
 
 describe('GatewayClient websocket attach mode', () => {
   const originalWebSocket = globalThis.WebSocket
@@ -504,6 +510,13 @@ describe('GatewayClient websocket attach mode', () => {
       const socket = FakeWebSocket.instances[0]!
 
       socket.open()
+      socket.message(
+        JSON.stringify({
+          jsonrpc: '2.0',
+          method: 'event',
+          params: { type: 'gateway.ready', payload: { heartbeat: true } }
+        })
+      )
       await vi.advanceTimersByTimeAsync(WS_HEARTBEAT_INTERVAL_MS)
 
       const heartbeat = JSON.parse(socket.sent.at(-1) ?? '{}') as { id: string; method: string }
@@ -530,6 +543,13 @@ describe('GatewayClient websocket attach mode', () => {
       const first = FakeWebSocket.instances[0]!
 
       first.open()
+      first.message(
+        JSON.stringify({
+          jsonrpc: '2.0',
+          method: 'event',
+          params: { type: 'gateway.ready', payload: { heartbeat: true } }
+        })
+      )
       await vi.advanceTimersByTimeAsync(WS_HEARTBEAT_INTERVAL_MS)
       expect(JSON.parse(first.sent.at(-1) ?? '{}')).toMatchObject({ method: 'gateway.ping' })
       await vi.advanceTimersByTimeAsync(WS_HEARTBEAT_DEAD_MS + WS_HEARTBEAT_INTERVAL_MS)
@@ -541,19 +561,27 @@ describe('GatewayClient websocket attach mode', () => {
     }
   })
 
-  it('does not bypass the spawned-gateway recovery budget', async () => {
+  it('does not heartbeat an older backend that omits the capability', async () => {
     vi.useFakeTimers()
+    process.env.HERMES_TUI_GATEWAY_URL = 'ws://gateway.test/api/ws?token=abc'
     const gw = new GatewayClient()
-    const start = vi.spyOn(gw, 'start').mockImplementation(() => {})
 
     try {
-      ;(
-        gw as unknown as {
-          handleTransportExit: (code: null | number, reason?: string) => void
-        }
-      ).handleTransportExit(1, 'spawned gateway failed')
-      await vi.advanceTimersByTimeAsync(RECONNECT_MAX_MS)
-      expect(start).not.toHaveBeenCalled()
+      gw.start()
+      const socket = FakeWebSocket.instances[0]!
+
+      socket.open()
+      socket.message(
+        JSON.stringify({
+          jsonrpc: '2.0',
+          method: 'event',
+          params: { type: 'gateway.ready', payload: {} }
+        })
+      )
+      await vi.advanceTimersByTimeAsync(WS_HEARTBEAT_DEAD_MS + WS_HEARTBEAT_INTERVAL_MS)
+      expect(socket.readyState).toBe(FakeWebSocket.OPEN)
+      expect(socket.sent).toEqual([])
+      expect(FakeWebSocket.instances).toHaveLength(1)
     } finally {
       gw.kill()
       vi.useRealTimers()

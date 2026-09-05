@@ -7,8 +7,7 @@ import {
   FEATURED_ID,
   FeaturedProviderRow,
   FireworksProviderRow,
-  isManagedLocalCliProviderUnavailable,
-  managedOAuthProviders,
+  LocalModelsProviderRow,
   OpenRouterProviderRow,
   ProviderRow,
   providerTitle,
@@ -19,11 +18,11 @@ import { RowButton } from '@/components/ui/row-button'
 import { SearchField } from '@/components/ui/search-field'
 import { disconnectOAuthProvider, listOAuthProviders } from '@/hermes'
 import { useI18n } from '@/i18n'
-import { isManagedEvaosAgent } from '@/i18n/managed-brand'
 import { Check, ChevronDown, ChevronRight, KeyRound, Loader2, Terminal, Trash2 } from '@/lib/icons'
 import { normalize } from '@/lib/text'
 import { cn } from '@/lib/utils'
 import { confirm } from '@/store/confirm'
+import { $localModelsEnabled } from '@/store/local-models-flag'
 import { notify, notifyError } from '@/store/notifications'
 import { $desktopOnboarding, startManualLocalEndpoint, startManualProviderOAuth } from '@/store/onboarding'
 import type { EnvVarInfo, OAuthProvider } from '@/types/hermes'
@@ -32,6 +31,7 @@ import { isKeyVar, ProviderKeyRows } from './credential-key-ui'
 import { CustomEndpointsSettings } from './custom-endpoints-settings'
 import { SettingsCategoryHeading, useEnvCredentials } from './env-credentials'
 import { providerGroup, providerMeta, providerPriority } from './helpers'
+import { LocalModelsSettings } from './local-models-settings'
 import { SettingsContent, SettingsSkeleton } from './primitives'
 
 // The embedded terminal (and thus the "run disconnect command" path) only
@@ -49,7 +49,7 @@ function GroupLabel({ children }: { children: ReactNode }) {
 }
 
 // Sub-views surfaced as a sidebar subnav: account sign-in vs raw API keys.
-export const PROVIDER_VIEWS = ['accounts', 'keys', 'custom-endpoints'] as const
+export const PROVIDER_VIEWS = ['accounts', 'keys', 'custom-endpoints', 'local'] as const
 
 export type ProviderView = (typeof PROVIDER_VIEWS)[number]
 
@@ -120,31 +120,32 @@ function buildProviderKeyGroups(vars: Record<string, EnvVarInfo>): ProviderKeyGr
 
 // Deliberately a near-1:1 replica of the first-run onboarding picker
 // (`Picker` in desktop-onboarding-overlay): same recommended card, same
-// Fireworks #2 quick-key row, same provider rows, same "Other providers"
-// disclosure, same OpenRouter quick-key row, and the same bottom-right
-// "I have an API key" affordance. The leaf cards are the exact shared
-// components, so the two surfaces stay visually identical. Selecting a
-// provider hands off to the shared onboarding overlay, which runs that
-// provider's real sign-in flow; the key affordances open the API-key
-// catalog below.
+// always-visible Local models row, same provider rows, same "Other
+// providers" disclosure (Fireworks and OpenRouter quick-key rows live
+// inside it on both surfaces), and the same bottom-right "I have an API
+// key" affordance. The leaf cards are the exact shared components, so
+// the two surfaces stay visually identical. Selecting a provider hands
+// off to the shared onboarding overlay, which runs that provider's real
+// sign-in flow; the key affordances open the API-key catalog below.
 function OAuthPicker({
   disconnecting,
   onDisconnect,
   onTerminalDisconnect,
   onWantApiKey,
+  onWantLocalModels,
   providers
 }: {
   disconnecting: null | string
   onDisconnect: (provider: OAuthProvider) => void
   onTerminalDisconnect: (provider: OAuthProvider) => void
   onWantApiKey: () => void
+  onWantLocalModels: () => void
   providers: OAuthProvider[]
 }) {
   const { t } = useI18n()
   const p = t.settings.providers
   const [showAll, setShowAll] = useState(false)
   const ordered = useMemo(() => sortProviders(providers), [providers])
-  const managedEva = isManagedEvaosAgent()
 
   if (ordered.length === 0) {
     return null
@@ -152,14 +153,8 @@ function OAuthPicker({
 
   const select = (p: OAuthProvider) => startManualProviderOAuth(p.id)
 
-  const featured = managedEva ? null : (ordered.find(p => p.id === FEATURED_ID && !p.status?.logged_in) ?? null)
-
-  const rest = managedEva
-    ? managedOAuthProviders(ordered, true)
-    : featured
-      ? ordered.filter(p => p.id !== FEATURED_ID)
-      : ordered
-
+  const featured = ordered.find(p => p.id === FEATURED_ID && !p.status?.logged_in) ?? null
+  const rest = featured ? ordered.filter(p => p.id !== FEATURED_ID) : ordered
   // Keep connected accounts grouped and always visible; only the unconnected
   // providers hide behind the disclosure, so the page leads with what's set up.
   // Both lists preserve `sortProviders` order (curated priority, then name).
@@ -186,8 +181,9 @@ function OAuthPicker({
         {p.intro}
       </p>
       {featured && <FeaturedProviderRow onSelect={select} provider={featured} />}
-      {/* Slot #2 — always visible, matching onboarding / CANONICAL_PROVIDERS. */}
-      {!managedEva && <FireworksProviderRow onClick={onWantApiKey} />}
+      {/* Slot #2 — the no-account path, matching onboarding. Behind the
+          --local launch flag like every local-models surface. */}
+      {$localModelsEnabled.get() && <LocalModelsProviderRow onClick={onWantLocalModels} />}
       {connected.length > 0 && (
         <>
           <GroupLabel>{p.connected}</GroupLabel>
@@ -209,6 +205,7 @@ function OAuthPicker({
           {others.map(p => (
             <ProviderRow key={p.id} onSelect={select} provider={p} />
           ))}
+          <FireworksProviderRow onClick={onWantApiKey} />
           <OpenRouterProviderRow onClick={onWantApiKey} />
         </>
       )}
@@ -244,27 +241,18 @@ function ConnectedProviderRow({
   const { t } = useI18n()
   const copy = t.settings.providers
   const title = providerTitle(provider)
-  const managedUnavailable = isManagedLocalCliProviderUnavailable(provider)
   const Trail = provider.flow === 'external' ? Terminal : ChevronRight
-
   // Hermes can clear this provider's creds via the API.
   const canDisconnect = provider.disconnectable ?? provider.flow !== 'external'
-
   // External (CLI-managed) provider Hermes can't clear via the API, but ships a
   // command we can run in the embedded terminal (Electron shell only).
-  const terminalDisconnect =
-    !managedUnavailable && !canDisconnect && Boolean(provider.disconnect_command) && canRunInTerminal()
-
+  const terminalDisconnect = !canDisconnect && Boolean(provider.disconnect_command) && canRunInTerminal()
   // Only fall back to a static "remove it elsewhere" hint when we offer no button.
   const showHint = !canDisconnect && !terminalDisconnect
 
   return (
     <div className="group grid grid-cols-[minmax(0,1fr)_auto] items-center gap-1 rounded-[6px] transition-colors hover:bg-(--ui-control-hover-background)">
-      <RowButton
-        className="min-w-0 px-3 py-2.5 text-left"
-        disabled={managedUnavailable}
-        onClick={() => onSelect(provider)}
-      >
+      <RowButton className="min-w-0 px-3 py-2.5 text-left" onClick={() => onSelect(provider)}>
         <div className="flex min-w-0 items-center gap-2">
           <span className="truncate text-[length:var(--conversation-text-font-size)] font-semibold">{title}</span>
           <span className="inline-flex shrink-0 items-center gap-1 bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">
@@ -273,27 +261,14 @@ function ConnectedProviderRow({
           </span>
         </div>
         <p className="mt-1 text-xs leading-5 text-muted-foreground">{t.onboarding.flowSubtitles[provider.flow]}</p>
-        {managedUnavailable ? (
-          <p className="mt-0.5 truncate text-[0.68rem] leading-5 text-muted-foreground/70">
-            {copy.managedUnavailableDescription}
-          </p>
-        ) : showHint ? (
+        {showHint && (
           <p className="mt-0.5 truncate text-[0.68rem] leading-5 text-muted-foreground/70">
             {provider.flow === 'external' ? copy.removeExternalGeneric(title) : copy.removeKeyManaged(title)}
           </p>
-        ) : null}
+        )}
       </RowButton>
       <div className="flex items-center gap-1 pr-2">
-        {managedUnavailable ? (
-          <span className="text-xs font-medium text-muted-foreground">{copy.managedUnavailable}</span>
-        ) : (
-          <>
-            <Trail className="size-4 text-muted-foreground transition group-hover:text-foreground" />
-            <Button onClick={() => onSelect(provider)} size="inline" type="button" variant="textStrong">
-              {copy.reauthenticate}
-            </Button>
-          </>
-        )}
+        <Trail className="size-4 text-muted-foreground transition group-hover:text-foreground" />
         {canDisconnect && (
           <Button
             aria-label={`${t.common.remove} ${title}`}
@@ -539,6 +514,13 @@ export function ProvidersSettings({
     return <CustomEndpointsSettings onConfigSaved={onConfigSaved} onMainModelChanged={onMainModelChanged} />
   }
 
+  if (view === 'local') {
+    // Strict --local gate: without the launch flag the pane doesn't render
+    // even when local models are configured — a stale ?pview=local deep link
+    // (or an old shortcut) lands on the accounts view instead.
+    return $localModelsEnabled.get() ? <LocalModelsSettings /> : null
+  }
+
   return (
     <SettingsContent>
       <OAuthPicker
@@ -546,6 +528,7 @@ export function ProvidersSettings({
         onDisconnect={provider => void handleDisconnect(provider)}
         onTerminalDisconnect={provider => void handleTerminalDisconnect(provider)}
         onWantApiKey={() => onViewChange('keys')}
+        onWantLocalModels={() => onViewChange('local')}
         providers={oauthProviders}
       />
     </SettingsContent>
