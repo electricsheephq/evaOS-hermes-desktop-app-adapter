@@ -458,6 +458,9 @@ def _profile_home(profile: str | None) -> Path | None:
     """Resolve a named profile's home on THIS host, or None for the launch profile."""
     if not (name := (profile or "").strip()):
         return None
+    from hermes_cli.managed_profile_scope import require_managed_profile
+
+    name = require_managed_profile(name)
     try:
         from hermes_cli import profiles as profiles_mod
         home = Path(profiles_mod.get_profile_dir(name))

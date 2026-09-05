@@ -792,6 +792,16 @@ def _multiplex_port_binding_conflict(platform_id: str, requested_profile: Option
     if platform_id not in PORT_BINDING_PLATFORM_VALUES:
         return None
 
+    from hermes_cli.managed_profile_scope import managed_profile_name
+    from hermes_cli.web_server_profiles import _managed_profile_or_http
+
+    # evaOS launches one managed gateway per profile, so the upstream default
+    # multiplex listener rule does not apply. Validate the selector first so a
+    # sibling cannot reach the ordinary profile-resolution path.
+    _managed_profile_or_http(requested_profile)
+    if managed_profile_name() is not None:
+        return None
+
     requested = (requested_profile or "").strip()
     if not requested or requested.lower() == "current":
         from hermes_cli.profiles import get_active_profile_name

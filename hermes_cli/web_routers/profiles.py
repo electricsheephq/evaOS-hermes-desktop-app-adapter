@@ -62,6 +62,7 @@ router = APIRouter()
 
 # Late-bound web_server helpers (resolved at call time; cycle-safe, monkeypatch-transparent).
 _cron_profile_home = late("_cron_profile_home", "hermes_cli.web_server_cron")
+_managed_profile_or_http = late("_managed_profile_or_http", "hermes_cli.web_server_profiles")
 _resolve_profile_dir = late("_resolve_profile_dir", "hermes_cli.web_server_profiles")
 _spawn_hermes_action = late("_spawn_hermes_action", "hermes_cli.web_server_gateway")
 
@@ -90,6 +91,7 @@ def _profile_to_dict(info) -> Dict[str, Any]:
 
 def _profile_setup_command(name: str) -> str:
     """Return the shell command used to configure a profile in the CLI."""
+    name = _managed_profile_or_http(name)
     _resolve_profile_dir(name)
     return "hermes setup" if name == "default" else f"{name} setup"
 
@@ -376,6 +378,7 @@ def get_profiles_sessions(
     if order not in ("created", "recent"):
         raise HTTPException(status_code=400, detail="order must be one of: created, recent")
 
+    profile = _managed_profile_or_http(profile, selectors_for_current=("all",))
     targets = ([_cron_profile_home(profile)] if profile and profile != "all"
                else _profile_targets("GET /api/profiles/sessions", lightweight=True))
 
@@ -428,7 +431,17 @@ def get_profiles_sessions_sidebar(
 
     See #42651, #65710, #70629.
     """
-    targets = _profile_targets("GET /api/profiles/sessions/sidebar", lightweight=True)
+    from hermes_cli import profiles as profiles_mod
+
+    managed_name = _managed_profile_or_http(None)
+    recents_profile = _managed_profile_or_http(
+        recents_profile,
+        selectors_for_current=("all",),
+    )
+    if managed_name:
+        targets = [(managed_name, profiles_mod.get_profile_dir(managed_name))]
+    else:
+        targets = _profile_targets("GET /api/profiles/sessions/sidebar", lightweight=True)
 
     recents_scope = (recents_profile or "all").strip() or "all"
     recents_exclude_list = [s for s in (recents_exclude or "").split(",") if s.strip()]
@@ -567,12 +580,19 @@ def get_profiles_projects_tree(preview_limit: int = 3, session_limit: int = 2000
     multiply empty lanes by the profile count), and discovery is the one part of the builder
     that writes (policy reconciliation), which a read-only fan-out must not do.
     """
+    from hermes_cli import profiles as profiles_mod
     from tui_gateway import server as gateway_server
+    managed_name = _managed_profile_or_http(None)
     merged: Dict[str, Dict[str, Any]] = {}
     scoped_session_ids: List[str] = []
     errors: List[Dict[str, str]] = []
 
-    for name, home in _profile_targets("GET /api/profiles/projects/tree", lightweight=False):
+    targets = (
+        [(managed_name, profiles_mod.get_profile_dir(managed_name))]
+        if managed_name
+        else _profile_targets("GET /api/profiles/projects/tree", lightweight=False)
+    )
+    for name, home in targets:
         def _read(db, name=name, home=home):
             with _hermes_home_scope(home):
                 tree, _active_id = gateway_server._build_project_tree(
@@ -611,6 +631,8 @@ def post_profiles_sessions_pull_requests(body: SessionPrScanBody):
     that starts in the main checkout and works in a worktree has no branch of its own, so
     its PR is invisible to the branch join — but ``gh pr create`` ran in the conversation
     (see ``_pr_url_from_tool_output``). Read-only across every profile."""
+    from hermes_cli import profiles as profiles_mod
+    managed_name = _managed_profile_or_http(None)
     wanted = list(dict.fromkeys(s for s in (body.ids or []) if s))[:2000]
     if not wanted:
         return {"pull_requests": {}, "scanned": []}
@@ -624,7 +646,12 @@ def post_profiles_sessions_pull_requests(body: SessionPrScanBody):
                 # Oldest-first, so a later `gh pr create` (the replacement PR) wins.
                 found[pr["session_id"]] = {"number": parsed[0], "url": parsed[1]}
 
-    for name, home in _profile_targets("POST /api/profiles/sessions/pull-requests", lightweight=False):
+    targets = (
+        [(managed_name, profiles_mod.get_profile_dir(managed_name))]
+        if managed_name
+        else _profile_targets("POST /api/profiles/sessions/pull-requests", lightweight=False)
+    )
+    for name, home in targets:
         _read_profile_db(name, home, None, _read)
 
     # ``scanned``: every id looked at, so the caller can remember "nothing there".
@@ -634,6 +661,19 @@ def post_profiles_sessions_pull_requests(body: SessionPrScanBody):
 @router.get("/api/profiles")
 async def list_profiles_endpoint():
     from hermes_cli import profiles as profiles_mod
+    managed_name = _managed_profile_or_http(None)
+    if managed_name:
+        try:
+            profile = await run_in_threadpool(
+                profiles_mod._profile_info,
+                managed_name,
+                profiles_mod.get_profile_dir(managed_name),
+                is_default=managed_name == "default",
+            )
+            return {"profiles": [_profile_to_dict(profile)]}
+        except Exception:
+            _log.exception("GET /api/profiles failed for managed profile")
+            return {"profiles": []}
     try:
         profiles = await run_in_threadpool(profiles_mod.list_profiles)
         return {"profiles": [_profile_to_dict(p) for p in profiles]}
@@ -644,6 +684,8 @@ async def list_profiles_endpoint():
 
 @router.post("/api/profiles")
 async def create_profile_endpoint(body: ProfileCreate):
+    if _managed_profile_or_http(None):
+        raise HTTPException(status_code=403, detail="profile lifecycle is managed by evaOS")
     from hermes_cli import profiles as profiles_mod
     explicit_source = (body.clone_from or "").strip()
     if explicit_source:
@@ -705,6 +747,9 @@ async def create_profile_endpoint(body: ProfileCreate):
 async def get_active_profile_endpoint():
     """``active`` is the sticky default written by ``hermes profile use`` (what new CLI
     invocations pick up); ``current`` is the profile this running dashboard is scoped to."""
+    managed_name = _managed_profile_or_http(None)
+    if managed_name:
+        return {"active": managed_name, "current": managed_name}
     from hermes_cli import profiles as profiles_mod
 
     def _run():
@@ -724,6 +769,8 @@ async def get_active_profile_endpoint():
 async def set_active_profile_endpoint(body: ProfileActiveUpdate):
     """Set the sticky active profile (mirrors ``hermes profile use``); does not retarget the
     running dashboard, only subsequent CLI commands and gateways."""
+    if _managed_profile_or_http(None):
+        raise HTTPException(status_code=403, detail="profile lifecycle is managed by evaOS")
     from hermes_cli import profiles as profiles_mod
     with _profile_errors("POST /api/profiles/active failed"):
         # Stats the target, creates the state directory, writes via temp file + replace.
@@ -776,6 +823,8 @@ async def open_profile_terminal_endpoint(name: str):
 
 @router.patch("/api/profiles/{name}")
 async def rename_profile_endpoint(name: str, body: ProfileRename):
+    if _managed_profile_or_http(None):
+        raise HTTPException(status_code=403, detail="profile lifecycle is managed by evaOS")
     from hermes_cli import profiles as profiles_mod
     with _profile_errors("PATCH /api/profiles/%s failed", name,
                          bad_request=(ValueError, FileExistsError)):
@@ -797,6 +846,8 @@ async def rename_profile_endpoint(name: str, body: ProfileRename):
 async def delete_profile_endpoint(name: str):
     """The dashboard collects the user's confirmation in its own dialog, so ``yes=True``
     always skips the CLI's interactive prompt."""
+    if _managed_profile_or_http(None):
+        raise HTTPException(status_code=403, detail="profile lifecycle is managed by evaOS")
     from hermes_cli import profiles as profiles_mod
     with _profile_errors("DELETE /api/profiles/%s failed", name):
         # Polls a running gateway's PID for up to 10 s, then rmtree()s the directory; on the
@@ -877,6 +928,7 @@ async def describe_profile_auto_endpoint(name: str, body: ProfileDescribeAuto):
     """Auto-generate a profile's description via the auxiliary LLM (mirrors ``hermes profile
     describe <name> --auto``). A failed generation is ``ok: false`` with a reason rather than
     an HTTP error so the UI can surface it inline and let the operator retry."""
+    name = _managed_profile_or_http(name)
     # Resolution stays on the loop: it owns the 400/404 mapping the 500 fallback would flatten.
     _resolve_profile_dir(name)
 
@@ -906,6 +958,8 @@ def _read_desktop_overlay(profile_dir: Path) -> Any:
 @router.post("/api/profiles/{name}/export")
 async def export_profile_endpoint(name: str, body: ProfileExport):
     from hermes_cli import profiles as profiles_mod
+    name = _managed_profile_or_http(name)
+    _resolve_profile_dir(name)
     output = (body.output or "").strip()
     if not output:
         try:
@@ -923,6 +977,8 @@ async def export_profile_endpoint(name: str, body: ProfileExport):
 
 @router.post("/api/profiles/import")
 async def import_profile_endpoint(body: ProfileImport):
+    if _managed_profile_or_http(None):
+        raise HTTPException(status_code=403, detail="profile lifecycle is managed by evaOS")
     from hermes_cli import profiles as profiles_mod
     archive = (body.archive or "").strip()
     if not archive:
