@@ -13,11 +13,11 @@ logger = logging.getLogger("tools.mcp_tool")
 
 # Live stdio MCP children (pid -> server_name), added after connection and removed on normal
 # shutdown, so they can be force-killed if SDK teardown fails.
-_stdio_pids: Dict[int, str] = {}
+_stdio_pids: Dict[int, object] = {}
 # PIDs that survived their session context exit (detected in _run_stdio's finally, reaped by
 # _kill_orphaned_mcp_children). Separate from _stdio_pids so sweeps never race active sessions.
 _orphan_stdio_pids: set = set()
-_orphan_stdio_pid_servers: Dict[int, str] = {}
+_orphan_stdio_pid_servers: Dict[int, object] = {}
 # pid -> pgid captured at spawn. The SDK spawns with start_new_session=True (PGID == PID);
 # grandchildren keep that PGID after the direct child exits, so killpg still reaches them.
 # Separate from _stdio_pids so the PGID survives the child's removal. Empty on Windows.
@@ -98,8 +98,9 @@ def shutdown_mcp_servers(*, scope: Optional[str] = None):
     (its ``/reload-mcp`` must not kill other profiles') and leaves the shared loop running if
     anything else is still connected."""
     with _core._lock:
-        selected = [name for name in _core._servers if scope is None or _core._server_scope_keys.get(name) == scope]
-        servers_snapshot = [_core._servers[name] for name in selected]
+        selected = [state_key for state_key in _core._servers
+                    if scope is None or _core._server_scope_keys.get(state_key) == scope]
+        servers_snapshot = [_core._servers[state_key] for state_key in selected]
 
     # Fast path: nothing to shut down. The connect-cooldown maps can still be populated here — a server that
     # failed to connect is never recorded in ``_servers`` (that is the very premise of the #50394 cooldown),
@@ -112,9 +113,9 @@ def shutdown_mcp_servers(*, scope: Optional[str] = None):
                 if isinstance(result, Exception):
                     logger.debug("Error closing MCP server '%s': %s", server.name, result)
             with _core._lock:
-                for name in selected:
-                    _core._servers.pop(name, None)
-                    _core._server_scope_keys.pop(name, None)
+                for state_key in selected:
+                    _core._servers.pop(state_key, None)
+                    _core._server_scope_keys.pop(state_key, None)
                 _clear_connect_cooldowns()
 
         with _core._lock:
@@ -136,11 +137,15 @@ def shutdown_mcp_servers(*, scope: Optional[str] = None):
     _loop._stop_mcp_loop(only_if_idle=scope is not None)
 
 
-def _take_reapable_pids(include_active: bool, server_name: Optional[str]) -> tuple[Dict[int, str], Dict[int, int]]:
+def _take_reapable_pids(include_active: bool, server_name: Optional[str]) -> tuple[Dict[int, object], Dict[int, int]]:
     """Pop the PIDs to reap (and their spawn-time pgids) out of the ledgers under the lock, so
     a future spawn can't collide with stale state. Returns ``(pid -> owner, pid -> pgid)``."""
-    def _owned(entries: Dict[int, str]) -> Dict[int, str]:
-        return {pid: owner for pid, owner in entries.items() if server_name is None or owner == server_name}
+    owner_key = _core._server_state_key(server_name) if server_name is not None else None
+
+    def _owned(entries: Dict[int, object]) -> Dict[int, object]:
+        return {pid: owner for pid, owner in entries.items()
+                if owner_key is None or owner == owner_key
+                or (isinstance(owner_key, str) and owner == server_name)}
 
     with _core._lock:
         pids = _owned({opid: _orphan_stdio_pid_servers.get(opid, "orphan") for opid in _orphan_stdio_pids})

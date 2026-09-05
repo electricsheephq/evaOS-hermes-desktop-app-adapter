@@ -61,16 +61,25 @@ def _record_tool_trust_metadata(server_name: str, config: dict, tools: List[Any]
         }
 
 
-def _track_mcp_tool_server(tool_name: str, server_name: str) -> None:
-    """Remember the exact raw MCP server that registered *tool_name*."""
+def _track_mcp_tool_server(tool_name: str, server_name: str,
+                           registration_home: Optional[str] = None) -> None:
+    """Remember the exact profile-owned MCP server that registered *tool_name*."""
+    state_key = _core._server_state_key(server_name, registration_home)
+    provenance_key = (tool_name if isinstance(state_key, str)
+                      else (state_key[0], tool_name))
     with _core._lock:
-        _core._mcp_tool_server_names[tool_name] = server_name
+        _core._mcp_tool_server_names[provenance_key] = state_key
 
 
-def _forget_mcp_tool_server(tool_name: str) -> None:
+def _forget_mcp_tool_server(tool_name: str, registration_home: Optional[str] = None) -> None:
     """Forget MCP server provenance for a deregistered tool."""
     with _core._lock:
-        _core._mcp_tool_server_names.pop(tool_name, None)
+        if registration_home is None:
+            key = _core._tool_provenance_key(tool_name)
+        else:
+            state_key = _core._server_state_key("", registration_home)
+            key = tool_name if isinstance(state_key, str) else (state_key[0], tool_name)
+        _core._mcp_tool_server_names.pop(key, None)
 
 
 def _select_utility_schemas(server_name: str, server: "MCPServerTask", config: dict) -> List[dict]:
@@ -105,12 +114,14 @@ def _select_utility_schemas(server_name: str, server: "MCPServerTask", config: d
 def _existing_tool_names() -> List[str]:
     """Tool names for all connected servers plus lazy (cache-registered) servers, whose tools live only in the registry."""
     names: List[str] = []
-    for server in _core._servers.values():
+    for state_key, server in _core._servers.items():
+        if not _core._state_key_is_current(state_key):
+            continue
         names.extend(server._registered_tool_names if hasattr(server, "_registered_tool_names")
                      else (_schema._convert_mcp_schema(server.name, t)["name"] for t in server._tools))
     with _core._lock:
         names.extend(n for sname, tool_names in _core._lazy_server_tool_names.items()
-                     if sname not in _core._servers for n in tool_names)
+                     if _core._state_key_is_current(sname) and sname not in _core._servers for n in tool_names)
     return names
 
 
@@ -171,14 +182,15 @@ def _tool_candidates(name: str, tools: Iterable[Any], should_register: Callable[
     return out
 
 
-def _utility_candidates(name: str, entries: Iterable[Any], tool_timeout) -> List[_Candidate]:
+def _utility_candidates(name: str, entries: Iterable[Any], tool_timeout,
+                        registration_home: Optional[str] = None) -> List[_Candidate]:
     """``{schema, handler_key}`` rows (live selection or cache) -> candidates; malformed rows dropped."""
     out: List[_Candidate] = []
     for raw in entries:
         schema, key = (raw.get("schema"), raw.get("handler_key")) if isinstance(raw, dict) else (None, None)
         if isinstance(schema, dict) and key in _UTILITY_HANDLER_FACTORIES and schema.get("name"):
             out.append(_Candidate(schema["name"], f"{_UTILITY_ORIGIN_PREFIX}{key!r}", schema,
-                                  _UTILITY_HANDLER_FACTORIES[key](name, tool_timeout)))
+                                  _UTILITY_HANDLER_FACTORIES[key](name, tool_timeout, registration_home)))
     return out
 
 
@@ -226,7 +238,8 @@ def _resolve_name_collisions(name: str, candidates: List[_Candidate]) -> List[_C
 
 
 def _register_candidates(name: str, candidates: List[_Candidate], *, check_fn: Callable,
-                         scope: Callable[[], Optional[str]], lazy: bool) -> List[str]:
+                         scope: Callable[[], Optional[str]], lazy: bool,
+                         registration_home: Optional[str] = None) -> List[str]:
     """Register candidates under toolset ``mcp-{name}``; returns the names that landed. The
     ownership pre-check is advisory (servers connect in parallel): ``registry.register()`` is
     the atomic gate and its verdict is re-read after every call."""
@@ -251,7 +264,7 @@ def _register_candidates(name: str, candidates: List[_Candidate], *, check_fn: C
             name=c.registry_name, toolset=toolset_name, schema=c.schema, handler=c.handler, check_fn=check_fn,
             is_async=False, description=c.schema.get("description") or "", scope=scope())
         if registry.get_toolset_for_tool(c.registry_name) == toolset_name:
-            _track_mcp_tool_server(c.registry_name, name)
+            _track_mcp_tool_server(c.registry_name, name, registration_home)
             registered.append(c.registry_name)
         elif not lazy:
             logger.error("MCP server '%s': registration of %s as '%s' was rejected by the registry; "
@@ -299,10 +312,13 @@ def _register_server_tools(name: str, server: "MCPServerTask", config: dict) -> 
     _record_tool_trust_metadata(name, config, server._tools, server.registration_home)
     candidates = _tool_candidates(name, server._tools, should_register, server.tool_timeout,
                                   server.registration_home)
-    candidates += _utility_candidates(name, _select_utility_schemas(name, server, config), server.tool_timeout)
+    candidates += _utility_candidates(name, _select_utility_schemas(name, server, config), server.tool_timeout,
+                                      server.registration_home)
     registered = _register_candidates(
         name, _resolve_name_collisions(name, candidates),
-        check_fn=_make_check_fn(name), scope=lambda: _core._server_registry_scope(name), lazy=False)
+        check_fn=_make_check_fn(name, server.registration_home),
+        scope=lambda: _core._server_registry_scope(name, server.registration_home), lazy=False,
+        registration_home=server.registration_home)
     if registered:
         _write_schema_cache(name, server, config, should_register)
     return registered
@@ -326,13 +342,16 @@ def _register_from_cache_sync(name: str, config: dict, entry: dict,
     _record_tool_trust_metadata(name, config, cached_tools, registration_home)
     candidates = _tool_candidates(name, cached_tools, _make_tool_filter(name, config), tool_timeout,
                                   registration_home)
-    candidates += _utility_candidates(name, utility_tools_from_cache_entry(entry), tool_timeout)
+    candidates += _utility_candidates(name, utility_tools_from_cache_entry(entry), tool_timeout, registration_home)
     registered = _register_candidates(
-        name, candidates, check_fn=_make_check_fn(name), scope=_core._mcp_registry_scope, lazy=True)
+        name, candidates, check_fn=_make_check_fn(name, registration_home),
+        scope=lambda: _core._server_registry_scope(name, registration_home), lazy=True,
+        registration_home=registration_home)
     if registered:
         with _core._lock:
-            _core._lazy_server_configs[name] = dict(config)
-            _core._lazy_server_fingerprints[name] = config_fingerprint(config)
-            _core._lazy_server_tool_names[name] = list(registered)
+            state_key = _core._server_state_key(name, registration_home)
+            _core._lazy_server_configs[state_key] = dict(config)
+            _core._lazy_server_fingerprints[state_key] = config_fingerprint(config)
+            _core._lazy_server_tool_names[state_key] = list(registered)
         logger.info("MCP server '%s' (lazy): registered %d tool(s) from schema cache", name, len(registered))
     return registered

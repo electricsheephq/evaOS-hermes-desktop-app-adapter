@@ -166,7 +166,9 @@ class MCPServerTransportMixin:
             except (AttributeError, OSError):  # Windows (os.getpgid is POSIX-only)
                 pass
         with _core._lock:
-            _stdio_pids.update(dict.fromkeys(new_pids, self.name))
+            _stdio_pids.update(dict.fromkeys(
+                new_pids,
+                getattr(self, "state_key", _core._server_state_key(self.name, self.registration_home))))
             _stdio_pgids.update(new_pgids)
         # Machine spawn ledger (startup sweeps reap orphans after an unclean exit); best-effort.
         for _pid in new_pids:
@@ -195,7 +197,8 @@ class MCPServerTransportMixin:
                 # Windows-safe pid probe; the child may be gone while descendants remain in its pgroup.
                 if _pid_exists(pid) or _pgroup_alive(_stdio_pgids.get(pid)):
                     _orphan_stdio_pids.add(pid)
-                    _orphan_stdio_pid_servers[pid] = self.name
+                    _orphan_stdio_pid_servers[pid] = getattr(
+                        self, "state_key", _core._server_state_key(self.name, self.registration_home))
                 else:  # nothing to reap — drop the pgid so PID reuse can't surface stale pgroup state
                     dropped = _stdio_pgids.pop(pid, None)
                     if dropped is not None:
@@ -489,10 +492,10 @@ class MCPServerTransportMixin:
         if self._registered_tool_names:
             return
         with _core._lock:
-            owned = _core._servers.get(self.name) is self
+            owned = _core._servers.get(self.state_key) is self
         if not owned and not self._ready.is_set():
             return
         self._registered_tool_names = _registration._register_server_tools(self.name, self, self._config)
         with _core._lock:  # a retained initial-failure server that just published tools has recovered
-            if _core._servers.get(self.name) is self:
-                _core._server_connect_errors.pop(self.name, None)
+            if _core._servers.get(self.state_key) is self:
+                _core._server_connect_errors.pop(self.state_key, None)

@@ -288,13 +288,15 @@ async def _paginate_full_list(list_method, items_attr: str, server_name: str,
 
 # ---- Server task -- each MCP server lives in one long-lived asyncio Task ----
 
+_ServerStateKey = str | tuple[str, str]
+
 class MCPServerTask(MCPServerRunMixin, MCPServerTransportMixin, MCPServerHealthMixin):
     """One MCP server connection in one long-lived asyncio Task (the transport's anyio cancel
     scopes must enter/exit in the same Task). Run state machine, transport bring-up and
     keepalive/liveness live in the three mixins."""
 
     __slots__ = (
-        "name", "session", "tool_timeout", "_task", "_ready", "_shutdown_event", "_reconnect_event",
+        "name", "session", "state_key", "tool_timeout", "_task", "_ready", "_shutdown_event", "_reconnect_event",
         "_tools", "_error", "_config", "_sampling", "_elicitation", "_registered_tool_names",
         "_auth_type", "_refresh_lock", "registration_home", "_evaos_lease_manager", "_evaos_lease_auth",
         "_evaos_lease_warning_emitted", "_rpc_lock", "_pending_refresh_tasks", "_pending_call_context",
@@ -311,6 +313,7 @@ class MCPServerTask(MCPServerRunMixin, MCPServerTransportMixin, MCPServerHealthM
 
             registration_home = str(get_hermes_home())
         self.registration_home = os.path.realpath(os.path.expanduser(registration_home))
+        self.state_key = _server_state_key(name, self.registration_home)
         self.session: Optional[Any] = None
         self.tool_timeout: float = _DEFAULT_TOOL_TIMEOUT
         self._task: Optional[asyncio.Task] = None
@@ -391,18 +394,18 @@ class MCPServerTask(MCPServerRunMixin, MCPServerTransportMixin, MCPServerHealthM
 
 # ---- Module-level state (every mutation under ``_lock``) ----
 
-_servers: Dict[str, MCPServerTask] = {}
+_servers: Dict[_ServerStateKey, MCPServerTask] = {}
 # Profile registry scope per live connection (None outside multiplex) so a multiplexed
 # /reload-mcp tears down only its own profile's servers.
-_server_scope_keys: Dict[str, Optional[str]] = {}
-_server_connecting: set[str] = set()
-_server_connect_errors: Dict[str, str] = {}
+_server_scope_keys: Dict[_ServerStateKey, Optional[str]] = {}
+_server_connecting: set[_ServerStateKey] = set()
+_server_connect_errors: Dict[_ServerStateKey, str] = {}
 # Lazy startup: servers registered from the schema cache without connecting; popped on
 # first real connection.
-# Keyed by server name; entries are popped once a real connection is established on first use. See #56832.
-_lazy_server_configs: Dict[str, dict] = {}
-_lazy_server_fingerprints: Dict[str, str] = {}
-_lazy_server_tool_names: Dict[str, List[str]] = {}
+# Keyed by profile-owned state key; entries are popped once a real connection is established on first use. See #56832.
+_lazy_server_configs: Dict[_ServerStateKey, dict] = {}
+_lazy_server_fingerprints: Dict[_ServerStateKey, str] = {}
+_lazy_server_tool_names: Dict[_ServerStateKey, List[str]] = {}
 # Task-local claim around ``_connect_server``: discovery retains a recoverable parked task
 # while standalone probes never publish failed servers into module-global ownership.
 _connect_server_claim: contextvars.ContextVar[Optional[Callable[[MCPServerTask], None]]] = (
@@ -423,8 +426,8 @@ _connect_server_claim: contextvars.ContextVar[Optional[Callable[[MCPServerTask],
 # ``retry_after`` deadline with exponential backoff. ``register_mcp_servers`` skips a server whose cooldown
 # has not elapsed, so a chronically failing server is retried on a backoff schedule instead of on every
 # worker session -- isolating it from the rest of the bridge. A successful connection clears the state.
-_server_connect_retry_after: Dict[str, float] = {}   # name -> monotonic deadline
-_server_connect_failures: Dict[str, int] = {}        # name -> consecutive failures
+_server_connect_retry_after: Dict[_ServerStateKey, float] = {}   # state key -> monotonic deadline
+_server_connect_failures: Dict[_ServerStateKey, int] = {}        # state key -> consecutive failures
 _CONNECT_RETRY_BASE_BACKOFF_SEC, _CONNECT_RETRY_MAX_BACKOFF_SEC = 30.0, 600.0
 
 # Per-server circuit breaker: closed -> open (calls short-circuit until the cooldown) ->
@@ -437,15 +440,9 @@ _CONNECT_RETRY_BASE_BACKOFF_SEC, _CONNECT_RETRY_MAX_BACKOFF_SEC = 30.0, 600.0
 # ``_server_breaker_opened_at`` records the monotonic timestamp when the breaker most recently transitioned
 # into the open state. Use the ``_bump_server_error`` / ``_reset_server_error`` helpers to mutate this state
 # — they keep the count and timestamp in sync.
-_server_error_counts: Dict[str, int] = {}
-_server_breaker_opened_at: Dict[str, float] = {}
+_server_error_counts: Dict[_ServerStateKey, int] = {}
+_server_breaker_opened_at: Dict[_ServerStateKey, float] = {}
 _CIRCUIT_BREAKER_THRESHOLD, _CIRCUIT_BREAKER_COOLDOWN_SEC = 3, 60.0
-
-# State identity for profile-owned MCP metadata. Single-profile callers retain raw server-name
-# keys; multiplexed callers add the canonical Hermes home so equal server names cannot share
-# approval metadata.
-_ServerStateKey = str | tuple[str, str]
-
 
 def _server_state_key(server_name: str, registration_home: Optional[str] = None) -> _ServerStateKey:
     """Return the process-local identity for one profile-owned server."""
@@ -457,6 +454,21 @@ def _server_state_key(server_name: str, registration_home: Optional[str] = None)
         registration_home = get_hermes_home()
     home = os.path.realpath(os.path.expanduser(str(registration_home)))
     return (home, server_name)
+
+
+def _state_key_is_current(state_key: _ServerStateKey) -> bool:
+    """Return whether a profile-owned entry belongs to the active profile."""
+    current = _server_state_key("")
+    return (isinstance(state_key, str) if isinstance(current, str)
+            else isinstance(state_key, tuple) and state_key[0] == current[0])
+
+
+def _tool_provenance_key(tool_name: str) -> str | tuple[str, str]:
+    """Profile-scope a generated MCP tool name without changing its display name."""
+    state_key = _server_state_key("")
+    if isinstance(state_key, str):
+        return tool_name
+    return (state_key[0], tool_name)
 
 
 # Trust-tier gating (``trust: full | untrusted``): on an untrusted server every write-capable
@@ -471,25 +483,27 @@ _tool_read_only_hints: Dict[_ServerStateKey, Dict[str, bool]] = {}
 _TRUST_FULL, _TRUST_UNTRUSTED = "full", "untrusted"
 
 
-def _bump_server_error(server_name: str) -> None:
+def _bump_server_error(server_name: str, state_key: Optional[_ServerStateKey] = None) -> None:
     """Count a failure; at the threshold (re)stamp the breaker-open time."""
-    n = _server_error_counts.get(server_name, 0) + 1
-    _server_error_counts[server_name] = n
+    key = state_key if state_key is not None else _server_state_key(server_name)
+    n = _server_error_counts.get(key, 0) + 1
+    _server_error_counts[key] = n
     if n >= _CIRCUIT_BREAKER_THRESHOLD:
-        _server_breaker_opened_at[server_name] = time.monotonic()
+        _server_breaker_opened_at[key] = time.monotonic()
 
 
-def _reset_server_error(server_name: str) -> None:
+def _reset_server_error(server_name: str, state_key: Optional[_ServerStateKey] = None) -> None:
     """Close the breaker on any unambiguous success signal."""
-    _server_error_counts[server_name] = 0
-    _server_breaker_opened_at.pop(server_name, None)
+    key = state_key if state_key is not None else _server_state_key(server_name)
+    _server_error_counts[key] = 0
+    _server_breaker_opened_at.pop(key, None)
 
 
 # Raw server names opted into parallel tool calls (``foo-bar``/``foo_bar`` sanitize alike but
 # must not share policy).
-_parallel_safe_servers: set = set()
+_parallel_safe_servers: set[_ServerStateKey] = set()
 # registry tool name -> raw server name (the generated name is lossy; never re-parse it).
-_mcp_tool_server_names: Dict[str, str] = {}
+_mcp_tool_server_names: Dict[str | tuple[str, str], _ServerStateKey] = {}
 
 # Dedicated event loop in a background daemon thread; _lock guards the loop handles, _servers,
 # the status maps and the PID ledgers.
@@ -622,21 +636,25 @@ def _update_death_supervisor(verb: str, pgids) -> None:
             _death_supervisor = None
 
 
-def _mcp_registry_scope() -> Optional[str]:
+def _mcp_registry_scope(registration_home: Optional[str] = None) -> Optional[str]:
     """Registry scope for MCP registrations: a profile overlay under a multiplexer, else None."""
     from agent.secret_scope import is_multiplex_active
     if not is_multiplex_active():
         return None
-    from tools.registry import registry
-    return registry.current_scope_key()
+    if registration_home is None:
+        from tools.registry import registry
+        return registry.current_scope_key()
+    from hermes_constants import hermes_home_key
+    return hermes_home_key(registration_home)
 
 
-def _server_registry_scope(name: str) -> Optional[str]:
+def _server_registry_scope(name: str, registration_home: Optional[str] = None) -> Optional[str]:
     """Scope owning *name*'s tools: the one captured at adoption (teardown runs on the MCP
     loop without the discovering profile's context), else the current one."""
-    if name in _server_scope_keys:
-        return _server_scope_keys[name]
-    return _mcp_registry_scope()
+    key = _server_state_key(name, registration_home)
+    if key in _server_scope_keys:
+        return _server_scope_keys[key]
+    return _mcp_registry_scope(registration_home)
 
 
 # Cross-process discovery guard: advisory file lock so gateway + CLI + TUI don't all discover.

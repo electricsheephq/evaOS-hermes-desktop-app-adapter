@@ -534,6 +534,7 @@ class MCPServerRunMixin:
         exhaustion, so a dead server never leaves phantom tools in the prompt."""
         from tools.registry import registry
         for tool_name in list(getattr(self, "_registered_tool_names", [])):
-            registry.deregister(tool_name, scope=_core._server_registry_scope(self.name))
-            _registration._forget_mcp_tool_server(tool_name)
+            registry.deregister(tool_name, scope=_core._server_registry_scope(
+                self.name, self.registration_home))
+            _registration._forget_mcp_tool_server(tool_name, self.registration_home)
         self._registered_tool_names = []
