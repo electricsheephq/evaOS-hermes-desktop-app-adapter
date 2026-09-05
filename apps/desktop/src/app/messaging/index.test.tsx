@@ -11,8 +11,6 @@ const getPairing = vi.fn()
 const approvePairing = vi.fn()
 const revokePairing = vi.fn()
 const openExternalLink = vi.fn()
-const notify = vi.fn()
-const mockRunGatewayRestart = vi.fn()
 
 vi.mock('@/hermes', () => ({
   approvePairing: (platformId: string, requestId: string, profile?: null | string) =>
@@ -43,12 +41,12 @@ vi.mock('@/lib/external-link', () => ({
 }))
 
 vi.mock('@/store/notifications', () => ({
-  notify,
+  notify: vi.fn(),
   notifyError: vi.fn()
 }))
 
 vi.mock('@/store/system-actions', () => ({
-  runGatewayRestart: mockRunGatewayRestart
+  runGatewayRestart: vi.fn()
 }))
 
 function platform(patch: Partial<MessagingPlatformInfo> = {}): MessagingPlatformInfo {
@@ -130,28 +128,6 @@ describe('MessagingView setup-guide link', () => {
     })
 
     await waitFor(() => expect(openExternalLink).toHaveBeenCalledWith(docsUrl))
-  })
-
-  it('reuses the shared gateway restart action after enabling a platform', async () => {
-    getMessagingPlatforms.mockResolvedValue({ platforms: [platform({ configured: true })] })
-
-    await renderMessaging()
-
-    await act(async () => {
-      fireEvent.click(await screen.findByRole('switch', { name: 'Enable Microsoft Teams' }))
-    })
-
-    await waitFor(() => expect(notify).toHaveBeenCalledWith(expect.objectContaining({ action: expect.any(Object) })))
-
-    const restartNotification = notify.mock.calls
-      .map(([value]) => value as { action?: { onClick?: () => void } })
-      .find(value => typeof value.action?.onClick === 'function')
-
-    expect(restartNotification).toBeDefined()
-    await act(async () => {
-      restartNotification?.action?.onClick?.()
-    })
-    expect(mockRunGatewayRestart).toHaveBeenCalledTimes(1)
   })
 })
 

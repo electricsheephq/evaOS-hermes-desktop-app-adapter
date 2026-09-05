@@ -57,6 +57,16 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
+      - name: Prepare immutable synthetic-compatibility sources
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin d02f246755153b318d472e30abb960f8578f8cfa
+          git worktree add --detach ../evaos-r31-r307-baseline d02f246755153b318d472e30abb960f8578f8cfa
+          git clone --no-checkout --filter=blob:none https://github.com/stephenschoettler/hermes-lcm.git ../evaos-r31-lcm-source
+          git -C ../evaos-r31-lcm-source checkout --detach 49e99a272d2d461e5c90732e7ef2bc20e96f0826
+          test "$(git -C ../evaos-r31-r307-baseline rev-parse HEAD)" = d02f246755153b318d472e30abb960f8578f8cfa
+          test "$(git -C ../evaos-r31-lcm-source rev-parse HEAD)" = 49e99a272d2d461e5c90732e7ef2bc20e96f0826
+
       - name: Install ripgrep (prebuilt binary)
         run: |
           set -euo pipefail

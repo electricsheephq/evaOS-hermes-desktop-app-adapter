@@ -20,6 +20,7 @@ import { KbdCombo } from '@/components/ui/kbd'
 import { getHermesConfigRecord, listAllProfileSessions } from '@/hermes'
 import { useMediaQuery } from '@/hooks/use-media-query'
 import { useI18n } from '@/i18n'
+import { isManagedEvaosAgent } from '@/i18n/managed-brand'
 import { sessionTitle } from '@/lib/chat-runtime'
 import {
   Activity,
@@ -56,6 +57,7 @@ import {
   Wrench,
   Zap
 } from '@/lib/icons'
+import { getServers } from '@/lib/mcp-servers'
 import { normalize } from '@/lib/text'
 import { cn } from '@/lib/utils'
 import { resolveVersionStatus } from '@/lib/version-status'
@@ -549,7 +551,7 @@ export function CommandPalette() {
 
 function CommandPaletteBody({ onExited }: { onExited: () => void }) {
   const { t } = useI18n()
-  const managedEva = Boolean(window.hermesDesktop?.eva)
+  const managedEva = isManagedEvaosAgent()
   const pendingPage = useStore($commandPalettePage)
   const pendingSeed = useStore($commandPaletteSeed)
   const bindings = useStore($bindings)
@@ -669,13 +671,9 @@ function CommandPaletteBody({ onExited }: { onExited: () => void }) {
     queryFn: () => listAllProfileSessions(200, 0, 'only')
   })
 
-  const mcpServers = useMemo(() => {
-    const raw = configQuery.data?.mcp_servers
-
-    return raw && typeof raw === 'object' && !Array.isArray(raw)
-      ? Object.keys(raw as Record<string, unknown>).sort()
-      : []
-  }, [configQuery.data])
+  // getServers is the shared choke point that also drops malformed (null/
+  // scalar) entries, so the palette never lists a server the MCP tab dropped.
+  const mcpServers = useMemo(() => Object.keys(getServers(configQuery.data ?? null)).sort(), [configQuery.data])
 
   const sessions = useMemo(() => (sessionsQuery.data?.sessions ?? []).map(toSessionEntry), [sessionsQuery.data])
   const archivedSessions = useMemo(() => (archivedQuery.data?.sessions ?? []).map(toSessionEntry), [archivedQuery.data])
@@ -867,13 +865,7 @@ function CommandPaletteBody({ onExited }: { onExited: () => void }) {
             label: t.shell.statusbar.cron,
             run: go(CRON_ROUTE)
           },
-          {
-            action: 'nav.profiles',
-            icon: Users,
-            id: 'nav-profiles',
-            label: t.profiles.title,
-            run: go(PROFILES_ROUTE)
-          },
+          { action: 'nav.profiles', icon: Users, id: 'nav-profiles', label: t.profiles.title, run: go(PROFILES_ROUTE) },
           { action: 'nav.agents', icon: Cpu, id: 'nav-agents', label: t.agents.title, run: go(AGENTS_ROUTE) },
           {
             icon: Starmap,
@@ -1033,11 +1025,11 @@ function CommandPaletteBody({ onExited }: { onExited: () => void }) {
     contributedItems,
     dismissedAutoProjects,
     go,
-    managedEva,
     projectTree,
     selectTick,
     settingsSectionLabel,
     t,
+    managedEva,
     updateVersionLabel
   ])
 
@@ -1263,7 +1255,6 @@ function CommandPaletteBody({ onExited }: { onExited: () => void }) {
     availableThemes,
     go,
     goSession,
-    managedEva,
     mcpServers,
     mode,
     previewTheme,

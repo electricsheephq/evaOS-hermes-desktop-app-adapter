@@ -205,8 +205,12 @@ export function reportInstallMethodWarning(message: string | undefined): void {
  * Closing the toast — dismissing it or opening the updates window from it —
  * (re)starts the cooldown, so a busy upstream branch doesn't re-spam the user
  * on every new commit. The snooze is persisted, so it survives relaunches too.
+ *
+ * `target` is the target whose status produced this toast. The overlay has no
+ * target switcher, so a client-status toast that opened the backend overlay
+ * showed the user a machine they weren't told about, with no way back.
  */
-export function maybeNotifyUpdateAvailable(status: DesktopUpdateStatus | null) {
+export function maybeNotifyUpdateAvailable(status: DesktopUpdateStatus | null, target: UpdateTarget = 'client') {
   if (!status || status.supported === false || status.error || !status.targetSha) {
     return
   }
@@ -232,7 +236,7 @@ export function maybeNotifyUpdateAvailable(status: DesktopUpdateStatus | null) {
       label: translateNow('notifications.seeWhatsNew'),
       onClick: () => {
         snoozeUpdateToast()
-        openUpdatesWindow()
+        openUpdateOverlayFor(target)
       }
     },
     durationMs: 0,
@@ -248,8 +252,24 @@ export function maybeNotifyUpdateAvailable(status: DesktopUpdateStatus | null) {
   })
 }
 
-export function openUpdatesWindow(): void {
-  openUpdateOverlayFor(isManagedEva() ? 'client' : isRemoteMode() ? 'backend' : 'client')
+/** The target a generic, surface-less update command acts on: the machine the
+ *  user is connected to. Surfaces that display one target's status must pass
+ *  that target explicitly instead of inheriting this. */
+function activeUpdateTarget(): UpdateTarget {
+  return isRemoteMode() ? 'backend' : 'client'
+}
+
+/**
+ * Open the updates overlay and kick off its check.
+ *
+ * Callers tied to a specific status surface pass its target; only genuinely
+ * generic entry points take the connection-mode default. The macOS "Check for
+ * Updates…" menu item is the former — it is the OS-standard affordance for
+ * updating *this app*, so in remote mode it checked the wrong machine and the
+ * Mac client silently drifted behind (#70266).
+ */
+export function openUpdatesWindow(target: UpdateTarget = activeUpdateTarget()): void {
+  openUpdateOverlayFor(target)
 }
 
 /**
@@ -263,19 +283,22 @@ export function openUpdatesWindow(): void {
  * through the everything-flow so "update" means every machine, not just the
  * active target — the single-target ternary is what left remote-mode users
  * updating the backend forever while the GUI itself went stale.
+ *
+ * An explicit `target` opts out of both: the caller is acting on one named
+ * machine's status and must not fan out to the others.
  */
-export function startActiveUpdate(): void {
-  if (hasMultipleUpdateTargets()) {
+export function startActiveUpdate(target?: UpdateTarget): void {
+  if (!target && hasMultipleUpdateTargets()) {
     $updateOverlayOpen.set(true)
     void applyEverythingUpdate()
 
     return
   }
 
-  const target: UpdateTarget = isManagedEva() ? 'client' : isRemoteMode() ? 'backend' : 'client'
-  $updateOverlayTarget.set(target)
+  const effective = target ?? activeUpdateTarget()
+  $updateOverlayTarget.set(effective)
   $updateOverlayOpen.set(true)
-  void (target === 'backend' ? applyBackendUpdate() : applyUpdates())
+  void (effective === 'backend' ? applyBackendUpdate() : applyUpdates())
 }
 
 /**
@@ -304,11 +327,11 @@ export function requestActiveUpdate(): void {
     }
   }
 
-  const target: UpdateTarget = isManagedEva() ? 'client' : isRemoteMode() ? 'backend' : 'client'
+  const target = activeUpdateTarget()
   const status = target === 'backend' ? $backendUpdateStatus.get() : $updateStatus.get()
 
   if ((status?.behind ?? 0) > 0 || status?.updateAvailable) {
-    startActiveUpdate()
+    startActiveUpdate(target)
 
     return
   }
@@ -348,10 +371,6 @@ function isRemoteMode(): boolean {
   return $connection.get()?.mode === 'remote'
 }
 
-function isManagedEva(): boolean {
-  return typeof window !== 'undefined' && Boolean(window.hermesDesktop?.eva)
-}
-
 function mapBackendCheck(res: BackendUpdateCheckResponse): DesktopUpdateStatus {
   const behind = res.behind ?? 0
 
@@ -368,18 +387,6 @@ function mapBackendCheck(res: BackendUpdateCheckResponse): DesktopUpdateStatus {
 }
 
 export async function checkBackendUpdates(): Promise<DesktopUpdateStatus | null> {
-  if (isManagedEva()) {
-    const status: DesktopUpdateStatus = {
-      supported: false,
-      message: 'Backend updates are managed by Electric Sheep.',
-      fetchedAt: Date.now()
-    }
-
-    $backendUpdateStatus.set(status)
-
-    return status
-  }
-
   if (!isRemoteMode() || $backendUpdateChecking.get()) {
     return $backendUpdateStatus.get()
   }
@@ -389,7 +396,7 @@ export async function checkBackendUpdates(): Promise<DesktopUpdateStatus | null>
   try {
     const status = mapBackendCheck(await checkHermesUpdate(true))
     $backendUpdateStatus.set(status)
-    maybeNotifyUpdateAvailable(status)
+    maybeNotifyUpdateAvailable(status, 'backend')
 
     return status
   } catch (error) {
@@ -420,7 +427,7 @@ export async function checkUpdates(): Promise<DesktopUpdateStatus | null> {
   try {
     const status = await bridge.check()
     $updateStatus.set(status)
-    maybeNotifyUpdateAvailable(status)
+    maybeNotifyUpdateAvailable(status, 'client')
     void refreshDesktopVersion()
 
     return status
@@ -851,10 +858,6 @@ export const $updateEverything = atom<UpdateEverythingState>({ running: false })
  *  "Update everything" affordance so single-machine installs keep the
  *  one-button experience. */
 export function hasMultipleUpdateTargets(): boolean {
-  if (isManagedEva()) {
-    return false
-  }
-
   return isRemoteMode() || ($connectionsRegistry.get()?.connections.length ?? 0) > 1
 }
 
@@ -874,6 +877,12 @@ export function applyEverythingUpdate(): Promise<void> {
 
 async function runEverythingUpdate(): Promise<void> {
   $updateEverything.set({ running: true })
+
+  // Snapshot the client status before any leg runs: the backend leg's own
+  // post-update nudge re-checks the client and overwrites `$updateStatus`,
+  // including with an error row when the bridge is unreachable. Step 3 needs a
+  // pre-flow value to fall back on when its own live check can't answer.
+  const cachedClientStatus = $updateStatus.get()
 
   try {
     // 1. Active backend first (remote mode), with the detailed overlay flow.
@@ -931,7 +940,14 @@ async function runEverythingUpdate(): Promise<void> {
 
     // 3. The client last — its apply relaunches or hands off the app, so it
     //    must come after every dispatch above. Skipped when already current.
-    const clientStatus = $updateStatus.get() ?? (await checkUpdates())
+    //    Re-check rather than trusting `$updateStatus`: the cached value can be
+    //    up to a poll interval (30 min) old and was captured BEFORE the backend
+    //    update above, so a cached `behind: 0` would skip the client leg and
+    //    leave the app stale — the exact failure this flow exists to prevent.
+    //    `checkUpdates()` resolves with an error-status rather than rejecting,
+    //    so fall back to the pre-flow snapshot when the live check can't answer.
+    const freshClientStatus = await checkUpdates().catch(() => null)
+    const clientStatus = freshClientStatus?.error ? cachedClientStatus : (freshClientStatus ?? cachedClientStatus)
 
     if ((clientStatus?.behind ?? 0) > 0 || clientStatus?.updateAvailable) {
       $updateOverlayTarget.set('client')
@@ -987,11 +1003,7 @@ export function startUpdatePoller(): void {
 
   pollerStarted = true
   void checkUpdates()
-
-  if (!isManagedEva()) {
-    void checkBackendUpdates()
-  }
-
+  void checkBackendUpdates()
   void refreshDesktopVersion()
   bridge.onProgress(ingestProgress)
 
@@ -1005,7 +1017,7 @@ export function startUpdatePoller(): void {
 
     lastConnectionMode = conn?.mode
 
-    if (conn?.mode === 'remote' && !isManagedEva()) {
+    if (conn?.mode === 'remote') {
       void checkBackendUpdates()
     }
   })
@@ -1014,10 +1026,7 @@ export function startUpdatePoller(): void {
   backgroundTimer = setInterval(
     () => {
       void checkUpdates()
-
-      if (!isManagedEva()) {
-        void checkBackendUpdates()
-      }
+      void checkBackendUpdates()
     },
     30 * 60 * 1000
   )
@@ -1045,10 +1054,6 @@ function onFocus() {
 
   lastFocusAt = now
   void checkUpdates()
-
-  if (!isManagedEva()) {
-    void checkBackendUpdates()
-  }
-
+  void checkBackendUpdates()
   void refreshDesktopVersion()
 }

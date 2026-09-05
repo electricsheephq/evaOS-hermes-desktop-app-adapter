@@ -12,6 +12,7 @@ import { Check, ChevronDown, ChevronLeft, KeyRound, Loader2 } from '@/lib/icons'
 import { isProviderSetupErrorMessage } from '@/lib/provider-setup-errors'
 import { cn } from '@/lib/utils'
 import { $desktopBoot, type DesktopBootState } from '@/store/boot'
+import { $localModelsEnabled } from '@/store/local-models-flag'
 import {
   $desktopOnboarding,
   clearPendingProviderOAuth,
@@ -33,6 +34,8 @@ import { DocsLink, FlowPanel, Status } from './flow'
 import {
   FeaturedProviderRow,
   FireworksProviderRow,
+  LocalModelsProviderRow,
+  managedOAuthProviders,
   OpenRouterProviderRow,
   ProviderRow,
   sortProviders
@@ -43,6 +46,7 @@ export {
   FireworksProviderRow,
   isManagedLocalCliProviderUnavailable,
   KeyProviderRow,
+  LocalModelsProviderRow,
   managedOAuthProviders,
   OpenRouterProviderRow,
   ProviderRow,
@@ -104,7 +108,7 @@ const API_KEY_OPTIONS: ApiKeyOption[] = [
     id: 'local',
     name: 'Local / custom endpoint',
     envKey: 'OPENAI_BASE_URL',
-    docsUrl: 'https://www.electricsheephq.com',
+    docsUrl: 'https://github.com/NousResearch/hermes-agent#bring-your-own-endpoint',
     placeholder: 'http://127.0.0.1:8000/v1'
   }
 ]
@@ -185,11 +189,10 @@ const ONBOARDING_EXIT_MS = 1180
 export function DesktopOnboardingOverlay(props: DesktopOnboardingOverlayProps) {
   const onboarding = useStore($desktopOnboarding)
 
-  // Managed evaOS Agent authenticates through Electric Sheep and connects to the
-  // administrator-bound remote agent, so unmanaged first-run setup must not
-  // cover enrollment. A manual provider flow is different: Settings already
-  // selected the broker-assigned runtime/profile and intentionally opens this
-  // shared overlay to connect or reauthenticate that runtime's provider.
+  // Managed evaOS Agent authenticates through Electric Sheep and connects to
+  // the administrator-assigned runtime. Do not surface unmanaged first-run
+  // provider setup or local endpoint onboarding on that path. Manual mode is
+  // explicitly entered from Settings for a supported provider re-auth flow.
   if (isManagedEvaosAgent() && !onboarding.manual) {
     return null
   }
@@ -457,7 +460,8 @@ export function Picker({ ctx }: { ctx: OnboardingContext }) {
   }
 
   const ordered = useMemo(() => (providers ? sortProviders(providers) : []), [providers])
-  const hasOauth = ordered.length > 0
+  const availableProviders = managedEva ? managedOAuthProviders(ordered, true) : ordered
+  const hasOauth = availableProviders.length > 0
   const apiKeyOptions = useApiKeyCatalog()
 
   // localEndpoint forces the key form regardless of `mode` (which a manual
@@ -488,8 +492,14 @@ export function Picker({ ctx }: { ctx: OnboardingContext }) {
   }
 
   const select = (p: OAuthProvider) => void startProviderOAuth(p, ctx)
-  const featured = ordered.find(p => p.id === FEATURED_ID) ?? null
-  const rest = featured ? ordered.filter(p => p.id !== FEATURED_ID) : ordered
+  const featured = managedEva ? null : (availableProviders.find(p => p.id === FEATURED_ID) ?? null)
+
+  const rest = managedEva
+    ? availableProviders
+    : featured
+      ? availableProviders.filter(p => p.id !== FEATURED_ID)
+      : availableProviders
+
   // Collapse the secondary providers behind a disclosure whenever Nous Portal
   // is present to anchor the choice — otherwise show the full list. The
   // Fireworks/OpenRouter key rows always live behind the disclosure, so the
@@ -497,10 +507,29 @@ export function Picker({ ctx }: { ctx: OnboardingContext }) {
   const collapsible = Boolean(featured)
   const showRest = !collapsible || showAll
 
+  // "Run models locally" leaves the picker for Settings -> Providers ->
+  // Local Models, where install/download live. First-run: persist the skip
+  // (same contract as ChooseLaterLink) so the blocking overlay never
+  // re-nags; manual mode just closes. window.location keeps this picker
+  // router-independent (it renders outside the route tree on first run).
+  const openLocalModels = () => {
+    if (manual) {
+      closeManualOnboarding()
+    } else {
+      dismissFirstRunOnboarding()
+    }
+
+    window.location.hash = '#/settings?tab=providers&pview=local'
+  }
+
   return (
     <div className="grid gap-2">
       <div className="grid max-h-[60dvh] gap-2 overflow-y-auto p-1">
         {featured ? <FeaturedProviderRow onSelect={select} provider={featured} /> : null}
+        {/* The no-account path: everything runs on this machine. Shipped
+            behind the --local launch flag. (Fireworks moved into the
+            expanded list on main.) */}
+        {$localModelsEnabled.get() && !managedEva ? <LocalModelsProviderRow onClick={openLocalModels} /> : null}
         {showRest ? (
           <>
             {/* Fireworks leads the expanded list, matching CANONICAL_PROVIDERS

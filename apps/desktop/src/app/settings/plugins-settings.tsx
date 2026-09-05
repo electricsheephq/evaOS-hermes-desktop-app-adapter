@@ -12,7 +12,6 @@ import { $pluginRecords, type PluginRecord, setPluginEnabled } from '@/contrib/p
 import { discoverRuntimePlugins } from '@/contrib/runtime-loader'
 import { getProfiles } from '@/hermes'
 import { useI18n } from '@/i18n'
-import { isManagedEvaosAgent } from '@/i18n/managed-brand'
 import { triggerHaptic } from '@/lib/haptics'
 import { FolderOpen, Monitor, Package, RefreshCw } from '@/lib/icons'
 import { normalize } from '@/lib/text'
@@ -357,7 +356,6 @@ function PluginRow({ record }: { record: PluginRecord }) {
 
 export function PluginsSettings() {
   const { t } = useI18n()
-  const managedEva = isManagedEvaosAgent()
   const p = t.settings.plugins
   const records = useStore($pluginRecords)
 

@@ -186,6 +186,10 @@ export class GatewayClient extends EventEmitter {
         clearTimeout(this.readyTimer)
         this.readyTimer = null
       }
+
+      if (ev.payload?.heartbeat && this.ws?.readyState === WS_OPEN) {
+        this.startHeartbeat(this.ws)
+      }
     }
 
     if (this.subscribed) {
@@ -266,7 +270,14 @@ export class GatewayClient extends EventEmitter {
       this.heartbeatSentAt = now
 
       try {
-        ws.send(JSON.stringify({ id, jsonrpc: '2.0', method: 'gateway.ping', params: { last_activity_ms: this.lastActivityAt } }))
+        ws.send(
+          JSON.stringify({
+            id,
+            jsonrpc: '2.0',
+            method: 'gateway.ping',
+            params: { last_activity_ms: this.lastActivityAt }
+          })
+        )
       } catch {
         this.lifecycle('[lifecycle] websocket heartbeat send failed; forcing reconnect')
         this.stopHeartbeat()
@@ -375,9 +386,7 @@ export class GatewayClient extends EventEmitter {
     // Schedule before the synchronous 'exit' emission: useMainApp's existing
     // recovery subscriber may call start() immediately, and start() cancels this
     // timer so there is only one recovery owner.
-    if (this.attachUrl) {
-      this.scheduleReconnect()
-    }
+    this.scheduleReconnect()
 
     if (this.subscribed) {
       this.emit('exit', code)
@@ -577,7 +586,6 @@ export class GatewayClient extends EventEmitter {
 
             this.lastActivityAt = Date.now()
             this.clearReconnect()
-            this.startHeartbeat(ws)
             this.connectSidecarMirror()
           },
           { once: true }

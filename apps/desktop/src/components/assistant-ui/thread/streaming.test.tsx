@@ -1,9 +1,8 @@
 import { AssistantRuntimeProvider, type ThreadMessage, useExternalStoreRuntime } from '@assistant-ui/react'
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { useEffect, useState } from 'react'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { I18nProvider } from '@/i18n'
 import { $reasoningCollapsedByDefault } from '@/store/reasoning-disclosure'
 
 import { stubThreadEnvironment, stubThreadViewportSize, ThreadRuntime } from '../test-utils'
@@ -11,7 +10,6 @@ import { stubThreadEnvironment, stubThreadViewportSize, ThreadRuntime } from '..
 import { Thread } from '.'
 
 const createdAt = new Date('2026-05-01T00:00:00.000Z')
-const originalDesktop = window.hermesDesktop
 
 const resizeObservers = new Set<TestResizeObserver>()
 
@@ -474,14 +472,6 @@ describe('assistant-ui streaming renderer', () => {
     $reasoningCollapsedByDefault.set(false)
   })
 
-  afterEach(() => {
-    Object.defineProperty(window, 'hermesDesktop', {
-      configurable: true,
-      value: originalDesktop,
-      writable: true
-    })
-  })
-
   it('renders assistant text incrementally before completion', async () => {
     let controls: StreamingControls | undefined
 
@@ -489,25 +479,15 @@ describe('assistant-ui streaming renderer', () => {
       controls = next
     }
 
-    Object.defineProperty(window, 'hermesDesktop', {
-      configurable: true,
-      value: { eva: {} },
-      writable: true
-    })
+    const { container } = render(<StreamingHarness onControls={registerControls} />)
 
-    const { container } = render(
-      <I18nProvider configClient={null}>
-        <StreamingHarness onControls={registerControls} />
-      </I18nProvider>
-    )
-
-    expect(screen.getByRole('status', { name: 'evaOS Agent is loading a response' })).toBeTruthy()
+    expect(screen.getByRole('status', { name: 'Hermes is loading a response' })).toBeTruthy()
 
     await waitFor(() => {
       expect(container.textContent).toContain('first chunk')
     })
     expect(container.textContent).not.toContain('second chunk')
-    expect(screen.queryByRole('status', { name: 'evaOS Agent is loading a response' })).toBeNull()
+    expect(screen.queryByRole('status', { name: 'Hermes is loading a response' })).toBeNull()
 
     // Producer-gated, not wall-clock-gated: the old test slept 80ms and
     // assumed a 500ms timer could not fire before the assertion. On a loaded

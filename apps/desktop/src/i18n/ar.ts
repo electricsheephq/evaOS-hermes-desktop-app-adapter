@@ -61,15 +61,6 @@ export const ar = defineLocale({
     on: 'مفعل',
     off: 'معطل'
   },
-  quickEntry: {
-    inputLabel: 'الإدخال السريع',
-    askPlaceholder: 'اسأل Hermes…',
-    disconnectedPlaceholder: 'غير متصل — افتح Hermes لإعادة الاتصال',
-    sendTo: 'إرسال إلى',
-    targetLabel: 'الجلسة المستهدفة',
-    currentChat: 'المحادثة الحالية',
-    newSession: 'جلسة جديدة'
-  },
   fileMenu: {
     revealFinder: 'إظهار في Finder',
     revealExplorer: 'إظهار في File Explorer',
@@ -136,8 +127,8 @@ export const ar = defineLocale({
       signInIncompleteTitle: 'تسجيل الدخول غير مكتمل',
       signInIncompleteMessage: 'أغلقت نافذة تسجيل الدخول قبل اكتمال المصادقة.',
       signInFailed: 'فشل تسجيل الدخول',
-      managedAssignmentHint: 'تحدد Electric Sheep تعيين مؤسستك. سجّل الدخول مرة أخرى إذا تم تغيير الوصول أو إلغاؤه.',
-      managedSignInFailed: 'تعذر تسجيل الدخول إلى الوصول المُدار. أعد المحاولة.',
+      managedAssignmentHint: 'تحدد Electric Sheep تعيين أعمالك. سجل الدخول مرة أخرى إذا تغير الوصول أو أُلغي.',
+      managedSignInFailed: 'تعذر تسجيل الدخول إلى الوصول المُدار. حاول مرة أخرى.',
       signInToRemoteGateway: 'تسجيل الدخول للبوابة البعيدة',
       signInWithProvider: provider => `تسجيل الدخول عبر ${provider}`,
       identityProvider: 'مزود الهوية'
@@ -176,7 +167,8 @@ export const ar = defineLocale({
       microphonePermission: 'تم رفض إذن الميكروفون.',
       openaiRejectedApiKey: 'رفض OpenAI مفتاح API.',
       openaiRejectedApiKeyWithStatus: status => `رفض OpenAI مفتاح API (${status} invalid_api_key).`,
-      openaiTtsNeedsKey: 'يتطلب OpenAI TTS المفتاح VOICE_TOOLS_OPENAI_KEY أو OPENAI_API_KEY.'
+      openaiTtsNeedsKey: 'يتطلب OpenAI TTS المفتاح VOICE_TOOLS_OPENAI_KEY أو OPENAI_API_KEY.',
+      codeSkewRestartRequired: 'بعد التحديث ما زال هذا الخلفية يشغّل كودا قديما. أعد تشغيله لتحميل الكود الجديد.'
     },
     voice: {
       configureSpeechToText: 'اضبط تحويل الكلام إلى نص لاستخدام وضع الصوت.',
@@ -213,15 +205,6 @@ export const ar = defineLocale({
   },
   remoteDisplayBanner: {
     message: reason => `العرض البرمجي نشط — تم اكتشاف شاشة بعيدة (${reason}). تم تعطيل تسريع GPU لمنع الوميض.`
-  },
-  delegatedSupport: {
-    actingForCustomer: customer => `تعمل نيابة عن ${customer}`,
-    assignedAgent: agent => `الوكيل: ${agent}`,
-    endsIn: countdown => `ينتهي خلال ${countdown}`,
-    endSession: 'إنهاء جلسة الدعم',
-    endingSession: 'جارٍ إنهاء جلسة الدعم…',
-    unavailable: 'حالة جلسة الدعم غير متاحة.',
-    endFailed: 'تعذر إنهاء جلسة الدعم. حاول مرة أخرى.'
   },
   titlebar: {
     hideSidebar: 'إخفاء الشريط الجانبي',
@@ -485,10 +468,18 @@ export const ar = defineLocale({
       },
       backdropTitle: 'خلفية النافذة',
       backdropDesc: 'اختيار مقدار مزج خلفية سطح المكتب مع سطح Hermes.',
+      userBubbleTitle: 'فقاعة الرسالة',
+      userBubbleDesc: 'مدى شفافية رسائلك. معتمة عند 0؛ يبقى الإطار فقط عند 100.',
       introSplashTitle: 'شاشة المقدمة',
       introSplashDesc: 'الشعار النصي والعبارة التمهيدية في محادثة فارغة.',
       reactionsTitle: 'تفاعلات الرسائل',
       reactionsDesc: 'تفاعلات إيموجي بأسلوب iMessage — تفاعل مع الرسائل، ويمكن لـ Hermes التفاعل مع رسائلك.',
+      tipsTitle: 'نصائح داخل التطبيق',
+      tipsDesc:
+        'فقاعة صغيرة تشير إلى جزء من التطبيق، تظهر أحيانًا أثناء الخمول ومن Hermes عند الحاجة. إغلاق نصيحة يزيلها نهائيًا.',
+      tipsReset: count => `استعادة ${count} نصيحة مغلقة`,
+      toursTitle: 'جولات إرشادية',
+      toursDesc: 'دع Hermes يرشدك في التطبيق، مع تعتيم الشاشة وإبراز كل خطوة.',
       composerPopoutTitle: 'محرر عائم',
       composerPopoutDesc: 'السماح بسحب محرر الرسائل خارج موضعه. عطّل هذا الخيار لإبقائه مثبتًا في الأسفل.',
       vibeHeartsTitle: 'قلوب المزاج',
@@ -500,6 +491,8 @@ export const ar = defineLocale({
       embedsAlways: 'دائما',
       embedsOff: 'إيقاف',
       embedsReset: count => `إعادة تعيين ${count} ${count === 1 ? 'خدمة مسموح بها' : 'خدمة مسموح بها'}`,
+      resumeLastSessionTitle: 'إعادة فتح آخر محادثة عند التشغيل',
+      resumeLastSessionDesc: 'متابعة من حيث توقفت عند بدء التطبيق. أوقفه للبدء دائمًا بمحادثة جديدة.',
       product: 'مبسط',
       productDesc: 'عرض أنظف يركز على النتيجة.',
       technical: 'تقني',
@@ -685,6 +678,10 @@ export const ar = defineLocale({
       bundleOutOfSyncDesc:
         'تم تحديث وقت تشغيل Hermes، لكن تطبيق سطح المكتب نفسه لا يزال إصدارًا قديمًا — لن تظهر ميزات الواجهة الجديدة (مثل Bot Mode) حتى يتم تحديث التطبيق. شغّل التحديث أدناه لإعادة بناء التطبيق. إذا لم يختفِ هذا التحذير، فأعد التثبيت من أحدث مثبّت لسطح المكتب.',
       bundleOutOfSyncAction: 'الحصول على المثبّت',
+      bundleSwapPending: 'أعد التشغيل لإكمال التحديث',
+      bundleSwapPendingDesc:
+        'تم تثبيت التطبيق المحدَّث بالفعل — يكفي إعادة تشغيل Hermes لتحميله. لن تتأثر المحادثات أو الإعدادات.',
+      bundleSwapPendingAction: 'إعادة تشغيل Hermes',
       updates: 'التحديثات',
       checkNow: 'التحقق الآن',
       checking: 'جار التحقق...',
@@ -707,17 +704,7 @@ export const ar = defineLocale({
       justNow: 'الآن',
       minAgo: count => `قبل ${count} دقيقة`,
       hoursAgo: count => `قبل ${count} ساعة`,
-      daysAgo: count => `قبل ${count} يوم`,
-      managed: {
-        businessTitle: 'نسخة أعمال تجريبية مُدارة',
-        businessDescription: 'تدير Electric Sheep حسابك والوكيل المعيّن وسياسة الوصول وتحديثات البرنامج.',
-        updateChannelTitle: 'قناة التحديث',
-        updateChannelDescription: channel => `${channel} · تحديثات موقّعة من Electric Sheep`,
-        attributionTitle: 'نَسب المصدر المفتوح',
-        attributionDescription: 'مبني على Hermes Agent by Nous Research ويُستخدم بموجب MIT License.',
-        distributionTitle: 'التوزيع',
-        distributionDescription: 'نسخة أعمال تجريبية مُدارة وموقّعة لـ Apple Silicon، وليست إصداراً عاماً.'
-      }
+      daysAgo: count => `قبل ${count} يوم`
     },
     config: {
       none: 'لا شيء',
@@ -764,25 +751,6 @@ export const ar = defineLocale({
       clear: 'مسح'
     },
     gateway: {
-      managed: {
-        loading: 'جار تحميل وصول evaOS Agent المُدار…',
-        title: 'تديره Electric Sheep',
-        description:
-          'يتصل evaOS Agent فقط بالوكيل الذي عيّنه مسؤول مؤسستك. تم تعطيل الخلفيات المحلية وروابط البوابة المخصصة ورموز الجلسات الخام وتجاوزات البوابة الخارجية.',
-        accountTitle: 'حساب Electric Sheep',
-        notSignedIn: 'لم يتم تسجيل الدخول',
-        businessTitle: 'المؤسسة',
-        assignedAfterSignIn: 'يُعيّن بعد تسجيل الدخول',
-        agentTitle: 'الوكيل المعيّن',
-        updateChannelTitle: 'قناة التحديث',
-        signIn: 'تسجيل الدخول إلى evaOS Agent',
-        refresh: 'تحديث الوصول المعيّن',
-        signOut: 'تسجيل الخروج',
-        failed: 'تعذر تحميل الوصول المُدار. أعد المحاولة أو تواصل مع دعم Electric Sheep.',
-        callbackHandlerUnavailable:
-          'هناك نسخة أخرى من evaOS Agent تتعامل مع روابط تسجيل الدخول. احتفظ فقط بالتطبيق المثبّت في مجلد التطبيقات، ثم أعد فتحه وحاول مرة أخرى.',
-        failedWithCode: code => `فشل طلب Electric Sheep [الرمز: ${code}]`
-      },
       loading: 'جار تحميل إعدادات البوابة...',
       unavailableTitle: 'إعدادات البوابة غير متاحة',
       unavailableDesc: 'جسر IPC في سطح المكتب لا يوفّر إعدادات البوابة.',
@@ -907,6 +875,11 @@ export const ar = defineLocale({
       reasoning: 'الاستدلال',
       reasoningOff: 'إيقاف',
       defaultsFailed: 'فشل حفظ افتراضيات النموذج',
+      loadFailed: 'تعذر تحميل النماذج',
+      restartRequired: 'بعد التحديث ما زال هذا الخلفية يشغّل كودا قديما. أعد تشغيله لتحميل الكود الجديد.',
+      restartBackend: 'إعادة تشغيل الخلفية',
+      restartingBackend: 'جار إعادة تشغيل الخلفية...',
+      restartFailed: 'تعذر إعادة تشغيل الخلفية',
       auxiliaryTitle: 'النماذج المساعدة',
       resetAllToMain: 'إعادة تعيين الكل إلى النموذج الرئيسي',
       auxiliaryDesc: 'تعمل المهام المساعدة على النموذج الرئيسي افتراضيا. عيّن نموذجا مخصصا لأي مهمة لتجاوز ذلك.',
@@ -957,10 +930,6 @@ export const ar = defineLocale({
       collapse: 'طي',
       connectAnother: 'ربط مزود آخر',
       otherProviders: 'مزودون آخرون',
-      reauthenticate: 'إعادة المصادقة',
-      managedUnavailable: 'غير متاح',
-      managedUnavailableDescription:
-        'يتطلب هذا المزوّد تسجيل دخول عبر CLI محلي ولا يمكنه إعداد الوكيل المُدار المعيّن لك.',
       disconnect: 'قطع الاتصال',
       disconnectInTerminal: 'قطع الاتصال (يشغّل أمر الإزالة في الطرفية)',
       removeConfirm: provider => `إزالة ${provider}؟`,
@@ -1027,8 +996,6 @@ export const ar = defineLocale({
       noProviders: 'لا يوجد مزوّدون متاحون لمجموعة الأدوات هذه الآن.',
       ready: 'جاهز',
       nousIncluded: 'مُضمّن مع اشتراك Nous — سجّل الدخول إلى Nous Portal للتفعيل.',
-      managedUnavailableTitle: 'المزوّد غير متاح',
-      managedUnavailableMessage: provider => `${provider} غير متاح لوكيلك المُدار.`,
       noApiKeyRequired: 'لا يلزم مفتاح API.',
       postSetupHint: step =>
         `تحتاج هذه الخلفية إلى تثبيت لمرة واحدة (${step}). يعمل على هذا الجهاز — قد يستغرق بضع دقائق.`,
@@ -1444,6 +1411,7 @@ export const ar = defineLocale({
     newProfile: 'ملف شخصي جديد',
     importProfile: 'استيراد ملف شخصي…',
     exportProfile: 'تصدير ملف شخصي…',
+    exportMenu: 'تصدير…',
     imported: 'تم استيراد الملف الشخصي',
     exported: 'تم تصدير الملف الشخصي',
     failedImport: 'فشل استيراد الملف الشخصي',
@@ -1775,7 +1743,7 @@ export const ar = defineLocale({
       removeFolder: 'إزالة',
       create: 'إنشاء',
       menu: 'إجراءات',
-      menuRename: 'إعادة تسمية',
+      menuRename: 'إعادة تسمية…',
       menuAppearance: 'المظهر',
       noColor: 'بلا لون',
       menuAddFolder: 'إضافة مجلد',
@@ -1833,7 +1801,7 @@ export const ar = defineLocale({
       copyId: 'نسخ المعرف',
       export: 'تصدير',
       branchFrom: 'فرع',
-      rename: 'إعادة تسمية',
+      rename: 'إعادة تسمية…',
       archive: 'أرشفة',
       newWindow: 'فتح في نافذة جديدة',
       openInTerminal: 'فتح في الطرفية',
@@ -2166,9 +2134,6 @@ export const ar = defineLocale({
     chooseLater: 'سأختار مزوّدا لاحقا',
     recommended: 'موصى به',
     connected: 'متصل',
-    managedUnavailable: 'غير متاح',
-    managedUnavailableDescription:
-      'يتطلب هذا المزوّد تسجيل دخول عبر CLI محلي ولا يمكنه إعداد الوكيل المُدار المعيّن لك.',
     featuredPitch: 'اشتراك واحد، أكثر من 300 نموذج متقدم — الطريقة الموصى بها لتشغيل Hermes',
     fireworksPitch: 'نماذج مفتوحة سريعة مع استضافة Fireworks.',
     openRouterPitch: 'مفتاح واحد لمئات النماذج — خيار افتراضي جيد',
@@ -2214,6 +2179,8 @@ export const ar = defineLocale({
     connectedProvider: provider => `تم ربط ${provider}`,
     connectedPicking: provider => `تم ربط ${provider}. جار اختيار نموذج افتراضي...`,
     signInFailed: 'فشل تسجيل الدخول. حاول مرة أخرى.',
+    signInExpired:
+      'انتهت مهلة انتظار التفويض. السبب الأكثر شيوعًا هو تعطّل صفحة تسجيل الدخول في تبويب المتصفح (مشكلة من جهة الخادم) — أكمل تسجيل الدخول هناك ثم أعد المحاولة. إذا استمر الفشل، استخدم مفتاح API أو واجهة سطر الأوامر بدلاً من ذلك.',
     pickDifferentProvider: 'اختر مزوداً آخر',
     signInWith: provider => `تسجيل الدخول عبر ${provider}`,
     openedBrowser: provider => `فتحنا ${provider} في المتصفح.`,
@@ -2893,6 +2860,52 @@ export const ar = defineLocale({
     boundaryDesc: 'يمكنك إعادة تحميل النافذة أو فتح السجلات لمعرفة التفاصيل.',
     reloadWindow: 'إعادة تحميل النافذة',
     openLogs: 'فتح السجلات'
+  },
+  tips: {
+    close: 'لا تعرض هذه النصيحة مرة أخرى',
+    items: {
+      'new-session': {
+        title: 'ابدأ من جديد',
+        text: 'كل محادثة جديدة لها سياقها وطرفيتها ومجلد عملها الخاص.'
+      },
+      skills: {
+        title: 'علّمه مرة واحدة',
+        text: 'المهارات مجلدات من التعليمات يحمّلها Hermes عندما يقتضي العمل ذلك.'
+      },
+      messaging: {
+        title: 'Hermes بعيدًا عن مكتبك',
+        text: 'اربطه بـ Telegram وDiscord وSlack وغيرها — الوكيل نفسه والذاكرة نفسها.'
+      },
+      artifacts: {
+        title: 'كل ما صنعه Hermes',
+        text: 'الصور والملفات والروابط من كل الجلسات، مفهرسة في مكان واحد.'
+      },
+      cron: {
+        title: 'عمل يجري من تلقاء نفسه',
+        text: 'جدوِل موجّهًا كل ساعة أو كل ليلة أو وفق تعبير cron.'
+      },
+      'command-palette': {
+        title: 'صندوق واحد لكل شيء',
+        text: 'الجلسات والإعدادات والمهارات والأوامر كلها تستجيب للوحة الأوامر.'
+      },
+      profiles: {
+        title: 'الملفات الشخصية منفصلة',
+        text: 'كل واحد منها Hermes مستقل — مفاتيحه وذاكرته وجلساته الخاصة.'
+      },
+      'composer-mentions': {
+        title: 'المرفقات والأوامر',
+        text: 'اكتب @ لإحضار ملف إلى المحادثة، و / لتشغيل أمر.'
+      },
+      'local-setup': {
+        title: 'هذا الجهاز يمكنه تشغيل النماذج محليًا',
+        text: 'عتادك قادر على تشغيل نموذج محلي. تبقى محادثاتك على جهازك ولا تكلف شيئًا.',
+        action: 'إعداد الآن'
+      },
+      'right-pane': {
+        title: 'لوحة العمل',
+        text: 'الملفات والطرفية والمراجعة والمتصفح المدمج تتشارك اللوحة الجانبية.'
+      }
+    }
   },
   ui: {
     search: {

@@ -117,14 +117,11 @@ export function GatewayConnectingOverlay() {
     }
   }, [phase, previewing])
 
-  // Managed Eva intentionally stops boot before a gateway exists when there is
-  // no Electric Sheep session yet. The router opens Settings → Gateway for the
-  // device-code flow; do not leave the initial connecting scrim over that
-  // enrollment surface.
+  // Managed evaOS Agent pauses boot while Electric Sheep enrollment or
+  // sign-in owns the screen. Do not leave the connecting scrim over the
+  // Settings recovery surface during that flow.
   const managedEnrollmentPending =
-    boot.phase === 'renderer.enrollment' ||
-    boot.phase === 'eva.sign-in-required' ||
-    boot.phase === 'eva.sign-in'
+    boot.phase === 'renderer.enrollment' || boot.phase === 'eva.sign-in-required' || boot.phase === 'eva.sign-in'
 
   if (managedEnrollmentPending && !previewing) {
     return null

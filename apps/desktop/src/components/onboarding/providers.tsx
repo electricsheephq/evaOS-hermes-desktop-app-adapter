@@ -28,7 +28,6 @@ export const isManagedLocalCliProviderUnavailable = (
   provider: OAuthProvider,
   managed = isManagedEvaosAgent()
 ): boolean => managed && provider.flow === 'external'
-
 const orderOf = (p: OAuthProvider) => PROVIDER_DISPLAY[p.id]?.order ?? 99
 
 export const sortProviders = (providers: OAuthProvider[]) =>
@@ -104,6 +103,16 @@ export function FireworksProviderRow({ onClick }: { onClick: () => void }) {
   const { t } = useI18n()
 
   return <KeyProviderRow onClick={onClick} pitch={t.onboarding.fireworksPitch} title="Fireworks AI" />
+}
+
+/** Onboarding row for the managed local runtime: no account, no key — the
+ *  destination is the Local Models pane where install/download live. */
+export function LocalModelsProviderRow({ onClick }: { onClick: () => void }) {
+  const { t } = useI18n()
+
+  return (
+    <KeyProviderRow onClick={onClick} pitch={t.onboarding.localModelsPitch} title={t.onboarding.localModelsTitle} />
+  )
 }
 
 export function OpenRouterProviderRow({ onClick }: { onClick: () => void }) {

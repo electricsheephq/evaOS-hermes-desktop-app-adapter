@@ -24,15 +24,21 @@ jobs:
       - name: Check for unmapped contributor emails
         id: check-emails
         run: |
-          # Get the merge base between this PR and main
-          MERGE_BASE=$(git merge-base "origin/${GITHUB_BASE_REF:-main}" HEAD)
+          # Audit the actual PR base, including pinned runtime branches.
+          PR_BASE_SHA='${{ github.event.pull_request.base.sha }}'
+          if [ -n "$PR_BASE_SHA" ] && git rev-parse --verify "${PR_BASE_SHA}^{commit}" >/dev/null 2>&1; then
+            MERGE_BASE=$(git merge-base "$PR_BASE_SHA" HEAD)
+          else
+            MERGE_BASE=$(git merge-base origin/main HEAD)
+          fi
 
           # Find any new author emails in this PR's commits
-          NEW_EMAILS=$(git log ${MERGE_BASE}..HEAD --format='%ae' --no-merges | sort -u)
+          NEW_EMAILS=$(git log "${MERGE_BASE}..HEAD" --format='%ae' --no-merges | sort -u)
 
           if [ -z "$NEW_EMAILS" ]; then
             echo "No new commits to check."
             echo "review_status=[]" >> "$GITHUB_OUTPUT"
+            echo "review_status=[]" > review-status.json
             exit 0
           fi
 
@@ -41,9 +47,11 @@ jobs:
           # legacy AUTHOR_MAP in scripts/release.py.
           MISSING=""
           while IFS= read -r email; do
-            # Skip teknium and bot emails
+            # Skip teknium, bots, and the machine-artifact mapping deliberately
+            # retired in upstream fcdae2cf0b. Reintroducing its case-only filename
+            # makes Mac/Windows checkouts permanently dirty.
             case "$email" in
-              *teknium*|*noreply@github.com*|*dependabot*|*github-actions*|*anthropic.com*|*cursor.com*)
+              *teknium*|*noreply@github.com*|*dependabot*|*github-actions*|*anthropic.com*|*cursor.com*|agent@Agents-Mac-mini.local)
                 continue ;;
             esac
 
@@ -86,8 +94,22 @@ jobs:
               --arg how_to_fix "$HOW_TO_FIX" \
               '[{"source":"contributor attribution","results":[{"kind":"action_required","title":"Unmapped contributor email(s)","summary":"New contributor email(s) are not in AUTHOR_MAP.","detail":$detail,"how_to_fix":$how_to_fix}]}]')
             echo "review_status=$REVIEW_STATUS" >> "$GITHUB_OUTPUT"
+            echo "review_status=$REVIEW_STATUS" > review-status.json
 
             exit 1
           else
             echo "✅ All contributor emails are mapped."
+            echo "review_status=[]" >> "$GITHUB_OUTPUT"
+            echo "review_status=[]" > review-status.json
           fi
+
+      - name: Upload review status artifact
+        if: always() && steps.check-emails.outcome != 'skipped'
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: review-status-contributor-check
+          path: review-status.json
+          retention-days: 1
+          overwrite: true
+          if-no-files-found: ignore

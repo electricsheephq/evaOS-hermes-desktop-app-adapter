@@ -263,6 +263,7 @@ function decryptSafeStorageValue(
     // stack, ciphertext or decrypted value to diagnostics.
     const message = error instanceof Error ? error.message : ''
     const prefix = 'Error while decrypting the ciphertext provided to safeStorage.decryptString.'
+
     const category: SafeStorageReadFailure =
       message === 'safeStorage cannot be used before app is ready'
         ? 'not-ready'
@@ -273,11 +274,13 @@ function decryptSafeStorageValue(
             : message === prefix
               ? 'decrypt-failed'
               : 'unexpected'
+
     try {
       options.onFailure?.(category)
     } catch {
       // A failed diagnostic sink must not change fail-closed credential reads.
     }
+
     return ''
   }
 }

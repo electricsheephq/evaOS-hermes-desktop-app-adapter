@@ -600,9 +600,9 @@ export function ToolsetConfigPanel({ toolset, onConfiguredChange, profile }: Too
 
     const providerDisplayName = managedProviderDisplayValue(provider.name, provider.name, managedEva)
 
-    // Managed agents cannot complete the local Nous Portal entitlement flow.
-    // Fail closed unless the backend has already confirmed this managed
-    // provider is ready, so a failed selection cannot be persisted first.
+    // Managed agents cannot complete the local provider entitlement flow.
+    // Fail closed unless the backend has already confirmed this provider is
+    // ready, so a failed selection cannot be persisted first.
     if (managedEva && provider.requires_nous_auth && providerStatus(provider, envState) !== 'ready') {
       notify({
         kind: 'warning',
@@ -649,7 +649,7 @@ export function ToolsetConfigPanel({ toolset, onConfiguredChange, profile }: Too
       notify({ kind: 'success', title: copy.selectedTitle, message: copy.selectedMessage(providerDisplayName) })
       onConfiguredChange?.()
     } catch (err) {
-      notifyError(err, copy.failedSelect(providerDisplayName))
+      notifyError(err, copy.failedSelect(provider.name))
     } finally {
       setSelecting(null)
     }
@@ -741,7 +741,7 @@ export function ToolsetConfigPanel({ toolset, onConfiguredChange, profile }: Too
       })
       onConfiguredChange?.()
     } catch (err) {
-      notifyError(err, copy.failedSelectCapability(providerDisplayName))
+      notifyError(err, copy.failedSelectCapability(provider.name))
     } finally {
       setSelecting(null)
     }
@@ -784,11 +784,11 @@ export function ToolsetConfigPanel({ toolset, onConfiguredChange, profile }: Too
       {providers.map(provider => {
         const isExpanded = expandedProvider === provider.name
         const isBackendActive = provider.is_active || cfg?.active_provider === provider.name
-        const providerDisplayName = managedProviderDisplayValue(provider.name, provider.name, managedEva)
         const status = providerStatus(provider, envState)
         const webCaps = toolset === 'web' ? (provider.capabilities ?? []) : []
         const isSearchBackend = Boolean(provider.web_backend && cfg.active_search_backend === provider.web_backend)
         const isExtractBackend = Boolean(provider.web_backend && cfg.active_extract_backend === provider.web_backend)
+        const providerDisplayName = managedProviderDisplayValue(provider.name, provider.name, managedEva)
 
         return (
           <div className="overflow-hidden rounded-xl bg-background/60" key={provider.name}>

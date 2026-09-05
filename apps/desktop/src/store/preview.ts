@@ -4,12 +4,7 @@ import { persistentAtom } from '@/lib/persisted'
 import { readKey } from '@/lib/storage'
 import { normalize } from '@/lib/text'
 
-import {
-  $rightRailActiveTabEpoch,
-  $rightRailActiveTabId,
-  type RightRailTabId,
-  selectRightRailTab
-} from './layout'
+import { $rightRailActiveTabEpoch, $rightRailActiveTabId, type RightRailTabId, selectRightRailTab } from './layout'
 import { canOpenBrowserWindow, openBrowserInNewWindow } from './windows'
 
 /**
@@ -168,8 +163,8 @@ function activePreviewTab(): PreviewTab | null {
 }
 
 /** Opaque identity for one visible Preview document. Browser tabs are stable
- *  vessels, so tab id alone is insufficient: navigation changes the document
- *  underneath the same input/script handles. */
+ * vessels, so tab id alone is insufficient: navigation changes the document
+ * underneath the same input/script handles. */
 export interface PreviewSurfaceToken {
   generation: number
   ownershipEpoch: number
@@ -219,9 +214,9 @@ export function ownsActivePreviewSurface(token: PreviewSurfaceToken | null): boo
 
   return Boolean(
     token &&
-      tab?.id === token.tabId &&
-      $rightRailActiveTabEpoch.get() === token.ownershipEpoch &&
-      previewSurfaceGenerations.get(token.tabId) === token.generation
+    tab?.id === token.tabId &&
+    $rightRailActiveTabEpoch.get() === token.ownershipEpoch &&
+    previewSurfaceGenerations.get(token.tabId) === token.generation
   )
 }
 

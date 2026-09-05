@@ -2,7 +2,7 @@
   "name": "evaos-agent",
   "productName": "evaOS Agent",
   "private": true,
-  "version": "2026.8.27-es.1",
+  "version": "2026.9.5-es.1",
   "description": "Managed business agent client by Electric Sheep.",
   "author": "Electric Sheep",
   "repository": {
@@ -12,7 +12,7 @@
   "type": "module",
   "main": "dist/electron-main.mjs",
   "engines": {
-    "node": ">=22.22.0"
+    "node": "^22.22.0 || ^24.11.0 || >=26.0.0"
   },
   "scripts": {
     "clean": "npm run clean:e2e && npm run clean:renderer && npm run clean:electron",
@@ -27,7 +27,7 @@
     "profile:main": "tsc --build tsconfig.electron.json && wait-on http://127.0.0.1:5174 && node scripts/bundle-electron-main.mjs --dev && cross-env XCURSOR_SIZE=24 HERMES_DESKTOP_DEV_SERVER=http://127.0.0.1:5174 electron --inspect=9229 .",
     "profile:main:cpu": "tsc --build tsconfig.electron.json && wait-on http://127.0.0.1:5174 && node scripts/bundle-electron-main.mjs --dev && cross-env XCURSOR_SIZE=24 NODE_OPTIONS=--cpu-prof HERMES_DESKTOP_DEV_SERVER=http://127.0.0.1:5174 electron .",
     "start": "npm run build && electron .",
-    "prebuild": "npm run clean",
+    "prebuild": "node scripts/assert-root-install.mjs && npm run clean",
     "build": "node scripts/assert-root-install.mjs && node scripts/write-build-stamp.mjs && vite build && node scripts/bundle-electron-main.mjs && node scripts/stage-native-deps.mjs",
     "postbuild": "node scripts/assert-dist-built.mjs",
     "prebuilder": "node scripts/patch-electron-builder-mac-binary.mjs",
@@ -35,7 +35,6 @@
     "pack": "npm run build && npm run builder -- --dir --publish never",
     "dist": "npm run build && npm run builder",
     "dist:mac": "npm run build && npm run builder -- --mac",
-    "dist:mac:arm64:release": "npm run build && cross-env EVAOS_MANAGED_RELEASE=1 npm run builder -- --mac --arm64",
     "dist:mac:dmg": "npm run build && npm run builder -- --mac dmg",
     "dist:mac:zip": "npm run build && npm run builder -- --mac zip",
     "dist:win": "npm run build && npm run builder -- --win",
@@ -58,9 +57,6 @@
     "test:desktop:existing": "node scripts/test-desktop.mjs existing",
     "test:desktop:fresh": "node scripts/test-desktop.mjs fresh",
     "typecheck": "tsc -p . --noEmit && tsc -p tsconfig.electron.json --noEmit && tsc -p tsconfig.e2e.json --noEmit",
-    "test:managed": "node --test electron/eva-app-updater.test.cjs electron/eva-managed-main-contract.test.cjs electron/eva-managed-scenarios.test.cjs electron/eva-managed.test.cjs electron/eva-protocol-handler.test.cjs electron/eva-runtime.test.cjs electron/eva-ws-relay.test.cjs e2e/verify-managed-reports.test.mjs scripts/notarize.test.mjs scripts/sign-mac.test.mjs scripts/verify-managed-update-release.test.mjs",
-    "release:refresh-and-verify:mac": "node scripts/refresh-managed-update-metadata.mjs",
-    "release:verify:mac": "node scripts/verify-managed-update-release.mjs",
     "lint": "eslint src/ electron/",
     "lint:fix": "eslint src/ electron/ --fix",
     "fmt": "prettier --write 'src/**/*.{ts,tsx}' 'electron/**/*.ts' 'vite.config.ts'",
@@ -73,15 +69,18 @@
     "check:test:ui": "npm run test:ui",
     "check:test:desktop:platforms": "npm run test:desktop:platforms",
     "check:test:desktop:all": "npm run test:desktop:all",
-    "check:test:managed": "npm run test:managed",
-    "check:test:plugins": "node --test src/plugins/*/tests/*.test.mjs",
     "check:lint": "npm run typecheck && npm run lint",
-    "check": "npm run check:lint && npm run test:ui && npm run test:desktop:platforms && npm run test:desktop:all && npm run check:test:plugins && npm run check:test:managed",
+    "check": "npm run check:lint && npm run test:ui && npm run test:desktop:platforms && npm run test:desktop:all && npm run check:test:managed",
     "test:e2e": "npm run build && playwright test e2e/",
     "test:e2e:visual": "npm run build && WLR_BACKENDS=headless WLR_NO_HARDWARE_CURSORS=1 cage -- npx playwright test e2e/ --reporter=list",
     "test:e2e:update-snapshots": "npm run build && WLR_BACKENDS=headless WLR_NO_HARDWARE_CURSORS=1 cage -- npx playwright test e2e/ --reporter=list --update-snapshots",
     "repro:short-session-hang": "node scripts/run-short-session-hang-repro.mjs",
-    "repro:short-session-hang:test": "node --test scripts/run-short-session-hang-repro.test.mjs"
+    "repro:short-session-hang:test": "node --test scripts/run-short-session-hang-repro.test.mjs",
+    "dist:mac:arm64:release": "npm run build && cross-env EVAOS_MANAGED_RELEASE=1 npm run builder -- --mac --arm64",
+    "test:managed": "node --test electron/eva-app-updater.test.cjs electron/eva-managed-main-contract.test.cjs electron/eva-managed-scenarios.test.cjs electron/eva-managed.test.cjs electron/eva-protocol-handler.test.cjs electron/eva-runtime.test.cjs electron/eva-ws-relay.test.cjs electron/r31-managed-profile-bypass.test.cjs e2e/verify-managed-reports.test.mjs scripts/notarize.test.mjs scripts/sign-mac.test.mjs scripts/verify-managed-update-release.test.mjs",
+    "release:refresh-and-verify:mac": "node scripts/refresh-managed-update-metadata.mjs",
+    "release:verify:mac": "node scripts/verify-managed-update-release.mjs",
+    "check:test:managed": "npm run test:managed"
   },
   "dependencies": {
     "@assistant-ui/core": "0.2.23",

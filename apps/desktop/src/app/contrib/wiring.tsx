@@ -17,7 +17,6 @@ import { graftRefreshedTailOntoBackfill } from '@/app/chat/transcript-backfill'
 import { formatRefValue } from '@/components/assistant-ui/directive-text'
 import { BootFailureOverlay } from '@/components/boot-failure-overlay'
 import { ConfirmHost } from '@/components/confirm-host'
-import { DelegatedSupportBanner } from '@/components/delegated-support-banner'
 import { DesktopInstallOverlay } from '@/components/desktop-install-overlay'
 import { FindBar } from '@/components/find-bar'
 import { GatewayConnectingOverlay } from '@/components/gateway-connecting-overlay'
@@ -33,6 +32,7 @@ import {
 import { FloatingPet } from '@/components/pet/floating-pet'
 import { RemoteDisplayBanner } from '@/components/remote-display-banner'
 import { SendDiagnosticsHost } from '@/components/send-diagnostics-dialog'
+import { TipHost } from '@/components/tips'
 import { emitGatewayEvent } from '@/contrib/events'
 import { getLatestSessionMessages } from '@/hermes'
 import { isManagedEvaosAgent } from '@/i18n/managed-brand'
@@ -46,9 +46,8 @@ import { $desktopBoot } from '@/store/boot'
 import { requestVoiceConversationStart } from '@/store/composer'
 import { $activeConnectionId } from '@/store/connections'
 import { $cronReviewRequest, setCronFocusJobId } from '@/store/cron'
-import { $gatewayConnectionEpochs } from '@/store/gateway'
 import { $pinnedSessionIds, pinSession, restoreWorktree, unpinSession } from '@/store/layout'
-import { notify, notifyError } from '@/store/notifications'
+import { notifyError } from '@/store/notifications'
 import { $previewTarget } from '@/store/preview'
 import {
   $activeGatewayProfile,
@@ -60,7 +59,7 @@ import {
   normalizeProfileKey,
   refreshActiveProfile
 } from '@/store/profile'
-import { $startWorkSessionRequest, followActiveSessionCwd } from '@/store/projects'
+import { $newProjectSessionRequest, $startWorkSessionRequest, followActiveSessionCwd } from '@/store/projects'
 import {
   $activeSessionId,
   $connection,
@@ -74,8 +73,10 @@ import {
   $selectedStoredSessionId,
   $sessionResumeRequest,
   $sessions,
+  forgetSessionOwnerHintsForSession,
   requestSessionResume,
   sessionMatchesStoredId,
+  sessionOwnerRouteFromRow,
   sessionPinId,
   setAwaitingResponse,
   setBusy,
@@ -93,6 +94,7 @@ import { CommandPalette } from '../command-palette'
 import { triggerAndRefreshCronJobs } from '../cron/cron-actions'
 import { useGatewayBoot } from '../gateway/hooks/use-gateway-boot'
 import { useGatewayRequest } from '../gateway/hooks/use-gateway-request'
+import { useHermesConfigRecord } from '../hooks/use-config-record'
 import { useKeybinds } from '../hooks/use-keybinds'
 import { useHudHandoff } from '../hud/handoff'
 import { ModelPickerOverlay } from '../model-picker-overlay'
@@ -190,7 +192,6 @@ export function ContribWiring({ children }: { children: ReactNode }) {
   const actionsRef = useRef<WiringActions | null>(null)
 
   const gatewayState = useStore($gatewayState)
-  const gatewayConnectionEpochs = useStore($gatewayConnectionEpochs)
   const activeSessionId = useStore($activeSessionId)
   const billingSettingsRequest = useStore($billingSettingsRequest)
   const managedEva = isManagedEvaosAgent()
@@ -231,7 +232,6 @@ export function ContribWiring({ children }: { children: ReactNode }) {
   const sessions = useStore($sessions)
   const activeConnectionId = useStore($activeConnectionId)
   const activeGatewayProfile = useStore($activeGatewayProfile)
-  const gatewayConnectionEpoch = gatewayConnectionEpochs[normalizeProfileKey(activeGatewayProfile)] ?? 0
   const profileScope = useStore($profileScope)
   const boot = useStore($desktopBoot)
 
@@ -281,6 +281,7 @@ export function ContribWiring({ children }: { children: ReactNode }) {
     activeSessionIdRef,
     ensureSessionState,
     getRuntimeIdForStoredSession,
+    holdSessionTranscriptView,
     resetViewSync,
     runtimeIdByStoredSessionIdRef,
     selectedStoredSessionIdRef,
@@ -343,6 +344,8 @@ export function ContribWiring({ children }: { children: ReactNode }) {
   const { refreshHermesConfig, sttEnabled, voiceMaxRecordingSeconds } = useHermesConfig({ activeSessionIdRef })
 
   const { applySavedMainModel, refreshCurrentModel, selectModel } = useModelControls({
+    cacheOwnerConnectionId: activeConnectionId || undefined,
+    cacheProfile: activeGatewayProfile,
     queryClient,
     requestGateway
   })
@@ -499,6 +502,7 @@ export function ContribWiring({ children }: { children: ReactNode }) {
     ensureSessionState,
     getRouteToken,
     getRoutedStoredSessionId,
+    holdSessionTranscriptView,
     navigate,
     onFreshDraftRouteIntent: clearRoutedSessionIntent,
     requestGateway,
@@ -597,6 +601,31 @@ export function ContribWiring({ children }: { children: ReactNode }) {
       requestComposerInsert(startWorkSessionRequest.draft, { target: 'main' })
     }
   }, [startSessionInWorkspace, startWorkSessionRequest])
+
+  // "New project" DRAG completion: the dialog created a project that was
+  // dropped onto a chat zone (tab-strip slot / pane edge / pane center). Open
+  // its fresh session draft exactly there — the same `openNewSessionTile`
+  // create path the new-session drags use — so the project starts, and stays,
+  // where it was dropped. Consume-once: drop the request after handling.
+  const newProjectSessionRequest = useStore($newProjectSessionRequest)
+
+  useEffect(() => {
+    if (!newProjectSessionRequest) {
+      return
+    }
+
+    const { path, placement } = newProjectSessionRequest
+
+    $newProjectSessionRequest.set(null)
+    void openNewSessionTile(placement.dir, {
+      anchor: placement.anchor,
+      before: placement.before,
+      cwd: path,
+      // Same draft-tab contract as onNewSessionSplit: a center/strip drop is
+      // an unlisted draft tab until its first turn; an edge split lists.
+      listed: placement.dir === 'center' ? false : undefined
+    })
+  }, [newProjectSessionRequest, openNewSessionTile])
 
   const composer = useComposerActions({ activeSessionId, currentCwd, requestGateway })
 
@@ -723,7 +752,6 @@ export function ContribWiring({ children }: { children: ReactNode }) {
     creatingSessionRef,
     currentView,
     freshDraftReady,
-    gatewayConnectionEpoch,
     gatewayState,
     locationPathname: location.pathname,
     resumeSession,
@@ -842,6 +870,15 @@ export function ContribWiring({ children }: { children: ReactNode }) {
   // remembered-session restore, and cross-window session-list sync.
   const previewTarget = useStore($previewTarget)
 
+  // display.resume_last_session gates the cold-start restore. `undefined` while
+  // the record is still loading holds the restore latch open; a failed fetch
+  // falls back to the historical behavior (resume).
+  const configRecord = useHermesConfigRecord()
+
+  const resumeLastSession = configRecord.isPending
+    ? undefined
+    : (configRecord.data?.display as { resume_last_session?: unknown } | undefined)?.resume_last_session !== false
+
   useDesktopIntegrations({
     activeProfile: normalizeProfileKey(activeGatewayProfile),
     chatOpen,
@@ -850,6 +887,7 @@ export function ContribWiring({ children }: { children: ReactNode }) {
     navigate,
     profileReady: boot.phase === 'renderer.ready',
     refreshSessions,
+    resumeLastSession,
     resumeExhaustedSessionId,
     routedSessionId,
     runtimeIdByStoredSessionId: runtimeIdByStoredSessionIdRef,
@@ -881,24 +919,17 @@ export function ContribWiring({ children }: { children: ReactNode }) {
   // the sidebar until its first message persists a turn and a refresh surfaces
   // it — Cursor-style. Every click opens a fresh "New session" tab (multiple
   // empty tabs are fine since none touch the session list).
+  //
+  // Bot Mode aims the "+" at the selected bot's own profile. Anything short of
+  // an exact route — a group chat's `blocked` target, an orphaned roster row —
+  // falls THROUGH to the ordinary session rather than refusing: the main strip
+  // carries plain session tabs alongside bot chats, so a "+" there must never
+  // be dead just because the sidebar's current selection has nowhere to route.
   const openNewSessionTab = useCallback(() => {
-    const workspaceMode = $workspaceMode.get()
     const workspaceOwnerKey = $workspaceOwnerKey.get()
     const workspaceNewSessionTarget = $workspaceNewSessionTarget.get()
 
-    if (workspaceMode === 'bots') {
-      if (workspaceNewSessionTarget?.kind !== 'route' || !workspaceOwnerKey) {
-        notify({
-          kind: 'info',
-          message:
-            workspaceNewSessionTarget?.kind === 'blocked'
-              ? workspaceNewSessionTarget.message
-              : 'Select a Bot or group first.'
-        })
-
-        return
-      }
-
+    if ($workspaceMode.get() === 'bots' && workspaceNewSessionTarget?.kind === 'route' && workspaceOwnerKey) {
       void openNewSessionTile('center', {
         listed: false,
         route: workspaceNewSessionTarget.route,
@@ -988,7 +1019,15 @@ export function ContribWiring({ children }: { children: ReactNode }) {
     },
     onNavigate: selectSidebarItem,
     onNewSessionInWorkspace: path => startSessionInWorkspace(path, { openTab: true }),
-    onNewSessionSplit: dir => void openNewSessionTile(dir),
+    onNewSessionSplit: (dir, opts) =>
+      void openNewSessionTile(dir, {
+        ...opts,
+        // A CENTER drop stacks a fresh TAB: keep the existing draft-tab
+        // contract and leave it out of the sidebar until its first turn
+        // persists (same as the tab-strip "+" and the occupied-project "+").
+        // An EDGE drop SPLITS a visible pane — list it like every other split.
+        listed: dir === 'center' ? false : undefined
+      }),
     onPasteClipboardImage: opts => composer.pasteClipboardImage(opts),
     onPickFiles: () => void composer.pickContextPaths('file'),
     onPickFolders: () => void composer.pickContextPaths('folder'),
@@ -1003,17 +1042,18 @@ export function ContribWiring({ children }: { children: ReactNode }) {
     // against whichever cached row is found first — the user clicks a row
     // previewing profile A and the resume dials profile B. Pin the row's own
     // (connection, profile) as the resume owner before navigating; untagged
-    // rows (single-profile installs, legacy pages) keep the id-only path.
+    // rows (single-profile installs and the legacy primary-SSH path) keep the
+    // ambient/id-only path. Clear any stale explicit hint first: older builds
+    // incorrectly persisted those rows as `local`, which made a remote session
+    // click switch to the Mac backend and fail with "session not found".
     onResumeSession: (sessionId, session) => {
-      const rowProfile = session?.profile?.trim()
+      const ownerRoute = sessionOwnerRouteFromRow(session)
 
-      if (rowProfile) {
-        requestSessionResume(sessionId, {
-          connectionId: session?.connection_id?.trim() || 'local',
-          ...(session?.connection_id?.trim() ? {} : { mode: 'local' as const }),
-          profile: rowProfile,
-          targetProfile: rowProfile
-        })
+      if (ownerRoute) {
+        requestSessionResume(sessionId, ownerRoute)
+      } else {
+        forgetSessionOwnerHintsForSession(sessionId)
+        requestSessionResume(sessionId)
       }
 
       openSession(sessionId, navigate)
@@ -1149,7 +1189,6 @@ export function ContribWiring({ children }: { children: ReactNode }) {
       </div>
 
       {/* The full real overlay set (mirrors DesktopController's `overlays`). */}
-      <DelegatedSupportBanner />
       <RemoteDisplayBanner />
       {!isAuxiliaryWindow() && <DesktopInstallOverlay />}
       {!isAuxiliaryWindow() && (
@@ -1164,11 +1203,18 @@ export function ContribWiring({ children }: { children: ReactNode }) {
           requestGateway={requestGateway}
         />
       )}
-      <ModelPickerOverlay gateway={gateway || undefined} onSelect={selectModel} profile={activeGatewayProfile} />
+      <ModelPickerOverlay
+        gateway={gateway || undefined}
+        onSelect={selectModel}
+        ownerConnectionId={activeConnectionId || undefined}
+        profile={activeGatewayProfile}
+        requestGateway={requestGateway}
+      />
       <SessionPickerOverlay onResume={sessionId => openSession(sessionId, navigate)} />
       <ModelVisibilityOverlay
         gateway={gateway || undefined}
         onOpenProviders={openProviderSettings}
+        ownerConnectionId={activeConnectionId || undefined}
         profile={activeGatewayProfile}
       />
       <UpdatesOverlay />
@@ -1260,6 +1306,11 @@ export function ContribWiring({ children }: { children: ReactNode }) {
       {/* Petdex floating mascot — renders nothing unless installed + enabled.
           Never in the HUD: that window is the chat bar and nothing else. */}
       {!isHudWindow() && !isBrowserWindow() && <FloatingPet />}
+
+      {/* In-app tips. Renders nothing until the app is quiet and has something
+          to point at, and nothing at all once they're off or all retired. The
+          HUD and browser windows have none of the surfaces a tip talks about. */}
+      {!isHudWindow() && !isBrowserWindow() && <TipHost />}
 
       {/* Single persistent xterm host chasing the terminal pane's slot rect.
           The HUD has no terminal pane, so it has nothing to chase. */}

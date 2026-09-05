@@ -556,7 +556,6 @@ export async function actOnActivePreview(
   }
 
   const ownerSurface = captureActivePreviewSurface()
-
   const ownsActionSurface = () => shouldContinue() && ownsActivePreviewSurface(ownerSurface)
 
   const nav = NAV_ACTIONS.find(verb => verb === action.kind)

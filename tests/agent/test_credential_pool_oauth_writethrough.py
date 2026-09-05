@@ -17,7 +17,9 @@ mocking the save boundary, so they exercise the actual atomic write path.
 """
 
 import json
+import os
 import threading
+import time
 
 import pytest
 
@@ -26,8 +28,10 @@ from agent.credential_pool import (
     AUTH_TYPE_OAUTH,
     CredentialPool,
     PooledCredential,
+    load_pool,
 )
 from hermes_cli import auth as A
+import hermes_cli.auth_codex as auth_codex
 
 
 def _write_store(path, store):
@@ -104,8 +108,8 @@ def test_global_write_through_preserves_concurrent_root_update(
     writer_done = threading.Event()
     real_auth_load = A._load_auth_store
 
-    def paused_helper_load(path=None):
-        store = real_auth_load(path)
+    def paused_helper_load(path=None, **kwargs):
+        store = real_auth_load(path, **kwargs)
         if threading.current_thread().name == "profile-write-through":
             target_holder = A._auth_lock_holder_for(root_path)
             if getattr(target_holder, "depth", 0) > 0:
@@ -216,6 +220,7 @@ def test_codex_pool_refresh_holds_auth_store_lock_across_post(monkeypatch, tmp_p
         }
 
     monkeypatch.setattr(A, "refresh_codex_oauth_pure", fake_refresh)
+    monkeypatch.setattr(auth_codex, "refresh_codex_oauth_pure", fake_refresh)
 
     entry = _entry(
         provider,
@@ -317,3 +322,270 @@ def test_write_through_fires_on_every_refresh_not_just_first(
     )
     assert root_tokens["refresh_token"] == "rf2"
 
+
+def test_hermes_pkce_refresh_writes_back_to_singleton(tmp_path, monkeypatch):
+    """A successful hermes_pkce refresh must update
+    ~/.hermes/.anthropic_oauth.json, or ``_seed_from_singletons()`` on the
+    next ``load_pool()`` re-seeds the pre-refresh (already-consumed,
+    single-use) token pair over the freshly rotated one.
+    """
+    hermes_home = tmp_path / "hermes"
+    hermes_home.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+    monkeypatch.setattr("hermes_cli.auth.is_provider_explicitly_configured", lambda pid: True)
+
+    oauth_file = hermes_home / ".anthropic_oauth.json"
+    oauth_file.write_text(
+        json.dumps({"accessToken": "sk-ant-oat-rt0", "refreshToken": "rt0", "expiresAt": 0}),
+        encoding="utf-8",
+    )
+    _write_store(hermes_home / "auth.json", {"version": 1, "providers": {}})
+
+    monkeypatch.setattr(
+        "agent.anthropic_credentials.refresh_anthropic_oauth_pure",
+        lambda refresh_token, use_json=False: {
+            "access_token": "sk-ant-oat-rt1",
+            "refresh_token": "rt1",
+            "expires_at_ms": int(time.time() * 1000) + 3_600_000,
+        },
+    )
+    monkeypatch.setattr("agent.anthropic_credentials.read_claude_code_credentials", lambda: None)
+
+    entry = PooledCredential(
+        provider="anthropic",
+        id="pool-entry",
+        label="cred",
+        auth_type=AUTH_TYPE_OAUTH,
+        priority=0,
+        source="hermes_pkce",
+        access_token="sk-ant-oat-rt0",
+        refresh_token="rt0",
+    )
+    pool = CredentialPool("anthropic", [entry])
+    updated = pool._refresh_entry(entry, force=True)
+    assert updated is not None
+    assert updated.refresh_token == "rt1"
+
+    on_disk = json.loads(oauth_file.read_text(encoding="utf-8"))
+    assert on_disk["refreshToken"] == "rt1", (
+        "successful hermes_pkce refresh must write back to "
+        "~/.hermes/.anthropic_oauth.json, or _seed_from_singletons() will "
+        "revert the pool entry to the pre-refresh (spent) token on next load"
+    )
+
+    reloaded = load_pool("anthropic")
+    reloaded_entries = [e for e in reloaded.entries() if e.source.endswith("hermes_pkce")]
+    assert reloaded_entries, "hermes_pkce entry should still be present after reload"
+    assert reloaded_entries[0].refresh_token == "rt1", (
+        "regression: fresh load_pool() re-seeded the pre-refresh refresh "
+        "token from the stale singleton file, reverting a successful "
+        "rotation and orphaning the already-consumed rt0"
+    )
+
+
+def test_manual_hermes_pkce_refresh_does_not_create_duplicate_singleton(
+    tmp_path, monkeypatch
+):
+    """A pool-owned manual:hermes_pkce entry must not create a second source."""
+    hermes_home = tmp_path / "hermes"
+    hermes_home.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+    monkeypatch.setattr("hermes_cli.auth.is_provider_explicitly_configured", lambda pid: True)
+    monkeypatch.setattr("agent.anthropic_credentials.read_claude_code_credentials", lambda: None)
+    monkeypatch.setattr(
+        "agent.anthropic_credentials.refresh_anthropic_oauth_pure",
+        lambda refresh_token, use_json=False: {
+            "access_token": "manual-at-1",
+            "refresh_token": "manual-rt-1",
+            "expires_at_ms": int(time.time() * 1000) + 3_600_000,
+        },
+    )
+    _write_store(hermes_home / "auth.json", {"version": 1, "providers": {}})
+
+    entry = PooledCredential(
+        provider="anthropic",
+        id="manual-entry",
+        label="cred",
+        auth_type=AUTH_TYPE_OAUTH,
+        priority=0,
+        source="manual:hermes_pkce",
+        access_token="manual-at-0",
+        refresh_token="manual-rt-0",
+        expires_at_ms=0,
+    )
+    pool = CredentialPool("anthropic", [entry])
+    refreshed = pool._refresh_entry(entry, force=True)
+
+    assert refreshed is not None
+    assert refreshed.refresh_token == "manual-rt-1"
+    oauth_file = hermes_home / ".anthropic_oauth.json"
+    assert not oauth_file.exists(), (
+        "manual:hermes_pkce is already pool-owned; refreshing it must not "
+        "create a second hermes_pkce singleton source"
+    )
+
+    reloaded = load_pool("anthropic")
+    matching = [e for e in reloaded.entries() if e.id == "manual-entry"]
+    assert len(matching) == 1
+    assert matching[0].source == "manual:hermes_pkce"
+    assert matching[0].refresh_token == "manual-rt-1"
+
+
+@pytest.mark.parametrize("initial_bytes", [None, b"{not-json"])
+def test_managed_shared_write_through_refuses_missing_or_corrupt_store(
+    profile_and_root, monkeypatch, initial_bytes
+):
+    _profile_path, root_path = profile_and_root
+    monkeypatch.setenv("HERMES_SHARED_AUTH_FILE", str(root_path))
+    if initial_bytes is not None:
+        root_path.parent.mkdir(parents=True, exist_ok=True)
+        root_path.write_bytes(initial_bytes)
+    before = root_path.read_bytes() if root_path.exists() else None
+    with pytest.raises(RuntimeError, match="managed shared auth writeback failed"):
+        CP._write_through_provider_state_to_global_root(
+            "openai-codex", {"tokens": {"access_token": "new", "refresh_token": "new-r"}}
+        )
+    assert (root_path.read_bytes() if root_path.exists() else None) == before
+
+
+@pytest.mark.parametrize("failure", [TimeoutError("lock"), OSError("write")])
+def test_managed_shared_write_through_propagates_lock_and_write_failures(
+    profile_and_root, monkeypatch, failure
+):
+    _profile_path, root_path = profile_and_root
+    _write_store(root_path, {"version": 1, "providers": {}})
+    monkeypatch.setenv("HERMES_SHARED_AUTH_FILE", str(root_path))
+    monkeypatch.setattr(A, "_persist_provider_state_to_store", lambda *args, **kwargs: (_ for _ in ()).throw(failure))
+    with pytest.raises(RuntimeError, match="managed shared auth writeback failed"):
+        CP._write_through_provider_state_to_global_root(
+            "openai-codex", {"tokens": {"access_token": "new", "refresh_token": "new-r"}}
+        )
+
+
+def test_managed_shared_pool_sync_does_not_swallow_writeback_failure(profile_and_root, monkeypatch):
+    profile_path, root_path = profile_and_root
+    _write_store(profile_path, {"version": 1, "providers": {}})
+    _write_store(root_path, {"version": 1, "providers": {"openai-codex": {"tokens": {"access_token": "old", "refresh_token": "old-r"}}}})
+    monkeypatch.setenv("HERMES_SHARED_AUTH_FILE", str(root_path))
+    monkeypatch.setattr(CP, "_global_auth_file_path", lambda: root_path)
+    monkeypatch.setattr(CP, "_same_path", lambda left, right: left == right)
+    monkeypatch.setattr(CP, "_write_through_provider_state_to_global_root", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("writeback failed")))
+    entry = _entry("openai-codex", id="codex-1", access_token="new", refresh_token="new-r")
+    pool = CredentialPool("openai-codex", [entry])
+    with pytest.raises(RuntimeError, match="managed shared auth sync failed"):
+        pool._sync_device_code_entry_to_auth_store(entry)
+
+
+def test_managed_codex_pools_share_the_source_refresh_lock(monkeypatch, tmp_path):
+    import contextlib
+    provider = "openai-codex"
+    profile_path = tmp_path / "profile" / "auth.json"
+    shared_path = tmp_path / "shared" / "auth.json"
+    monkeypatch.setattr(A, "_auth_file_path", lambda: profile_path)
+    entry = _entry(provider, id="codex-shared", access_token="old-access", refresh_token="old-refresh")
+    shared_entry = {"value": entry}
+    shared_guard = threading.Lock()
+    keyed_locks, keyed_guard, lock_targets = {}, threading.Lock(), []
+
+    @contextlib.contextmanager
+    def tracking_lock(timeout_seconds=A.AUTH_LOCK_TIMEOUT_SECONDS, *, target_path=None):
+        del timeout_seconds
+        key = str(target_path) if target_path is not None else threading.current_thread().name
+        with keyed_guard:
+            lock = keyed_locks.setdefault(key, threading.Lock())
+            lock_targets.append(target_path)
+        with lock:
+            yield
+
+    def sync_from_shared(pool, current):
+        with shared_guard:
+            persisted = shared_entry["value"]
+        if persisted.access_token != current.access_token or persisted.refresh_token != current.refresh_token:
+            pool._replace_entry(current, persisted)
+            return persisted
+        return current
+
+    def persist_to_shared(pool, *, removed_ids=None):
+        del removed_ids
+        with shared_guard:
+            shared_entry["value"] = pool._entries[0]
+
+    post_started, second_attempting = threading.Event(), threading.Event()
+    posts, posts_guard = [], threading.Lock()
+    def fake_refresh(access_token, refresh_token, **kwargs):
+        del kwargs
+        with posts_guard:
+            sequence = len(posts) + 1
+            posts.append((access_token, refresh_token))
+        if sequence == 1:
+            post_started.set()
+            assert second_attempting.wait(timeout=5)
+        return {"access_token": f"new-access-{sequence}", "refresh_token": f"new-refresh-{sequence}", "last_refresh": "2026-08-29T00:00:00Z"}
+
+    monkeypatch.setattr(CP, "_auth_store_lock", tracking_lock)
+    monkeypatch.setattr(CredentialPool, "_sync_entry_from_auth_store", sync_from_shared)
+    monkeypatch.setattr(CredentialPool, "_persist", persist_to_shared)
+    monkeypatch.setattr(CredentialPool, "_sync_device_code_entry_to_auth_store", lambda self, updated: None)
+    monkeypatch.setattr(CredentialPool, "_entry_needs_refresh", lambda self, current: current.access_token == "old-access")
+    monkeypatch.setattr(A, "refresh_codex_oauth_pure", fake_refresh)
+    first_pool = CredentialPool(provider, [entry], auth_source_path=shared_path)
+    second_pool = CredentialPool(provider, [entry], auth_source_path=shared_path)
+    results = {}
+    def refresh(name, pool, signal_attempt=False):
+        if signal_attempt:
+            second_attempting.set()
+        results[name] = pool._refresh_entry(entry, force=False)
+    first = threading.Thread(target=refresh, args=("first", first_pool))
+    first.start()
+    assert post_started.wait(timeout=5)
+    second = threading.Thread(target=refresh, args=("second", second_pool), kwargs={"signal_attempt": True})
+    second.start()
+    first.join(timeout=5)
+    second.join(timeout=5)
+    assert not first.is_alive() and not second.is_alive()
+    assert posts == [("old-access", "old-refresh")]
+    assert results["first"].access_token == "new-access-1"
+    assert results["second"].access_token == "new-access-1"
+    assert lock_targets == [None, shared_path, None, shared_path]
+
+
+def test_managed_shared_normalization_uses_exact_three_way_base(monkeypatch, tmp_path):
+    profile_path, shared_path = tmp_path / "profile" / "auth.json", tmp_path / "shared" / "auth.json"
+    raw_entry = {"id": "shared-oat", "label": "cred", "auth_type": "api_key", "priority": 0, "source": "hermes_pkce", "access_token": "sk-ant-oat-existing", "refresh_token": "refresh-existing"}
+    captured = {}
+    monkeypatch.setenv("HERMES_SHARED_AUTH_FILE", str(shared_path))
+    monkeypatch.setattr(A, "_auth_file_path", lambda: profile_path)
+    monkeypatch.setattr(CP, "read_credential_pool_with_source", lambda provider: ([dict(raw_entry)], shared_path))
+    monkeypatch.setattr(CP, "_reconcile_profile_pool_sources", lambda *args, **kwargs: False)
+    def capture_write(provider, entries, **kwargs):
+        captured.update(provider=provider, entries=entries, **kwargs)
+        return shared_path
+    monkeypatch.setattr(CP, "write_credential_pool", capture_write)
+    pool = CP.load_pool("anthropic")
+    assert pool._entries[0].auth_type == AUTH_TYPE_OAUTH
+    assert captured["target_path"] == shared_path
+    assert captured["base_entries"] == [raw_entry]
+
+
+@pytest.mark.parametrize("provider", ["openai-codex", "xai-oauth"])
+def test_terminal_quarantine_updates_managed_shared_source(profile_and_root, monkeypatch, provider):
+    profile_path, root_path = profile_and_root
+    _write_store(profile_path, {"version": 1})
+    _write_store(root_path, {"version": 1, "providers": {provider: {"tokens": {"access_token": "shared-access", "refresh_token": "shared-refresh"}}}})
+    if os.name != "nt":
+        root_path.chmod(0o660)
+        os.chown(root_path, -1, os.getgid())
+    monkeypatch.setenv("HERMES_SHARED_AUTH_FILE", str(root_path))
+    monkeypatch.setattr(CP, "_global_auth_file_path", lambda: root_path)
+    monkeypatch.setattr(CP, "_same_path", lambda left, right: left == right)
+    from hermes_cli.auth import AuthError
+    def terminal_failure(*_args, **_kwargs):
+        raise AuthError("refresh rejected", provider=provider, code=("codex_refresh_failed" if provider == "openai-codex" else "xai_refresh_failed"), relogin_required=True)
+    monkeypatch.setattr(CP.auth_mod, "refresh_codex_oauth_pure" if provider == "openai-codex" else "refresh_xai_oauth_pure", terminal_failure)
+    entry = _entry(provider, id="shared-entry", access_token="shared-access", refresh_token="shared-refresh")
+    pool = CredentialPool(provider, [entry])
+    assert pool._refresh_entry_impl(entry, force=True) is None
+    root_state = _read_store(root_path)["providers"][provider]
+    assert "access_token" not in root_state["tokens"]
+    assert "refresh_token" not in root_state["tokens"]
+    assert root_state["last_auth_error"]["relogin_required"] is True

@@ -8,6 +8,7 @@ import {
   FeaturedProviderRow,
   FireworksProviderRow,
   isManagedLocalCliProviderUnavailable,
+  LocalModelsProviderRow,
   managedOAuthProviders,
   OpenRouterProviderRow,
   ProviderRow,
@@ -19,11 +20,12 @@ import { RowButton } from '@/components/ui/row-button'
 import { SearchField } from '@/components/ui/search-field'
 import { disconnectOAuthProvider, listOAuthProviders } from '@/hermes'
 import { useI18n } from '@/i18n'
-import { isManagedEvaosAgent } from '@/i18n/managed-brand'
+import { isManagedEvaosAgent, managedProviderDisplayValue, sanitizeManagedBrandText } from '@/i18n/managed-brand'
 import { Check, ChevronDown, ChevronRight, KeyRound, Loader2, Terminal, Trash2 } from '@/lib/icons'
 import { normalize } from '@/lib/text'
 import { cn } from '@/lib/utils'
 import { confirm } from '@/store/confirm'
+import { $localModelsEnabled } from '@/store/local-models-flag'
 import { notify, notifyError } from '@/store/notifications'
 import { $desktopOnboarding, startManualLocalEndpoint, startManualProviderOAuth } from '@/store/onboarding'
 import type { EnvVarInfo, OAuthProvider } from '@/types/hermes'
@@ -32,6 +34,7 @@ import { isKeyVar, ProviderKeyRows } from './credential-key-ui'
 import { CustomEndpointsSettings } from './custom-endpoints-settings'
 import { SettingsCategoryHeading, useEnvCredentials } from './env-credentials'
 import { providerGroup, providerMeta, providerPriority } from './helpers'
+import { LocalModelsSettings } from './local-models-settings'
 import { SettingsContent, SettingsSkeleton } from './primitives'
 
 // The embedded terminal (and thus the "run disconnect command" path) only
@@ -49,7 +52,7 @@ function GroupLabel({ children }: { children: ReactNode }) {
 }
 
 // Sub-views surfaced as a sidebar subnav: account sign-in vs raw API keys.
-export const PROVIDER_VIEWS = ['accounts', 'keys', 'custom-endpoints'] as const
+export const PROVIDER_VIEWS = ['accounts', 'keys', 'custom-endpoints', 'local'] as const
 
 export type ProviderView = (typeof PROVIDER_VIEWS)[number]
 
@@ -67,6 +70,7 @@ export type ProviderView = (typeof PROVIDER_VIEWS)[number]
 // Only entries that resolve to neither (the "Other" bucket) are skipped.
 function buildProviderKeyGroups(vars: Record<string, EnvVarInfo>): ProviderKeyGroup[] {
   const buckets = new Map<string, [string, EnvVarInfo][]>()
+  const managedEva = isManagedEvaosAgent()
 
   for (const [key, info] of Object.entries(vars)) {
     if (info.category !== 'provider') {
@@ -106,10 +110,15 @@ function buildProviderKeyGroups(vars: Record<string, EnvVarInfo>): ProviderKeyGr
       advanced: entries
         .filter(([k, i]) => k !== primary[0] && (!isKeyVar(k, i) || i.is_set))
         .sort(([a], [b]) => a.localeCompare(b)),
-      description: meta?.description ?? primary[1].description,
-      docsUrl: meta?.docsUrl ?? primary[1].url ?? undefined,
+      description: managedEva
+        ? sanitizeManagedBrandText(meta?.description ?? primary[1].description ?? '')
+        : (meta?.description ?? primary[1].description),
+      docsUrl:
+        managedEva && /^nous/i.test(name)
+          ? 'https://www.electricsheephq.com'
+          : (meta?.docsUrl ?? primary[1].url ?? undefined),
       hasAnySet: entries.some(([, i]) => i.is_set),
-      name,
+      name: managedProviderDisplayValue(name, name, managedEva),
       primary,
       priority: providerPriority(name)
     })
@@ -120,24 +129,26 @@ function buildProviderKeyGroups(vars: Record<string, EnvVarInfo>): ProviderKeyGr
 
 // Deliberately a near-1:1 replica of the first-run onboarding picker
 // (`Picker` in desktop-onboarding-overlay): same recommended card, same
-// Fireworks #2 quick-key row, same provider rows, same "Other providers"
-// disclosure, same OpenRouter quick-key row, and the same bottom-right
-// "I have an API key" affordance. The leaf cards are the exact shared
-// components, so the two surfaces stay visually identical. Selecting a
-// provider hands off to the shared onboarding overlay, which runs that
-// provider's real sign-in flow; the key affordances open the API-key
-// catalog below.
+// always-visible Local models row, same provider rows, same "Other
+// providers" disclosure (Fireworks and OpenRouter quick-key rows live
+// inside it on both surfaces), and the same bottom-right "I have an API
+// key" affordance. The leaf cards are the exact shared components, so
+// the two surfaces stay visually identical. Selecting a provider hands
+// off to the shared onboarding overlay, which runs that provider's real
+// sign-in flow; the key affordances open the API-key catalog below.
 function OAuthPicker({
   disconnecting,
   onDisconnect,
   onTerminalDisconnect,
   onWantApiKey,
+  onWantLocalModels,
   providers
 }: {
   disconnecting: null | string
   onDisconnect: (provider: OAuthProvider) => void
   onTerminalDisconnect: (provider: OAuthProvider) => void
   onWantApiKey: () => void
+  onWantLocalModels: () => void
   providers: OAuthProvider[]
 }) {
   const { t } = useI18n()
@@ -186,8 +197,9 @@ function OAuthPicker({
         {p.intro}
       </p>
       {featured && <FeaturedProviderRow onSelect={select} provider={featured} />}
-      {/* Slot #2 — always visible, matching onboarding / CANONICAL_PROVIDERS. */}
-      {!managedEva && <FireworksProviderRow onClick={onWantApiKey} />}
+      {/* Slot #2 — the no-account path, matching onboarding. Behind the
+          --local launch flag like every local-models surface. */}
+      {$localModelsEnabled.get() && !managedEva && <LocalModelsProviderRow onClick={onWantLocalModels} />}
       {connected.length > 0 && (
         <>
           <GroupLabel>{p.connected}</GroupLabel>
@@ -209,6 +221,7 @@ function OAuthPicker({
           {others.map(p => (
             <ProviderRow key={p.id} onSelect={select} provider={p} />
           ))}
+          {!managedEva && <FireworksProviderRow onClick={onWantApiKey} />}
           <OpenRouterProviderRow onClick={onWantApiKey} />
         </>
       )}
@@ -246,7 +259,6 @@ function ConnectedProviderRow({
   const title = providerTitle(provider)
   const managedUnavailable = isManagedLocalCliProviderUnavailable(provider)
   const Trail = provider.flow === 'external' ? Terminal : ChevronRight
-
   // Hermes can clear this provider's creds via the API.
   const canDisconnect = provider.disconnectable ?? provider.flow !== 'external'
 
@@ -292,32 +304,32 @@ function ConnectedProviderRow({
             <Button onClick={() => onSelect(provider)} size="inline" type="button" variant="textStrong">
               {copy.reauthenticate}
             </Button>
+            {canDisconnect && (
+              <Button
+                aria-label={`${t.common.remove} ${title}`}
+                disabled={disconnecting}
+                onClick={() => onDisconnect(provider)}
+                size="icon-xs"
+                title={`${t.common.remove} ${title}`}
+                type="button"
+                variant="ghost"
+              >
+                {disconnecting ? <Loader2 className="size-3 animate-spin" /> : <Trash2 className="size-3" />}
+              </Button>
+            )}
+            {terminalDisconnect && (
+              <Button
+                aria-label={`${copy.disconnect} ${title}`}
+                onClick={() => onTerminalDisconnect(provider)}
+                size="icon-xs"
+                title={copy.disconnectInTerminal}
+                type="button"
+                variant="ghost"
+              >
+                <Trash2 className="size-3" />
+              </Button>
+            )}
           </>
-        )}
-        {canDisconnect && (
-          <Button
-            aria-label={`${t.common.remove} ${title}`}
-            disabled={disconnecting}
-            onClick={() => onDisconnect(provider)}
-            size="icon-xs"
-            title={`${t.common.remove} ${title}`}
-            type="button"
-            variant="ghost"
-          >
-            {disconnecting ? <Loader2 className="size-3 animate-spin" /> : <Trash2 className="size-3" />}
-          </Button>
-        )}
-        {terminalDisconnect && (
-          <Button
-            aria-label={`${copy.disconnect} ${title}`}
-            onClick={() => onTerminalDisconnect(provider)}
-            size="icon-xs"
-            title={copy.disconnectInTerminal}
-            type="button"
-            variant="ghost"
-          >
-            <Trash2 className="size-3" />
-          </Button>
         )}
       </div>
     </div>
@@ -372,6 +384,7 @@ export function ProvidersSettings({
   view
 }: ProvidersSettingsProps) {
   const { t } = useI18n()
+  const managedEva = isManagedEvaosAgent()
   const { rowProps, vars } = useEnvCredentials()
   const [oauthProviders, setOauthProviders] = useState<OAuthProvider[]>([])
   const [openProvider, setOpenProvider] = useState<null | string>(null)
@@ -499,7 +512,7 @@ export function ProvidersSettings({
 
     return (
       <SettingsContent>
-        <LocalEndpointRow onOpen={startManualLocalEndpoint} />
+        {!managedEva && <LocalEndpointRow onOpen={startManualLocalEndpoint} />}
         {keyGroups.length > 0 ? (
           <div className="grid gap-3">
             <SearchField
@@ -535,8 +548,15 @@ export function ProvidersSettings({
     )
   }
 
-  if (view === 'custom-endpoints') {
+  if (view === 'custom-endpoints' && !managedEva) {
     return <CustomEndpointsSettings onConfigSaved={onConfigSaved} onMainModelChanged={onMainModelChanged} />
+  }
+
+  if (view === 'local' && !managedEva) {
+    // Strict --local gate: without the launch flag the pane doesn't render
+    // even when local models are configured — a stale ?pview=local deep link
+    // (or an old shortcut) lands on the accounts view instead.
+    return $localModelsEnabled.get() ? <LocalModelsSettings /> : null
   }
 
   return (
@@ -546,6 +566,7 @@ export function ProvidersSettings({
         onDisconnect={provider => void handleDisconnect(provider)}
         onTerminalDisconnect={provider => void handleTerminalDisconnect(provider)}
         onWantApiKey={() => onViewChange('keys')}
+        onWantLocalModels={() => onViewChange('local')}
         providers={oauthProviders}
       />
     </SettingsContent>

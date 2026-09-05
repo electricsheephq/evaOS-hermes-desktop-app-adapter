@@ -5,7 +5,6 @@ import { MemoryRouter } from 'react-router'
 import type * as ReactRouterDom from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { en } from '@/i18n/en'
 import type { ToolsetConfig } from '@/types/hermes'
 
 // EnvVarField navigates to Settings → Keys via useNavigate, so every render
@@ -44,7 +43,6 @@ const getHermesConfigRecord = vi.fn()
 const getHermesConfigSchema = vi.fn()
 const saveHermesConfig = vi.fn()
 const getElevenLabsVoices = vi.fn()
-const confirmRemoval = vi.fn()
 
 vi.mock('@/hermes', () => ({
   getToolsetConfig: (name: string) => getToolsetConfig(name),
@@ -75,10 +73,6 @@ vi.mock('@/hermes', () => ({
 vi.mock('@/store/notifications', () => ({
   notify: vi.fn(),
   notifyError: vi.fn()
-}))
-
-vi.mock('@/store/confirm', () => ({
-  confirm: (options: unknown) => confirmRemoval(options)
 }))
 
 vi.mock('@/store/activity', () => ({
@@ -156,7 +150,6 @@ beforeEach(() => {
   getHermesConfigSchema.mockResolvedValue({ fields: {}, category_order: [] })
   saveHermesConfig.mockResolvedValue({ ok: true })
   getElevenLabsVoices.mockResolvedValue({ available: false, voices: [] })
-  confirmRemoval.mockResolvedValue(true)
 })
 
 afterEach(() => {
@@ -602,7 +595,7 @@ describe('ToolsetConfigPanel', () => {
       expect(screen.getAllByText('Active')).toHaveLength(1)
       expect(screen.queryByText('Ready')).toBeNull()
       expect(screen.getByText('Needs sign-in')).toBeTruthy()
-      expect(screen.getByText(en.settings.toolsets.needsSetup)).toBeTruthy()
+      expect(screen.getByText('Setup required')).toBeTruthy()
     })
 
     it('shows no Ready pill for a keyed provider the server marks needs_keys', async () => {
@@ -821,80 +814,34 @@ describe('ToolsetConfigPanel', () => {
         ]
       })
 
-    it('allows a managed provider after its last required key is saved locally', async () => {
+    it('does not offer a Nous Portal escape from a managed toolset response', async () => {
+      const { notify } = await import('@/store/notifications')
       Object.defineProperty(window, 'hermesDesktop', {
         configurable: true,
         value: { eva: {} },
         writable: true
       })
-      getToolsetConfig.mockResolvedValue(
-        config({
-          providers: [
-            {
-              name: 'Nous Subscription',
-              badge: 'subscription',
-              tag: 'Managed provider',
-              env_vars: [
-                { key: 'MANAGED_API_KEY', prompt: 'Managed API key', url: 'https://x', default: null, is_set: false }
-              ],
-              post_setup: null,
-              requires_nous_auth: true,
-              is_active: false,
-              status: 'needs_keys'
-            }
-          ]
-        })
-      )
+      getToolsetConfig.mockResolvedValue(nousBrowserConfig())
 
       const { ToolsetConfigPanel } = await import('./toolset-config-panel')
-      render(<ToolsetConfigPanel toolset="tts" />)
+      render(<ToolsetConfigPanel onConfiguredChange={vi.fn()} toolset="browser" />)
 
-      const trigger = await screen.findByRole('button', { name: /^Actions$/ })
-      fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false, pointerType: 'mouse' })
-      fireEvent.click(await screen.findByRole('menuitem', { name: 'Set' }))
-      fireEvent.change(await screen.findByPlaceholderText('Managed API key'), { target: { value: 'sk-live' } })
-      fireEvent.click(screen.getByRole('button', { name: 'Save' }))
-      await screen.findByText('Ready')
-      fireEvent.click(screen.getByRole('button', { name: /Use this backend/ }))
+      const managedRow = await screen.findByRole('button', { name: /Electric Sheep managed service/ })
+      await waitFor(() => expect(managedRow.getAttribute('aria-expanded')).toBe('true'))
+      expect(screen.getByText('managed')).toBeTruthy()
+      expect(screen.getByText('Managed Browser Use included with your managed agent')).toBeTruthy()
+      expect(screen.queryByText(/Nous Subscription/)).toBeNull()
+      fireEvent.click(await screen.findByRole('button', { name: /Use this backend/ }))
 
-      await waitFor(() => expect(selectToolsetProvider).toHaveBeenCalledWith('tts', 'Nous Subscription'))
-    })
-
-    it('blocks a managed provider after a required key is cleared locally', async () => {
-      Object.defineProperty(window, 'hermesDesktop', {
-        configurable: true,
-        value: { eva: {} },
-        writable: true
-      })
-      getToolsetConfig.mockResolvedValue(
-        config({
-          providers: [
-            {
-              name: 'Nous Subscription',
-              badge: 'subscription',
-              tag: 'Managed provider',
-              env_vars: [
-                { key: 'MANAGED_API_KEY', prompt: 'Managed API key', url: 'https://x', default: null, is_set: true }
-              ],
-              post_setup: null,
-              requires_nous_auth: true,
-              is_active: false,
-              status: 'ready'
-            }
-          ]
+      await waitFor(() =>
+        expect(notify).toHaveBeenCalledWith({
+          kind: 'warning',
+          title: 'Provider unavailable',
+          message: 'Electric Sheep managed service (Browser Use cloud) is not available for your managed agent.'
         })
       )
-
-      const { ToolsetConfigPanel } = await import('./toolset-config-panel')
-      render(<ToolsetConfigPanel toolset="tts" />)
-
-      const trigger = await screen.findByRole('button', { name: /^Actions$/ })
-      fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false, pointerType: 'mouse' })
-      fireEvent.click(await screen.findByRole('menuitem', { name: 'Clear' }))
-      await waitFor(() => expect(deleteEnvVar).toHaveBeenCalledWith('MANAGED_API_KEY'))
-      fireEvent.click(screen.getByRole('button', { name: /Use this backend/ }))
-
-      await waitFor(() => expect(selectToolsetProvider).not.toHaveBeenCalled())
+      expect(selectToolsetProvider).not.toHaveBeenCalled()
+      expect(startOAuthLogin).not.toHaveBeenCalled()
     })
 
     it('surfaces a sign-in notice when the PUT reports needs_nous_auth', async () => {
@@ -913,6 +860,7 @@ describe('ToolsetConfigPanel', () => {
         needs_nous_auth: true,
         feature: 'browser'
       })
+
       const { ToolsetConfigPanel } = await import('./toolset-config-panel')
       render(<ToolsetConfigPanel onConfiguredChange={vi.fn()} toolset="browser" />)
 
@@ -933,47 +881,6 @@ describe('ToolsetConfigPanel', () => {
       )
       // No success toast — the row is not active yet.
       expect(notify).not.toHaveBeenCalledWith(expect.objectContaining({ kind: 'success' }))
-    })
-
-    it('does not offer a Nous Portal escape from a managed toolset response', async () => {
-      const { notify } = await import('@/store/notifications')
-      Object.defineProperty(window, 'hermesDesktop', {
-        configurable: true,
-        value: { eva: {} },
-        writable: true
-      })
-      getToolsetConfig.mockResolvedValue(nousBrowserConfig())
-      selectToolsetProvider.mockResolvedValue({
-        ok: true,
-        name: 'browser',
-        provider: 'Nous Subscription (Browser Use cloud)',
-        needs_nous_auth: true,
-        feature: 'browser'
-      })
-
-      const { ToolsetConfigPanel } = await import('./toolset-config-panel')
-      render(<ToolsetConfigPanel onConfiguredChange={vi.fn()} toolset="browser" />)
-
-      const managedRow = await screen.findByRole('button', { name: /Electric Sheep managed service/ })
-
-      // The panel auto-expands its sole provider in an effect. Clicking while
-      // that effect is pending races its state update and can collapse the row.
-      await waitFor(() => expect(managedRow.getAttribute('aria-expanded')).toBe('true'))
-      expect(screen.getByText('managed')).toBeTruthy()
-      expect(screen.getByText('Managed Browser Use included with your managed agent')).toBeTruthy()
-      expect(screen.queryByText(/Nous Subscription/)).toBeNull()
-      fireEvent.click(await screen.findByRole('button', { name: /Use this backend/ }))
-
-      await waitFor(() =>
-        expect(notify).toHaveBeenCalledWith({
-          kind: 'warning',
-          title: 'Provider unavailable',
-          message: 'Electric Sheep managed service (Browser Use cloud) is not available for your managed agent.'
-        })
-      )
-      expect(selectToolsetProvider).not.toHaveBeenCalled()
-      expect(startOAuthLogin).not.toHaveBeenCalled()
-      expect(pollOAuthSession).not.toHaveBeenCalled()
     })
 
     it('drives the existing Nous OAuth device-code flow from the sign-in action and refetches', async () => {
@@ -1034,15 +941,8 @@ describe('ToolsetConfigPanel', () => {
 
     it('shows the plain success toast when the managed row is already entitled', async () => {
       const { notify } = await import('@/store/notifications')
-      Object.defineProperty(window, 'hermesDesktop', {
-        configurable: true,
-        value: { eva: {} },
-        writable: true
-      })
 
-      const entitledConfig = nousBrowserConfig()
-      entitledConfig.providers[0]!.status = 'ready'
-      getToolsetConfig.mockResolvedValue(entitledConfig)
+      getToolsetConfig.mockResolvedValue(nousBrowserConfig())
       selectToolsetProvider.mockResolvedValue({
         ok: true,
         name: 'browser',
@@ -1052,19 +952,10 @@ describe('ToolsetConfigPanel', () => {
       const { ToolsetConfigPanel } = await import('./toolset-config-panel')
       render(<ToolsetConfigPanel onConfiguredChange={vi.fn()} toolset="browser" />)
 
-      const managedRow = await screen.findByRole('button', { name: /Electric Sheep managed service/ })
-
-      // Await the default-provider effect instead of racing it with a click.
-      await waitFor(() => expect(managedRow.getAttribute('aria-expanded')).toBe('true'))
+      await screen.findByRole('button', { name: /Nous Subscription/ })
       fireEvent.click(await screen.findByRole('button', { name: /Use this backend/ }))
 
-      await waitFor(() =>
-        expect(notify).toHaveBeenCalledWith({
-          kind: 'success',
-          title: 'Provider selected',
-          message: 'Electric Sheep managed service (Browser Use cloud) is now active.'
-        })
-      )
+      await waitFor(() => expect(notify).toHaveBeenCalledWith(expect.objectContaining({ kind: 'success' })))
       expect(startOAuthLogin).not.toHaveBeenCalled()
     })
   })

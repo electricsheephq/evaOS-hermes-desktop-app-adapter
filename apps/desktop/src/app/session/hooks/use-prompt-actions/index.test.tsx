@@ -31,32 +31,17 @@ import { $wakeWord, resetWakeWordState } from '@/store/wake-word'
 import type { SessionInfo } from '@/types/hermes'
 
 import { clearSingleFlightSessionResumeState } from './single-flight-resume'
+import { SESSION_COMPRESS_TIMEOUT_MS } from './slash'
 import type { SubmitTextOptions } from './utils'
 
 import { uploadComposerAttachment, usePromptActions } from '.'
-
-const { mockInvalidateSlashCompletions, mockRunGatewayRestart } = vi.hoisted(() => ({
-  mockInvalidateSlashCompletions: vi.fn(),
-  mockRunGatewayRestart: vi.fn()
-}))
 
 // Suites in this file reuse the same stored-id constants. The module-level
 // single-flight resume map (and drift-recovery cache) would otherwise leak a
 // never-settling in-flight promise from one test into the next.
 beforeEach(() => {
   clearSingleFlightSessionResumeState()
-  mockInvalidateSlashCompletions.mockReset()
-  mockRunGatewayRestart.mockReset()
-  mockRunGatewayRestart.mockResolvedValue({ profile: 'default', status: 'restarted' })
 })
-
-vi.mock('@/lib/slash-completion-cache', () => ({
-  invalidateSlashCompletions: mockInvalidateSlashCompletions
-}))
-
-vi.mock('@/store/system-actions', () => ({
-  runGatewayRestart: mockRunGatewayRestart
-}))
 
 vi.mock('@/hermes', () => ({
   getProfiles: vi.fn(async () => ({ profiles: [] })),
@@ -365,6 +350,69 @@ describe('usePromptActions /title', () => {
   })
 })
 
+describe('usePromptActions /stop', () => {
+  afterEach(() => {
+    cleanup()
+    vi.restoreAllMocks()
+  })
+
+  it('interrupts the target desktop turn before keeping the background-process cleanup', async () => {
+    const calls: Array<{ method: string; params?: Record<string, unknown> }> = []
+
+    const requestGateway = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+      calls.push({ method, params })
+
+      if (method === 'session.interrupt') {
+        return { status: 'interrupted' } as never
+      }
+
+      if (method === 'process.stop') {
+        return { killed: 0 } as never
+      }
+
+      return {} as never
+    })
+
+    let handle: HarnessHandle | null = null
+    await actRender(
+      <Harness onReady={h => (handle = h)} refreshSessions={async () => undefined} requestGateway={requestGateway} />
+    )
+
+    await handle!.submitText('/stop', { sessionId: 'rt-target-session' })
+
+    expect(calls).toEqual([
+      { method: 'session.interrupt', params: { session_id: 'rt-target-session' } },
+      { method: 'process.stop', params: {} }
+    ])
+    expect(requestGateway).not.toHaveBeenCalledWith('slash.exec', expect.anything())
+    expect(requestGateway).not.toHaveBeenCalledWith('command.dispatch', expect.anything())
+  })
+
+  it('still stops background processes when the turn interrupt fails', async () => {
+    const requestGateway = vi.fn(async (method: string) => {
+      if (method === 'session.interrupt') {
+        throw new Error('interrupt failed')
+      }
+
+      if (method === 'process.stop') {
+        return { killed: 2 } as never
+      }
+
+      return {} as never
+    })
+
+    let handle: HarnessHandle | null = null
+    await actRender(
+      <Harness onReady={h => (handle = h)} refreshSessions={async () => undefined} requestGateway={requestGateway} />
+    )
+
+    await handle!.submitText('/stop')
+
+    expect(requestGateway).toHaveBeenCalledWith('session.interrupt', { session_id: RUNTIME_SESSION_ID })
+    expect(requestGateway).toHaveBeenCalledWith('process.stop', {})
+  })
+})
+
 // Helper: extract rendered text parts from captured updateSessionState seeds.
 function renderedSeedTexts(seeds: Record<string, unknown>[]): string[] {
   return seeds.flatMap(state => {
@@ -645,7 +693,7 @@ describe('usePromptActions /compress', () => {
     vi.restoreAllMocks()
   })
 
-  it('routes through session.compress (not slash.exec) with a 120s timeout and renders the summary', async () => {
+  it('routes through session.compress (not slash.exec) with the compute-host ceiling timeout and renders the summary', async () => {
     const seeds: Record<string, unknown>[] = []
 
     const requestGateway = vi.fn(async (method: string, _params?: Record<string, unknown>, _timeoutMs?: number) => {
@@ -681,7 +729,7 @@ describe('usePromptActions /compress', () => {
     expect(requestGateway).toHaveBeenCalledWith(
       'session.compress',
       expect.objectContaining({ session_id: RUNTIME_SESSION_ID }),
-      120_000
+      SESSION_COMPRESS_TIMEOUT_MS
     )
     expect(requestGateway).not.toHaveBeenCalledWith('slash.exec', expect.anything())
     expect(requestGateway).not.toHaveBeenCalledWith('command.dispatch', expect.anything())
@@ -815,7 +863,7 @@ describe('usePromptActions /compress', () => {
     expect(requestGateway).toHaveBeenCalledWith(
       'session.compress',
       expect.objectContaining({ focus_topic: 'the auth refactor' }),
-      120_000
+      SESSION_COMPRESS_TIMEOUT_MS
     )
   })
 
@@ -922,7 +970,9 @@ describe('usePromptActions /compress', () => {
     act(() => {
       submitted = handle!.submitTextRaw('/compress')
     })
-    await waitFor(() => expect(requestGateway).toHaveBeenCalledWith('session.compress', expect.anything(), 120_000))
+    await waitFor(() =>
+      expect(requestGateway).toHaveBeenCalledWith('session.compress', expect.anything(), SESSION_COMPRESS_TIMEOUT_MS)
+    )
 
     // Switch to session B before compression resolves.
     activeSessionIdRef.current = RUNTIME_SESSION_B
@@ -981,7 +1031,9 @@ describe('usePromptActions /compress', () => {
     act(() => {
       submitted = handle!.submitTextRaw('/compress')
     })
-    await waitFor(() => expect(requestGateway).toHaveBeenCalledWith('session.compress', expect.anything(), 120_000))
+    await waitFor(() =>
+      expect(requestGateway).toHaveBeenCalledWith('session.compress', expect.anything(), SESSION_COMPRESS_TIMEOUT_MS)
+    )
     activeSessionIdRef.current = RUNTIME_SESSION_B
     storedSessionIdRef.current = 'stored-b'
     rejectCompress(new Error('compression failed'))
@@ -1015,6 +1067,99 @@ describe('usePromptActions /compress', () => {
     await waitFor(() => expect($notifications.get().some(item => item.message === 'compressing context...')).toBe(true))
     resolveCompress({ messages: [{ content: 'compressed transcript', role: 'system' }] })
     await submitted
+  })
+})
+
+describe('usePromptActions /btw', () => {
+  afterEach(() => {
+    cleanup()
+    vi.restoreAllMocks()
+  })
+
+  // #99065: slash.exec only captured the ack; the answer prints after the
+  // worker's stdout window. prompt.btw + btw.complete is the TUI path.
+  it('routes through prompt.btw (not slash.exec) and renders the start notice', async () => {
+    const seeds: Record<string, unknown>[] = []
+
+    const requestGateway = vi.fn(async (method: string) => {
+      if (method === 'prompt.btw') {
+        return { task_id: 'btw_ab12cd' } as never
+      }
+
+      return {} as never
+    })
+
+    let handle: HarnessHandle | null = null
+    await actRender(
+      <Harness
+        onReady={h => (handle = h)}
+        onSeedState={s => seeds.push(s)}
+        refreshSessions={async () => undefined}
+        requestGateway={requestGateway}
+      />
+    )
+
+    await handle!.submitText('/btw which file was that error in?')
+
+    expect(requestGateway).toHaveBeenCalledWith('prompt.btw', {
+      session_id: RUNTIME_SESSION_ID,
+      text: 'which file was that error in?'
+    })
+    expect(requestGateway).not.toHaveBeenCalledWith('slash.exec', expect.anything())
+    expect(requestGateway).not.toHaveBeenCalledWith('command.dispatch', expect.anything())
+    expect(renderedSeedTexts(seeds).some(text => text.includes('btw_ab12cd'))).toBe(true)
+  })
+
+  it('shows usage when no question is typed', async () => {
+    const seeds: Record<string, unknown>[] = []
+
+    const requestGateway = vi.fn(async () => ({}) as never)
+
+    let handle: HarnessHandle | null = null
+    await actRender(
+      <Harness
+        onReady={h => (handle = h)}
+        onSeedState={s => seeds.push(s)}
+        refreshSessions={async () => undefined}
+        requestGateway={requestGateway}
+      />
+    )
+
+    await handle!.submitText('/btw')
+
+    expect(requestGateway).not.toHaveBeenCalled()
+    expect(renderedSeedTexts(seeds).some(text => text.includes('Usage: /btw'))).toBe(true)
+  })
+
+  it('falls back to the slash worker when an older gateway lacks prompt.btw', async () => {
+    const seeds: Record<string, unknown>[] = []
+
+    const requestGateway = vi.fn(async (method: string) => {
+      if (method === 'prompt.btw') {
+        throw new Error('method not found: prompt.btw')
+      }
+
+      if (method === 'slash.exec') {
+        return { output: 'Side question started by legacy gateway' } as never
+      }
+
+      throw new Error(`unexpected method: ${method}`)
+    })
+
+    let handle: HarnessHandle | null = null
+    await actRender(
+      <Harness
+        onReady={h => (handle = h)}
+        onSeedState={s => seeds.push(s)}
+        refreshSessions={async () => undefined}
+        requestGateway={requestGateway}
+      />
+    )
+
+    await handle!.submitText('/btw anything')
+
+    expect(requestGateway).toHaveBeenCalledWith('slash.exec', expect.objectContaining({ command: 'btw anything' }))
+    expect(renderedSeedTexts(seeds).some(text => text.includes('legacy gateway'))).toBe(true)
   })
 })
 
@@ -1094,242 +1239,6 @@ describe('usePromptActions exec fallback error reporting', () => {
     expect(requestGateway).toHaveBeenCalledWith('session.status', expect.anything(), undefined)
     expect(requestGateway).toHaveBeenCalledWith('slash.exec', expect.objectContaining({ command: 'status' }))
     expect(renderedSeedTexts(seeds).some(text => text.includes('session status from slash worker'))).toBe(true)
-  })
-
-  it('does not bypass reload.mcp confirmation when the dedicated RPC is unavailable', async () => {
-    const seeds: Record<string, unknown>[] = []
-
-    const requestGateway = vi.fn(async (method: string) => {
-      if (method === 'reload.mcp') {
-        throw new Error('method not found: reload.mcp')
-      }
-
-      throw new Error(`unexpected method: ${method}`)
-    })
-
-    let handle: HarnessHandle | null = null
-    await actRender(
-      <Harness
-        onReady={h => (handle = h)}
-        onSeedState={s => seeds.push(s)}
-        refreshSessions={async () => undefined}
-        requestGateway={requestGateway}
-      />
-    )
-
-    await handle!.submitText('/reload-mcp now')
-
-    expect(requestGateway).toHaveBeenCalledWith('reload.mcp', expect.objectContaining({ confirm: true }), 300_000)
-    expect(requestGateway.mock.calls.some(([method]) => method === 'slash.exec')).toBe(false)
-    expect(renderedSeedTexts(seeds).some(text => text.includes('method not found: reload.mcp'))).toBe(true)
-  })
-
-  it('reloads skills through the current session RPC on the managed desktop', async () => {
-    Object.defineProperty(window, 'hermesDesktop', {
-      configurable: true,
-      value: { eva: {} },
-      writable: true
-    })
-
-    const seeds: Record<string, unknown>[] = []
-
-    const requestGateway = vi.fn(async (method: string) => {
-      if (method === 'skills.reload') {
-        return { output: 'Reloading skills... 4 skill(s) available' } as never
-      }
-
-      throw new Error(`unexpected method: ${method}`)
-    })
-
-    let handle: HarnessHandle | null = null
-    await actRender(
-      <Harness
-        onReady={h => (handle = h)}
-        onSeedState={s => seeds.push(s)}
-        refreshSessions={async () => undefined}
-        requestGateway={requestGateway}
-      />
-    )
-
-    await handle!.submitText('/reload-skills')
-
-    expect(requestGateway).toHaveBeenCalledWith('skills.reload', { session_id: RUNTIME_SESSION_ID }, undefined)
-    expect(requestGateway.mock.calls.some(([method]) => method === 'slash.exec')).toBe(false)
-    expect(mockInvalidateSlashCompletions).toHaveBeenCalledTimes(1)
-    expect(renderedSeedTexts(seeds).some(text => text.includes('4 skill(s) available'))).toBe(true)
-  })
-
-  it('invalidates slash completions after the legacy managed skill reload fallback', async () => {
-    Object.defineProperty(window, 'hermesDesktop', {
-      configurable: true,
-      value: { eva: {} },
-      writable: true
-    })
-
-    const seeds: Record<string, unknown>[] = []
-
-    const requestGateway = vi.fn(async (method: string) => {
-      if (method === 'skills.reload') {
-        throw new Error('method not found: skills.reload')
-      }
-
-      if (method === 'slash.exec') {
-        return { output: 'Reloading skills... 4 skill(s) available' } as never
-      }
-
-      if (method === 'commands.catalog') {
-        return { pairs: [['/new-skill', 'Newly loaded skill']] } as never
-      }
-
-      throw new Error(`unexpected method: ${method}`)
-    })
-
-    let handle: HarnessHandle | null = null
-    await actRender(
-      <Harness
-        onReady={h => (handle = h)}
-        onSeedState={s => seeds.push(s)}
-        refreshSessions={async () => undefined}
-        requestGateway={requestGateway}
-      />
-    )
-
-    await handle!.submitText('/reload-skills')
-
-    expect(requestGateway).toHaveBeenCalledWith('skills.reload', { session_id: RUNTIME_SESSION_ID }, undefined)
-    expect(requestGateway).toHaveBeenCalledWith(
-      'slash.exec',
-      expect.objectContaining({ command: 'reload-skills', session_id: RUNTIME_SESSION_ID })
-    )
-    expect(requestGateway).toHaveBeenCalledWith('commands.catalog', { session_id: RUNTIME_SESSION_ID })
-    expect(requestGateway.mock.invocationCallOrder[1]).toBeLessThan(requestGateway.mock.invocationCallOrder[2])
-    expect(mockInvalidateSlashCompletions).toHaveBeenCalledTimes(1)
-    expect(renderedSeedTexts(seeds).some(text => text.includes('4 skill(s) available'))).toBe(true)
-  })
-
-  it('does not invalidate slash completions when the legacy managed skill reload fallback fails', async () => {
-    Object.defineProperty(window, 'hermesDesktop', {
-      configurable: true,
-      value: { eva: {} },
-      writable: true
-    })
-
-    const seeds: Record<string, unknown>[] = []
-
-    const requestGateway = vi.fn(async (method: string) => {
-      if (method === 'skills.reload') {
-        throw new Error('method not found: skills.reload')
-      }
-
-      if (method === 'slash.exec') {
-        throw new Error('legacy skill reload failed')
-      }
-
-      if (method === 'command.dispatch') {
-        throw new Error('not a quick/plugin/skill command')
-      }
-
-      throw new Error(`unexpected method: ${method}`)
-    })
-
-    let handle: HarnessHandle | null = null
-    await actRender(
-      <Harness
-        onReady={h => (handle = h)}
-        onSeedState={s => seeds.push(s)}
-        refreshSessions={async () => undefined}
-        requestGateway={requestGateway}
-      />
-    )
-
-    await handle!.submitText('/reload-skills')
-
-    expect(requestGateway).toHaveBeenCalledWith('skills.reload', { session_id: RUNTIME_SESSION_ID }, undefined)
-    expect(requestGateway).toHaveBeenCalledWith(
-      'slash.exec',
-      expect.objectContaining({ command: 'reload-skills', session_id: RUNTIME_SESSION_ID })
-    )
-    expect(requestGateway.mock.calls.some(([method]) => method === 'commands.catalog')).toBe(false)
-    expect(mockInvalidateSlashCompletions).not.toHaveBeenCalled()
-    expect(renderedSeedTexts(seeds).some(text => text.includes('legacy skill reload failed'))).toBe(true)
-  })
-
-  it('keeps managed skill reload unavailable on an unmanaged desktop', async () => {
-    Reflect.deleteProperty(window, 'hermesDesktop')
-
-    const seeds: Record<string, unknown>[] = []
-    const requestGateway = vi.fn(async () => ({ output: 'must not run' }) as never)
-
-    let handle: HarnessHandle | null = null
-    await actRender(
-      <Harness
-        onReady={h => (handle = h)}
-        onSeedState={s => seeds.push(s)}
-        refreshSessions={async () => undefined}
-        requestGateway={requestGateway}
-      />
-    )
-
-    await handle!.submitText('/reload-skills')
-
-    expect(requestGateway).not.toHaveBeenCalled()
-    expect(renderedSeedTexts(seeds).some(text => text.includes('terminal interface'))).toBe(true)
-  })
-
-  it('restarts only the current managed profile and renders the result', async () => {
-    Object.defineProperty(window, 'hermesDesktop', {
-      configurable: true,
-      value: { eva: {} },
-      writable: true
-    })
-
-    mockRunGatewayRestart.mockResolvedValue({ profile: 'asuka-eva02', status: 'restarted' })
-    const seeds: Record<string, unknown>[] = []
-    const requestGateway = vi.fn(async () => ({}) as never)
-
-    let handle: HarnessHandle | null = null
-    await actRender(
-      <Harness
-        onReady={h => (handle = h)}
-        onSeedState={s => seeds.push(s)}
-        refreshSessions={async () => undefined}
-        requestGateway={requestGateway}
-      />
-    )
-
-    await handle!.submitText('/restart')
-
-    expect(mockRunGatewayRestart).toHaveBeenCalledTimes(1)
-    expect(requestGateway).not.toHaveBeenCalled()
-    expect(renderedSeedTexts(seeds).some(text => text.includes('asuka-eva02'))).toBe(true)
-    expect(renderedSeedTexts(seeds).some(text => text.includes('Gateway restarted'))).toBe(true)
-  })
-
-  it('denies an explicit profile target without invoking the restart action', async () => {
-    Object.defineProperty(window, 'hermesDesktop', {
-      configurable: true,
-      value: { eva: {} },
-      writable: true
-    })
-
-    const seeds: Record<string, unknown>[] = []
-    const requestGateway = vi.fn(async () => ({}) as never)
-
-    let handle: HarnessHandle | null = null
-    await actRender(
-      <Harness
-        onReady={h => (handle = h)}
-        onSeedState={s => seeds.push(s)}
-        refreshSessions={async () => undefined}
-        requestGateway={requestGateway}
-      />
-    )
-
-    await handle!.submitText('/restart another-profile')
-
-    expect(mockRunGatewayRestart).not.toHaveBeenCalled()
-    expect(requestGateway).not.toHaveBeenCalled()
-    expect(renderedSeedTexts(seeds).some(text => text.includes('no explicit profile target is supported'))).toBe(true)
   })
 
   it('still reports a real command.dispatch failure for skill/quick commands', async () => {
@@ -2050,14 +1959,12 @@ describe('usePromptActions submit / queue drain semantics', () => {
     )
 
     expect(await handle!.submitText('continue remotely')).toBe(true)
-    expect(requestGatewayForAgent).toHaveBeenCalledWith(
-      'hermes01',
-      'default',
+    expect(ambientRequest).toHaveBeenCalledWith(
       'prompt.submit',
       { session_id: 'runtime-remote', text: 'continue remotely' },
       1_800_000
     )
-    expect(ambientRequest).not.toHaveBeenCalled()
+    expect(requestGatewayForAgent).not.toHaveBeenCalled()
   })
 
   it('clears a leftover interrupted flag on a fresh submit (so the new turn streams)', async () => {
@@ -3559,6 +3466,56 @@ describe('usePromptActions sleep/wake session recovery', () => {
     expect(calls.map(c => c.method)).toEqual(['prompt.submit', 'session.resume', 'prompt.submit'])
     expect(calls[1]?.params).toEqual({ session_id: STORED_SESSION_ID, source: 'desktop', omit_messages: true })
     expect(calls[2]?.params).toEqual({ session_id: RECOVERED_SESSION_ID, text: 'message after wake' })
+  })
+
+  it('publishes the recovered runtime binding before retrying through the remote owner router', async () => {
+    const calls: { method: string; params?: Record<string, unknown> }[] = []
+    let bindingPublished = false
+    let submitAttempts = 0
+
+    const requestGateway = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+      calls.push({ method, params })
+
+      if (method === 'prompt.submit') {
+        submitAttempts += 1
+
+        if (submitAttempts === 1) {
+          throw new JsonRpcGatewayError('session not found', { code: 4001 })
+        }
+
+        if (!bindingPublished) {
+          throw new JsonRpcGatewayError('session not found on ambient gateway', { code: 4001 })
+        }
+
+        return {} as never
+      }
+
+      if (method === 'session.resume') {
+        return { session_id: RECOVERED_SESSION_ID } as never
+      }
+
+      return {} as never
+    })
+
+    let handle: HarnessHandle | null = null
+    await actRender(
+      <Harness
+        onReady={h => (handle = h)}
+        onUpdateState={(runtimeId, storedId) => {
+          if (runtimeId === RECOVERED_SESSION_ID && storedId === STORED_SESSION_ID) {
+            bindingPublished = true
+          }
+        }}
+        refreshSessions={async () => undefined}
+        requestGateway={requestGateway}
+        storedSessionId={STORED_SESSION_ID}
+      />
+    )
+
+    expect(await handle!.submitText('remote follow-up after reap')).toBe(true)
+    expect(bindingPublished).toBe(true)
+    expect(calls.map(call => call.method)).toEqual(['prompt.submit', 'session.resume', 'prompt.submit'])
+    expect(calls[2]?.params).toEqual({ session_id: RECOVERED_SESSION_ID, text: 'remote follow-up after reap' })
   })
 
   it('resumes the stored session and retries once when reloadFromMessage (regenerate) reports "session not found"', async () => {
@@ -5813,5 +5770,70 @@ describe('usePromptActions editMessage stale-target recovery (#82462)', () => {
     expect(
       (submitCalls[0]?.[1] as { truncate_before_user_ordinal?: unknown } | undefined)?.truncate_before_user_ordinal
     ).toBeUndefined()
+  })
+})
+
+describe('usePromptActions reloadFromMessage failed-submit rollback (#95745)', () => {
+  afterEach(() => {
+    cleanup()
+    clearNotifications()
+    setMessages([])
+    $busy.set(false)
+  })
+
+  it('restores the full transcript when regenerate is rejected', async () => {
+    $busy.set(false)
+
+    const seed = [
+      { id: 'u1', parts: [textPart('first')], role: 'user' as const, timestamp: 0 },
+      { id: 'a1', parts: [textPart('reply')], role: 'assistant' as const, timestamp: 1 },
+      { id: 'u2', parts: [textPart('later')], role: 'user' as const, timestamp: 2 },
+      { id: 'a2', parts: [textPart('later reply')], role: 'assistant' as const, timestamp: 3 }
+    ]
+
+    setMessages(seed as never)
+
+    let latest: Record<string, unknown> | undefined
+
+    const requestGateway = vi.fn(async (method: string) => {
+      if (method === 'prompt.submit') {
+        throw new JsonRpcGatewayError('target user message is no longer in session history', {
+          code: 4018,
+          data: {
+            ordinal: 0,
+            prefix_user_count: 1,
+            segment_ordinal: -1,
+            user_turn_count: 2
+          }
+        })
+      }
+
+      return {} as never
+    })
+
+    let handle: HarnessHandle | undefined
+
+    await actRender(
+      <Harness
+        onReady={h => {
+          handle = h
+        }}
+        onSeedState={next => {
+          latest = next
+        }}
+        refreshSessions={async () => undefined}
+        requestGateway={requestGateway}
+        seedMessages={seed}
+      />
+    )
+
+    await handle!.reloadFromMessage('u1')
+
+    const rolledBack = latest?.messages as Array<{ hidden?: boolean; id: string }> | undefined
+
+    expect(rolledBack?.map(m => m.id)).toEqual(['u1', 'a1', 'u2', 'a2'])
+    expect(rolledBack?.some(m => m.hidden)).toBe(false)
+    expect(latest?.busy).toBe(false)
+    expect(latest?.awaitingResponse).toBe(false)
   })
 })

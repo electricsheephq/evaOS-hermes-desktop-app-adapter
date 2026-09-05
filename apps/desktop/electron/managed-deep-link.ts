@@ -62,6 +62,7 @@ export function classifyManagedDeepLink(rawUrl: string, callbackScheme: string):
     const rawAuthorityPath = schemeEnd < 0 ? '' : rawText.slice(schemeEnd + 3).split(/[?#]/, 1)[0]
     const rawPathStart = rawAuthorityPath.indexOf('/')
     const rawPath = rawPathStart < 0 ? '' : rawAuthorityPath.slice(rawPathStart)
+
     if (
       url.search ||
       rawText.includes('?') ||
@@ -74,6 +75,7 @@ export function classifyManagedDeepLink(rawUrl: string, callbackScheme: string):
     }
 
     const requestId = url.pathname.slice(1)
+
     if (!/^[A-Za-z0-9][A-Za-z0-9._~-]{0,127}$/.test(requestId) || requestId.includes('%')) {
       return { type: 'unsupported' }
     }

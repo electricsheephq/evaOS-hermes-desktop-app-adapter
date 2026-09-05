@@ -13,6 +13,7 @@ import {
   Archive,
   BarChart3,
   Bell,
+  Cpu,
   Download,
   Globe,
   Info,
@@ -33,6 +34,7 @@ import { cn } from '@/lib/utils'
 import { $commandPaletteOpen, openCommandPalettePage } from '@/store/command-palette'
 import { confirm } from '@/store/confirm'
 import { bindingsFor } from '@/store/keybinds'
+import { $localModelsEnabled } from '@/store/local-models-flag'
 import { notifyError } from '@/store/notifications'
 
 import { useRouteEnumParam } from '../hooks/use-route-enum-param'
@@ -95,7 +97,6 @@ export function SettingsView({ onClose, onConfigSaved, onMainModelChanged }: Set
 
   const availableViews = managedEva ? MANAGED_SETTINGS_VIEWS : SETTINGS_VIEWS
   const [activeView, setActiveView] = useRouteEnumParam('tab', availableViews, 'config:model' as SettingsViewId)
-  const effectiveView = activeView
 
   // Connections merged into the unified Gateways page: land old
   // `?tab=connections` routes/bookmarks there instead of a dead entry.
@@ -104,9 +105,14 @@ export function SettingsView({ onClose, onConfigSaved, onMainModelChanged }: Set
       setActiveView('gateway')
     }
   }, [activeView, setActiveView])
+
   // Providers subnav (Accounts vs API keys) lives in its own param so each
   // sub-view is deep-linkable and survives a refresh.
-  const [providerView, setProviderView] = useRouteEnumParam<ProviderView>('pview', PROVIDER_VIEWS, 'accounts')
+  const providerViews = managedEva
+    ? PROVIDER_VIEWS.filter(view => view !== 'custom-endpoints' && view !== 'local')
+    : PROVIDER_VIEWS
+
+  const [providerView, setProviderView] = useRouteEnumParam<ProviderView>('pview', providerViews, 'accounts')
   const [keysView] = useRouteEnumParam<KeysView>('kview', KEYS_VIEWS, 'tools')
 
   // Jump to a section + its sub-view in one navigate. Two sequential setters
@@ -218,13 +224,32 @@ export function SettingsView({ onClose, onConfigSaved, onMainModelChanged }: Set
             label: t.settings.nav.providerApiKeys,
             onSelect: () => openProviderView('keys')
           },
-          {
-            active: activeView === 'providers' && providerView === 'custom-endpoints',
-            icon: Globe,
-            id: 'pview:custom-endpoints',
-            label: t.settings.nav.providerCustomEndpoints,
-            onSelect: () => openProviderView('custom-endpoints')
-          }
+          ...(!managedEva
+            ? [
+                {
+                  active: activeView === 'providers' && providerView === 'custom-endpoints',
+                  icon: Globe,
+                  id: 'pview:custom-endpoints',
+                  label: t.settings.nav.providerCustomEndpoints,
+                  onSelect: () => openProviderView('custom-endpoints')
+                }
+              ]
+            : []),
+          // Local models ships behind the --local launch flag: no flag, no
+          // nav entry (the pane itself also refuses to render, so a stale
+          // ?pview=local deep link falls back to accounts-shaped emptiness
+          // rather than a hidden feature).
+          ...($localModelsEnabled.get() && !managedEva
+            ? [
+                {
+                  active: activeView === 'providers' && providerView === 'local',
+                  icon: Cpu,
+                  id: 'pview:local',
+                  label: t.settings.nav.providerLocalModels,
+                  onSelect: () => openProviderView('local')
+                }
+              ]
+            : [])
         ],
         gapBefore: true,
         icon: Zap,
@@ -292,7 +317,7 @@ export function SettingsView({ onClose, onConfigSaved, onMainModelChanged }: Set
         onSelect: () => setActiveView('about')
       }
     ],
-    [activeView, keysView, providerView, t, setActiveView, openProviderView, openKeysView]
+    [activeView, keysView, managedEva, providerView, t, setActiveView, openProviderView, openKeysView]
   )
 
   const navGroups = managedEva
@@ -382,24 +407,24 @@ export function SettingsView({ onClose, onConfigSaved, onMainModelChanged }: Set
   )
 
   const activeSettingsContent =
-    effectiveView === 'config:appearance' ? (
+    activeView === 'config:appearance' ? (
       <AppearanceSettings />
-    ) : effectiveView === 'about' ? (
+    ) : activeView === 'about' ? (
       <AboutSettings />
-    ) : effectiveView === 'gateway' || effectiveView === 'connections' ? (
+    ) : activeView === 'gateway' || activeView === 'connections' ? (
       // 'connections' renders the unified page too so the frame before
       // the alias redirect lands doesn't flash the fallback view.
       <GatewaySettings />
-    ) : effectiveView === 'keybinds' ? (
+    ) : activeView === 'keybinds' ? (
       <KeybindSettings />
-    ) : effectiveView.startsWith('config:') ? (
+    ) : activeView.startsWith('config:') ? (
       <ConfigSettings
-        activeSectionId={effectiveView.slice('config:'.length)}
+        activeSectionId={activeView.slice('config:'.length)}
         importInputRef={importInputRef}
         onConfigSaved={onConfigSaved}
         onMainModelChanged={onMainModelChanged}
       />
-    ) : effectiveView === 'providers' ? (
+    ) : activeView === 'providers' ? (
       <ProvidersSettings
         onClose={onClose}
         onConfigSaved={onConfigSaved}
@@ -407,13 +432,13 @@ export function SettingsView({ onClose, onConfigSaved, onMainModelChanged }: Set
         onViewChange={setProviderView}
         view={providerView}
       />
-    ) : effectiveView === 'keys' ? (
+    ) : activeView === 'keys' ? (
       <KeysSettings view={keysView} />
-    ) : effectiveView === 'notifications' ? (
+    ) : activeView === 'notifications' ? (
       <NotificationsSettings />
-    ) : effectiveView === 'billing' ? (
+    ) : activeView === 'billing' ? (
       <BillingSettings />
-    ) : effectiveView === 'plugins' ? (
+    ) : activeView === 'plugins' ? (
       <PluginsSettings />
     ) : (
       <SessionsSettings />

@@ -50,9 +50,9 @@ def _clean_manager_cache(tmp_path, monkeypatch):
     modules_before = set(sys.modules)
     multiplex_before = is_multiplex_active()
     set_multiplex_active(True)
-    plugins_mod.reset_plugin_managers()
+    plugins_mod._reset_plugin_managers_for_tests()
     yield
-    plugins_mod.reset_plugin_managers()
+    plugins_mod._reset_plugin_managers_for_tests()
     set_multiplex_active(multiplex_before)
     for name in set(sys.modules) - modules_before:
         if name.startswith("hermes_plugins."):
@@ -301,7 +301,7 @@ def test_profiles_apply_import_time_tool_override_policy_independently(tmp_path)
         assert module_names[0] != module_names[1]
     finally:
         for home in homes:
-            registry.deregister(target, registration_home_override=str(home))
+            registry.deregister(target, scope=str(home.resolve()))
         set_multiplex_active(False)
         registry.deregister(target)
         set_multiplex_active(True)
@@ -319,9 +319,9 @@ def test_scoped_plugin_missing_pre_exec_policy_fails_loudly(
     home = _make_profile(tmp_path / "profile_missing_policy", "missing_policy")
     register_policy = registry.register_plugin_override_policy
 
-    def drop_scoped_policy(module_namespace, allowed):
+    def drop_scoped_policy(module_namespace, allowed, *, scope=None):
         if not module_namespace.startswith("hermes_plugins.scope_"):
-            register_policy(module_namespace, allowed)
+            register_policy(module_namespace, allowed, scope=scope)
 
     monkeypatch.setattr(
         registry,

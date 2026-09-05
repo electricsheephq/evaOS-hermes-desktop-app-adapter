@@ -27,8 +27,8 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup()
-  vi.clearAllMocks()
   Reflect.deleteProperty(window, 'hermesDesktop')
+  vi.clearAllMocks()
 })
 
 async function renderField(value: unknown, onChange = vi.fn()) {

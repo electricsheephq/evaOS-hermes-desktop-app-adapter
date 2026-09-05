@@ -74,6 +74,7 @@ export function FallbackModelsField({
 }) {
   const { t } = useI18n()
   const m = t.settings.model
+  const managedEva = isManagedEvaosAgent()
 
   const modelOptions = useQuery({
     queryKey: ['model-options', 'global'],
@@ -132,7 +133,7 @@ export function FallbackModelsField({
               <SelectContent>
                 {providers.map(provider => (
                   <SelectItem key={provider.slug} value={provider.slug}>
-                    {managedProviderDisplayValue(provider.slug, provider.name, isManagedEvaosAgent())}
+                    {managedProviderDisplayValue(provider.slug, provider.name, managedEva)}
                   </SelectItem>
                 ))}
               </SelectContent>

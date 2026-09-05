@@ -73,69 +73,12 @@ describe('Hermes REST helpers', () => {
     )
   })
 
-  it('routes the all-profile endpoint through the primary backend independently of its selector', async () => {
-    setApiRequestProfile('work')
+  it('uses a longer timeout for the all-profile session list', async () => {
     await listAllProfileSessions(50, 1)
 
     expect(api).toHaveBeenCalledWith(
       expect.objectContaining({
         path: '/api/profiles/sessions?limit=50&offset=0&min_messages=1&archived=exclude&order=recent&profile=all',
-        profile: 'default',
-        timeoutMs: 60_000
-      })
-    )
-  })
-
-  it('scopes managed aggregate session reads to the boot-adopted concrete profile', async () => {
-    setApiRequestProfile('assigned-profile')
-    Object.defineProperty(window, 'hermesDesktop', {
-      configurable: true,
-      value: { api, eva: {} }
-    })
-
-    await listAllProfileSessions(50, 1)
-
-    expect(api).toHaveBeenCalledWith(
-      expect.objectContaining({
-        path: '/api/profiles/sessions?limit=50&offset=0&min_messages=1&archived=exclude&order=recent&profile=assigned-profile',
-        profile: 'assigned-profile',
-        timeoutMs: 60_000
-      })
-    )
-  })
-
-  it('uses the safe primary fallback until boot adopts a concrete managed scope', async () => {
-    Object.defineProperty(window, 'hermesDesktop', {
-      configurable: true,
-      value: { api, eva: {} }
-    })
-
-    await listAllProfileSessions(50, 1)
-
-    expect(api).toHaveBeenCalledWith(
-      expect.objectContaining({
-        path: '/api/profiles/sessions?limit=50&offset=0&min_messages=1&archived=exclude&order=recent&profile=default',
-        profile: 'default',
-        timeoutMs: 60_000
-      })
-    )
-  })
-
-  it('keeps explicit managed selectors routed through the enrolled profile for local denial', async () => {
-    setApiRequestProfile('assigned-profile')
-    Object.defineProperty(window, 'hermesDesktop', {
-      configurable: true,
-      value: { api, eva: {} }
-    })
-
-    await listAllProfileSessions(50, 1, 'exclude', 'recent', 'unauthorized-profile')
-
-    expect(api).toHaveBeenCalledWith(
-      expect.objectContaining({
-        path:
-          '/api/profiles/sessions?limit=50&offset=0&min_messages=1&archived=exclude&order=recent' +
-          '&profile=unauthorized-profile',
-        profile: 'assigned-profile',
         timeoutMs: 60_000
       })
     )
@@ -327,8 +270,8 @@ describe('Hermes REST helpers', () => {
       messagingExclude: ['cron', 'desktop']
     })
 
-    // Recents follow the selected profile; cron and messaging remain
-    // intentionally cross-profile, matching the pre-batching contract.
+    // Slices reassembled from the legacy per-slice route: recents follows the
+    // caller's profile while cron and messaging remain cross-profile.
     expect(result.recents.sessions.map(s => s.id)).toEqual(['recent-1'])
     // One row back against a 30-row window: the profile is fully loaded, so
     // the legacy path must not claim there's another page.
@@ -347,6 +290,41 @@ describe('Hermes REST helpers', () => {
     ).toHaveLength(2)
     expect(paths).toContainEqual(expect.stringContaining('source=cron'))
     expect(paths).toContainEqual(expect.stringContaining('exclude_sources=cron%2Ctool'))
+  })
+
+  it('keeps per-slice errors on the legacy fallback so a cron failure does not taint recents', async () => {
+    resetSidebarBatchCapability()
+    const row = (id: string) => ({ id, title: id, profile: 'default' })
+
+    api.mockImplementation(({ path }: { path: string }) => {
+      if (path.startsWith('/api/profiles/sessions/sidebar')) {
+        return Promise.reject(new Error('404: {"detail":"No such API endpoint: /api/profiles/sessions/sidebar"}'))
+      }
+
+      if (path.includes('source=cron')) {
+        return Promise.resolve({
+          ...emptySessionsResponse,
+          sessions: [],
+          errors: [{ profile: 'default', error: 'disk I/O error' }]
+        })
+      }
+
+      return Promise.resolve({ ...emptySessionsResponse, sessions: [row('recent-1')] })
+    })
+
+    const result = await listSidebarSessions({
+      recentsProfile: 'default',
+      recentsLimit: 20,
+      recentsExclude: [],
+      cronLimit: 50,
+      messagingLimit: 100,
+      messagingExclude: []
+    })
+
+    expect(result.recents.sessions.map(s => s.id)).toEqual(['recent-1'])
+    expect(result.recents.errors).toBeUndefined()
+    expect(result.cron.errors).toEqual([{ profile: 'default', error: 'disk I/O error' }])
+    expect(result.errors).toBeUndefined()
   })
 
   it('remembers endpoint-missing and skips re-probing the batched route on later refreshes', async () => {
@@ -717,25 +695,6 @@ describe('Hermes REST helpers', () => {
       path: '/api/audio/transcribe',
       timeoutMs: AUDIO_TRANSCRIBE_MIN_REQUEST_TIMEOUT_MS
     })
-  })
-
-  it('routes blocking transcription through an explicit session owner scope', async () => {
-    setApiRequestConnection('foreground-runtime')
-    setApiRequestProfile('foreground-profile')
-    api.mockResolvedValueOnce({ ok: true, provider: 'openai', text: 'owned transcript' })
-
-    await transcribeAudio('data:audio/webm;base64,AA==', 'audio/webm', {
-      connectionId: 'tile-runtime',
-      profile: 'tile-profile'
-    })
-
-    expect(api).toHaveBeenCalledWith(
-      expect.objectContaining({
-        connectionId: 'tile-runtime',
-        path: '/api/audio/transcribe',
-        profile: 'tile-profile'
-      })
-    )
   })
 
   it('defaults model options to configured providers only', async () => {

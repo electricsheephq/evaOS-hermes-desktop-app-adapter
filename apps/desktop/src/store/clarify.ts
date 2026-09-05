@@ -2,9 +2,6 @@ import { atom, computed } from 'nanostores'
 
 import { $gateway } from './gateway'
 import { $activeSessionId } from './session'
-import { assertSessionOwnerResolved } from './session-owner-resolution'
-import { requestForSessionProfile } from './session-request-router'
-import { knownOwnerForSession } from './session-states'
 
 export interface ClarifyQuestion {
   /** Server-generated wire id (q0..qN) — clarify.respond keys answers by it. */
@@ -200,32 +197,12 @@ export async function skipClarifyRequest(sessionId: string | null | undefined): 
     return false
   }
 
-  // Resolve the blocked session's owner while its request is still intact.
-  // Unknown multi-backend ownership fails closed and leaves the card visible
-  // instead of sending the answer to whichever gateway happens to be active.
-  const owner = knownOwnerForSession(request.sessionId)
-
-  try {
-    assertSessionOwnerResolved(owner, { method: 'clarify.respond', sessionId: request.sessionId })
-  } catch {
-    return false
-  }
-
-  const gateway = $gateway.get()
-
-  if (!gateway) {
-    return false
-  }
-
-  // The answer and owner are now fixed. Clear before the in-flight RPC so the
-  // user cannot answer the same card twice.
+  // Clear first: the answer is already decided, and an in-flight RPC must not
+  // leave a live card the user can answer a second time.
   clearClarifyRequest(request.requestId, request.sessionId)
 
   try {
-    await requestForSessionProfile(owner, gateway.request.bind(gateway), 'clarify.respond', {
-      request_id: request.requestId,
-      answer: ''
-    })
+    await $gateway.get()?.request('clarify.respond', { request_id: request.requestId, answer: '' })
   } catch {
     // The tool times out on its own; a failed skip must never swallow the
     // message the user is actually sending.

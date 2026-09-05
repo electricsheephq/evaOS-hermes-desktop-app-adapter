@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pytest
 
+from hermes_constants import get_hermes_home
 from hermes_cli import profiles
 from hermes_cli.profile_scope import (
     current_effective_profile,
@@ -25,16 +26,30 @@ def _principal(admin: bool = False):
 
 
 def test_managed_scope_defaults_to_primary_and_rejects_other_profile(monkeypatch, tmp_path):
-    profiles_root = tmp_path / "profiles"
-    for name in ("jane", "louis", "other"):
-        (profiles_root / name).mkdir(parents=True)
-    monkeypatch.setattr(profiles, "_get_profiles_root", lambda: profiles_root)
+    # Model the managed flat layout: each service owns one flat
+    # ``<managed-root>/<profile>`` home, while sibling lookup remains under
+    # ``<managed-root>/profiles``. The real resolver also requires the shared
+    # auth path and service identity to agree; keep both synthetic and scoped.
+    managed_root = tmp_path / "managed"
+    (managed_root / "jane").mkdir(parents=True)
+    (managed_root / "louis").mkdir()
+    (managed_root / "profiles" / "louis").mkdir(parents=True)
+    (managed_root / "shared-auth").mkdir()
+    monkeypatch.setattr(profiles, "_get_profiles_root", lambda: managed_root)
+    monkeypatch.setenv(
+        "HERMES_SHARED_AUTH_FILE", str(managed_root / "shared-auth" / "auth.json")
+    )
+    monkeypatch.setattr(
+        profiles,
+        "_effective_service_user",
+        lambda: f"hermes-{get_hermes_home().name}",
+    )
 
     with managed_profile_context(_principal()):
         assert require_profile(None) == "jane"
         assert current_effective_profile() == "jane"
-        assert profiles.get_profile_dir("default") == profiles_root / "jane"
-        assert profiles.get_profile_dir("louis") == profiles_root / "louis"
+        assert profiles.get_profile_dir("default") == managed_root / "jane"
+        assert profiles.get_profile_dir("louis") == managed_root / "profiles" / "louis"
         assert profiles.profile_exists("other") is False
         with pytest.raises(PermissionError):
             profiles.get_profile_dir("other")

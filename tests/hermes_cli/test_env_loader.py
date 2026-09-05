@@ -6,21 +6,290 @@ import sys
 from hermes_cli.env_loader import load_hermes_dotenv
 
 
+def test_recovered_update_retry_skips_external_secret_sources(tmp_path, monkeypatch):
+    """The post-recovery updater must not remap native vault dependencies."""
+    import hermes_cli.env_loader as env_loader
+    from hermes_cli import _early_recovery
+
+    home = tmp_path / "hermes"
+    home.mkdir()
+    env_file = home / ".env"
+    env_file.write_text("UPDATE_RETRY_DOTENV=loaded\n", encoding="utf-8")
+    monkeypatch.delenv("UPDATE_RETRY_DOTENV", raising=False)
+    monkeypatch.setattr(_early_recovery, "_UPDATE_RETRY_RECOVERED", True)
+    external_calls = []
+    monkeypatch.setattr(
+        env_loader,
+        "_apply_external_secret_sources",
+        lambda path: external_calls.append(path),
+    )
+
+    loaded = load_hermes_dotenv(hermes_home=home)
+
+    assert loaded == [env_file]
+    assert os.environ["UPDATE_RETRY_DOTENV"] == "loaded"
+    assert external_calls == []
 
 
+def test_profile_dotenv_cannot_override_managed_runtime_lease_authority(
+    tmp_path, monkeypatch
+):
+    """Profile-owned dotenv values cannot replace service-owned authority."""
+    import hermes_cli.env_loader as env_loader
+
+    home = tmp_path / "hermes"
+    home.mkdir()
+    authority = {
+        "HERMES_MANAGED_DIR": "profile-managed-dir",
+        "HERMES_SHARED_AUTH_FILE": "profile-shared-auth",
+        "CREDENTIALS_DIRECTORY": "profile-credentials",
+        "EVAOS_DESKTOP_RUNTIME_SESSION_URL": "profile-session-url",
+        "PIPEDREAM_AGENT_BROKER_SECRET_FILE": "profile-broker-secret",
+    }
+    (home / ".env").write_text(
+        "".join(f"{key}={value}\n" for key, value in authority.items()),
+        encoding="utf-8",
+    )
+    process_values = {
+        key: f"process-{key.lower()}" for key in authority
+    }
+    for key, value in process_values.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setattr(env_loader, "_apply_external_secret_sources", lambda _path: None)
+    monkeypatch.setattr(env_loader, "_apply_managed_env", lambda: None)
+
+    load_hermes_dotenv(hermes_home=home)
+
+    for key, value in process_values.items():
+        assert os.environ[key] == value
 
 
+def test_profile_dotenv_cannot_create_managed_runtime_lease_authority(
+    tmp_path, monkeypatch
+):
+    """A profile dotenv cannot create package-owned authority keys."""
+    import hermes_cli.env_loader as env_loader
+
+    home = tmp_path / "hermes"
+    home.mkdir()
+    keys = (
+        "HERMES_MANAGED_DIR",
+        "HERMES_SHARED_AUTH_FILE",
+        "CREDENTIALS_DIRECTORY",
+        "EVAOS_DESKTOP_RUNTIME_SESSION_URL",
+        "PIPEDREAM_AGENT_BROKER_SECRET_FILE",
+    )
+    (home / ".env").write_text(
+        "".join(f"{key}=profile-owned\n" for key in keys), encoding="utf-8"
+    )
+    for key in keys:
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setattr(env_loader, "_apply_external_secret_sources", lambda _path: None)
+    monkeypatch.setattr(env_loader, "_apply_managed_env", lambda: None)
+
+    load_hermes_dotenv(hermes_home=home)
+
+    for key in keys:
+        assert key not in os.environ
 
 
+def test_profile_dotenv_cannot_override_managed_config_placeholder(
+    tmp_path, monkeypatch
+):
+    """A profile dotenv cannot redefine an env placeholder from managed config."""
+    import hermes_cli.env_loader as env_loader
+    from hermes_cli import managed_scope
 
+    home = tmp_path / "hermes"
+    home.mkdir()
+    managed = tmp_path / "managed"
+    managed.mkdir()
+    (managed / "config.yaml").write_text(
+        "mcp_servers:\n  evaos:\n    env: ${EVAOS_TEST_AGENT_ID}\n",
+        encoding="utf-8",
+    )
+    (home / ".env").write_text("EVAOS_TEST_AGENT_ID=sibling\n", encoding="utf-8")
+    monkeypatch.setenv("HERMES_MANAGED_DIR", str(managed))
+    monkeypatch.setenv("EVAOS_TEST_AGENT_ID", "main")
+    managed_scope.invalidate_managed_cache()
+    monkeypatch.setattr(env_loader, "_apply_external_secret_sources", lambda _path: None)
+    monkeypatch.setattr(env_loader, "_apply_managed_env", lambda: None)
+
+    load_hermes_dotenv(hermes_home=home)
+
+    assert os.environ["EVAOS_TEST_AGENT_ID"] == "main"
+
+
+def test_utf8_bom_does_not_mangle_first_key(tmp_path, monkeypatch):
+    """A leading UTF-8 BOM must not prefix the first key name in os.environ.
+
+    PowerShell 5.1 ``Set-Content -Encoding UTF8`` and Windows Notepad write
+    a BOM (EF BB BF). With encoding=utf-8, python-dotenv keeps U+FEFF on the
+    first key so the canonical name is absent and callers see "not configured".
+    """
+    home = tmp_path / "hermes"
+    home.mkdir()
+    env_file = home / ".env"
+    env_file.write_bytes(
+        b"\xef\xbb\xbfFIRST_KEY=first-value\nSECOND_KEY=second-value\n"
+    )
+
+    monkeypatch.delenv("FIRST_KEY", raising=False)
+    monkeypatch.delenv("SECOND_KEY", raising=False)
+    monkeypatch.delenv("\ufeffFIRST_KEY", raising=False)
+
+    loaded = load_hermes_dotenv(hermes_home=home)
+
+    assert loaded == [env_file]
+    assert os.getenv("FIRST_KEY") == "first-value"
+    assert os.getenv("SECOND_KEY") == "second-value"
+    assert os.environ.get("\ufeffFIRST_KEY") is None
+
+
+def test_bomless_utf8_env_still_loads(tmp_path, monkeypatch):
+    """BOM-less UTF-8 .env files must keep loading after utf-8-sig."""
+    home = tmp_path / "hermes"
+    home.mkdir()
+    env_file = home / ".env"
+    env_file.write_text("OPENAI_API_KEY=sk-plain\nSECOND_KEY=ok\n", encoding="utf-8")
+
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("SECOND_KEY", raising=False)
+
+    loaded = load_hermes_dotenv(hermes_home=home)
+
+    assert loaded == [env_file]
+    assert os.getenv("OPENAI_API_KEY") == "sk-plain"
+    assert os.getenv("SECOND_KEY") == "ok"
+
+
+def test_latin1_env_falls_back(tmp_path, monkeypatch):
+    """Invalid UTF-8 bytes must still load via the latin-1 fallback."""
+    home = tmp_path / "hermes"
+    home.mkdir()
+    env_file = home / ".env"
+    # 0xE9 is "é" in latin-1 and not a valid UTF-8 lead sequence alone.
+    env_file.write_bytes(b"LATIN1_VALUE=caf\xe9\n")
+
+    monkeypatch.delenv("LATIN1_VALUE", raising=False)
+
+    loaded = load_hermes_dotenv(hermes_home=home)
+
+    assert loaded == [env_file]
+    assert os.getenv("LATIN1_VALUE") == "café"
+
+
+def test_utf8_bom_preserves_first_api_key_name(tmp_path, monkeypatch):
+    """Real-world case: BOM + first line is a provider API key name."""
+    home = tmp_path / "hermes"
+    home.mkdir()
+    env_file = home / ".env"
+    env_file.write_bytes(
+        b"\xef\xbb\xbfANTHROPIC_API_KEY=sk-test-123\nSECOND_KEY=ok\n"
+    )
+
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("SECOND_KEY", raising=False)
+    monkeypatch.delenv("\ufeffANTHROPIC_API_KEY", raising=False)
+
+    loaded = load_hermes_dotenv(hermes_home=home)
+
+    assert loaded == [env_file]
+    assert os.getenv("ANTHROPIC_API_KEY") == "sk-test-123"
+    assert os.getenv("SECOND_KEY") == "ok"
+    assert os.environ.get("\ufeffANTHROPIC_API_KEY") is None
+
+
+def test_utf8_bom_plus_invalid_utf8_preserves_first_key(tmp_path, monkeypatch):
+    """BOM + non-UTF-8 body must load via latin-1 without mangling the first key.
+
+    utf-8-sig only applies on the primary path. When invalid UTF-8 forces the
+    latin-1 fallback, a leading EF BB BF would otherwise become part of the
+    first key name under latin-1 and drop the canonical name.
+    """
+    home = tmp_path / "hermes"
+    home.mkdir()
+    env_file = home / ".env"
+    # BOM + valid first key + latin-1 é (0xE9) in a later value.
+    env_file.write_bytes(
+        b"\xef\xbb\xbfANTHROPIC_API_KEY=sk-test-123\nBAD=caf\xe9\n"
+    )
+
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("BAD", raising=False)
+    monkeypatch.delenv("\ufeffANTHROPIC_API_KEY", raising=False)
+
+    loaded = load_hermes_dotenv(hermes_home=home)
+
+    assert loaded == [env_file]
+    assert os.getenv("ANTHROPIC_API_KEY") == "sk-test-123"
+    assert os.getenv("BAD") == "café"
+    assert os.environ.get("\ufeffANTHROPIC_API_KEY") is None
+
+def test_bomless_latin1_env_still_loads(tmp_path, monkeypatch):
+    """BOM-less cp1252/latin-1 .env files must keep loading after the BOM strip."""
+    home = tmp_path / "hermes"
+    home.mkdir()
+    env_file = home / ".env"
+    env_file.write_bytes(b"LATIN1_VALUE=caf\xe9\nOTHER=ok\n")
+
+    monkeypatch.delenv("LATIN1_VALUE", raising=False)
+    monkeypatch.delenv("OTHER", raising=False)
+
+    loaded = load_hermes_dotenv(hermes_home=home)
+
+    assert loaded == [env_file]
+    assert os.getenv("LATIN1_VALUE") == "café"
+    assert os.getenv("OTHER") == "ok"
+
+def test_latin1_fallback_stream_honors_override(tmp_path, monkeypatch):
+    """Stream-based latin-1 fallback must honor override= identically to dotenv_path."""
+    from hermes_cli.env_loader import _load_dotenv_with_fallback
+
+    home = tmp_path / "hermes"
+    home.mkdir()
+    env_file = home / ".env"
+    # Invalid UTF-8 forces the stream/latin-1 path.
+    env_file.write_bytes(b"OVERRIDE_PROBE=from-file\nLATIN1_VALUE=caf\xe9\n")
+
+    monkeypatch.setenv("OVERRIDE_PROBE", "from-shell")
+    monkeypatch.delenv("LATIN1_VALUE", raising=False)
+
+    # override=False: shell value must win (same as dotenv_path form).
+    _load_dotenv_with_fallback(env_file, override=False)
+    assert os.getenv("OVERRIDE_PROBE") == "from-shell"
+    assert os.getenv("LATIN1_VALUE") == "café"
+
+    # override=True: file value must win (user-env path).
+    _load_dotenv_with_fallback(env_file, override=True)
+    assert os.getenv("OVERRIDE_PROBE") == "from-file"
+    assert os.getenv("LATIN1_VALUE") == "café"
+
+def test_latin1_fallback_stream_preserves_interpolation(tmp_path, monkeypatch):
+    """Stream/latin-1 path must still expand ${VAR} like the dotenv_path form."""
+    home = tmp_path / "hermes"
+    home.mkdir()
+    env_file = home / ".env"
+    # 0xE9 forces latin-1 fallback; ${FOO} must still expand.
+    env_file.write_bytes(b"FOO=bar\nBAR=${FOO}\nLATIN1_VALUE=caf\xe9\n")
+
+    monkeypatch.delenv("FOO", raising=False)
+    monkeypatch.delenv("BAR", raising=False)
+    monkeypatch.delenv("LATIN1_VALUE", raising=False)
+
+    loaded = load_hermes_dotenv(hermes_home=home)
+
+    assert loaded == [env_file]
+    assert os.getenv("FOO") == "bar"
+    assert os.getenv("BAR") == "bar"
+    assert os.getenv("LATIN1_VALUE") == "café"
 
 # ---------------------------------------------------------------------------
 # UTF-16 / UTF-32 .env sanitizer coverage
 #
-# Scope note: intentionally NO UTF-8-BOM assertions here. UTF-8 BOM handling
-# for _load_dotenv_with_fallback is #65124's un-merged fix; a test here would
-# couple the PRs. This suite covers only the sanitizer rewrite path for
-# UTF-16/32 (and UTF-8 / cp1252 regression guards for that path).
+# UTF-8 BOM handling for _load_dotenv_with_fallback is covered above (#65124).
+# This section covers the sanitizer rewrite path for UTF-16/32 (and UTF-8 /
+# cp1252 regression guards for that path).
 # ---------------------------------------------------------------------------
 
 

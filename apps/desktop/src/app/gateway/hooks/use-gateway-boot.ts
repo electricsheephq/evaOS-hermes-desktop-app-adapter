@@ -46,7 +46,9 @@ import {
   isCurrentGatewaySwitch,
   registerGatewaySwitchLifecycle
 } from '@/store/gateway-switch'
+import { checkLocalRuntimeUpdate, watchLocalRuntimeJobs } from '@/store/local-runtime-jobs'
 import { notify, notifyError } from '@/store/notifications'
+import { loadPoolLimits } from '@/store/pool-limits'
 import {
   $activeGatewayProfile,
   normalizeProfileKey,
@@ -120,9 +122,10 @@ const BOOT_RETRY_MAX_ATTEMPTS = 5
 // Base delay for boot retries. Deliberately slower than the socket reconnect
 // loop's 300ms: each attempt may rebuild an SSH master + remote dashboard.
 const BOOT_RETRY_BASE_DELAY_MS = 2_000
-// Managed enrollment can legitimately spend longer minting and validating the
-// assigned remote connection. Keep the ES17 outer guard while leaving the
-// upstream local/registered connection budget unchanged.
+
+// Managed enrollment can spend longer minting and validating the assigned
+// remote connection. Keep the upstream local/registered connection budget
+// unchanged.
 const MANAGED_INITIAL_CONNECTION_DEADLINE_MS = 90_000
 
 // While any of the RECONNECT_ATTEMPT_TIMEOUT_MS-bounded awaits below is
@@ -691,6 +694,12 @@ export function useGatewayBoot({
 
         completeDesktopBoot()
         bootCompleted = true
+        // Rediscover local-runtime jobs (model downloads, runtime installs)
+        // that were running before a reload — the backend registry is the
+        // authority; this just resumes following it.
+        watchLocalRuntimeJobs()
+        // One-per-session engine-update pointer (enabled runtimes only).
+        void checkLocalRuntimeUpdate()
       } catch (err) {
         const mayPublishFailure =
           !cancelled && (switchToken === null ? !$gatewaySwitching.get() : isCurrentGatewaySwitch(switchToken))
@@ -763,7 +772,6 @@ export function useGatewayBoot({
     }
 
     const gateway = adoptedFromHmr ? survivor!.gateway : new HermesGateway()
-    let sourceProfile = normalizeProfileKey(survivor?.profile ?? $activeGatewayProfile.get())
 
     callbacksRef.current.onGatewayReady(gateway)
     setPrimaryGateway(gateway, survivor?.profile ?? normalizeProfileKey($activeGatewayProfile.get()))
@@ -856,6 +864,8 @@ export function useGatewayBoot({
       }
     })
 
+    let sourceProfile = normalizeProfileKey(survivor?.profile ?? $activeGatewayProfile.get())
+
     const offEvent = gateway.onEvent(event => {
       const connectionId = activeGatewayConnectionId()
 
@@ -919,6 +929,10 @@ export function useGatewayBoot({
     // macOS wake often restores focus without a visibilitychange — without
     // this a socket dropped during sleep sits closed until the user clicks.
     window.addEventListener('focus', onFocus)
+
+    // Pool limits are main-process state; mirror them once for the Settings
+    // rows and prewarmProfileBackend's saturation guard.
+    void loadPoolLimits()
 
     // Keep live pool backends alive while this window is open (the main process
     // can't observe the direct renderer↔backend WS). No-op for the primary.
@@ -1003,9 +1017,8 @@ export function useGatewayBoot({
         // round-trip must not hang "Starting Hermes…" forever. Initial boot
         // rides out a full backend cold spawn, so it gets the shared 45s
         // backend-boot budget, not the 20s reconnect budget.
-        const connection = desktop.getConnection(windowProfileOverride() ?? undefined)
         const conn = await withTimeout(
-          connection,
+          desktop.getConnection(windowProfileOverride() ?? undefined),
           isManagedEvaosAgent() ? MANAGED_INITIAL_CONNECTION_DEADLINE_MS : BACKEND_BOOT_WAIT_TIMEOUT_MS,
           isManagedEvaosAgent()
             ? translateNow('boot.errors.gatewayConnectionLost')
@@ -1017,9 +1030,9 @@ export function useGatewayBoot({
         }
 
         // Resolve the backend-authoritative managed profile before opening the
-        // socket. Events can arrive immediately after the WebSocket handshake;
-        // adopting afterwards can tag them with a stale renderer profile.
-        if (!(await adoptPrimaryProfile()) || cancelled) {
+        // socket. Events can arrive immediately after the handshake; adopting
+        // afterwards would tag them with a stale renderer profile.
+        if (isManagedEvaosAgent() && (!(await adoptPrimaryProfile()) || cancelled)) {
           return
         }
 
@@ -1061,6 +1074,15 @@ export function useGatewayBoot({
 
         if (cancelled) {
           return
+        }
+
+        // Profile adoption must land first: refreshSessions scopes its fetch by
+        // $profileScope ← $activeGatewayProfile. The remaining three fetches
+        // (cwd seed, config, sessions) are independent REST calls — running
+        // them serially added their sum to time-to-populated-sidebar when only
+        // the max is needed.
+        if (!isManagedEvaosAgent()) {
+          await adoptPrimaryProfile()
         }
 
         setDesktopBootStep({

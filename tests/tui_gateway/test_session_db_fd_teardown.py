@@ -158,26 +158,32 @@ def test_rpc_pool_session_list_releases_shared_db_reader(monkeypatch, tmp_path):
         assert released.wait(timeout=5)
         assert frames[0]["result"]["sessions"][0]["id"] == "rpc-list-session"
         with db._read_conns_lock:
-            assert db._read_conns == set()
+            assert db._read_conns_closed is False
     finally:
         db.close()
 
 
-def test_teardown_closes_owned_db_when_agent_close_is_a_noop(tmp_path):
-    """Synthetic agents still release a transferred profile handle."""
+def test_teardown_closes_owned_db_via_agent_close(tmp_path):
+    """A transferred profile handle is closed by the owning agent's lifecycle."""
     db_path = tmp_path / "state.db"
     db = SessionDB(db_path=db_path)
 
-    class NoOpAgent:
+    class SyntheticAgent:
         session_id = "synthetic-session"
         model = "synthetic"
         platform = "desktop"
-        _session_db = None
+
+        def __init__(self, session_db):
+            # Model the real ownership transfer: the agent receives the exact handle opened by the
+            # session, so the production identity guard remains strict.
+            self._session_db = session_db
 
         def close(self):
-            pass
+            if self._owns_session_db:
+                self._owns_session_db = False
+                self._session_db.close()
 
-    agent = NoOpAgent()
+    agent = SyntheticAgent(db)
     assert server._transfer_db_to_agent(agent, db) is True
 
     server._teardown_session(

@@ -5,6 +5,8 @@ import './store/active-work'
 import './store/power'
 // Side-effect: applies the persisted window translucency on load.
 import './store/translucency'
+// Side-effect: applies the persisted user-bubble transparency on load.
+import './store/user-bubble-transparency'
 // Dev-only render/state churn counters. MUST precede the `react-dom` import
 // below: react-dom captures the devtools hook at module init, so bippy has to
 // install during THIS import's evaluation or every commit goes unseen
@@ -23,6 +25,7 @@ import { RootErrorBoundary } from './components/error-boundary'
 import { HapticsProvider } from './components/haptics-provider'
 import { RootTooltipProvider } from './components/ui/tooltip'
 import { I18nProvider } from './i18n'
+import { isManagedEvaosAgent, sanitizeManagedBrandText } from './i18n/managed-brand'
 import { installClipboardShim } from './lib/clipboard'
 import { queryClient } from './lib/query-client'
 import { installRendererAnimationPauseState } from './lib/renderer-loop-pause'
@@ -47,6 +50,10 @@ const winParam = new URLSearchParams(window.location.search).get('win')
 
 if (winParam === 'hud') {
   document.title = 'Hermes HUD'
+}
+
+if (isManagedEvaosAgent()) {
+  document.title = sanitizeManagedBrandText(document.title)
 }
 
 if (winParam === 'overlay') {

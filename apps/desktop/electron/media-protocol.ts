@@ -151,11 +151,7 @@ export function createMediaProtocolHandler(dependencies: MediaProtocolDependenci
 
     try {
       if (dependencies.fetchManaged) {
-        return await dependencies.fetchManaged(
-          { filePath: target.filePath, profile: target.profile },
-          headers,
-          method
-        )
+        return await dependencies.fetchManaged({ filePath: target.filePath, profile: target.profile }, headers, method)
       }
 
       const connection = await dependencies.resolveRemoteConnection({

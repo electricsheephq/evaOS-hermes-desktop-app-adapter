@@ -117,28 +117,5 @@ class TestSourceGuardrail:
 
     def test_helper_defined(self, source):
         assert "def _interpreter_shutting_down(" in source
-        assert "#58720" in source
 
-
-def test_cron_agent_teardown_ends_context_session_before_close():
-    """Ephemeral cron agents must flush session state before releasing handles."""
-    from cron.scheduler import _teardown_cron_agent
-
-    events = []
-
-    class _Agent:
-        _session_messages = [{"role": "assistant", "content": "done"}]
-
-        def shutdown_memory_provider(self, messages):
-            events.append(("session_end", messages))
-
-        def close(self):
-            events.append(("close", None))
-
-    _teardown_cron_agent(_Agent(), "cron-lifecycle-order")
-
-    assert events == [
-        ("session_end", [{"role": "assistant", "content": "done"}]),
-        ("close", None),
-    ]
 

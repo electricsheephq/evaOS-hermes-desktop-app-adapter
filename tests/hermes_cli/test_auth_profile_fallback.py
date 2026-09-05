@@ -12,11 +12,32 @@ authenticated only at the global root.
 from __future__ import annotations
 
 import json
+import multiprocessing
+import os
+import stat
 import time
 from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
+
+
+def _mark_shared_credential_in_process(
+    profile_home: str,
+    shared_file: str,
+    credential_id: str,
+    ready_queue,
+    start_event,
+) -> None:
+    os.environ["HERMES_HOME"] = profile_home
+    os.environ["HERMES_SHARED_AUTH_FILE"] = shared_file
+    from agent.credential_pool import load_pool
+
+    pool = load_pool("openrouter")
+    ready_queue.put(credential_id)
+    if not start_event.wait(timeout=10):
+        raise RuntimeError("shared-auth concurrency start timed out")
+    pool.mark_exhausted_and_rotate(status_code=429, credential_id=credential_id)
 
 
 def _make_auth_store(pool: dict | None = None, providers: dict | None = None) -> dict:
@@ -50,6 +71,9 @@ def profile_env(tmp_path, monkeypatch):
 
 def _write(path: Path, payload: dict) -> None:
     path.write_text(json.dumps(payload, indent=2))
+    if "shared-auth" in path.parts and os.name != "nt":
+        path.chmod(0o660)
+        os.chown(path, -1, os.getgid())
 
 
 # ---------------------------------------------------------------------------
@@ -288,3 +312,272 @@ def test_write_pool_never_merges_cooldown_onto_reauthed_entry(classic_env):
     assert persisted["access_token"] == "sk-new"
     assert persisted.get("last_status") != "exhausted"
     assert persisted.get("last_error_code") is None
+
+
+def test_managed_shared_pool_persists_status_to_shared_source(profile_env, monkeypatch):
+    from agent.credential_pool import load_pool
+
+    shared = profile_env["global"] / "shared-auth" / "auth.json"
+    shared.parent.mkdir()
+    _write(shared, _make_auth_store(pool={"openrouter": [_pool_entry(id="shared-1")]}))
+    _write(profile_env["profile"] / "auth.json", _make_auth_store(pool={}))
+    monkeypatch.setenv("HERMES_SHARED_AUTH_FILE", str(shared))
+    load_pool("openrouter").mark_exhausted_and_rotate(status_code=429, credential_id="shared-1")
+    persisted = json.loads(shared.read_text())["credential_pool"]["openrouter"][0]
+    assert persisted["last_status"] == "exhausted"
+    assert persisted["last_error_code"] == 429
+    assert not json.loads((profile_env["profile"] / "auth.json").read_text()).get("credential_pool", {}).get("openrouter")
+
+
+def test_managed_shared_pool_adds_manual_credential_to_profile_shadow(profile_env, monkeypatch):
+    from agent.credential_pool import PooledCredential, load_pool
+
+    shared = profile_env["global"] / "shared-auth" / "auth.json"
+    shared.parent.mkdir()
+    _write(shared, _make_auth_store(pool={"openrouter": [_pool_entry(id="shared-1", access_token="shared-synthetic")]}))
+    profile_auth = profile_env["profile"] / "auth.json"
+    _write(profile_auth, _make_auth_store(pool={}))
+    monkeypatch.setenv("HERMES_SHARED_AUTH_FILE", str(shared))
+    before = shared.read_bytes()
+    pool = load_pool("openrouter")
+    added = pool.add_entry(PooledCredential.from_dict("openrouter", _pool_entry(id="profile-manual", access_token="profile-synthetic")))
+    assert added.id == "profile-manual"
+    assert shared.read_bytes() == before
+    assert [e["id"] for e in json.loads(profile_auth.read_text())["credential_pool"]["openrouter"]] == ["profile-manual"]
+
+
+def test_managed_profile_source_creates_local_shadow_without_mutating_shared(profile_env, monkeypatch):
+    from agent import credential_pool
+
+    shared = profile_env["global"] / "shared-auth" / "auth.json"
+    shared.parent.mkdir()
+    _write(shared, _make_auth_store(pool={"openrouter": [_pool_entry(id="shared-1", access_token="shared-synthetic")]}))
+    profile_auth = profile_env["profile"] / "auth.json"
+    _write(profile_auth, _make_auth_store(pool={}))
+    monkeypatch.setenv("HERMES_SHARED_AUTH_FILE", str(shared))
+    monkeypatch.setattr(credential_pool, "get_env_prefer_dotenv", lambda key: "profile-synthetic" if key == "OPENROUTER_API_KEY" else "")
+    before = shared.read_bytes()
+    pool = credential_pool.load_pool("openrouter")
+    assert pool.select().source == "env:OPENROUTER_API_KEY"
+    assert shared.read_bytes() == before
+    assert json.loads(profile_auth.read_text())["credential_pool"]["openrouter"][0]["source"] == "env:OPENROUTER_API_KEY"
+
+
+def test_managed_shared_singleton_is_not_copied_into_profile_pool(profile_env, monkeypatch):
+    from agent import credential_pool
+
+    shared = profile_env["global"] / "shared-auth" / "auth.json"
+    shared.parent.mkdir()
+    _write(shared, _make_auth_store(
+        pool={"nous": [_pool_entry(id="shared-nous", access_token="shared-pool-synthetic", auth_type="oauth")]},
+        providers={"nous": {"access_token": "shared-singleton-synthetic", "refresh_token": "shared-refresh-synthetic"}},
+    ))
+    profile_auth = profile_env["profile"] / "auth.json"
+    _write(profile_auth, _make_auth_store(pool={}))
+    monkeypatch.setenv("HERMES_SHARED_AUTH_FILE", str(shared))
+    monkeypatch.setattr(credential_pool, "get_env_prefer_dotenv", lambda _key: "")
+    pool = credential_pool.load_pool("nous")
+    assert [entry.id for entry in pool.entries()] == ["shared-nous"]
+    assert not json.loads(profile_auth.read_text()).get("credential_pool", {}).get("nous")
+
+
+def test_managed_shared_auth_rejects_world_permissions(profile_env, monkeypatch):
+    from hermes_cli.auth import read_credential_pool
+    if os.name == "nt":
+        pytest.skip("POSIX mode validation")
+    shared = profile_env["global"] / "shared-auth" / "auth.json"
+    shared.parent.mkdir()
+    _write(shared, _make_auth_store(pool={"openrouter": [_pool_entry()]}))
+    shared.chmod(0o664)
+    _write(profile_env["profile"] / "auth.json", _make_auth_store(pool={}))
+    monkeypatch.setenv("HERMES_SHARED_AUTH_FILE", str(shared))
+    with pytest.raises(RuntimeError, match="unsafe metadata"):
+        read_credential_pool("openrouter")
+
+
+def test_managed_shared_auth_rejects_unapproved_owner(profile_env, monkeypatch):
+    from hermes_cli import auth as auth_mod
+
+    if os.name == "nt":
+        pytest.skip("POSIX owner validation")
+    shared = profile_env["global"] / "shared-auth" / "auth.json"
+    shared.parent.mkdir()
+    _write(shared, _make_auth_store(pool={"openrouter": [_pool_entry()]}))
+    _write(profile_env["profile"] / "auth.json", _make_auth_store(pool={}))
+    monkeypatch.setenv("HERMES_SHARED_AUTH_FILE", str(shared))
+    monkeypatch.setattr(
+        auth_mod,
+        "_managed_shared_auth_owner_is_authorized",
+        lambda owner_uid, gid: False,
+    )
+
+    with pytest.raises(RuntimeError, match="unsafe metadata"):
+        auth_mod.read_credential_pool("openrouter")
+
+
+def test_managed_shared_pool_does_not_override_local_provider(profile_env, monkeypatch):
+    from hermes_cli.auth import read_credential_pool_with_source
+    shared = profile_env["global"] / "shared-auth" / "auth.json"
+    shared.parent.mkdir()
+    _write(shared, _make_auth_store(pool={"openrouter": [_pool_entry(id="shared-1", access_token="shared")] }))
+    profile_auth = profile_env["profile"] / "auth.json"
+    _write(profile_auth, _make_auth_store(pool={"openrouter": [_pool_entry(id="local-1", access_token="local")] }))
+    monkeypatch.setenv("HERMES_SHARED_AUTH_FILE", str(shared))
+    entries, source_path = read_credential_pool_with_source("openrouter")
+    assert [entry["id"] for entry in entries] == ["local-1"]
+    assert source_path == profile_auth
+
+
+def test_managed_shared_pool_preserves_concurrent_process_updates(
+    profile_env, monkeypatch
+):
+    shared = profile_env["global"] / "shared-auth" / "auth.json"
+    shared.parent.mkdir()
+    _write(shared, _make_auth_store(pool={
+        "openrouter": [
+            _pool_entry(id="shared-a", access_token="token-a", priority=0),
+            _pool_entry(id="shared-b", access_token="token-b", priority=1),
+        ],
+    }))
+    profile_b = profile_env["global"] / "profiles" / "reviewer"
+    profile_b.mkdir(parents=True)
+    _write(profile_env["profile"] / "auth.json", _make_auth_store(pool={}))
+    _write(profile_b / "auth.json", _make_auth_store(pool={}))
+    monkeypatch.setenv("HERMES_SHARED_AUTH_FILE", str(shared))
+
+    context = multiprocessing.get_context("spawn")
+    ready_queue = context.Queue()
+    start_event = context.Event()
+    processes = [
+        context.Process(
+            target=_mark_shared_credential_in_process,
+            args=(
+                str(profile_home),
+                str(shared),
+                credential_id,
+                ready_queue,
+                start_event,
+            ),
+        )
+        for profile_home, credential_id in (
+            (profile_env["profile"], "shared-a"),
+            (profile_b, "shared-b"),
+        )
+    ]
+    for process in processes:
+        process.start()
+    assert {ready_queue.get(timeout=10) for _ in processes} == {
+        "shared-a",
+        "shared-b",
+    }
+    start_event.set()
+    for process in processes:
+        process.join(timeout=15)
+        assert process.exitcode == 0
+
+    persisted = json.loads(shared.read_text())["credential_pool"]["openrouter"]
+    assert {entry["id"] for entry in persisted} == {"shared-a", "shared-b"}
+    assert {entry.get("last_status") for entry in persisted} == {"exhausted"}
+    if os.name != "nt":
+        assert stat.S_IMODE(shared.stat().st_mode) == 0o660
+        assert stat.S_IMODE(shared.with_suffix(".lock").stat().st_mode) == 0o660
+        assert shared.stat().st_gid == shared.with_suffix(".lock").stat().st_gid
+
+
+def test_managed_profile_cannot_remove_shared_pool_or_resurrect_root_removal(
+    profile_env, monkeypatch
+):
+    from agent.credential_pool import load_pool
+    from hermes_cli.auth import write_credential_pool
+
+    shared = profile_env["global"] / "shared-auth" / "auth.json"
+    shared.parent.mkdir()
+    initial = [
+        _pool_entry(id="shared-a", access_token="token-a", priority=0),
+        _pool_entry(id="shared-b", access_token="token-b", priority=1),
+    ]
+    _write(shared, _make_auth_store(pool={"openrouter": initial}))
+    _write(profile_env["profile"] / "auth.json", _make_auth_store(pool={}))
+    monkeypatch.setenv("HERMES_SHARED_AUTH_FILE", str(shared))
+
+    removing_pool = load_pool("openrouter")
+    stale_pool = load_pool("openrouter")
+    with pytest.raises(
+        PermissionError,
+        match="managed shared credentials cannot be removed from a profile",
+    ):
+        removing_pool.remove_index(1)
+    assert {
+        entry["id"]
+        for entry in json.loads(shared.read_text())["credential_pool"]["openrouter"]
+    } == {"shared-a", "shared-b"}
+
+    # A root-owned action removes A and rotates B after both pools loaded. The
+    # stale status update must preserve this token and must not recreate A.
+    write_credential_pool(
+        "openrouter",
+        [_pool_entry(id="shared-b", access_token="token-b-rotated", priority=0)],
+        removed_ids=["shared-a"],
+        target_path=shared,
+    )
+    stale_pool.mark_exhausted_and_rotate(
+        status_code=429,
+        credential_id="shared-b",
+    )
+
+    persisted = json.loads(shared.read_text())["credential_pool"]["openrouter"]
+    assert [entry["id"] for entry in persisted] == ["shared-b"]
+    assert persisted[0]["access_token"] == "token-b-rotated"
+    assert persisted[0]["last_status"] == "exhausted"
+    assert [entry.id for entry in stale_pool.entries()] == ["shared-b"]
+
+
+def test_managed_shared_pool_sanitizes_disk_only_borrowed_secrets(profile_env, monkeypatch):
+    from hermes_cli.auth import write_credential_pool
+    shared = profile_env["global"] / "shared-auth" / "auth.json"
+    shared.parent.mkdir()
+    raw = _pool_entry(id="shared-a", source="bitwarden", access_token="borrowed-token", client_secret="borrowed-client-secret")
+    _write(shared, _make_auth_store(pool={"openrouter": [raw]}))
+    _write(profile_env["profile"] / "auth.json", _make_auth_store(pool={}))
+    monkeypatch.setenv("HERMES_SHARED_AUTH_FILE", str(shared))
+    write_credential_pool("openrouter", [{**raw, "last_status": "exhausted"}], base_entries=[dict(raw)], target_path=shared)
+    persisted = json.loads(shared.read_text())["credential_pool"]["openrouter"][0]
+    assert persisted["last_status"] == "exhausted"
+    assert "access_token" not in persisted and "client_secret" not in persisted
+    assert persisted["secret_fingerprint"].startswith("sha256:")
+
+
+def test_managed_shared_auth_corruption_fails_closed(profile_env, monkeypatch):
+    from hermes_cli.auth import read_credential_pool
+    shared = profile_env["global"] / "shared-auth" / "auth.json"
+    shared.parent.mkdir()
+    shared.write_text("{broken", encoding="utf-8")
+    if os.name != "nt":
+        shared.chmod(0o660)
+        os.chown(shared, -1, os.getgid())
+    _write(profile_env["profile"] / "auth.json", _make_auth_store(pool={}))
+    monkeypatch.setenv("HERMES_SHARED_AUTH_FILE", str(shared))
+    with pytest.raises(RuntimeError, match="managed auth store is corrupt"):
+        read_credential_pool("openrouter")
+    assert shared.with_suffix(".json.corrupt").is_file()
+
+
+def test_managed_shared_auth_missing_file_fails_closed(profile_env, monkeypatch):
+    from hermes_cli.auth import read_credential_pool
+    _write(profile_env["profile"] / "auth.json", _make_auth_store(pool={}))
+    shared = profile_env["global"] / "shared-auth" / "auth.json"
+    monkeypatch.setenv("HERMES_SHARED_AUTH_FILE", str(shared))
+    with pytest.raises(RuntimeError, match="shared auth file is unavailable"):
+        read_credential_pool("openrouter")
+
+
+def test_managed_shared_auth_rejects_symlink(profile_env, monkeypatch):
+    from hermes_cli.auth import read_credential_pool
+    real_shared = profile_env["global"] / "real-auth.json"
+    _write(real_shared, _make_auth_store(pool={}))
+    shared_link = profile_env["global"] / "shared-auth.json"
+    shared_link.symlink_to(real_shared)
+    _write(profile_env["profile"] / "auth.json", _make_auth_store(pool={}))
+    monkeypatch.setenv("HERMES_SHARED_AUTH_FILE", str(shared_link))
+    with pytest.raises(RuntimeError, match="regular no-follow"):
+        read_credential_pool("openrouter")

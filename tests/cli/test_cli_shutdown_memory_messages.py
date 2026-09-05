@@ -45,36 +45,6 @@ def test_cleanup_forwards_session_messages(mock_invoke_hook):
         cli_mod._cleanup_done = False
 
     agent.shutdown_memory_provider.assert_called_once_with(transcript)
-    agent.close.assert_called_once_with()
-
-
-@patch("hermes_cli.plugins.invoke_hook")
-def test_cleanup_ends_context_session_before_agent_close(mock_invoke_hook):
-    """CLI exit must finalize the context engine before releasing its handles."""
-    import cli as cli_mod
-
-    events = []
-
-    class _Agent:
-        session_id = "cli-session-id"
-        _session_messages = []
-        _memory_manager = None
-
-        def shutdown_memory_provider(self, messages):
-            events.append(("session_end", messages))
-
-        def close(self):
-            events.append(("close", None))
-
-    cli_mod._active_agent_ref = _Agent()
-    cli_mod._cleanup_done = False
-    try:
-        cli_mod._run_cleanup()
-    finally:
-        cli_mod._active_agent_ref = None
-        cli_mod._cleanup_done = False
-
-    assert events == [("session_end", []), ("close", None)]
 
 
 

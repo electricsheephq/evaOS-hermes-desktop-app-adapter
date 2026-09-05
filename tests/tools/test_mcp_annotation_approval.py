@@ -9,7 +9,15 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from tools import approval_context as _approval_context
+from tools import approval_prompt as _approval_prompt
+from tools import approval_smart as _approval_smart
 from tools import mcp_tool
+from tools import mcp_tool_discovery as _mcp_discovery
+from tools import mcp_tool_handlers as _mcp_handlers
+from tools import mcp_tool_loop as _mcp_loop
+from tools import mcp_tool_registration as _mcp_registration
+from tools import mcp_tool_schema as _mcp_schema
 
 
 class _TextBlock:
@@ -39,7 +47,8 @@ def _run_on_private_loop(coro_or_factory, timeout=30):
 
 @pytest.fixture(autouse=True)
 def _isolate_annotation_state():
-    with patch.dict(mcp_tool._tool_read_only_hints, {}, clear=True):
+    with patch.dict(mcp_tool._server_trust_levels, {}, clear=True), \
+         patch.dict(mcp_tool._tool_read_only_hints, {}, clear=True):
         yield
 
 
@@ -58,8 +67,9 @@ def _annotation_tool(name: str, hint=...):
 
 
 def test_annotation_capture_fails_closed_for_missing_or_malformed_hints():
-    mcp_tool._record_tool_approval_metadata(
+    _mcp_registration._record_tool_trust_metadata(
         "pipedream",
+        {},
         [
             _annotation_tool("read", True),
             _annotation_tool("write", False),
@@ -77,15 +87,17 @@ def test_annotation_capture_fails_closed_for_missing_or_malformed_hints():
 
 
 def test_cached_annotation_metadata_has_live_path_parity():
-    cached = mcp_tool._CachedMCPTool(
-        "read",
-        "",
-        {},
-        annotations={"readOnlyHint": True},
-    )
-    missing = mcp_tool._CachedMCPTool("write", "", {})
+    cached, missing = _mcp_registration._cached_tools([
+        {
+            "name": "read",
+            "description": "",
+            "inputSchema": {},
+            "annotations": {"readOnlyHint": True},
+        },
+        {"name": "write", "description": "", "inputSchema": {}},
+    ])
 
-    mcp_tool._record_tool_approval_metadata("pipedream", [cached, missing])
+    _mcp_registration._record_tool_trust_metadata("pipedream", {}, [cached, missing])
 
     assert mcp_tool._tool_read_only_hints["pipedream"] == {
         "read": True,
@@ -95,10 +107,7 @@ def test_cached_annotation_metadata_has_live_path_parity():
 
 def test_annotation_metadata_is_isolated_by_profile_home(tmp_path, monkeypatch):
     from agent import secret_scope
-    from hermes_constants import (
-        reset_hermes_home_override,
-        set_hermes_home_override,
-    )
+    from hermes_constants import reset_hermes_home_override, set_hermes_home_override
 
     monkeypatch.setattr(secret_scope, "_MULTIPLEX_ACTIVE", True)
     home_a = tmp_path / "profile-a"
@@ -106,18 +115,16 @@ def test_annotation_metadata_is_isolated_by_profile_home(tmp_path, monkeypatch):
 
     token = set_hermes_home_override(str(home_a))
     try:
-        mcp_tool._record_tool_approval_metadata(
-            "evaos-pipedream-google_sheets",
-            [_annotation_tool("rows", True)],
+        _mcp_registration._record_tool_trust_metadata(
+            "evaos-pipedream-google_sheets", {}, [_annotation_tool("rows", True)]
         )
     finally:
         reset_hermes_home_override(token)
 
     token = set_hermes_home_override(str(home_b))
     try:
-        mcp_tool._record_tool_approval_metadata(
-            "evaos-pipedream-google_sheets",
-            [_annotation_tool("rows", False)],
+        _mcp_registration._record_tool_trust_metadata(
+            "evaos-pipedream-google_sheets", {}, [_annotation_tool("rows", False)]
         )
     finally:
         reset_hermes_home_override(token)
@@ -146,14 +153,14 @@ def test_lazy_cache_registration_restores_annotation_before_tool_handler():
             },
         ]
     }
-    with patch.object(mcp_tool, "_scan_mcp_description", return_value=[]), \
+    with patch.object(_mcp_schema, "_scan_mcp_description", return_value=[]), \
          patch.object(
-             mcp_tool,
+             _mcp_schema,
              "_convert_mcp_schema",
              side_effect=RuntimeError("stop after metadata"),
          ), \
          pytest.raises(RuntimeError, match="stop after metadata"):
-        mcp_tool._register_from_cache_sync(
+        _mcp_registration._register_from_cache_sync(
             "pipedream",
             {
                 "auth": "evaos_lease",
@@ -174,8 +181,8 @@ def test_lazy_cache_registration_restores_annotation_before_tool_handler():
 def test_read_only_hint_bypasses_approval():
     mcp_tool._tool_read_only_hints["pipedream"] = {"search": True}
 
-    with patch("tools.approval.request_elicitation_consent") as consent:
-        assert mcp_tool._mcp_tool_approval_check(
+    with patch.object(_approval_prompt, "request_elicitation_consent") as consent:
+        assert _mcp_handlers._trust_gate_check(
             "pipedream", "search", {"query": "quarterly plan"}
         ) is None
 
@@ -185,15 +192,15 @@ def test_read_only_hint_bypasses_approval():
 def test_manual_approval_accepts_or_denies_once():
     mcp_tool._tool_read_only_hints["pipedream"] = {"send_email": False}
 
-    with patch("tools.approval._get_approval_mode", return_value="manual"), \
-         patch("tools.approval.request_elicitation_consent", return_value="accept"):
-        assert mcp_tool._mcp_tool_approval_check(
+    with patch.object(_approval_context, "_get_approval_mode", return_value="manual"), \
+         patch.object(_approval_prompt, "request_elicitation_consent", return_value="accept"):
+        assert _mcp_handlers._trust_gate_check(
             "pipedream", "send_email", {"to": "owner@example.com"}
         ) is None
 
-    with patch("tools.approval._get_approval_mode", return_value="manual"), \
-         patch("tools.approval.request_elicitation_consent", return_value="decline"):
-        blocked = mcp_tool._mcp_tool_approval_check(
+    with patch.object(_approval_context, "_get_approval_mode", return_value="manual"), \
+         patch.object(_approval_prompt, "request_elicitation_consent", return_value="decline"):
+        blocked = _mcp_handlers._trust_gate_check(
             "pipedream", "send_email", {"to": "owner@example.com"}
         )
 
@@ -207,10 +214,10 @@ def test_manual_approval_accepts_or_denies_once():
 def test_smart_mode_uses_native_guardian_without_a_second_prompt(verdict, allowed):
     mcp_tool._tool_read_only_hints["pipedream"] = {"update_row": False}
 
-    with patch("tools.approval._get_approval_mode", return_value="smart"), \
-         patch("tools.approval._smart_approve", return_value=verdict) as smart, \
-         patch("tools.approval.request_elicitation_consent") as consent:
-        result = mcp_tool._mcp_tool_approval_check(
+    with patch.object(_approval_context, "_get_approval_mode", return_value="smart"), \
+         patch.object(_approval_smart, "_smart_approve", return_value=verdict) as smart, \
+         patch.object(_approval_prompt, "request_elicitation_consent") as consent:
+        result = _mcp_handlers._trust_gate_check(
             "pipedream", "update_row", {"row": 7}
         )
 
@@ -220,6 +227,8 @@ def test_smart_mode_uses_native_guardian_without_a_second_prompt(verdict, allowe
 
 
 def test_multiplex_write_approval_uses_owning_profile_mode(tmp_path, monkeypatch):
+    from hermes_cli import config as config_module
+
     pool_home = tmp_path / "pool"
     profile_home = tmp_path / "profile"
     pool_home.mkdir()
@@ -233,19 +242,18 @@ def test_multiplex_write_approval_uses_owning_profile_mode(tmp_path, monkeypatch
         encoding="utf-8",
     )
     monkeypatch.setenv("HERMES_HOME", str(pool_home))
+    config_module._LOAD_CONFIG_CACHE.clear()
     state_key = (str(profile_home.resolve()), "pipedream")
     mcp_tool._tool_read_only_hints[state_key] = {"send_email": False}
 
-    with patch("tools.approval._smart_approve") as smart, \
-         patch(
-             "tools.approval.request_elicitation_consent",
+    with patch.object(_approval_smart, "_smart_approve") as smart, \
+         patch.object(
+             _approval_prompt,
+             "request_elicitation_consent",
              return_value="decline",
          ) as consent:
-        blocked = mcp_tool._mcp_tool_approval_check(
-            "pipedream",
-            "send_email",
-            {"to": "owner@example.com"},
-            state_key,
+        blocked = _mcp_handlers._trust_gate_check(
+            "pipedream", "send_email", {"to": "owner@example.com"}, state_key
         )
 
     smart.assert_not_called()
@@ -275,11 +283,9 @@ def test_missing_approval_home_resolves_unique_profile_mode_off(tmp_path, monkey
     mcp_tool._tool_read_only_hints[state_key] = {"send_email": False}
     config_module._LOAD_CONFIG_CACHE.clear()
 
-    with patch("tools.approval.request_elicitation_consent") as consent:
-        result = mcp_tool._mcp_tool_approval_check(
-            "pipedream",
-            "send_email",
-            {"to": "owner@example.com"},
+    with patch.object(_approval_prompt, "request_elicitation_consent") as consent:
+        result = _mcp_handlers._trust_gate_check(
+            "pipedream", "send_email", {"to": "owner@example.com"}
         )
 
     consent.assert_not_called()
@@ -296,10 +302,8 @@ def test_missing_approval_home_blocks_ambiguous_multiplex_owner(
         state_key = (str(tmp_path / profile), "pipedream")
         mcp_tool._tool_read_only_hints[state_key] = {"send_email": False}
 
-    result = mcp_tool._mcp_tool_approval_check(
-        "pipedream",
-        "send_email",
-        {"to": "owner@example.com"},
+    result = _mcp_handlers._trust_gate_check(
+        "pipedream", "send_email", {"to": "owner@example.com"}
     )
 
     assert "profile approval scope could not be resolved" in json.loads(result)["error"]
@@ -341,7 +345,7 @@ def test_lazy_profile_owned_server_scopes_approval_when_process_is_not_multiplex
             },
         ]
     }
-    registered = mcp_tool._register_from_cache_sync(
+    registered = _mcp_registration._register_from_cache_sync(
         "pipedream",
         {
             "auth": "evaos_lease",
@@ -358,20 +362,22 @@ def test_lazy_profile_owned_server_scopes_approval_when_process_is_not_multiplex
     connect = MagicMock()
 
     try:
-        with patch("tools.approval._smart_approve") as smart, \
-             patch(
-                 "tools.approval.request_elicitation_consent",
+        with patch.object(_approval_smart, "_smart_approve") as smart, \
+             patch.object(
+                 _approval_prompt,
+                 "request_elicitation_consent",
                  return_value="decline",
              ) as consent, \
-             patch(
-                 "tools.mcp_tool._get_connected_server_for_call",
+             patch.object(
+                 _mcp_discovery,
+                 "_get_connected_server_for_call",
                  connect,
              ):
             blocked = tool_entry.handler({"to": "owner@example.com"})
     finally:
         for tool_name in registered:
             registry.deregister(tool_name)
-            mcp_tool._forget_mcp_tool_server(tool_name, str(profile_home))
+            _mcp_registration._forget_mcp_tool_server(tool_name)
         mcp_tool._lazy_server_configs.pop("pipedream", None)
         mcp_tool._lazy_server_fingerprints.pop("pipedream", None)
         mcp_tool._lazy_server_tool_names.pop("pipedream", None)
@@ -389,26 +395,23 @@ def test_off_mode_and_session_yolo_bypass_write_approval():
 
     mcp_tool._tool_read_only_hints["pipedream"] = {"update_row": False}
 
-    with patch("tools.approval._get_approval_mode", return_value="off"), \
-         patch("tools.approval.request_elicitation_consent") as consent:
-        assert mcp_tool._mcp_tool_approval_check(
-            "pipedream", "update_row", {}
-        ) is None
+    with patch.object(_approval_context, "_get_approval_mode", return_value="off") as mode, \
+         patch.object(_approval_prompt, "request_elicitation_consent") as consent:
+        assert _mcp_handlers._trust_gate_check("pipedream", "update_row", {}) is None
+    mode.assert_called_once()
     consent.assert_not_called()
 
     session_key = "mcp-yolo-test"
-    token = approval.set_current_session_key(session_key)
+    token = _approval_context.set_current_session_key(session_key)
     approval.enable_session_yolo(session_key)
     try:
-        with patch("tools.approval._get_approval_mode", return_value="manual"), \
-             patch("tools.approval.request_elicitation_consent") as consent:
-            assert mcp_tool._mcp_tool_approval_check(
-                "pipedream", "update_row", {}
-            ) is None
+        with patch.object(_approval_context, "_get_approval_mode", return_value="manual") as mode, \
+             patch.object(_approval_prompt, "request_elicitation_consent") as consent:
+            assert _mcp_handlers._trust_gate_check("pipedream", "update_row", {}) is None
         consent.assert_not_called()
     finally:
         approval.clear_session(session_key)
-        approval.reset_current_session_key(token)
+        _approval_context.reset_current_session_key(token)
 
 
 @pytest.mark.parametrize(
@@ -428,9 +431,9 @@ def test_approval_display_redacts_bearer_tokens(credential_key):
         )
         return "decline"
 
-    with patch("tools.approval._get_approval_mode", return_value="manual"), \
-         patch("tools.approval.request_elicitation_consent", side_effect=_capture):
-        mcp_tool._mcp_tool_approval_check(
+    with patch.object(_approval_context, "_get_approval_mode", return_value="manual"), \
+         patch.object(_approval_prompt, "request_elicitation_consent", side_effect=_capture):
+        _mcp_handlers._trust_gate_check(
             "pipedream",
             "send_email",
             {"headers": {credential_key: f"Bearer {secret}"}},
@@ -444,11 +447,11 @@ def test_approval_display_redacts_bearer_tokens(credential_key):
 def test_denial_happens_before_lazy_connect_or_rpc():
     mcp_tool._tool_read_only_hints["pipedream"] = {"send_email": False}
     connect = MagicMock()
-    handler = mcp_tool._make_tool_handler("pipedream", "send_email", 5.0)
+    handler = _mcp_handlers._make_tool_handler("pipedream", "send_email", 5.0)
 
-    with patch("tools.approval._get_approval_mode", return_value="manual"), \
-         patch("tools.approval.request_elicitation_consent", return_value="decline"), \
-         patch("tools.mcp_tool._get_connected_server_for_call", connect):
+    with patch.object(_approval_context, "_get_approval_mode", return_value="manual"), \
+         patch.object(_approval_prompt, "request_elicitation_consent", return_value="decline"), \
+         patch.object(_mcp_discovery, "_get_connected_server_for_call", connect):
         result = handler({"to": "owner@example.com"})
 
     connect.assert_not_called()
@@ -463,12 +466,12 @@ def test_approved_write_invokes_rpc_once():
         _pending_call_context=None,
     )
     mcp_tool._tool_read_only_hints["pipedream"] = {"send_email": False}
-    handler = mcp_tool._make_tool_handler("pipedream", "send_email", 5.0)
+    handler = _mcp_handlers._make_tool_handler("pipedream", "send_email", 5.0)
 
-    with patch("tools.approval._get_approval_mode", return_value="manual"), \
-         patch("tools.approval.request_elicitation_consent", return_value="accept"), \
-         patch("tools.mcp_tool._get_connected_server_for_call", return_value=server), \
-         patch("tools.mcp_tool._run_on_mcp_loop", side_effect=_run_on_private_loop):
+    with patch.object(_approval_context, "_get_approval_mode", return_value="manual"), \
+         patch.object(_approval_prompt, "request_elicitation_consent", return_value="accept"), \
+         patch.object(_mcp_discovery, "_get_connected_server_for_call", return_value=server), \
+         patch.object(_mcp_loop, "_run_on_mcp_loop", side_effect=_run_on_private_loop):
         result = handler({"to": "owner@example.com"})
 
     session.call_tool.assert_awaited_once_with(

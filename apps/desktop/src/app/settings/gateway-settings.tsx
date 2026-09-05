@@ -71,6 +71,25 @@ export interface GatewaySettingsState {
 
 const SSH_HOST_CUSTOM = '__custom__'
 
+const EMPTY_STATE: GatewaySettingsState = {
+  envOverride: false,
+  mode: 'local',
+  remoteAuthMode: 'token',
+  remoteOauthConnected: false,
+  remoteTokenPreview: null,
+  remoteTokenSet: false,
+  secureTokenStorage: true,
+  remoteTokenPlainText: false,
+  remoteUrl: '',
+  cloudOrg: '',
+  sshHost: '',
+  sshUser: '',
+  sshPort: null,
+  sshKeyPath: '',
+  sshRemoteHermesPath: '',
+  sshRemoteProfile: ''
+}
+
 const SAFE_MANAGED_BROKER_CODES = new Set([
   'callback-handler-mismatch',
   'callback-handler-registration-failed',
@@ -105,29 +124,12 @@ export function safeManagedErrorMessage(
 ): string {
   const message = error instanceof Error ? error.message.trim() : ''
   const brokerCode = message.match(/\[code: ([a-z][a-z0-9]*(?:[_-][a-z0-9]+)*)\]/)?.[1]
+
   if (brokerCode && brokerCode.length <= 64 && SAFE_MANAGED_BROKER_CODES.has(brokerCode)) {
     return failedWithCode(brokerCode)
   }
-  return fallback
-}
 
-const EMPTY_STATE: GatewaySettingsState = {
-  envOverride: false,
-  mode: 'local',
-  remoteAuthMode: 'token',
-  remoteOauthConnected: false,
-  remoteTokenPreview: null,
-  remoteTokenSet: false,
-  secureTokenStorage: true,
-  remoteTokenPlainText: false,
-  remoteUrl: '',
-  cloudOrg: '',
-  sshHost: '',
-  sshUser: '',
-  sshPort: null,
-  sshKeyPath: '',
-  sshRemoteHermesPath: '',
-  sshRemoteProfile: ''
+  return fallback
 }
 
 export function normalizeGatewaySettingsState(
@@ -195,10 +197,9 @@ function ModeCard({
   )
 }
 
-// `embedded` trims the page chrome for reuse inside the boot-failure recovery
-// card: the outer title/intro, the "Save for next restart" action, and the
-// Diagnostics row are redundant there (the card owns its header + a single
-// reconnect action), so only the connection controls render.
+// Managed evaOS Agent connections are assigned by Electric Sheep. Keep the
+// local/remote/cloud/SSH connection editor out of this path: those controls
+// would expose unsupported endpoint, token, or profile overrides.
 function EvaManagedGatewaySettings({ embedded = false }: { embedded?: boolean } = {}) {
   const { t } = useI18n()
   const g = t.settings.gateway.managed
@@ -277,10 +278,7 @@ function EvaManagedGatewaySettings({ embedded = false }: { embedded?: boolean } 
           <div className="overflow-hidden rounded-xl border border-border/70">
             <ListRow description={status.email ?? g.notSignedIn} title={g.accountTitle} />
             <ListRow description={businessDisplayName} title={g.businessTitle} />
-            <ListRow
-              description={status.agentDisplayName ?? status.agentId ?? g.assignedAfterSignIn}
-              title={g.agentTitle}
-            />
+            <ListRow description={status.agentDisplayName ?? g.assignedAfterSignIn} title={g.agentTitle} />
             <ListRow description={status.updateChannel} title={g.updateChannelTitle} />
           </div>
         ) : null}
@@ -315,6 +313,10 @@ function EvaManagedGatewaySettings({ embedded = false }: { embedded?: boolean } 
   )
 }
 
+// `embedded` trims the page chrome for reuse inside the boot-failure recovery
+// card: the outer title/intro, the "Save for next restart" action, and the
+// Diagnostics row are redundant there (the card owns its header + a single
+// reconnect action), so only the connection controls render.
 export function GatewaySettings({ embedded = false }: { embedded?: boolean } = {}) {
   if (window.hermesDesktop?.eva) {
     return <EvaManagedGatewaySettings embedded={embedded} />

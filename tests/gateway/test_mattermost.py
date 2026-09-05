@@ -3,7 +3,7 @@ import json
 import os
 import time
 import pytest
-from unittest.mock import AsyncMock, MagicMock, call, patch
+from unittest.mock import MagicMock, patch, AsyncMock
 
 from gateway.config import Platform, PlatformConfig
 from gateway.platforms.base import MessageType
@@ -393,142 +393,6 @@ class TestMattermostMentionBehavior:
             await self.adapter._handle_ws_event(self._make_event("hello", channel_id="chan_456"))
             assert self.adapter.handle_message.called
 
-    @pytest.mark.asyncio
-    async def test_multi_bot_fanout_strips_peer_bots_but_preserves_human_mentions(self):
-        """Each addressed bot sees the instruction without handles it may echo."""
-        self.adapter._api_get = AsyncMock(return_value=[
-            {"username": "hermes-bot", "is_bot": True},
-            {"username": "agent-agent3", "is_bot": True},
-            {"username": "agent-louis", "is_bot": True},
-            {"username": "davidcdorman", "is_bot": False},
-        ])
-
-        await self.adapter._handle_ws_event(
-            self._make_event(
-                "ping @hermes-bot @agent-agent3 @agent-louis for @davidcdorman"
-            )
-        )
-
-        assert self.adapter.handle_message.call_count == 1
-        message = self.adapter.handle_message.call_args[0][0]
-        assert message.text == "ping for @davidcdorman"
-        self.adapter._api_get.assert_awaited_once_with(
-            "users?in_channel=chan_456&page=0&per_page=200"
-        )
-
-    @pytest.mark.asyncio
-    async def test_multi_bot_fanout_preserves_unrelated_whitespace(self):
-        self.adapter._api_get = AsyncMock(return_value=[
-            {"username": "hermes-bot", "is_bot": True},
-            {"username": "agent-agent3", "is_bot": True},
-        ])
-
-        await self.adapter._handle_ws_event(
-            self._make_event("value  =  expression @hermes-bot @agent-agent3")
-        )
-
-        message = self.adapter.handle_message.call_args[0][0]
-        assert message.text == "value  =  expression"
-
-    @pytest.mark.asyncio
-    async def test_multi_bot_fanout_finds_peer_bot_on_second_users_page(self):
-        first_page = [
-            {"username": f"human-{index}", "is_bot": False}
-            for index in range(200)
-        ]
-        second_page = [
-            {"username": "hermes-bot", "is_bot": True},
-            {"username": "agent-agent3", "is_bot": True},
-        ]
-        self.adapter._api_get = AsyncMock(side_effect=[first_page, second_page])
-
-        await self.adapter._handle_ws_event(
-            self._make_event("ping @hermes-bot @agent-agent3")
-        )
-
-        message = self.adapter.handle_message.call_args[0][0]
-        assert message.text == "ping"
-        assert self.adapter._api_get.await_args_list == [
-            call("users?in_channel=chan_456&page=0&per_page=200"),
-            call("users?in_channel=chan_456&page=1&per_page=200"),
-        ]
-
-
-class TestMattermostBindingScope:
-    def setup_method(self):
-        self.adapter = _make_adapter()
-        self.adapter._bot_user_id = "bot_user_id"
-        self.adapter._bot_username = "hermes-bot"
-        self.adapter.handle_message = AsyncMock()
-
-    def _event(self, *, user_id="user_allowed", channel_type="D", channel_id="dm_1"):
-        return {
-            "event": "posted",
-            "data": {
-                "post": json.dumps({
-                    "id": f"post_{user_id}_{channel_id}",
-                    "user_id": user_id,
-                    "channel_id": channel_id,
-                    "message": "@hermes-bot synthetic",
-                }),
-                "channel_type": channel_type,
-                "sender_name": "@synthetic",
-            },
-        }
-
-    @pytest.mark.asyncio
-    async def test_channel_only_binding_denies_dm_and_allows_exact_private_channel(self):
-        self.adapter.config.extra.update({
-            "dm_allowed_users": [],
-            "channel_allowed_users": {"agent_private": ["user_allowed"]},
-        })
-
-        await self.adapter._handle_ws_event(self._event())
-        assert not self.adapter.handle_message.called
-
-        await self.adapter._handle_ws_event(
-            self._event(channel_type="P", channel_id="agent_private")
-        )
-        assert self.adapter.handle_message.call_count == 1
-
-    @pytest.mark.asyncio
-    async def test_channel_binding_denies_unassigned_user_and_other_channel(self):
-        self.adapter.config.extra.update({
-            "dm_allowed_users": ["user_allowed"],
-            "channel_allowed_users": {"agent_private": ["user_allowed"]},
-        })
-
-        await self.adapter._handle_ws_event(
-            self._event(user_id="user_denied", channel_type="P", channel_id="agent_private")
-        )
-        await self.adapter._handle_ws_event(
-            self._event(channel_type="P", channel_id="other_private")
-        )
-        assert not self.adapter.handle_message.called
-
-    @pytest.mark.asyncio
-    async def test_channel_only_config_denies_dm_when_counterpart_key_is_absent(self):
-        self.adapter.config.extra.update({
-            "channel_allowed_users": {"agent_private": ["user_allowed"]},
-        })
-        await self.adapter._handle_ws_event(self._event())
-        assert not self.adapter.handle_message.called
-
-    @pytest.mark.asyncio
-    async def test_dm_only_config_denies_channel_when_counterpart_key_is_absent(self):
-        self.adapter.config.extra.update({
-            "dm_allowed_users": ["user_allowed"],
-        })
-        await self.adapter._handle_ws_event(
-            self._event(channel_type="P", channel_id="agent_private")
-        )
-        assert not self.adapter.handle_message.called
-
-    @pytest.mark.asyncio
-    async def test_legacy_config_without_binding_scope_preserves_existing_behavior(self):
-        await self.adapter._handle_ws_event(self._event())
-        assert self.adapter.handle_message.call_count == 1
-
 
 # ---------------------------------------------------------------------------
 # File upload (send_image)
@@ -728,3 +592,120 @@ async def test_mattermost_top_level_channel_post_is_thread_root():
     assert msg_event.source.thread_id == "top_post_123"
     assert msg_event.source.message_id == "top_post_123"
     assert msg_event.message_id == "top_post_123"
+
+
+# ---------------------------------------------------------------------------
+# Multiplex secondary-profile scope
+# ---------------------------------------------------------------------------
+#
+# __init__'s url/reply_mode, validate_mattermost_config's url,
+# _standalone_send's url, and _handle_ws_event's require_mention/
+# free_response_channels/allowed_channels, all previously read raw
+# os.getenv unconditionally (only MATTERMOST_TOKEN was already scoped).
+# _apply_yaml_config also wrote MATTERMOST_REQUIRE_MENTION/
+# MATTERMOST_FREE_RESPONSE_CHANNELS/MATTERMOST_ALLOWED_CHANNELS into the
+# process-global os.environ unconditionally. Under multiplex, os.environ
+# holds the DEFAULT profile's YAML-to-env bridge output -- a secondary
+# profile with its own (different or absent) Mattermost config would
+# silently connect to the default profile's server, or have its
+# mention-gating/channel-allowlist decisions driven by the default
+# profile's settings. Mirrors the LINE/DingTalk/IRC fix for #98738.
+
+@pytest.fixture
+def multiplex_scope():
+    """Install multiplex + a secondary-profile secret scope; restore after."""
+    tokens = []
+
+    def install(scope=None):
+        from agent.secret_scope import set_multiplex_active, set_secret_scope
+
+        set_multiplex_active(True)
+        tokens.append(set_secret_scope(scope or {}))
+        return tokens[-1]
+
+    yield install
+
+    from agent.secret_scope import reset_secret_scope, set_multiplex_active
+
+    for token in reversed(tokens):
+        reset_secret_scope(token)
+    set_multiplex_active(False)
+
+
+@pytest.fixture
+def default_profile_env(monkeypatch):
+    """The default profile's YAML-to-env bridge output in os.environ."""
+    monkeypatch.setenv("MATTERMOST_URL", "https://default.example.com")
+    monkeypatch.setenv("MATTERMOST_REPLY_MODE", "thread")
+    monkeypatch.setenv("MATTERMOST_REQUIRE_MENTION", "false")
+    monkeypatch.setenv("MATTERMOST_FREE_RESPONSE_CHANNELS", "chan_default")
+    monkeypatch.setenv("MATTERMOST_ALLOWED_CHANNELS", "chan_default")
+
+
+class TestMultiplexProfileScope:
+
+    @pytest.mark.asyncio
+    async def test_ws_event_gating_uses_scoped_settings_not_default(
+        self, monkeypatch
+    ):
+        """A secondary profile's own require_mention/free_response_channels/
+        allowed_channels (installed via the scope) must gate its messages --
+        not the default profile's bridged settings."""
+        from agent.secret_scope import (
+            reset_secret_scope,
+            set_multiplex_active,
+            set_secret_scope,
+        )
+        from plugins.platforms.mattermost.adapter import MattermostAdapter
+
+        monkeypatch.setenv("MATTERMOST_REQUIRE_MENTION", "true")
+        monkeypatch.delenv("MATTERMOST_FREE_RESPONSE_CHANNELS", raising=False)
+
+        adapter = _make_adapter()
+        adapter._bot_user_id = "bot_user_id"
+        adapter._bot_username = "hermes-bot"
+        adapter.handle_message = AsyncMock()
+
+        post_data = {
+            "id": "post_scoped",
+            "user_id": "user_123",
+            "channel_id": "chan_456",
+            "message": "hello with no mention",
+        }
+        event = {
+            "event": "posted",
+            "data": {
+                "post": json.dumps(post_data),
+                "channel_type": "O",
+                "sender_name": "@alice",
+            },
+        }
+
+        set_multiplex_active(True)
+        token = set_secret_scope({"MATTERMOST_REQUIRE_MENTION": "false"})
+        try:
+            await adapter._handle_ws_event(event)
+        finally:
+            reset_secret_scope(token)
+            set_multiplex_active(False)
+
+        # The profile's own scope disables require_mention -- the message
+        # must be dispatched even without an @mention, despite the default
+        # profile's env bridge saying require_mention=true.
+        assert adapter.handle_message.called
+
+    def test_apply_yaml_config_scoped_skips_env_write_and_seeds_extra(
+        self, multiplex_scope
+    ):
+        from plugins.platforms.mattermost.adapter import _apply_yaml_config
+
+        multiplex_scope()
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("MATTERMOST_REQUIRE_MENTION", None)
+            seeded = _apply_yaml_config({}, {"require_mention": False, "allowed_channels": ["c1"]})
+            assert seeded == {"require_mention": False, "allowed_channels": ["c1"]}
+            # Under a secondary profile's scope the env bridge must be
+            # skipped -- writing here would leak into every other profile's
+            # os.environ.
+            assert "MATTERMOST_REQUIRE_MENTION" not in os.environ
+

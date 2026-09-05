@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button'
 import { ProfileGlyph } from '@/components/ui/profile-glyph'
 import { getProfileSoul, type ProfileInfo, updateProfileSoul } from '@/hermes'
 import { useI18n } from '@/i18n'
+import { isManagedEvaosAgent } from '@/i18n/managed-brand'
 import { displayPath } from '@/lib/display-path'
 import { AlertTriangle, Save } from '@/lib/icons'
 import { resolveProfileColor } from '@/lib/profile-color'
@@ -56,6 +57,7 @@ export function resolveManagedProfileDisplayName(
 
 export function ProfilesView({ onClose }: ProfilesViewProps) {
   const { t } = useI18n()
+  const managedEva = isManagedEvaosAgent()
   const p = t.profiles
   const [profiles, setProfiles] = useState<null | ProfileInfo[]>(null)
   const [selectedName, setSelectedName] = useState<null | string>(null)
@@ -74,9 +76,8 @@ export function ProfilesView({ onClose }: ProfilesViewProps) {
     refreshInFlight.current = true
 
     try {
-      // Both managed reads can refresh enrollment after a 401. Keep them
-      // serialized, and coalesce overlapping view refreshes, so one recovery
-      // cannot clear or invalidate the other's forced enrollment.
+      // Keep managed enrollment reads serialized with the profile list so a
+      // single 401 recovery cannot mix values from different generations.
       const list = await refreshProfiles()
 
       const activeProfileResult = window.hermesDesktop?.profile?.get
@@ -86,9 +87,6 @@ export function ProfilesView({ onClose }: ProfilesViewProps) {
             .catch(() => ({ ok: false as const }))
         : { ok: false as const }
 
-      // profile.get() may refresh managed enrollment on a 401. Resolve it
-      // before reading the matching display metadata so the two values cannot
-      // come from different enrollment generations.
       let nextManagedPresentation: ManagedProfilePresentation | null | undefined
 
       if (activeProfileResult.ok) {
@@ -101,9 +99,7 @@ export function ProfilesView({ onClose }: ProfilesViewProps) {
 
         if (statusResult.ok) {
           const profileName =
-            typeof activeProfileResult.value?.profile === 'string'
-              ? activeProfileResult.value.profile.trim()
-              : ''
+            typeof activeProfileResult.value?.profile === 'string' ? activeProfileResult.value.profile.trim() : ''
 
           nextManagedPresentation =
             statusResult.value?.managed && profileName
@@ -181,11 +177,13 @@ export function ProfilesView({ onClose }: ProfilesViewProps) {
       ) : profiles.length === 0 ? (
         <PanelEmpty
           action={
-            <Button onClick={() => setCreateOpen(true)} size="sm">
-              {p.newProfile}
-            </Button>
+            !managedEva && (
+              <Button onClick={() => setCreateOpen(true)} size="sm">
+                {p.newProfile}
+              </Button>
+            )
           }
-          description={p.createDesc}
+          description={managedEva ? undefined : p.createDesc}
           icon="organization"
           title={p.noProfiles}
         />
@@ -205,25 +203,27 @@ export function ProfilesView({ onClose }: ProfilesViewProps) {
                   displayName={resolveManagedProfileDisplayName(profile.name, managedPresentation)}
                   key={profile.name}
                   menuItems={
-                    profile.is_default
-                      ? // Renaming the default profile sets a presentation-only
-                        // display name (the canonical id stays "default").
-                        [{ icon: 'edit', label: p.renameMenu, onSelect: () => setPendingRename(profile) }]
-                      : [
-                          { icon: 'edit', label: p.renameMenu, onSelect: () => setPendingRename(profile) },
-                          {
-                            icon: 'trash',
-                            label: t.common.delete,
-                            onSelect: () => setPendingDelete(profile),
-                            tone: 'danger'
-                          }
-                        ]
+                    managedEva
+                      ? []
+                      : profile.is_default
+                        ? // Renaming the default profile sets a presentation-only
+                          // display name (the canonical id stays "default").
+                          [{ icon: 'edit', label: p.renameMenu, onSelect: () => setPendingRename(profile) }]
+                        : [
+                            { icon: 'edit', label: p.renameMenu, onSelect: () => setPendingRename(profile) },
+                            {
+                              icon: 'trash',
+                              label: t.common.delete,
+                              onSelect: () => setPendingDelete(profile),
+                              tone: 'danger'
+                            }
+                          ]
                   }
                   onSelect={() => setSelectedName(profile.name)}
                   profile={profile}
                 />
               ))}
-              <PanelAddButton label={p.newProfile} onClick={() => setCreateOpen(true)} />
+              {!managedEva && <PanelAddButton label={p.newProfile} onClick={() => setCreateOpen(true)} />}
             </PanelList>
 
             {selected ? (
@@ -239,30 +239,36 @@ export function ProfilesView({ onClose }: ProfilesViewProps) {
         </>
       )}
 
-      <RenameProfileDialog
-        currentName={pendingRename?.name ?? ''}
-        isDefault={pendingRename?.is_default ?? false}
-        onClose={() => setPendingRename(null)}
-        onRenamed={selectAndRefresh}
-        open={pendingRename !== null}
-      />
+      {!managedEva && (
+        <RenameProfileDialog
+          currentName={pendingRename?.name ?? ''}
+          isDefault={pendingRename?.is_default ?? false}
+          onClose={() => setPendingRename(null)}
+          onRenamed={selectAndRefresh}
+          open={pendingRename !== null}
+        />
+      )}
 
-      <CreateProfileDialog
-        onClose={() => setCreateOpen(false)}
-        onCreated={selectAndRefresh}
-        open={createOpen}
-        profiles={profiles ?? []}
-      />
+      {!managedEva && (
+        <CreateProfileDialog
+          onClose={() => setCreateOpen(false)}
+          onCreated={selectAndRefresh}
+          open={createOpen}
+          profiles={profiles ?? []}
+        />
+      )}
 
-      <DeleteProfileDialog
-        onClose={() => setPendingDelete(null)}
-        onDeleted={async () => {
-          setSelectedName(null)
-          await refresh()
-        }}
-        open={pendingDelete !== null}
-        profile={pendingDelete}
-      />
+      {!managedEva && (
+        <DeleteProfileDialog
+          onClose={() => setPendingDelete(null)}
+          onDeleted={async () => {
+            setSelectedName(null)
+            await refresh()
+          }}
+          open={pendingDelete !== null}
+          profile={pendingDelete}
+        />
+      )}
     </Panel>
   )
 }

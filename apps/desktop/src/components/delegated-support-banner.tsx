@@ -32,7 +32,9 @@ export function DelegatedSupportBanner() {
       return
     }
 
-    void readStatus().then(setStatus).catch(() => undefined)
+    void readStatus()
+      .then(setStatus)
+      .catch(() => undefined)
   }, [])
 
   useEffect(() => {
@@ -57,6 +59,7 @@ export function DelegatedSupportBanner() {
     }
 
     setEnding(true)
+
     try {
       await window.hermesDesktop.eva.endSupportSession()
 
@@ -76,12 +79,8 @@ export function DelegatedSupportBanner() {
       <span aria-live="polite" className="sr-only" role="status">
         {t.delegatedSupport.actingForCustomer(status.supportCustomerLabel)}
       </span>
-      <span className="font-medium">
-        {t.delegatedSupport.actingForCustomer(status.supportCustomerLabel)}
-      </span>
-      <span className="text-(--ui-text-secondary)">
-        {t.delegatedSupport.assignedAgent(status.supportAgentLabel)}
-      </span>
+      <span className="font-medium">{t.delegatedSupport.actingForCustomer(status.supportCustomerLabel)}</span>
+      <span className="text-(--ui-text-secondary)">{t.delegatedSupport.assignedAgent(status.supportAgentLabel)}</span>
       <span className="tabular-nums text-(--ui-text-secondary)">
         {t.delegatedSupport.endsIn(formatRemaining(status.supportExpiresAt))}
       </span>

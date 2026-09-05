@@ -144,8 +144,12 @@ export async function resolveSpeakStreamUrl(): Promise<null | string> {
             `Timed out connecting to profile "${profile}"`
           )
 
-    const wsDeps =
-      connectionId && desktop.getGatewayWsUrlFor
+    // The registry lookup above still validates the owning managed route.
+    // Its relay tickets bind an exact endpoint, so use the endpoint-aware
+    // bridge rather than minting /api/ws and rewriting that ticket's URL.
+    const wsDeps = conn.baseUrl?.startsWith('eva-managed://')
+      ? desktop
+      : connectionId && desktop.getGatewayWsUrlFor
         ? { getGatewayWsUrl: () => desktop.getGatewayWsUrlFor!({ connectionId, profile }) }
         : connectionId
           ? {}

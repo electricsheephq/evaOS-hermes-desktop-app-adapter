@@ -8,7 +8,7 @@ import { $gateway, ensureActiveGatewayOpen, isActivePrimary } from '@/store/gate
 import { $activeGatewayProfile } from '@/store/profile'
 import { $gatewayState, setConnection } from '@/store/session'
 
-function waitForGatewayOpen(gateway: HermesGateway, timeoutMs = 15_000): Promise<void> {
+function waitForGatewayOpen(gateway: HermesGateway, timeoutMs = RECONNECT_ATTEMPT_TIMEOUT_MS): Promise<void> {
   if (gateway.connectionState === 'open') {
     return Promise.resolve()
   }
@@ -33,10 +33,7 @@ function waitForGatewayOpen(gateway: HermesGateway, timeoutMs = 15_000): Promise
       }
     }
 
-    const timer = window.setTimeout(
-      () => finish(new Error('Could not connect to evaOS Agent gateway')),
-      timeoutMs
-    )
+    const timer = window.setTimeout(() => finish(new Error('Could not connect to evaOS Agent gateway')), timeoutMs)
 
     offState = gateway.onState(state => {
       if (state === 'open') {
@@ -180,7 +177,7 @@ export function useGatewayRequest() {
       const gateway = gatewayRef.current
 
       if (!gateway) {
-        throw new Error('evaOS Agent gateway unavailable')
+        throw new Error('Hermes gateway unavailable')
       }
 
       try {

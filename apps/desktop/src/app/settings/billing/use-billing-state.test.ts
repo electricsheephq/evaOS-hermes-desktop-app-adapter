@@ -163,7 +163,7 @@ describe('deriveBillingView', () => {
     expect(view.status).toBe('logged_out')
     expect(view.summary.map(item => item.value)).toEqual(['—', '—', '—'])
     expect(view.notice).toMatchObject({
-      title: 'Connect your Electric Sheep account'
+      title: 'Connect your Nous account'
     })
     expect(view.paymentRow).toBeUndefined()
     expect(view.topupRow).toBeUndefined()

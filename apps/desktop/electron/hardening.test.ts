@@ -1124,6 +1124,7 @@ test('decryptSafeStorageValue preserves non-macOS behavior and fails closed', ()
 
 test('decryptSafeStorageValue reports only fixed failure categories without exposing errors or ciphertext', () => {
   const ciphertext = Buffer.from('synthetic-encrypted-value').toString('base64')
+
   const cases = [
     ['safeStorage cannot be used before app is ready', 'not-ready'],
     [

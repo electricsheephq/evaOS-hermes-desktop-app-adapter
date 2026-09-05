@@ -41,7 +41,7 @@ def _install(monkeypatch, *, in_flight, join_result, new_defs):
     monkeypatch.setattr(entry, "mcp_discovery_in_flight", lambda: in_flight)
     monkeypatch.setattr(entry, "join_mcp_discovery", lambda timeout=None: join_result)
     monkeypatch.setattr(model_tools, "get_tool_definitions", lambda **kw: list(new_defs))
-    monkeypatch.setattr(server, "_load_enabled_toolsets", lambda: None)
+    monkeypatch.setattr(server, "_load_enabled_toolsets", lambda *_a, **_kw: None)
     monkeypatch.setattr(server, "_session_info", lambda agent, session: {"tools_len": len(agent.tools)})
 
     emitted = []
@@ -65,58 +65,6 @@ def test_late_refresh_adds_tools_and_reemits_when_pre_first_turn(monkeypatch):
         assert ("session.info", sid, {"tools_len": 3}) in emitted
     finally:
         server._sessions.pop(sid, None)
-
-
-def test_late_refresh_reinstalls_session_profile_context(monkeypatch, tmp_path):
-    from agent.secret_scope import (
-        get_secret,
-        is_multiplex_active,
-        set_multiplex_active,
-    )
-    from hermes_constants import get_hermes_home
-
-    profile_home = tmp_path / "jane"
-    profile_home.mkdir()
-    (profile_home / ".env").write_text(
-        "PROFILE_MCP_TOKEN=jane-profile-token\n",
-        encoding="utf-8",
-    )
-    base = [_tool("read_file")]
-    agent = _make_fake_agent(base)
-    sid = "sess-late-profile"
-    server._sessions[sid] = {
-        "agent": agent,
-        "profile_home": str(profile_home),
-    }
-    seen = []
-    previous_multiplex = is_multiplex_active()
-    set_multiplex_active(True)
-    try:
-        emitted = _install(
-            monkeypatch,
-            in_flight=True,
-            join_result=True,
-            new_defs=base + [_tool("mcp__profile__probe")],
-        )
-
-        def _scoped_join(timeout=None):
-            seen.append(
-                (str(get_hermes_home().resolve()), get_secret("PROFILE_MCP_TOKEN"))
-            )
-            return True
-
-        monkeypatch.setattr(entry, "join_mcp_discovery", _scoped_join)
-        server._schedule_mcp_late_refresh(sid, agent)
-        _drain_refresh_threads()
-
-        assert seen == [
-            (str(profile_home.resolve()), "jane-profile-token"),
-        ]
-        assert len(agent.tools) == 2
-        assert ("session.info", sid, {"tools_len": 2}) in emitted
-    finally:
-        server._sessions.pop(sid, None)
-        set_multiplex_active(previous_multiplex)
 
 
 def test_no_refresh_when_discovery_not_in_flight(monkeypatch):

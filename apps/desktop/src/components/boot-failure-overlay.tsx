@@ -207,10 +207,39 @@ export function BootFailureOverlay() {
     setBusy('signin')
 
     try {
-      await window.hermesDesktop?.oauthLogoutConnectionConfig?.(remoteReauth.url)
-      const result = await window.hermesDesktop?.oauthLoginConnectionConfig(remoteReauth.url)
+      const desktop = window.hermesDesktop
+
+      await desktop?.oauthLogoutConnectionConfig?.(remoteReauth.url)
+
+      let result: { connected?: boolean } | undefined
+
+      if (connectionConfig?.mode === 'cloud' && desktop?.cloud) {
+        const status = await desktop.cloud.status()
+
+        if (!status.signedIn) {
+          const login = await desktop.cloud.login()
+
+          if (!login.signedIn) {
+            notify({
+              kind: 'warning',
+              title: t.boot.failure.signInIncompleteTitle,
+              message: t.boot.failure.signInIncompleteMessage
+            })
+
+            return
+          }
+        }
+
+        result = await desktop.cloud.agentSignIn(remoteReauth.url)
+      } else {
+        result = await desktop?.oauthLoginConnectionConfig(remoteReauth.url)
+      }
 
       if (result?.connected) {
+        if (connectionConfig?.mode === 'cloud') {
+          await desktop?.resetBootstrap().catch(() => undefined)
+        }
+
         notify({ kind: 'success', title: t.boot.failure.signedInTitle, message: t.boot.failure.signedInMessage })
         window.location.reload()
 

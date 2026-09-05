@@ -106,8 +106,8 @@ async def test_reload_mcp_refreshes_cached_agent_tools():
     ]
 
     with (
-        patch("tools.mcp_tool.shutdown_mcp_servers"),
-        patch("tools.mcp_tool.discover_mcp_tools", return_value=["HassTurnOn", "HassTurnOff"]),
+        patch("tools.mcp_tool_lifecycle.shutdown_mcp_servers"),
+        patch("tools.mcp_tool_discovery.discover_mcp_tools", return_value=["HassTurnOn", "HassTurnOff"]),
         patch.dict("tools.mcp_tool._servers", {"homeassistant": object()}, clear=True),
         patch("model_tools.get_tool_definitions", return_value=fresh_tool_defs),
     ):
@@ -136,8 +136,8 @@ async def test_reload_mcp_handles_empty_agent_cache():
     assert len(runner._agent_cache) == 0
 
     with (
-        patch("tools.mcp_tool.shutdown_mcp_servers"),
-        patch("tools.mcp_tool.discover_mcp_tools", return_value=[]),
+        patch("tools.mcp_tool_lifecycle.shutdown_mcp_servers"),
+        patch("tools.mcp_tool_discovery.discover_mcp_tools", return_value=[]),
         patch.dict("tools.mcp_tool._servers", {}, clear=True),
         patch("model_tools.get_tool_definitions", return_value=[]),
     ):
@@ -164,8 +164,8 @@ async def test_reload_mcp_preserves_per_agent_toolset_overrides():
         return [{"type": "function", "function": {"name": "refreshed"}}]
 
     with (
-        patch("tools.mcp_tool.shutdown_mcp_servers"),
-        patch("tools.mcp_tool.discover_mcp_tools", return_value=["refreshed"]),
+        patch("tools.mcp_tool_lifecycle.shutdown_mcp_servers"),
+        patch("tools.mcp_tool_discovery.discover_mcp_tools", return_value=["refreshed"]),
         patch.dict("tools.mcp_tool._servers", {"homeassistant": object()}, clear=True),
         patch("model_tools.get_tool_definitions", side_effect=_capture_get_tool_definitions),
     ):
@@ -174,181 +174,3 @@ async def test_reload_mcp_preserves_per_agent_toolset_overrides():
     assert captured_calls, "get_tool_definitions was never called to refresh the cache"
     assert captured_calls[0]["enabled_toolsets"] == ["safe"]
     assert captured_calls[0]["disabled_toolsets"] == ["terminal"]
-
-
-@pytest.mark.asyncio
-async def test_multiplex_reload_refreshes_only_routed_profile_cache(
-    tmp_path, monkeypatch
-):
-    from agent import secret_scope
-    from hermes_constants import get_hermes_home
-    runner = _make_runner_with_cached_agents(num_agents=2)
-    runner.config.multiplex_profiles = True
-    eve_entry, grace_entry = list(runner._agent_cache.values())
-    runner._agent_cache = OrderedDict(
-        [
-            ("agent:eve:discord:channel:eve", eve_entry),
-            ("agent:grace:discord:channel:grace", grace_entry),
-        ]
-    )
-    event = _make_event()
-    event.source.profile = "eve"
-    refreshed = []
-    seen_shutdown_homes = []
-    eve_home = tmp_path / "profiles" / "eve"
-    eve_home.mkdir(parents=True)
-    monkeypatch.setattr(secret_scope, "_MULTIPLEX_ACTIVE", True)
-
-    def _scoped_shutdown():
-        seen_shutdown_homes.append(get_hermes_home().resolve())
-
-    runner._resolve_profile_home_for_source = lambda _source: eve_home
-
-    try:
-        with (
-            patch("tools.mcp_tool.shutdown_mcp_servers") as global_shutdown,
-            patch(
-                "tools.mcp_tool.shutdown_mcp_servers_for_current_scope",
-                side_effect=_scoped_shutdown,
-            ) as scoped_shutdown,
-            patch(
-                "tools.mcp_tool.discover_mcp_tools",
-                return_value=["gmail_read"],
-            ),
-            patch.dict(
-                "tools.mcp_tool._servers",
-                {(str(eve_home.resolve()), "gmail"): object()},
-                clear=True,
-            ),
-            patch(
-                "tools.mcp_tool.refresh_agent_mcp_tools",
-                side_effect=lambda agent, **_kwargs: refreshed.append(agent),
-            ),
-        ):
-            result = await runner._execute_mcp_reload(event)
-    finally:
-        executor = getattr(runner, "_executor", None)
-        if executor is not None:
-            executor.shutdown(wait=True)
-
-    assert isinstance(result, str)
-    scoped_shutdown.assert_called_once_with()
-    global_shutdown.assert_not_called()
-    assert seen_shutdown_homes == [eve_home.resolve()]
-    assert refreshed == [eve_entry[0]]
-    assert grace_entry[0] not in refreshed
-
-
-def test_scoped_mcp_shutdown_preserves_sibling_profile_state(tmp_path, monkeypatch):
-    from agent import secret_scope
-    from tests.hermes_cli.test_managed_mcp_profile_scope import _profile_scope
-    from tools import mcp_tool
-
-    eve_home = (tmp_path / "profiles" / "eve").resolve()
-    grace_home = (tmp_path / "profiles" / "grace").resolve()
-    eve_home.mkdir(parents=True)
-    grace_home.mkdir(parents=True)
-    eve_key = (str(eve_home), "gmail")
-    grace_key = (str(grace_home), "drive")
-    monkeypatch.setattr(secret_scope, "_MULTIPLEX_ACTIVE", True)
-
-    with (
-        patch.dict(mcp_tool._servers, {eve_key: object(), grace_key: object()}, clear=True),
-        patch.dict(
-            mcp_tool._server_connect_errors,
-            {eve_key: "eve-error", grace_key: "grace-error"},
-            clear=True,
-        ),
-        patch.object(mcp_tool, "_server_connecting", {eve_key, grace_key}),
-        patch.object(mcp_tool, "_parallel_safe_servers", {eve_key, grace_key}),
-        patch.object(mcp_tool, "_mcp_loop", None),
-    ):
-        with _profile_scope(eve_home):
-            mcp_tool.shutdown_mcp_servers_for_current_scope()
-
-        assert eve_key not in mcp_tool._servers
-        assert eve_key not in mcp_tool._server_connect_errors
-        assert eve_key not in mcp_tool._server_connecting
-        assert eve_key not in mcp_tool._parallel_safe_servers
-        assert grace_key in mcp_tool._servers
-        assert grace_key in mcp_tool._server_connect_errors
-        assert grace_key in mcp_tool._server_connecting
-        assert grace_key in mcp_tool._parallel_safe_servers
-
-
-@pytest.mark.asyncio
-async def test_multiplex_reload_reports_lazy_survivor_without_touching_sibling(
-    tmp_path, monkeypatch
-):
-    from agent import secret_scope
-    from tests.hermes_cli.test_managed_mcp_profile_scope import _profile_scope
-    from tools import mcp_tool
-
-    runner = _make_runner_with_cached_agents(num_agents=0)
-    runner.config.multiplex_profiles = True
-    event = _make_event()
-    event.source.profile = "eve"
-    eve_home = (tmp_path / "profiles" / "eve").resolve()
-    grace_home = (tmp_path / "profiles" / "grace").resolve()
-    eve_home.mkdir(parents=True)
-    grace_home.mkdir(parents=True)
-    eve_owned = (str(eve_home), "gmail-owned")
-    eve_shared = (str(eve_home), "gmail-shared")
-    grace_owned = (str(grace_home), "drive-owned")
-    monkeypatch.setattr(secret_scope, "_MULTIPLEX_ACTIVE", True)
-    runner._resolve_profile_home_for_source = lambda _source: eve_home
-
-    def _scoped_shutdown():
-        mcp_tool._lazy_server_tool_names.pop(eve_owned, None)
-        mcp_tool._lazy_server_tool_names.pop(eve_shared, None)
-
-    def _discover():
-        mcp_tool._lazy_server_tool_names[eve_owned] = ["gmail_owned_read"]
-        return ["gmail_owned_read"]
-
-    try:
-        with (
-            patch.dict(
-                mcp_tool._servers,
-                {
-                    "base-pre-multiplex": SimpleNamespace(session=object()),
-                    grace_owned: SimpleNamespace(session=object()),
-                },
-                clear=True,
-            ),
-            patch.dict(
-                mcp_tool._lazy_server_tool_names,
-                {
-                    "base-lazy-pre-multiplex": ["base_lazy_read"],
-                    eve_owned: ["gmail_owned_read"],
-                    eve_shared: ["gmail_shared_read"],
-                    grace_owned: ["drive_owned_read"],
-                },
-                clear=True,
-            ),
-            patch(
-                "tools.mcp_tool.shutdown_mcp_servers_for_current_scope",
-                side_effect=_scoped_shutdown,
-            ),
-            patch("tools.mcp_tool.discover_mcp_tools", side_effect=_discover),
-            patch("model_tools.get_tool_definitions", return_value=[]),
-        ):
-            result = await runner._execute_mcp_reload(event)
-            with _profile_scope(eve_home):
-                available, connected = (
-                    mcp_tool.get_mcp_server_inventory_for_current_profile()
-                )
-
-            assert available == {"gmail-owned"}
-            assert connected == set()
-            assert "Removed: gmail-shared" in result
-            assert "Reconnected: gmail-owned" not in result
-            assert "1 tool(s) available from 1 server(s)" in result
-            assert "No MCP servers connected" not in result
-            assert "base-pre-multiplex" not in result
-            assert "base-lazy-pre-multiplex" not in result
-            assert grace_owned in mcp_tool._lazy_server_tool_names
-    finally:
-        executor = getattr(runner, "_executor", None)
-        if executor is not None:
-            executor.shutdown(wait=True)

@@ -1,8 +1,6 @@
 import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { en } from '@/i18n/en'
-
 const getConnectionConfig = vi.fn()
 const saveConnectionConfig = vi.fn()
 
@@ -43,7 +41,9 @@ describe('GatewaySettings', () => {
 
     render(<GatewaySettings />)
     expect(await screen.findByText('Local gateway')).toBeTruthy()
-    expect(screen.getByText(en.settings.gateway.localDesc)).toBeTruthy()
+    expect(
+      screen.getByText('Start a private Hermes backend on localhost. This is the default and works offline.')
+    ).toBeTruthy()
 
     // The page manages the machine's gateway connections; it must load the
     // global config, never a per-profile override.
