@@ -1,10 +1,12 @@
 import { isGatewayReauthRequired, JsonRpcGatewayError, resolveGatewayWsUrl } from '@hermes/shared'
 import { useEffect, useRef } from 'react'
+import { useNavigate } from 'react-router'
 
 import { shouldApplyPostBootProgressError } from '@/components/boot-failure-reauth'
 import type { HermesConnection } from '@/global'
 import { HermesGateway } from '@/hermes'
 import { translateNow } from '@/i18n'
+import { isManagedEvaosAgent } from '@/i18n/managed-brand'
 import { desktopDefaultCwd } from '@/lib/desktop-fs'
 import { decideLivenessForceClose, LIVENESS_REPROBE_DELAY_MS } from '@/lib/gateway-liveness-policy'
 import { reconnectBackoffDelayMs } from '@/lib/reconnect-backoff'
@@ -81,6 +83,8 @@ import {
 import { windowProfileOverride } from '@/store/windows'
 import type { RpcEvent } from '@/types/hermes'
 
+import { SETTINGS_ROUTE } from '../../routes'
+
 import { stashGatewaySurvivor, survivorIsStale, takeGatewaySurvivor } from './gateway-hmr-survivor'
 
 // After the reconnect loop has been failing for this long, raise a NON-blocking
@@ -119,6 +123,11 @@ const BOOT_RETRY_MAX_ATTEMPTS = 5
 // loop's 300ms: each attempt may rebuild an SSH master + remote dashboard.
 const BOOT_RETRY_BASE_DELAY_MS = 2_000
 
+// Managed enrollment can spend longer minting and validating the assigned
+// remote connection. Keep the upstream local/registered connection budget
+// unchanged.
+const MANAGED_INITIAL_CONNECTION_DEADLINE_MS = 90_000
+
 // While any of the RECONNECT_ATTEMPT_TIMEOUT_MS-bounded awaits below is
 // pending, `reconnecting` never clears, so scheduleReconnect()/
 // attemptReconnect() early-return permanently and the backoff loop is
@@ -156,6 +165,10 @@ export function useGatewayBoot({
   refreshHermesConfig,
   refreshSessions
 }: GatewayBootOptions) {
+  const navigate = useNavigate()
+  const navigateRef = useRef(navigate)
+  navigateRef.current = navigate
+
   const callbacksRef = useRef({
     beforeConnectionSwitch,
     handleGatewayEvent,
@@ -535,15 +548,31 @@ export function useGatewayBoot({
         }
 
         const key = normalizeProfileKey(profileKey)
+        sourceProfile = key
         $activeGatewayProfile.set(key)
         setPrimaryGateway(gateway, key)
         void ensureGatewayForProfile(key)
-      } catch {
+      } catch (error) {
         if (!shouldPublish()) {
           return false
         }
 
-        $activeGatewayProfile.set(normalizeProfileKey(override))
+        const fallback = normalizeProfileKey(override)
+        sourceProfile = fallback
+        $activeGatewayProfile.set(fallback)
+
+        // A managed build must never keep using the previous renderer profile
+        // when the authoritative assignment cannot be read. Tear down the
+        // gateway and let the enrollment recovery surface handle the error.
+        if (isManagedEvaosAgent()) {
+          closeSecondaryGateways()
+          gateway.close()
+          publish(null)
+          callbacksRef.current.onGatewayReady(null)
+          setPrimaryGateway(null)
+          $gateway.set(null)
+          throw error
+        }
       }
 
       return true
@@ -835,7 +864,7 @@ export function useGatewayBoot({
       }
     })
 
-    const sourceProfile = normalizeProfileKey($activeGatewayProfile.get())
+    let sourceProfile = normalizeProfileKey(survivor?.profile ?? $activeGatewayProfile.get())
 
     const offEvent = gateway.onEvent(event => {
       const connectionId = activeGatewayConnectionId()
@@ -990,11 +1019,20 @@ export function useGatewayBoot({
         // backend-boot budget, not the 20s reconnect budget.
         const conn = await withTimeout(
           desktop.getConnection(windowProfileOverride() ?? undefined),
-          BACKEND_BOOT_WAIT_TIMEOUT_MS,
-          'Timed out connecting to Hermes backend'
+          isManagedEvaosAgent() ? MANAGED_INITIAL_CONNECTION_DEADLINE_MS : BACKEND_BOOT_WAIT_TIMEOUT_MS,
+          isManagedEvaosAgent()
+            ? translateNow('boot.errors.gatewayConnectionLost')
+            : 'Timed out connecting to Hermes backend'
         )
 
         if (cancelled) {
+          return
+        }
+
+        // Resolve the backend-authoritative managed profile before opening the
+        // socket. Events can arrive immediately after the handshake; adopting
+        // afterwards would tag them with a stale renderer profile.
+        if (isManagedEvaosAgent() && (!(await adoptPrimaryProfile()) || cancelled)) {
           return
         }
 
@@ -1043,7 +1081,9 @@ export function useGatewayBoot({
         // (cwd seed, config, sessions) are independent REST calls — running
         // them serially added their sum to time-to-populated-sidebar when only
         // the max is needed.
-        await adoptPrimaryProfile()
+        if (!isManagedEvaosAgent()) {
+          await adoptPrimaryProfile()
+        }
 
         setDesktopBootStep({
           phase: 'renderer.config',
@@ -1078,6 +1118,22 @@ export function useGatewayBoot({
       } catch (err) {
         if (!cancelled) {
           const message = err instanceof Error ? err.message : String(err)
+
+          const managedSignInRequired =
+            isManagedEvaosAgent() && message.includes('Sign in to evaOS Agent from Settings')
+
+          if (managedSignInRequired) {
+            setDesktopBootStep({
+              phase: 'renderer.enrollment',
+              message: 'Sign in to evaOS Agent from Settings → Gateway.',
+              progress: 100,
+              running: false
+            })
+            setSessionsLoading(false)
+            navigateRef.current(`${SETTINGS_ROUTE}?tab=gateway`, { replace: true })
+
+            return
+          }
 
           // Transient remote failure (dropped SSH/HTTP registered connection,
           // mint timeout): self-heal with bounded, jittered retries instead of

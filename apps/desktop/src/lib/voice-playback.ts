@@ -152,18 +152,19 @@ export async function resolveSpeakStreamUrl(): Promise<null | string> {
           : desktop
 
     const wsUrl = await withTimeout(
-      resolveGatewayWsUrl(wsDeps, conn),
+      resolveGatewayWsUrl(wsDeps, conn, '/api/audio/speak-stream'),
       RECONNECT_ATTEMPT_TIMEOUT_MS,
       `Timed out re-minting the gateway WebSocket URL for profile "${profile}"`
     )
 
     const url = new URL(wsUrl)
 
-    if (!url.pathname.endsWith('/api/ws')) {
+    // Managed loopback tickets are minted for one exact endpoint. Reject any
+    // broker or bridge response that silently points somewhere else instead
+    // of sending the ticket to an unintended WebSocket route.
+    if (url.pathname !== '/api/audio/speak-stream') {
       return null
     }
-
-    url.pathname = url.pathname.replace(/\/api\/ws$/, '/api/audio/speak-stream')
 
     // The backend resolves the TTS provider chain from this profile's
     // config/.env (same seam as /api/pty?profile=). A registry-minted URL may

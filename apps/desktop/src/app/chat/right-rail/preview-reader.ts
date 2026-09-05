@@ -12,14 +12,15 @@
  * directly (read_file / the conversation's artifact).
  */
 
-import { $rightRailActiveTabId } from '@/store/layout'
-import { $previewTabs } from '@/store/preview'
+import { $previewTabs, captureActivePreviewSurface, ownsActivePreviewSurface } from '@/store/preview'
 
 import { nudgeOverlay } from './preview-nudge'
 
 export interface PreviewReadOptions {
   /** Characters to return from `start` (capped at PREVIEW_READ_MAX_CHARS). */
   count?: number
+  /** Live ownership guard for the post-read visual nudge. Defaults to allowed. */
+  shouldNudge?: () => boolean
   /** 0-indexed character offset into the page text. */
   start?: number
 }
@@ -77,8 +78,9 @@ function windowText(
 
 /** Read the ACTIVE preview tab. Null only when no tab is open at all. */
 export async function readActivePreview(opts: PreviewReadOptions = {}): Promise<PreviewReadResult | null> {
+  const surface = captureActivePreviewSurface()
   const tabs = $previewTabs.get()
-  const tab = tabs.find(t => t.id === $rightRailActiveTabId.get()) ?? tabs[0]
+  const tab = surface ? tabs.find(t => t.id === surface.tabId) : null
 
   if (!tab) {
     return null
@@ -91,12 +93,18 @@ export async function readActivePreview(opts: PreviewReadOptions = {}): Promise<
     try {
       const page = await reader()
 
+      if (!ownsActivePreviewSurface(surface)) {
+        return null
+      }
+
       // Say it on the page. Reading is by far the cheapest thing the agent
       // does — a few hundredths of a second against a model round trip either
       // side of it — so a run of reads used to leave the pane dark for the
       // twenty seconds it took to page through a document, immediately after
       // the one moment that showed anything.
-      nudgeOverlay('read')
+      if (opts.shouldNudge?.() ?? true) {
+        nudgeOverlay('read')
+      }
 
       return windowText(
         { kind: target.kind, path: target.path, title: page.title || target.label, url: page.url || target.url },
@@ -107,6 +115,10 @@ export async function readActivePreview(opts: PreviewReadOptions = {}): Promise<
       // Webview not ready (still booting / just navigated) — fall through to
       // the identity answer, whose note says to retry.
     }
+  }
+
+  if (!ownsActivePreviewSurface(surface)) {
+    return null
   }
 
   // No live webview behind the tab (a file peek, an artifact, or a page still

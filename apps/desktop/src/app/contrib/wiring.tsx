@@ -35,6 +35,7 @@ import { SendDiagnosticsHost } from '@/components/send-diagnostics-dialog'
 import { TipHost } from '@/components/tips'
 import { emitGatewayEvent } from '@/contrib/events'
 import { getLatestSessionMessages } from '@/hermes'
+import { isManagedEvaosAgent } from '@/i18n/managed-brand'
 import { type ChatMessage, chatMessageText, preserveLocalAssistantErrors, toChatMessages } from '@/lib/chat-messages'
 import { isMessagingSource } from '@/lib/session-source'
 import { latestSessionTodos } from '@/lib/todos'
@@ -193,6 +194,7 @@ export function ContribWiring({ children }: { children: ReactNode }) {
   const gatewayState = useStore($gatewayState)
   const activeSessionId = useStore($activeSessionId)
   const billingSettingsRequest = useStore($billingSettingsRequest)
+  const managedEva = isManagedEvaosAgent()
   const cronReviewRequest = useStore($cronReviewRequest)
   const currentCwd = useStore($currentCwd)
 
@@ -204,10 +206,10 @@ export function ContribWiring({ children }: { children: ReactNode }) {
 
     billingSettingsSeenRef.current = billingSettingsRequest
 
-    if (billingSettingsRequest > 0) {
+    if (billingSettingsRequest > 0 && !managedEva) {
       navigate(`${SETTINGS_ROUTE}?tab=billing`)
     }
-  }, [billingSettingsRequest, navigate])
+  }, [billingSettingsRequest, managedEva, navigate])
 
   // eslint-disable-next-line no-restricted-syntax -- one-shot request-seen sentinel, not an atom mirror
   useEffect(() => {
@@ -1092,7 +1094,7 @@ export function ContribWiring({ children }: { children: ReactNode }) {
     [actions, currentView]
   )
 
-  const terminalNode = useMemo(() => <TerminalSurface />, [])
+  const terminalNode = useMemo(() => (managedEva ? null : <TerminalSurface />), [managedEva])
 
   const statusbarNode = useMemo(
     () => (

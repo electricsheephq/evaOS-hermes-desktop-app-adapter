@@ -85,6 +85,12 @@ export const $rightRailActiveTabId = persistentAtom<RightRailTabId | null>(RIGHT
   encode: tabId => tabId ?? ''
 })
 
+/** Monotonic proof that one rail tab has remained continuously active. Tab id
+ * alone cannot distinguish A→B→A while an asynchronous Preview operation is
+ * in flight. This epoch is deliberately process-local: no continuation may
+ * survive an app restart. */
+export const $rightRailActiveTabEpoch = atom(0)
+
 export const $sidebarWidth: ReadableAtom<number> = computed($paneStates, states => {
   const override = states[CHAT_SIDEBAR_PANE_ID]?.widthOverride
 
@@ -569,6 +575,10 @@ export function togglePanesFlipped() {
 }
 
 export function selectRightRailTab(id: RightRailTabId | null) {
+  if ($rightRailActiveTabId.get() !== id) {
+    $rightRailActiveTabEpoch.set($rightRailActiveTabEpoch.get() + 1)
+  }
+
   $rightRailActiveTabId.set(id)
 }
 

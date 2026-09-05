@@ -217,6 +217,13 @@ declare global {
         discover: (org?: string) => Promise<DesktopCloudDiscoverResult>
         agentSignIn: (dashboardUrl: string) => Promise<DesktopCloudAgentSignInResult>
       }
+      eva: {
+        status: () => Promise<EvaManagedStatus>
+        signIn: () => Promise<EvaManagedStatus>
+        signOut: () => Promise<{ ok: boolean }>
+        refresh: () => Promise<EvaManagedStatus>
+        endSupportSession: () => Promise<{ ok: boolean }>
+      }
       profile: {
         get: () => Promise<DesktopActiveProfile>
         // Persists the profile used on the next Desktop launch without
@@ -559,6 +566,30 @@ export interface DesktopMarketplaceSearchItem {
   publisher: string
   description: string
   installs: number
+}
+
+export interface EvaManagedStatus {
+  managed: true
+  productName: string
+  signedOut: boolean
+  customerId: null | string
+  email: null | string
+  desktopSessionExpiresAt: null | string
+  desktopSessionActive: boolean
+  runtimeSessionExpiresAt: null | string
+  runtimeSessionActive: boolean
+  agentId: null | string
+  /** Authorized enrollment label for presentation; agentId remains canonical. */
+  agentDisplayName?: null | string
+  updateChannel: string
+  delegatedSupportActive?: boolean
+  sessionKind?: 'ordinary' | 'delegated_support' | string
+  supportCustomerLabel?: null | string
+  supportAgentLabel?: null | string
+  supportExpiresAt?: null | string
+  supportDeadline?: null | string
+  assignmentVersion?: null | string
+  supportEndFailed?: boolean
 }
 
 export interface DesktopMarketplaceThemeFile {
