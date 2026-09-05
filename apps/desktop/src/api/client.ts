@@ -1,6 +1,8 @@
 import { JsonRpcGatewayClient } from '@hermes/shared'
 
 import type { HermesApiRequest } from '@/global'
+import { isManagedEvaosAgent } from '@/i18n/managed-brand'
+import { assertManagedGatewayMethodAllowed } from '@/lib/managed-ui-policy'
 
 // Desktop startup fires a burst of read-only data calls (config, profiles,
 // model info/options, cron) the moment the backend passes readiness. On a
@@ -25,6 +27,29 @@ const DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS = 30_000
 // ever fires when the turn itself would have been abandoned server-side.
 export const PROMPT_SUBMIT_REQUEST_TIMEOUT_MS = 1_800_000
 
+/**
+ * Numeric renderer contract negotiated with the remote Hermes runtime.
+ *
+ * The runtime treats a missing marker as the legacy protocol, while older
+ * runtimes ignore this additive field. Keep the marker at the Desktop gateway
+ * boundary so every create/resume/activate path (including Bot Mode and routed
+ * sessions) advertises the same capability without duplicating lifecycle code.
+ */
+export const DESKTOP_UI_PROTOCOL = 3
+
+const DESKTOP_UI_PROTOCOL_METHODS = new Set(['session.create', 'session.resume', 'session.activate'])
+
+export function withDesktopUiProtocol(
+  method: string,
+  params: Record<string, unknown>
+): Record<string, unknown> {
+  if (!DESKTOP_UI_PROTOCOL_METHODS.has(method)) {
+    return params
+  }
+
+  return { ...params, desktop_ui_protocol: DESKTOP_UI_PROTOCOL }
+}
+
 export class HermesGateway extends JsonRpcGatewayClient {
   constructor() {
     super({
@@ -34,6 +59,17 @@ export class HermesGateway extends JsonRpcGatewayClient {
       notConnectedErrorMessage: 'Hermes gateway is not connected',
       requestTimeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS
     })
+  }
+
+  override request<T>(
+    method: string,
+    params: Record<string, unknown> = {},
+    timeoutMs = DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS,
+    signal?: AbortSignal
+  ): Promise<T> {
+    assertManagedGatewayMethodAllowed(method, isManagedEvaosAgent())
+
+    return super.request<T>(method, withDesktopUiProtocol(method, params), timeoutMs, signal)
   }
 }
 
@@ -45,9 +81,26 @@ export class HermesGateway extends JsonRpcGatewayClient {
 // unscoped handlers retain a profile backend. Remote overrides still route to
 // their owning backend. Null → primary, so single-profile users are unaffected.
 let _apiProfile: null | string = null
+const apiProfileListeners = new Set<(profile: null | string) => void>()
 
 export function setApiRequestProfile(profile: null | string): void {
-  _apiProfile = profile || null
+  const next = profile || null
+
+  if (_apiProfile === next) {
+    return
+  }
+
+  _apiProfile = next
+
+  for (const listener of apiProfileListeners) {
+    listener(next)
+  }
+}
+
+export function subscribeApiRequestProfile(listener: (profile: null | string) => void): () => void {
+  apiProfileListeners.add(listener)
+
+  return () => apiProfileListeners.delete(listener)
 }
 
 export function profileScoped(profile?: null | string): { profile?: string } {

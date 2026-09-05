@@ -5,6 +5,7 @@ import http from 'node:http'
 import https from 'node:https'
 import os from 'node:os'
 import path from 'node:path'
+import { Readable } from 'node:stream'
 import tls from 'node:tls'
 import { pathToFileURL } from 'node:url'
 
@@ -170,8 +171,18 @@ import {
 } from './desktop-uninstall'
 import { describeDevCdpDecision, resolveDevCdpPort } from './dev-cdp'
 import { installEmbedReferer } from './embed-referer'
-const { buildEvaAccountRendererResetScript } = require('./eva-managed.cjs')
+const { createEvaAppUpdater, safeApplyFailure, safeCheckFailure } = require('./eva-app-updater.cjs')
+const {
+  assertEvaManagedLocalMutationAllowed,
+  assertEvaManagedLocalTerminalAllowed,
+  buildEvaAccountRendererResetScript,
+  EVA_MANAGED_POLICY,
+  resolveEvaManagedDesktopProfileFromSources
+} = require('./eva-managed.cjs')
+const { createEvaMediaGrantCodec } = require('./eva-media-grant.cjs')
+const { createEvaProtocolHandlerManager } = require('./eva-protocol-handler.cjs')
 const { createEvaManagedRuntime } = require('./eva-runtime.cjs')
+const { createManagedBackendGate } = require('./managed-backend-gate.cjs')
 import { createEventDeduper } from './event-dedupe'
 import {
   buildTerminalScript,
@@ -211,6 +222,7 @@ import {
   clampDataUrlReadMaxMb,
   DATA_URL_READ_DEFAULT_MAX_MB,
   dataUrlReadMaxBytesFromMb,
+  decryptSafeStorageValue,
   DEFAULT_FETCH_TIMEOUT_MS,
   enableBasicPasswordStoreEncryption,
   encryptDesktopSecret as encryptDesktopSecretStrict,
@@ -235,6 +247,7 @@ import { buildHudWindowUrl } from './hud-url'
 import { resolveHudWindowing } from './hud-windowing'
 import { createLinkTitleWindow, guardLinkTitleSession, readLinkTitleWindowTitle } from './link-title-window'
 import { ensureMainWindow } from './main-window-lifecycle'
+import { classifyManagedDeepLink } from './managed-deep-link'
 import {
   assertManagedUpdatePreflightClear,
   executeManagedRemoteUpdate,
@@ -263,6 +276,7 @@ import {
   resolveOauthRestAuth,
   resolveReadinessProbeAuth
 } from './native-auth-decisions'
+import { nativeAboutPanelOptions, nativeAppIconCandidates } from './native-branding'
 import {
   nativeRefreshUrl,
   type NativeTokenSet,
@@ -281,9 +295,15 @@ import {
   recordDismissed as recordPluginCompatDismissed
 } from './plugin-compat-notice'
 import {
+  assertEvaManagedConnectionId,
+  buildEvaManagedAgentRoster,
+  buildEvaManagedConnectionsRegistry,
+  buildEvaManagedProfileRoutes,
   buildRegistryProfileRoutes,
+  EVA_MANAGED_CONNECTION_ID,
   isLocalEnumerationFailure,
   localRouteFallbackProfiles,
+  normalizeEvaManagedActiveRoute,
   undialedSshRouteSeeds
 } from './plugin-profile-routes'
 import { selectPoolEvictions } from './pool-eviction'
@@ -866,11 +886,13 @@ const PROFILE_NAME_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/
 // Branch we track for self-update. The GUI work has merged to main, so this
 // tracks main. User can also override at runtime via
 // hermesDesktop.updates.setBranch().
-const DEFAULT_UPDATE_BRANCH = 'main'
+const DEFAULT_UPDATE_BRANCH = EVA_MANAGED_BUILD ? EVA_MANAGED_POLICY.updateChannel : 'main'
 // desktop.log lives under HERMES_HOME/logs/ so it sits next to agent.log,
 // errors.log, gateway.log produced by hermes_logging.setup_logging — one log
 // directory per user, regardless of which UI surface produced the line.
-const DESKTOP_LOG_PATH = path.join(HERMES_HOME, 'logs', 'desktop.log')
+const DESKTOP_LOG_PATH = EVA_MANAGED_BUILD
+  ? path.join(app.getPath('userData'), 'logs', 'evaos-agent-desktop.log')
+  : path.join(HERMES_HOME, 'logs', 'desktop.log')
 const DESKTOP_LOG_FLUSH_MS = 120
 const DESKTOP_LOG_BUFFER_MAX_CHARS = 64 * 1024
 // Bound desktop.log on disk. It is an append-only forensic log, so a boot loop
@@ -909,7 +931,7 @@ const BOOT_FAKE_STEP_MS = (() => {
   return Math.max(120, raw)
 })()
 
-const APP_NAME = process.env.HERMES_DESKTOP_APP_NAME || 'Hermes'
+const APP_NAME = EVA_MANAGED_BUILD ? EVA_MANAGED_POLICY.productName : process.env.HERMES_DESKTOP_APP_NAME || 'Hermes'
 const HUD_WINDOW_TITLE = `${APP_NAME} HUD`
 const TITLEBAR_HEIGHT = 34
 const MACOS_TRAFFIC_LIGHTS_HEIGHT = 14
@@ -931,12 +953,19 @@ const WINDOW_BUTTON_POSITION = {
 // The ladder is BUILT once here but each window factory RE-RESOLVES through
 // resolveAppIcon (decoding probe): existence alone is not proof the bytes
 // decode, and an undecodable icon must never take the main process down.
-const APP_ICON_PATHS = appIconCandidates({
-  isWindows: IS_WINDOWS,
-  appRoot: APP_ROOT,
-  resourcesPath: process.resourcesPath,
-  unpackedPathFor
-})
+const APP_ICON_PATHS = EVA_MANAGED_BUILD
+  ? nativeAppIconCandidates({
+      appRoot: APP_ROOT,
+      isWindows: IS_WINDOWS,
+      resourcesPath: process.resourcesPath ?? '',
+      unpackedAppRoot: unpackedPathFor(APP_ROOT)
+    })
+  : appIconCandidates({
+      isWindows: IS_WINDOWS,
+      appRoot: APP_ROOT,
+      resourcesPath: process.resourcesPath,
+      unpackedPathFor
+    })
 
 let rendererTitleBarTheme = null
 
@@ -1322,18 +1351,21 @@ app.setName(APP_NAME)
 // need this, so gate it on Windows. (Fixes: desktop approval/turn notifications
 // never firing on Windows.)
 if (IS_WINDOWS) {
-  app.setAppUserModelId('com.nousresearch.hermes')
+  app.setAppUserModelId(EVA_MANAGED_BUILD ? 'com.electricsheephq.evaos.agent' : 'com.nousresearch.hermes')
 }
 
 // Seed the native About panel with the live Hermes version. This is refreshed
 // on every open via the explicit "About" menu handler (refreshAboutPanel), so
 // an in-place `hermes update` mid-session is reflected without an app restart;
 // the seed here just covers the first open and any non-menu invocation path.
-app.setAboutPanelOptions({
-  applicationName: APP_NAME,
-  applicationVersion: resolveHermesVersion(),
-  copyright: 'Copyright © 2026 Nous Research'
-})
+app.setAboutPanelOptions(
+  nativeAboutPanelOptions({
+    applicationName: APP_NAME,
+    appVersion: app.getVersion(),
+    managed: EVA_MANAGED_BUILD,
+    upstreamVersion: resolveHermesVersion()
+  })
+)
 
 // Custom scheme for streaming audio/video into the renderer. Local paths read
 // from this machine; remote paths are proxied through the configured gateway
@@ -1361,6 +1393,32 @@ function registerMediaProtocol() {
         headers,
         method
       }),
+    fetchManaged: EVA_MANAGED_BUILD
+      ? async ({ filePath, profile }, headers, method) => {
+          const response = await evaManagedRuntime.requestMedia({
+            headers,
+            path: `/api/files/download?path=${encodeURIComponent(filePath)}`,
+            profile
+          })
+
+          if (method !== 'HEAD') {
+            return response
+          }
+
+          try {
+            await response.body?.cancel()
+          } catch {
+            // The metadata response remains valid even if Chromium already
+            // released the unused GET body behind the managed transport.
+          }
+
+          return new Response(null, {
+            headers: response.headers,
+            status: response.status,
+            statusText: response.statusText
+          })
+        }
+      : undefined,
     fetchRemote: (url, headers, method) =>
       electronNet.fetch(url, {
         bypassCustomProtocolHandlers: true,
@@ -1400,6 +1458,10 @@ function registerMediaProtocol() {
 }
 
 let mainWindow = null
+// Quick Entry lives outside the main renderer. This declaration must precede
+// managed-runtime construction because stale support cleanup can run during
+// cold module initialization before the renderer window exists.
+let quickEntryLastState = null
 const backendConnectionState = createBackendConnectionState<ReturnType<typeof spawn>, any>()
 const remoteLiveness = new RemoteLivenessTracker()
 const remoteRevalidation = new RemoteRevalidationCoordinator()
@@ -2326,7 +2388,7 @@ async function waitForUpdateToFinish() {
 
       await advanceBootProgress(
         'backend.update-wait',
-        'An update is finishing — Hermes will start automatically when it completes…',
+        `An update is finishing — ${APP_NAME} will start automatically when it completes…`,
         12
       )
     },
@@ -3039,6 +3101,35 @@ function emitUpdateProgress(payload) {
   for (const window of BrowserWindow.getAllWindows()) {
     window.webContents.send('hermes:updates:progress', merged)
   }
+}
+
+let evaAppUpdater = null
+
+function getEvaAppUpdater() {
+  if (!evaAppUpdater) {
+    const { autoUpdater } = require('electron-updater')
+    evaAppUpdater = createEvaAppUpdater({
+      app,
+      autoUpdater,
+      emitProgress: emitUpdateProgress,
+      isPackaged: IS_PACKAGED,
+      onError: (stage, error) => {
+        const message = error instanceof Error ? error.message : String(error || 'Unknown updater error')
+        rememberLog(`[updates] managed ${stage} failed: ${message}`)
+      },
+      platform: process.platform,
+      prepareInstallHandoff: () => {
+        const previous = isQuittingForHandoff
+        isQuittingForHandoff = true
+
+        return () => {
+          isQuittingForHandoff = previous
+        }
+      }
+    })
+  }
+
+  return evaAppUpdater
 }
 
 // Self-heal the tracked update branch: if origin no longer publishes it (e.g.
@@ -3961,7 +4052,7 @@ async function applyUpdates(opts: { stopSafeBlockers?: boolean } = {}) {
     emitUpdateProgress({
       stage: 'restart',
       message:
-        'Updating Hermes — this window will close and the updater will open. Don’t reopen Hermes yourself; it restarts automatically when the update finishes.',
+        'Updating evaOS Agent — this window will close and the updater will open. Don’t reopen evaOS Agent yourself; it restarts automatically when the update finishes.',
       percent: 100
     })
     repairMacUpdaterHelper(updater)
@@ -3996,8 +4087,8 @@ async function applyUpdates(opts: { stopSafeBlockers?: boolean } = {}) {
       // user close the holder and retry. Restart our own backend so the app
       // keeps working after the failed attempt.
       const message =
-        'Update aborted: another process is holding the Hermes install open ' +
-        '(a second Hermes window or a terminal running hermes?). Close it and retry.'
+        'Update aborted: another process is holding the evaOS Agent install open ' +
+        '(a second evaOS Agent window or a terminal running hermes?). Close it and retry.'
 
       emitUpdateProgress({ stage: 'error', message, percent: null })
       startHermes().catch(() => {})
@@ -5094,7 +5185,7 @@ async function ensureRuntime(backend) {
 
     if (await handOffWindowsBootstrapRecovery('bootstrap-needed')) {
       const handoffError: Error & { isBootstrapFailure?: boolean; bootstrapHandedOff?: boolean } = new Error(
-        'Hermes recovery was handed off to Hermes Setup. The desktop will restart when recovery completes.'
+        'evaOS Agent recovery was handed off to the setup helper. The desktop will restart when recovery completes.'
       )
 
       handoffError.isBootstrapFailure = true
@@ -5156,7 +5247,7 @@ async function ensureRuntime(backend) {
     bootstrapAbortController = null
 
     if (bootstrapResult.cancelled) {
-      const cancelledError = new Error('Hermes install was cancelled.') as any
+      const cancelledError = new Error('evaOS Agent install was cancelled.') as any
       cancelledError.isBootstrapFailure = true
       cancelledError.bootstrapCancelled = true
       bootstrapFailure = cancelledError
@@ -5233,7 +5324,7 @@ async function ensureRuntime(backend) {
   backend.label = `Hermes at ${ACTIVE_HERMES_ROOT} (venv: ${VENV_ROOT})`
   updateBootProgress({
     phase: 'runtime.ready',
-    message: 'Hermes runtime is ready',
+    message: 'evaOS Agent runtime is ready',
     progress: 82,
     running: true,
     error: null
@@ -5262,6 +5353,12 @@ function multipartBody(upload) {
   return { body, contentType: `multipart/form-data; boundary=${boundary}` }
 }
 
+function httpStatusError(statusCode, detail) {
+  const error = new Error(`${statusCode}: ${detail}`) as Error & { statusCode: number }
+  error.statusCode = statusCode
+  return error
+}
+
 function fetchJson(url, token, options: any = {}) {
   // Retry policy lives in api-transport.ts: idempotent verbs retry on any
   // transient transport error; POST/PUT/DELETE only when the request provably
@@ -5287,6 +5384,20 @@ function fetchJson(url, token, options: any = {}) {
           return
         }
 
+        let settled = false
+        const resolveOnce = value => {
+          if (!settled) {
+            settled = true
+            resolve(value)
+          }
+        }
+        const rejectOnce = error => {
+          if (!settled) {
+            settled = true
+            reject(error)
+          }
+        }
+
         const req = client.request(
           parsed,
           {
@@ -5308,19 +5419,19 @@ function fetchJson(url, token, options: any = {}) {
           },
           res => {
             const chunks = []
-            res.on('error', reject)
+            res.on('error', rejectOnce)
             res.on('data', chunk => chunks.push(chunk))
             res.on('end', () => {
               const text = Buffer.concat(chunks).toString('utf8')
 
               if ((res.statusCode || 500) >= 400) {
-                reject(new Error(`${res.statusCode}: ${text || res.statusMessage}`))
+                rejectOnce(httpStatusError(res.statusCode || 500, text || res.statusMessage))
 
                 return
               }
 
               if (!text) {
-                resolve(null)
+                resolveOnce(null)
 
                 return
               }
@@ -5333,7 +5444,7 @@ function fetchJson(url, token, options: any = {}) {
               const contentType = String(res.headers['content-type'] || '')
 
               if (looksHtml || contentType.includes('text/html')) {
-                reject(
+                rejectOnce(
                   new Error(
                     `Expected JSON from ${url} but got HTML (status ${res.statusCode}). ` +
                       'The endpoint is likely missing on the Hermes backend.'
@@ -5344,15 +5455,25 @@ function fetchJson(url, token, options: any = {}) {
               }
 
               try {
-                resolve(JSON.parse(text))
+                resolveOnce(JSON.parse(text))
               } catch {
-                reject(new Error(`Invalid JSON from ${url} (status ${res.statusCode}): ${text.slice(0, 200)}`))
+                rejectOnce(new Error(`Invalid JSON from ${url} (status ${res.statusCode}): ${text.slice(0, 200)}`))
               }
             })
           }
         )
 
-        req.on('error', reject)
+        const signal = options.signal
+        const abortRequest = () => req.destroy(new Error('Managed support request cancelled.'))
+        req.on('error', rejectOnce)
+        if (signal?.aborted) {
+          rejectOnce(new Error('Managed support request cancelled.'))
+          abortRequest()
+
+          return
+        }
+        signal?.addEventListener('abort', abortRequest, { once: true })
+        req.on('close', () => signal?.removeEventListener('abort', abortRequest))
         req.setTimeout(timeoutMs, () => {
           req.destroy(new Error(`Timed out connecting to Hermes backend after ${timeoutMs}ms`))
         })
@@ -5398,6 +5519,7 @@ function downloadViaTokenToFile(url, token, ctx, options: any = {}) {
     const client = parsed.protocol === 'https:' ? https : http
     const agent = downloadAgentFor(parsed.protocol)
     const timeoutMs = resolveTimeoutMs(options.timeoutMs, DEFAULT_FETCH_TIMEOUT_MS)
+    const rejectOnce = reject
 
     const req = client.request(
       parsed,
@@ -5423,7 +5545,17 @@ function downloadViaTokenToFile(url, token, ctx, options: any = {}) {
       }
     )
 
-    req.on('error', reject)
+    const signal = options.signal
+    const abortRequest = () => req.destroy(new Error('Managed support request cancelled.'))
+    req.on('error', rejectOnce)
+    if (signal?.aborted) {
+      rejectOnce(new Error('Managed support request cancelled.'))
+      abortRequest()
+      return
+    } else {
+      signal?.addEventListener('abort', abortRequest, { once: true })
+    }
+    req.on('close', () => signal?.removeEventListener('abort', abortRequest))
     req.setTimeout(timeoutMs, () => {
       req.destroy(new Error(`Timed out connecting to Hermes backend after ${timeoutMs}ms`))
     })
@@ -8112,17 +8244,32 @@ async function saveGatewayFile(payload: GatewayFileSavePayload = {}) {
     throw new Error('Missing gateway file path')
   }
 
-  const { connection, connectionId, profile } = await resolveGatewayFileBackend<GatewayFileConnection>(payload, {
-    ensureLegacy: ensureBackend,
-    ensureRegistry: ensureRegistryBackend
-  })
-
+  const profile = String(payload.profile ?? '').trim() || null
   const suggested = String(payload.suggestedName || '').trim()
   const fallbackName = path.basename(filePath) || suggested || 'download'
   const ctx = { suggested, fallbackName }
 
+  if (EVA_MANAGED_BUILD) {
+    const response = await evaManagedRuntime.requestMedia({
+      path: `/api/files/download?path=${encodeURIComponent(filePath)}`,
+      profile
+    })
+
+    const body = response.body ? Readable.fromWeb(response.body as any) : Readable.from([])
+
+    return finalizeGatewayDownload(body, response.status, Object.fromEntries(response.headers.entries()), {
+      ...ctx,
+      abort: () => body.destroy()
+    })
+  }
+
+  const { connection, connectionId, profile: routedProfile } = await resolveGatewayFileBackend<GatewayFileConnection>(payload, {
+    ensureLegacy: ensureBackend,
+    ensureRegistry: ensureRegistryBackend
+  })
+
   const requestPaths = gatewayFileRequestPaths(filePath, requestPath =>
-    gatewayFileRequestPath(connection, connectionId, profile, requestPath)
+    gatewayFileRequestPath(connection, connectionId, routedProfile, requestPath)
   )
 
   const url = `${connection.baseUrl}${requestPaths.download}`
@@ -8250,7 +8397,11 @@ async function mintGatewayWsTicket(baseUrl, headers = {}) {
 // calls this immediately before every gateway.connect() so each WS upgrade
 // carries a freshly-minted ticket. For local/token connections this just
 // reuses the static token (no minting needed).
-async function freshGatewayWsUrl(profile) {
+async function freshGatewayWsUrl(profile, endpointPath = '/api/ws') {
+  if (EVA_MANAGED_BUILD) {
+    return evaManagedRuntime.freshWsUrl({ path: endpointPath, profile })
+  }
+
   // Mint for the requested profile's backend, NOT always the primary. The
   // renderer re-mints right before every gateway.connect(); when swapping to a
   // pooled profile we must return THAT backend's ws URL, otherwise the connect
@@ -9064,7 +9215,7 @@ function applySecretStorageEncryption(on: boolean) {
 
 function encryptDesktopSecret(value, options = {}) {
   if (EVA_MANAGED_BUILD) {
-    return encryptDesktopSecretStrict(value, safeStorage, { ...options, allowPlainText: false })
+    return encryptDesktopSecretStrict(value, safeStorage, { ...options, allowPlainText: false, managed: true })
   }
 
   if (!secretStoragePolicy().on) {
@@ -9073,8 +9224,10 @@ function encryptDesktopSecret(value, options = {}) {
     return raw ? { encoding: 'plain', value: raw } : null
   }
 
-  return encryptDesktopSecretStrict(value, safeStorage, options)
+  return encryptDesktopSecretStrict(value, safeStorage, { ...options, managed: EVA_MANAGED_BUILD })
 }
+
+const reportedManagedStorageReadFailures = new Set<string>()
 
 function decryptDesktopSecret(secret) {
   if (!secret || typeof secret !== 'object') {
@@ -9096,11 +9249,16 @@ function decryptDesktopSecret(secret) {
       return ''
     }
 
-    try {
-      return safeStorage.decryptString(Buffer.from(value, 'base64'))
-    } catch {
-      return ''
-    }
+    return decryptSafeStorageValue(value, safeStorage, {
+      appReady: app.isReady(),
+      platform: process.platform,
+      onFailure: category => {
+        if (EVA_MANAGED_BUILD && !reportedManagedStorageReadFailures.has(category)) {
+          reportedManagedStorageReadFailures.add(category)
+          rememberLog(`[eva-auth] secure-storage-read failed: ${category}`)
+        }
+      }
+    })
   }
 
   // Any other encoding (a hand-edited config, or one written by a pre-release
@@ -9111,14 +9269,15 @@ function decryptDesktopSecret(secret) {
 }
 
 async function resetEvaRendererSessions() {
+  // Quick Entry lives outside the main renderer. Drop its last projected
+  // sessions before closing auxiliary windows so prior delegated context
+  // cannot reopen while the main renderer is re-homed.
   quickEntryLastState = null
-
   for (const window of BrowserWindow.getAllWindows()) {
     if (window !== mainWindow && !window.isDestroyed()) {
       window.close()
     }
   }
-
   if (!mainWindow || mainWindow.isDestroyed()) {
     return false
   }
@@ -9143,9 +9302,24 @@ const evaManagedRuntime = createEvaManagedRuntime({
   statePath: EVA_ENROLLMENT_STATE_PATH,
   encryptSecret: encryptDesktopSecret,
   decryptSecret: decryptDesktopSecret,
+  ensureSignInCallbackReady: () => ensureEvaDeepLinkProtocolReady(),
   openExternal: url => shell.openExternal(url),
   waitForHermes,
   fetchJson,
+  fetchMedia: (url, token, requestHeaders, signal) => {
+    const headers = new Headers(requestHeaders)
+    headers.delete('authorization')
+    headers.delete('cookie')
+    headers.delete('x-hermes-session-token')
+    headers.set('x-hermes-session-token', token)
+
+    return electronNet.fetch(url, {
+      bypassCustomProtocolHandlers: true,
+      headers,
+      redirect: 'error',
+      signal
+    })
+  },
   resolveTimeoutMs: value => resolveTimeoutMs(value, DEFAULT_FETCH_TIMEOUT_MS),
   rememberLog,
   advanceBootProgress,
@@ -9156,9 +9330,17 @@ const evaManagedRuntime = createEvaManagedRuntime({
     if (!mainWindow || mainWindow.isDestroyed()) {
       return
     }
-
-    focusWindow(mainWindow)
+    if (mainWindow.isMinimized()) {
+      mainWindow.restore()
+    }
+    mainWindow.show()
+    mainWindow.focus()
   }
+})
+
+const evaManagedBackendGate = createManagedBackendGate({
+  enabled: EVA_MANAGED_BUILD,
+  resolveBackend: input => evaManagedRuntime.resolveBackend(input)
 })
 
 function decryptRemoteHeaders(headers) {
@@ -10149,6 +10331,10 @@ let managedUpdateQuitWait: Promise<void> | null = null
 let managedUpdateQuitWaitDone = false
 
 function assertCanMutateManagedPrimaryRouting() {
+  if (EVA_MANAGED_BUILD) {
+    throw new Error('evaOS Agent gateway settings are managed by Electric Sheep.')
+  }
+
   const durableIds = readManagedSshRecoveryRecords().map(record => record.connectionId)
 
   const ids = new Set([
@@ -10473,6 +10659,15 @@ async function resetPreviewReach(webContentsId?: number) {
  * failure; the pane explains an unreachable one on its own.
  */
 async function reachablePreviewUrl(webContentsId: number, rawUrl: string): Promise<string> {
+  if (EVA_MANAGED_BUILD) {
+    // Managed URL gateways intentionally have no workstation SSH transport.
+    // Never reuse saved Desktop registry credentials to tunnel VM loopback;
+    // authenticated managed port reach is tracked separately.
+    await resetPreviewReach(webContentsId)
+
+    return rawUrl
+  }
+
   let target = activeSshTerminalTarget(webContentsId)
 
   if (target === 'pending') {
@@ -10967,6 +11162,10 @@ function configuredRemoteProfileNames() {
 // profile via ?profile=. Cloud counts — it resolves to a remote backend (Q6).
 // Distinct from per-profile overrides — here there's one host for all.
 function globalRemoteActive() {
+  if (EVA_MANAGED_BUILD) {
+    return true
+  }
+
   if (process.env.HERMES_DESKTOP_REMOTE_URL) {
     return true
   }
@@ -11449,11 +11648,8 @@ function profileRouteOptions(profile, request?) {
 // resolveProfileBackendRoute(). An empty / unknown profile resolves to the
 // primary, so legacy callers are unchanged.
 async function ensureBackend(profile) {
-  if (EVA_MANAGED_BUILD) {
-    return evaManagedRuntime.resolveBackend({ profile })
-  }
-
-  const key = profile && String(profile).trim() ? String(profile).trim() : primaryProfileKey()
+  return evaManagedBackendGate.resolve(profile, async () => {
+    const key = profile && String(profile).trim() ? String(profile).trim() : primaryProfileKey()
 
   profileDeletionGate.assertCanStart(key)
 
@@ -11522,7 +11718,8 @@ async function ensureBackend(profile) {
   const connection = await entry.connectionPromise
   setWslBridgeProfileState(key, connection.mode !== 'remote')
 
-  return connection
+    return connection
+  })
 }
 
 // ── Registry-scoped backends (multi-connection, PR 2 of the campaign) ──────
@@ -12831,7 +13028,8 @@ async function startHermes() {
     throw new Error('Hermes Desktop is already running in another window.')
   }
 
-  if (EVA_MANAGED_BUILD) {
+  return evaManagedBackendGate.start(
+    async () => {
     await advanceBootProgress('backend.resolve', 'Resolving your managed evaOS agent', 8)
 
     try {
@@ -12858,10 +13056,9 @@ async function startHermes() {
         error: message
       })
       throw error
-    }
-  }
-
-  await reapOrphanedBackendsOnce()
+    },
+    async () => {
+      await reapOrphanedBackendsOnce()
 
   // Latched-failure short-circuit: once bootstrap has failed in this
   // process, every subsequent startHermes() call re-throws the same error
@@ -13313,6 +13510,8 @@ async function startHermes() {
   backendConnectionState.setPromise(connectionAttempt, connectionPromise)
 
   return connectionPromise
+    }
+  )
 }
 
 // Shared navigation guards + window chrome wiring applied to every window
@@ -13431,7 +13630,7 @@ function spawnSecondaryWindow({
     height: SESSION_WINDOW_MIN_HEIGHT,
     minWidth: SESSION_WINDOW_MIN_WIDTH,
     minHeight: SESSION_WINDOW_MIN_HEIGHT,
-    title: 'Hermes',
+    title: APP_NAME,
     titleBarStyle: 'hidden',
     titleBarOverlay: getTitleBarOverlayOptions(),
     trafficLightPosition: IS_MAC ? WINDOW_BUTTON_POSITION : undefined,
@@ -13525,7 +13724,7 @@ function spawnBrowserWindow(tabId) {
     height: BROWSER_WINDOW_HEIGHT,
     minWidth: BROWSER_WINDOW_MIN_WIDTH,
     minHeight: BROWSER_WINDOW_MIN_HEIGHT,
-    title: 'Hermes',
+    title: APP_NAME,
     titleBarStyle: 'hidden',
     titleBarOverlay: getTitleBarOverlayOptions(),
     trafficLightPosition: IS_MAC ? WINDOW_BUTTON_POSITION : undefined,
@@ -13617,7 +13816,7 @@ function createInstanceWindow() {
     ...nextInstanceBounds(),
     minWidth: WINDOW_MIN_WIDTH,
     minHeight: WINDOW_MIN_HEIGHT,
-    title: 'Hermes',
+    title: APP_NAME,
     titleBarStyle: 'hidden',
     titleBarOverlay: getTitleBarOverlayOptions(),
     trafficLightPosition: IS_MAC ? WINDOW_BUTTON_POSITION : undefined,
@@ -14362,9 +14561,9 @@ const QUICK_ENTRY_CONFIG_PATH = path.join(app.getPath('userData'), 'quick-entry.
 
 let quickEntryWindow = null
 
-// Latest state push from the primary renderer (connection + recent sessions),
-// replayed to a quick window that spawns after the push happened.
-let quickEntryLastState = null
+// Latest state push from the primary renderer (connection + recent sessions)
+// is held by the early declaration above so managed cleanup can clear it even
+// before the Quick Entry subsystem is initialized.
 
 function readQuickEntrySettings() {
   try {
@@ -14567,7 +14766,7 @@ function createWindow() {
     ...computeWindowOptions(savedWindowState, screen.getAllDisplays()),
     minWidth: WINDOW_MIN_WIDTH,
     minHeight: WINDOW_MIN_HEIGHT,
-    title: 'Hermes',
+    title: APP_NAME,
     // Frameless title bar on every platform so the renderer can paint the
     // "hide sidebar" button (and other left-side titlebar tools) flush with
     // the top edge — matching the macOS layout where the traffic lights sit
@@ -14803,7 +15002,8 @@ function createWindow() {
   // the renderer misses are recovered by its getBootProgress() pull on mount.
   startHermes().catch(error => rememberLog(error.stack || error.message))
 
-  mainWindow.webContents.once('did-finish-load', () => {
+  mainWindow.webContents.once('did-finish-load', async () => {
+    await evaManagedRuntime.flushPendingRendererReset()
     // Zoom restore is handled by wireCommonWindowHandlers (shared with session
     // windows); no need to reapply it here.
     broadcastBootProgress()
@@ -14818,7 +15018,10 @@ ipcMain.handle('hermes:connection', async (_event, profile) => {
   // normalization so every spelling of the primary coalesces onto one dial.
   const profileKey = profile && String(profile).trim() ? String(profile).trim() : primaryProfileKey()
   const connection = await backendDialClaims.run(backendScopeKey(null, profileKey), () => ensureBackend(profile))
-  const connectionId = resolvedConnectionId(readDesktopConnectionsRegistry(), connection)
+
+  const connectionId = EVA_MANAGED_BUILD
+    ? EVA_MANAGED_CONNECTION_ID
+    : resolvedConnectionId(readDesktopConnectionsRegistry(), connection)
 
   return connectionId ? { ...connection, connectionId } : connection
 })
@@ -14829,6 +15032,15 @@ ipcMain.handle('hermes:connection', async (_event, profile) => {
 // registry 'local' entry always means this machine).
 ipcMain.handle('hermes:connection:for', async (_event, payload) => {
   const { connectionId, profile } = payload && typeof payload === 'object' ? (payload as any) : ({} as any)
+
+  if (EVA_MANAGED_BUILD) {
+    const id = assertEvaManagedConnectionId(connectionId)
+    const profileKey = profile && String(profile).trim() ? String(profile).trim() : primaryProfileKey()
+    const connection = await backendDialClaims.run(backendScopeKey(id, profileKey), () => ensureBackend(profile))
+
+    return { ...connection, connectionId: id, registryScoped: true }
+  }
+
   const registry = readDesktopConnectionsRegistry()
   const id = String(connectionId || '').trim() || registry.primary
   // Same single-owner claim as 'hermes:connection', keyed by the composite
@@ -14845,7 +15057,8 @@ const windowConnectionRouteOwners = new Set<number>()
 ipcMain.on('hermes:connection:active-route', (event, route) => {
   const id = event.sender.id
   const previous = windowConnectionRoutes.get(id)
-  const next = windowConnectionRoutes.set(id, route)
+  const safeRoute = EVA_MANAGED_BUILD ? normalizeEvaManagedActiveRoute(route) : route
+  const next = windowConnectionRoutes.set(id, safeRoute)
 
   if (
     previous?.connectionId !== next?.connectionId ||
@@ -14873,6 +15086,10 @@ ipcMain.on('hermes:connection:active-route', (event, route) => {
 // not, we drop the cache so the next getConnection() rebuilds it. Local backends
 // self-heal via their child 'exit' handler, so we never touch them here.
 ipcMain.handle('hermes:connection:revalidate', async () => {
+  if (EVA_MANAGED_BUILD) {
+    return { ok: true, rebuilt: false }
+  }
+
   const connectionPromise = backendConnectionState.getPromise()
 
   if (!connectionPromise) {
@@ -15029,6 +15246,8 @@ ipcMain.handle('hermes:window:openBrowser', async (_event, tabId) => {
 // never ensureRuntime(), which would kick off a first-run install from a menu
 // click; an unresolved runtime is reported instead.
 ipcMain.handle('hermes:window:openInTerminal', async (_event, sessionId, opts) => {
+  assertEvaManagedLocalTerminalAllowed(EVA_MANAGED_BUILD)
+
   if (typeof sessionId !== 'string' || !sessionId.trim()) {
     return { ok: false, error: 'invalid-session-id' }
   }
@@ -15143,6 +15362,10 @@ ipcMain.handle('hermes:backend:recycle', async (_event, profile) => {
   return { ok: true }
 })
 ipcMain.handle('hermes:bootstrap:reset', async () => {
+  if (EVA_MANAGED_BUILD) {
+    throw new Error('evaOS Agent uses a managed remote runtime; local repair is unavailable.')
+  }
+
   // Renderer's "Reload and retry" path. Clear the latched failure and
   // reset connection state so the next startHermes() call restarts the
   // full backend flow (including a fresh runBootstrap pass).
@@ -15157,6 +15380,10 @@ ipcMain.handle('hermes:bootstrap:reset', async () => {
   return { ok: true }
 })
 ipcMain.handle('hermes:bootstrap:repair', async () => {
+  if (EVA_MANAGED_BUILD) {
+    throw new Error('evaOS Agent uses a managed remote runtime; local repair is unavailable.')
+  }
+
   // Forceful repair: force the next startHermes() through the full installer
   // (refreshing a broken/partial venv) and clear any latched failure + live
   // connection. The renderer reloads afterwards to re-drive the boot flow.
@@ -15209,12 +15436,20 @@ ipcMain.handle('hermes:bootstrap:repair', async () => {
   return { ok: true }
 })
 ipcMain.handle('hermes:bootstrap:continue-local', async () => {
+  if (EVA_MANAGED_BUILD) {
+    throw new Error('evaOS Agent uses a managed remote runtime; local installation is unavailable.')
+  }
+
   rememberLog('[bootstrap] local install selected by renderer; continuing first-launch bootstrap')
   continueFirstRunLocalBootstrap()
 
   return { ok: true }
 })
 ipcMain.handle('hermes:bootstrap:cancel', async () => {
+  if (EVA_MANAGED_BUILD) {
+    throw new Error('evaOS Agent uses a managed remote runtime; local installation is unavailable.')
+  }
+
   // Renderer's Cancel button during first-launch install. Abort the running
   // install script (SIGTERM via the runner's abortSignal). runBootstrap
   // resolves with { cancelled: true }, which surfaces the recovery overlay.
@@ -15233,7 +15468,19 @@ ipcMain.handle('hermes:bootstrap:cancel', async () => {
 ipcMain.handle('hermes:boot-progress:get', async () => bootProgressState)
 ipcMain.handle('hermes:bootstrap:get', async () => getBootstrapState())
 ipcMain.handle('hermes:connection-config:get', async (_event, profile) =>
-  sanitizeDesktopConnectionConfig(readDesktopConnectionConfig(), profile)
+  EVA_MANAGED_BUILD
+    ? {
+        managed: true,
+        mode: 'remote',
+        profile: null,
+        remoteAuthMode: 'token',
+        remoteOauthConnected: false,
+        remoteTokenPreview: null,
+        remoteTokenSet: true,
+        remoteUrl: '',
+        envOverride: true
+      }
+    : sanitizeDesktopConnectionConfig(readDesktopConnectionConfig(), profile)
 )
 ipcMain.handle('hermes:plugin-profile-routes', async (_event, rawProfileNames) => {
   const fallbackProfileNames = Array.isArray(rawProfileNames)
@@ -15243,6 +15490,10 @@ ipcMain.handle('hermes:plugin-profile-routes', async (_event, rawProfileNames) =
         .filter(Boolean)
         .slice(0, 256)
     : []
+
+  if (EVA_MANAGED_BUILD) {
+    return buildEvaManagedProfileRoutes(fallbackProfileNames, primaryProfileKey())
+  }
 
   const registry = readDesktopConnectionsRegistry()
   const enumerations = await enumerateRegistryAgentSources(registry)
@@ -15347,7 +15598,13 @@ ipcMain.handle('hermes:ssh-config:resolve', async (_event, host) => {
     })
   })
 })
-ipcMain.handle('hermes:connection-config:test', async (_event, payload) => testDesktopConnectionConfig(payload))
+ipcMain.handle('hermes:connection-config:test', async (_event, payload) => {
+  if (EVA_MANAGED_BUILD) {
+    throw new Error('evaOS Agent gateway settings are managed by Electric Sheep.')
+  }
+
+  return testDesktopConnectionConfig(payload)
+})
 
 // ── Opt-in keychain encryption for stored secrets ───────────────────────────
 // get returns the current policy without touching safeStorage; set flips it
@@ -15359,13 +15616,21 @@ ipcMain.handle('hermes:secret-storage:set', async (_event: any, on: any) => appl
 // Storage-level CRUD for named agent sources. Routing/pooling consumption of
 // the registry lands separately; these handlers only manage the persisted
 // list, so they are safe to ship ahead of the switchover.
-ipcMain.handle('hermes:connections:list', async () => sanitizeConnectionsRegistry())
+ipcMain.handle('hermes:connections:list', async () => {
+  if (EVA_MANAGED_BUILD) {
+    return buildEvaManagedConnectionsRegistry()
+  }
+
+  return sanitizeConnectionsRegistry()
+})
 ipcMain.handle('hermes:connections:save', async (_event, payload) => {
+  assertCanMutateManagedPrimaryRouting()
   const saved = await saveRegistryConnection(payload)
 
   return { ok: true, connection: saved, registry: sanitizeConnectionsRegistry() }
 })
 ipcMain.handle('hermes:connections:remove', async (_event, id) => {
+  assertCanMutateManagedPrimaryRouting()
   const key = String(id || '')
   managedConnectionUpdateGate.assertCanMutate(key)
   const registry = removeConnection(readDesktopConnectionsRegistry(), key)
@@ -15395,12 +15660,14 @@ ipcMain.handle('hermes:connections:set-launch-mode', async (_event, mode) => {
   return { ok: true, registry: sanitizeConnectionsRegistry(registry) }
 })
 ipcMain.handle('hermes:connections:set-last-used', async (_event, id) => {
+  assertCanMutateManagedPrimaryRouting()
   const registry = setLastUsedConnection(readDesktopConnectionsRegistry(), String(id || ''))
   writeDesktopConnectionsRegistry(registry)
 
   return { ok: true, registry: sanitizeConnectionsRegistry(registry) }
 })
 ipcMain.handle('hermes:connections:test', async (_event, id) => {
+  assertCanMutateManagedPrimaryRouting()
   const registry = readDesktopConnectionsRegistry()
   const entry = registry.connections.find(c => c.id === String(id || ''))
 
@@ -15747,6 +16014,10 @@ async function enumerateRegistryAgentSources(registry = readDesktopConnectionsRe
 }
 
 ipcMain.handle('hermes:agents:roster', async () => {
+  if (EVA_MANAGED_BUILD) {
+    return buildEvaManagedAgentRoster(primaryProfileKey())
+  }
+
   const registry = readDesktopConnectionsRegistry()
   const enumerations = await enumerateRegistryAgentSources(registry)
 
@@ -15779,6 +16050,12 @@ const registryGatewayWsUrlHandler = createRegistryGatewayWsUrlHandler({
 })
 
 ipcMain.handle('hermes:gateway:ws-url-for', async (_event, payload) => {
+  if (EVA_MANAGED_BUILD) {
+    assertEvaManagedConnectionId(payload?.connectionId)
+
+    return gatewayWsUrlIpcResult(() => freshGatewayWsUrl(payload?.profile))
+  }
+
   return gatewayWsUrlIpcResult(() => registryGatewayWsUrlHandler(payload))
 })
 
@@ -15830,7 +16107,11 @@ async function requestManagedSshUpdate(rawId) {
   return operation
 }
 
-ipcMain.handle('hermes:connections:update-managed', async (_event, rawId) => requestManagedSshUpdate(rawId))
+ipcMain.handle('hermes:connections:update-managed', async (_event, rawId) => {
+  assertCanMutateManagedPrimaryRouting()
+
+  return requestManagedSshUpdate(rawId)
+})
 
 // Fan out `hermes update` to every eligible registered connection at once.
 // Cloud entries are excluded (platform-managed); each dispatch reports
@@ -15838,6 +16119,7 @@ ipcMain.handle('hermes:connections:update-managed', async (_event, rawId) => req
 // app's own update pipeline; Desktop-managed SSH uses the transactional
 // drain/update/restore lifecycle; URL remotes POST their backend updater.
 ipcMain.handle('hermes:connections:update-all', async (_event, payload) => {
+  assertCanMutateManagedPrimaryRouting()
   const registry = readDesktopConnectionsRegistry()
 
   // Optional renderer-side exclusions: the everything-update flow dispatches
@@ -15970,8 +16252,18 @@ async function fetchJsonForBackend(
   })
 }
 
-ipcMain.handle('hermes:connection-config:probe', async (_event, rawUrl) => probeRemoteAuthMode(rawUrl))
+ipcMain.handle('hermes:connection-config:probe', async (_event, rawUrl) => {
+  if (EVA_MANAGED_BUILD) {
+    throw new Error('evaOS Agent gateway settings are managed by Electric Sheep.')
+  }
+
+  return probeRemoteAuthMode(rawUrl)
+})
 ipcMain.handle('hermes:connection-config:oauth-login', async (_event, rawUrl) => {
+  if (EVA_MANAGED_BUILD) {
+    throw new Error('evaOS Agent gateway settings are managed by Electric Sheep.')
+  }
+
   // Capability-gated login (RFC 8252). Probe the gateway's public /api/status
   // for supported auth_flows and /api/auth/providers for provider capabilities:
   //   - all providers support password → always use the embedded login window
@@ -16035,6 +16327,10 @@ ipcMain.handle('hermes:connection-config:oauth-login', async (_event, rawUrl) =>
   return { ok: true, baseUrl, connected }
 })
 ipcMain.handle('hermes:connection-config:oauth-logout', async (_event, rawUrl) => {
+  if (EVA_MANAGED_BUILD) {
+    throw new Error('evaOS Agent gateway settings are managed by Electric Sheep.')
+  }
+
   const baseUrl = normalizeRemoteBaseUrl(rawUrl)
   await clearOauthSession(baseUrl)
 
@@ -16054,25 +16350,42 @@ ipcMain.handle('hermes:connection-config:oauth-logout', async (_event, rawUrl) =
 // One portal login in the OAuth partition powers both discovery and the silent
 // per-agent cascade. See the discovery/cascade helpers above.
 ipcMain.handle('hermes:cloud:status', async () => ({
-  portalBaseUrl: resolvePortalBaseUrl(),
-  signedIn: await hasLivePortalSession()
+  ...(EVA_MANAGED_BUILD ? { portalBaseUrl: null, signedIn: false, managed: true } : {}),
+  ...(!EVA_MANAGED_BUILD
+    ? {
+        portalBaseUrl: resolvePortalBaseUrl(),
+        signedIn: await hasLivePortalSession()
+      }
+    : {})
 }))
 ipcMain.handle('hermes:cloud:login', async () => {
+  if (EVA_MANAGED_BUILD) {
+    throw new Error('Cloud selection is managed by Electric Sheep.')
+  }
   await openPortalLoginWindow()
 
   return { ok: true, signedIn: await hasLivePortalSession() }
 })
 ipcMain.handle('hermes:cloud:logout', async () => {
+  if (EVA_MANAGED_BUILD) {
+    throw new Error('Cloud selection is managed by Electric Sheep.')
+  }
   await clearOauthSession(resolvePortalBaseUrl())
 
   return { ok: true, signedIn: await hasLivePortalSession() }
 })
 ipcMain.handle('hermes:cloud:discover', async (_event, org) => {
+  if (EVA_MANAGED_BUILD) {
+    throw new Error('Cloud selection is managed by Electric Sheep.')
+  }
   // Returns { agents } or { needsOrgSelection: true, orgs }. `org` (optional)
   // scopes discovery to a chosen org for multi-org users.
   return discoverCloudAgents(typeof org === 'string' && org ? org : undefined)
 })
 ipcMain.handle('hermes:cloud:agent-sign-in', async (_event, dashboardUrl) => {
+  if (EVA_MANAGED_BUILD) {
+    throw new Error('Cloud selection is managed by Electric Sheep.')
+  }
   // Silent per-agent sign-in via the shared portal session. Returns the agent's
   // gateway baseUrl + whether its session cookie landed; the renderer then
   // saves a cloud-mode connection pointed at this dashboardUrl.
@@ -16133,15 +16446,48 @@ ipcMain.handle('hermes:connection-config:apply', async (_event, payload) => {
   return sanitizeDesktopConnectionConfig(config, payload?.profile)
 })
 
-ipcMain.handle('hermes:profile:get', async () => ({ profile: readActiveDesktopProfile() }))
+ipcMain.handle('hermes:eva:status', async () => evaManagedRuntime.status())
+ipcMain.handle('hermes:eva:sign-in', async () => evaManagedRuntime.signIn())
+ipcMain.handle('hermes:eva:sign-out', async () => evaManagedRuntime.signOut())
+ipcMain.handle('hermes:eva:refresh', async () => evaManagedRuntime.refresh())
+ipcMain.handle('hermes:eva:support:end', async () => evaManagedRuntime.endSupportSession())
+
+ipcMain.handle('hermes:profile:get', async () => {
+  if (!EVA_MANAGED_BUILD) {
+    return { profile: readActiveDesktopProfile() }
+  }
+
+  const profile = await resolveEvaManagedDesktopProfileFromSources(
+    () => evaManagedRuntime.requestApi({ path: '/api/profiles/active', method: 'GET' }),
+    () => evaManagedRuntime.status()
+  )
+
+  return { profile }
+})
 // Persistence-only sibling of hermes:profile:set: records the profile the
 // Desktop should boot into next launch WITHOUT tearing down the backend or
 // reloading the window — the rail's live workspace switch already re-homed
 // the gateway (#79886).
-ipcMain.handle('hermes:profile:remember', async (_event, name) => ({
-  profile: writeActiveDesktopProfile(name)
-}))
+ipcMain.handle('hermes:profile:remember', async (_event, name) => {
+  if (EVA_MANAGED_BUILD) {
+    if (!name || name === 'default') {
+      return { profile: 'default' }
+    }
+
+    throw new Error('evaOS Agent uses the agent assigned by Electric Sheep; Desktop profiles cannot change it.')
+  }
+
+  return { profile: writeActiveDesktopProfile(name) }
+})
 ipcMain.handle('hermes:profile:set', async (_event, name) => {
+  if (EVA_MANAGED_BUILD) {
+    if (!name || name === 'default') {
+      return { profile: 'default' }
+    }
+
+    throw new Error('evaOS Agent uses the agent assigned by Electric Sheep; Desktop profiles cannot change it.')
+  }
+
   assertCanMutateManagedPrimaryRouting()
   const next = writeActiveDesktopProfile(name)
 
@@ -16684,6 +17030,10 @@ async function handleHermesApiRequest(request) {
 }
 
 ipcMain.handle('hermes:api', async (_event, request) => {
+  if (EVA_MANAGED_BUILD) {
+    return evaManagedRuntime.requestApi(request)
+  }
+
   // Hold the deletion gate for BOTH profile deletes and renames: a concurrent
   // renderer reconnect entering ensureBackend() mid-mutation would otherwise
   // respawn the old-name backend and recreate its HERMES_HOME (#45474).
@@ -17437,15 +17787,21 @@ ipcMain.handle('hermes:openPreviewInBrowser', async (_event, url) => {
 // settings mount and seeds the value into the picker; writing back persists
 // it via writeDefaultProjectDir so resolveHermesCwd picks it up on the next
 // session spawn (no app restart needed).
-ipcMain.handle('hermes:setting:defaultProjectDir:get', async () => ({
-  dir: readDefaultProjectDir(),
-  defaultLabel: app.getPath('home'),
-  resolvedCwd: resolveHermesCwd()
-}))
+ipcMain.handle('hermes:setting:defaultProjectDir:get', async () => {
+  assertEvaManagedLocalMutationAllowed(EVA_MANAGED_BUILD, 'Reading the local default project directory')
+
+  return {
+    dir: readDefaultProjectDir(),
+    defaultLabel: app.getPath('home'),
+    resolvedCwd: resolveHermesCwd()
+  }
+})
 
 ipcMain.handle('hermes:workspace:sanitize', async (_event, cwd) => sanitizeWorkspaceCwd(cwd))
 
 ipcMain.handle('hermes:setting:defaultProjectDir:set', async (_event, dir) => {
+  assertEvaManagedLocalMutationAllowed(EVA_MANAGED_BUILD, 'Changing the local default project directory')
+
   const next = typeof dir === 'string' && dir.trim() ? dir.trim() : null
 
   if (next) {
@@ -17462,6 +17818,8 @@ ipcMain.handle('hermes:setting:defaultProjectDir:set', async (_event, dir) => {
 })
 
 ipcMain.handle('hermes:setting:defaultProjectDir:pick', async () => {
+  assertEvaManagedLocalMutationAllowed(EVA_MANAGED_BUILD, 'Choosing a local default project directory')
+
   const result = await dialog.showOpenDialog({
     title: 'Choose default project directory',
     properties: ['openDirectory', 'createDirectory'],
@@ -17510,6 +17868,7 @@ ipcMain.on('hermes:logs:renderer-error', (_event, report) => {
 
 // Local filesystem + plugin-root IPC (readDir/reveal/rename/trash/…) — see fs-ipc.ts.
 registerFsIpc({
+  assertLocalAccessAllowed: operation => assertEvaManagedLocalMutationAllowed(EVA_MANAGED_BUILD, operation),
   hermesHome: HERMES_HOME,
   readActiveDesktopProfile,
   expandUserPath,
@@ -17519,7 +17878,11 @@ registerFsIpc({
 })
 
 // Git-driven features (worktrees, review pane, repo scan) — see git-ipc.ts.
-registerGitIpc({ resolveGitBinary, resolveGhBinary })
+registerGitIpc({
+  assertLocalMutationAllowed: operation => assertEvaManagedLocalMutationAllowed(EVA_MANAGED_BUILD, operation),
+  resolveGitBinary,
+  resolveGhBinary
+})
 
 // Client-side loopback callback for MCP OAuth against remote backends — see
 // mcp-oauth-callback-ipc.ts.
@@ -17528,6 +17891,8 @@ registerMcpOauthCallbackIpc()
 // Embedded terminal PTY host (hermes:terminal:*) — see terminal-ipc.ts.
 const terminalIpc = registerTerminalIpc({
   isWindows: IS_WINDOWS,
+  assertLocalMutationAllowed: operation => assertEvaManagedLocalMutationAllowed(EVA_MANAGED_BUILD, operation),
+  assertLocalTerminalAllowed: () => assertEvaManagedLocalTerminalAllowed(EVA_MANAGED_BUILD),
   findOnPath,
   rememberLog,
   activeSshTerminalTarget,
@@ -17537,27 +17902,54 @@ const terminalIpc = registerTerminalIpc({
 
 const disposeTerminalSession = terminalIpc.disposeTerminalSession
 
-ipcMain.handle('hermes:updates:check', async () =>
-  checkUpdates().catch(error => ({
+ipcMain.handle('hermes:updates:check', async () => {
+  if (EVA_MANAGED_BUILD) {
+    try {
+      return await getEvaAppUpdater().check()
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error || 'Unknown updater error')
+      rememberLog(`[updates] managed check setup failed: ${message}`)
+
+      return safeCheckFailure()
+    }
+  }
+
+  return checkUpdates().catch(error => ({
     supported: true,
     branch: readDesktopUpdateConfig().branch,
     error: 'check-failed',
     message: error?.message || String(error),
     fetchedAt: Date.now()
   }))
-)
+})
 
-ipcMain.handle('hermes:updates:apply', async (_event, payload) =>
-  applyUpdates(payload || {}).catch(error => ({
+ipcMain.handle('hermes:updates:apply', async (_event, payload) => {
+  if (EVA_MANAGED_BUILD) {
+    try {
+      return await getEvaAppUpdater().apply()
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error || 'Unknown updater error')
+      rememberLog(`[updates] managed apply setup failed: ${message}`)
+
+      return safeApplyFailure()
+    }
+  }
+
+  return applyUpdates(payload || {}).catch(error => ({
     ok: false,
     error: 'apply-failed',
     message: error?.message || String(error)
   }))
+})
+
+ipcMain.handle('hermes:updates:branch:get', async () =>
+  EVA_MANAGED_BUILD ? { branch: EVA_MANAGED_POLICY.updateChannel } : readDesktopUpdateConfig()
 )
 
-ipcMain.handle('hermes:updates:branch:get', async () => readDesktopUpdateConfig())
-
 ipcMain.handle('hermes:updates:branch:set', async (_event, name) => {
+  if (EVA_MANAGED_BUILD) {
+    throw new Error('Updates are managed by Electric Sheep.')
+  }
   const branch = typeof name === 'string' && name.trim() ? name.trim() : DEFAULT_UPDATE_BRANCH
   writeDesktopUpdateConfig({ branch })
 
@@ -17608,13 +18000,18 @@ async function detectRendererSkew() {
 // other platforms don't use this menu item.
 function showAboutPanelFresh() {
   void detectRendererSkew().then(skew => {
-    app.setAboutPanelOptions({
-      applicationName: APP_NAME,
-      applicationVersion: skew.outOfSync
-        ? `${resolveHermesVersion()} — app build out of date, update the desktop app`
-        : resolveHermesVersion(),
-      copyright: 'Copyright © 2026 Nous Research'
-    })
+    const upstreamVersion = skew.outOfSync
+      ? `${resolveHermesVersion()} — app build out of date, update the desktop app`
+      : resolveHermesVersion()
+
+    app.setAboutPanelOptions(
+      nativeAboutPanelOptions({
+        applicationName: APP_NAME,
+        appVersion: app.getVersion(),
+        managed: EVA_MANAGED_BUILD,
+        upstreamVersion
+      })
+    )
     app.showAboutPanel()
   })
 }
@@ -17623,19 +18020,15 @@ ipcMain.handle('hermes:version', async () => {
   const skew = await detectRendererSkew()
 
   return {
-    appVersion: resolveHermesVersion(),
+    appVersion: EVA_MANAGED_BUILD ? app.getVersion() : resolveHermesVersion(),
     electronVersion: process.versions.electron,
     nodeVersion: process.versions.node,
     platform: process.platform,
-    hermesRoot: resolveUpdateRoot(),
-    bundleOutOfSync: skew.outOfSync,
-    bundleCommitsBehind: skew.desktopCommitsBehind,
-    // True when the bundle on disk is not the one this process loaded — a
-    // plain app restart (no rebuild, no installer) clears the skew above.
-    // Packaged only: a dev `--build-only` rewrites build/install-stamp.json
-    // under a running `npm start`, which is a rebuild the developer asked for,
-    // not a torn install to offer a restart for.
-    bundleSwapPending: IS_PACKAGED && detectBundleSwap(INSTALL_STAMP, loadInstallStamp())
+    hermesRoot: EVA_MANAGED_BUILD ? null : resolveUpdateRoot(),
+    bundleOutOfSync: EVA_MANAGED_BUILD ? false : skew.outOfSync,
+    bundleCommitsBehind: EVA_MANAGED_BUILD ? 0 : skew.desktopCommitsBehind,
+    bundleSwapPending:
+      !EVA_MANAGED_BUILD && IS_PACKAGED && detectBundleSwap(INSTALL_STAMP, loadInstallStamp())
   }
 })
 
@@ -17757,7 +18150,7 @@ async function runDesktopUninstall(mode) {
     return {
       ok: false,
       error: 'agent-missing',
-      message: `Can't run the uninstaller: no Hermes agent venv at ${VENV_ROOT}.`
+      message: `Can't run the uninstaller: no evaOS Agent runtime at ${VENV_ROOT}.`
     }
   }
 
@@ -17857,8 +18250,19 @@ async function runDesktopUninstall(mode) {
   return { ok: true, mode, willRemoveAppBundle: Boolean(removeBundle), scriptPath }
 }
 
-ipcMain.handle('hermes:uninstall:summary', async () => getUninstallSummary())
+ipcMain.handle('hermes:uninstall:summary', async () => {
+  if (EVA_MANAGED_BUILD) {
+    return { available: false, managed: true, message: 'evaOS Agent does not install a local agent runtime.' }
+  }
+
+  return getUninstallSummary()
+})
+
 ipcMain.handle('hermes:uninstall:run', async (_event, payload) => {
+  if (EVA_MANAGED_BUILD) {
+    throw new Error('evaOS Agent does not install a local agent runtime.')
+  }
+
   const mode = payload && typeof payload === 'object' ? payload.mode : payload
 
   return runDesktopUninstall(String(mode || ''))
@@ -17883,11 +18287,18 @@ ipcMain.handle('hermes:vscode-theme:search', async (_event, query) => searchMark
 // running app. Three delivery paths: macOS 'open-url',
 // Win/Linux running-app 'second-instance' (argv), Win/Linux cold-start argv.
 // ---------------------------------------------------------------------------
-const HERMES_PROTOCOL = DEV_SERVER ? 'hermes-dev' : 'hermes'
+const HERMES_PROTOCOL = EVA_MANAGED_BUILD ? EVA_MANAGED_POLICY.callbackScheme : DEV_SERVER ? 'hermes-dev' : 'hermes'
+
 /** Schemes accepted when parsing inbound URLs (dev accepts both). */
-const DEEPLINK_SCHEMES = DEV_SERVER ? ['hermes-dev', 'hermes'] : ['hermes']
+const DEEPLINK_SCHEMES = EVA_MANAGED_BUILD
+  ? [EVA_MANAGED_POLICY.callbackScheme]
+  : DEV_SERVER
+    ? ['hermes-dev', 'hermes']
+    : ['hermes']
+
 let _pendingDeepLink = null
 let _rendererReadyForDeepLink = false
+let evaDeepLinkProtocolManager = null
 
 function _extractDeepLink(argv) {
   if (!Array.isArray(argv)) {
@@ -17907,7 +18318,41 @@ function handleDeepLink(url) {
   try {
     parsed = new URL(url)
   } catch {
-    rememberLog(`[deeplink] ignoring malformed url: ${url}`)
+    rememberLog('[deeplink] ignoring malformed URL')
+
+    return
+  }
+
+  if (EVA_MANAGED_BUILD) {
+    const managedLink = classifyManagedDeepLink(url, HERMES_PROTOCOL)
+
+    if (managedLink.type === 'auth-callback') {
+      void evaManagedRuntime.completeCallback(url).catch(error => {
+        rememberLog(`[eva-auth] callback rejected: ${error?.code || 'invalid-callback'}`)
+      })
+
+      return
+    }
+
+    if (managedLink.type === 'blueprint') {
+      deliverDeepLinkPayload(managedLink.payload)
+
+      return
+    }
+
+    if (managedLink.type === 'support') {
+      // The request id is claimed in the main process with the existing
+      // employee desktop session. It is deliberately never forwarded to the
+      // renderer or included in a renderer-visible error.
+      void evaManagedRuntime.claimSupportRequest(managedLink.requestId).catch(error => {
+        const code = String(error?.code || '').match(/^[a-z][a-z0-9]*(?:[_-][a-z0-9]+)*$/)?.[0]
+        rememberLog(`[eva-support] request rejected: ${code || 'support-claim-failed'}`)
+      })
+
+      return
+    }
+
+    rememberLog('[deeplink] ignoring unsupported managed-app URL')
 
     return
   }
@@ -17927,8 +18372,10 @@ function handleDeepLink(url) {
   parsed.searchParams.forEach((v, k) => {
     params[k] = v
   })
-  const payload = { kind, name, params }
+  deliverDeepLinkPayload({ kind, name, params })
+}
 
+function deliverDeepLinkPayload(payload) {
   if (!_rendererReadyForDeepLink || !mainWindow || mainWindow.isDestroyed()) {
     _pendingDeepLink = payload
 
@@ -17942,7 +18389,7 @@ function handleDeepLink(url) {
 
     mainWindow.focus()
     mainWindow.webContents.send('hermes:deep-link', payload)
-    rememberLog(`[deeplink] delivered ${kind}/${name}`)
+    rememberLog(`[deeplink] delivered ${payload.kind}/${payload.name}`)
   } catch (err) {
     rememberLog(`[deeplink] delivery failed: ${err.message}`)
   }
@@ -17956,31 +18403,62 @@ ipcMain.handle('hermes:deep-link-ready', () => {
   if (_pendingDeepLink) {
     const queued = _pendingDeepLink
     _pendingDeepLink = null
-    handleDeepLink(
-      `${HERMES_PROTOCOL}://${queued.kind}/${encodeURIComponent(queued.name)}` +
-        (Object.keys(queued.params).length ? '?' + new URLSearchParams(queued.params).toString() : '')
-    )
+    deliverDeepLinkPayload(queued)
   }
 
   return { ok: true }
 })
 
-function registerDeepLinkProtocol() {
-  try {
-    if (process.defaultApp && process.argv.length >= 2) {
-      // Dev: register with the electron exec path + entry script so the OS can
-      // relaunch us with the URL. argv[1] is usually "." when launched via
-      // `electron .` from apps/desktop — resolve against cwd.
-      const entry = path.resolve(process.argv[1])
-      app.setAsDefaultProtocolClient(HERMES_PROTOCOL, process.execPath, [entry])
-    } else {
-      app.setAsDefaultProtocolClient(HERMES_PROTOCOL)
-    }
-
-    rememberLog(`[deeplink] registered ${HERMES_PROTOCOL}:// handler`)
-  } catch (err) {
-    rememberLog(`[deeplink] protocol registration failed: ${err.message}`)
+function registerRawDeepLinkProtocol() {
+  if (process.defaultApp && process.argv.length >= 2) {
+    // Dev: register with the electron exec path + entry script so the OS can
+    // relaunch us with the URL.
+    return app.setAsDefaultProtocolClient(HERMES_PROTOCOL, process.execPath, [path.resolve(process.argv[1])])
   }
+
+  return app.setAsDefaultProtocolClient(HERMES_PROTOCOL)
+}
+
+function getEvaDeepLinkProtocolManager() {
+  if (!evaDeepLinkProtocolManager) {
+    evaDeepLinkProtocolManager = createEvaProtocolHandlerManager({
+      scheme: HERMES_PROTOCOL,
+      bundleIdentifier: 'com.electricsheephq.evaos.agent',
+      currentExecutablePath: process.execPath,
+      expectedInstallPath: '/Applications/evaOS Agent.app',
+      getApplicationInfoForProtocol: url => app.getApplicationInfoForProtocol(url),
+      getApplicationNameForProtocol: url => app.getApplicationNameForProtocol(url),
+      isPackaged: IS_PACKAGED,
+      platform: process.platform,
+      registerProtocol: registerRawDeepLinkProtocol
+    })
+  }
+
+  return evaDeepLinkProtocolManager
+}
+
+async function ensureEvaDeepLinkProtocolReady() {
+  if (!EVA_MANAGED_BUILD) {
+    registerRawDeepLinkProtocol()
+
+    return { ok: true, repaired: false, skipped: true }
+  }
+
+  const result = await getEvaDeepLinkProtocolManager().ensureCurrentHandler({ repair: true })
+
+  if (result.repaired) {
+    rememberLog(`[deeplink] repaired protocol ownership for evaOS Agent ${app.getVersion()}`)
+  }
+
+  return result
+}
+
+function registerDeepLinkProtocol() {
+  void ensureEvaDeepLinkProtocolReady().catch(err => {
+    const code = String(err?.code || 'callback-handler-registration-failed')
+
+    rememberLog(`[deeplink] protocol registration failed [code: ${code}]`)
+  })
 }
 
 // Single-instance lock: deep links on a running app (Win/Linux) arrive as a
@@ -18041,11 +18519,13 @@ app.whenReady().then(() => {
   // Keyring-less Linux `--password-store=basic` support. This must run before
   // createWindow() and anything that could touch safeStorage; the narrow
   // platform/switch/guard semantics live in the extracted helper.
-  enableBasicPasswordStoreEncryption({
-    platform: process.platform,
-    passwordStoreSwitch: app.commandLine.getSwitchValue('password-store'),
-    safeStorageApi: safeStorage
-  })
+  if (!EVA_MANAGED_BUILD) {
+    enableBasicPasswordStoreEncryption({
+      platform: process.platform,
+      passwordStoreSwitch: app.commandLine.getSwitchValue('password-store'),
+      safeStorageApi: safeStorage
+    })
+  }
 
   // Keychain encryption is opt-in (default OFF). One-shot: rewrite any
   // legacy safeStorage-encrypted secrets as plain so no later launch ever
@@ -18150,7 +18630,7 @@ function heldQuitForActiveWork(event: Electron.Event): boolean {
     return false
   }
 
-  const prompt = quitPromptFor(mergeActiveWork(activeWorkByWebContents.values()), isQuittingForHandoff)
+  const prompt = quitPromptFor(mergeActiveWork(activeWorkByWebContents.values()), isQuittingForHandoff, APP_NAME)
   const parent = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
 
   if (!prompt || !parent || parent.isDestroyed()) {

@@ -135,9 +135,9 @@ export function runCurator(): Promise<ActionResponse> {
   })
 }
 
-export function restartGateway(): Promise<ActionResponse> {
+export function restartGateway(profile?: null | string): Promise<ActionResponse> {
   return hermesApi<ActionResponse>({
-    ...profileScoped(),
+    ...profileScoped(profile),
     path: '/api/gateway/restart',
     method: 'POST'
   })
@@ -168,11 +168,15 @@ export function getActionStatus(name: string, lines = 200, profile?: ProfileScop
   })
 }
 
-export function transcribeAudio(dataUrl: string, mimeType?: string): Promise<AudioTranscriptionResponse> {
-  return hermesApi<AudioTranscriptionResponse>({
+export function transcribeAudio(
+  dataUrl: string,
+  mimeType?: string,
+  scope?: ProfileScope
+): Promise<AudioTranscriptionResponse> {
+  return window.hermesDesktop.api<AudioTranscriptionResponse>({
+    ...capabilityScoped(scope),
     path: '/api/audio/transcribe',
     method: 'POST',
-    ...profileScoped(),
     body: {
       data_url: dataUrl,
       mime_type: mimeType

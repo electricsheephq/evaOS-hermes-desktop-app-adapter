@@ -812,6 +812,7 @@ test('buildSpawnCommand atomically reserves the ownership slot through spawn and
 
   assert.ok(cmd.includes('.connect.lock'))
   assert.ok(cmd.includes('.hermes-update-in-progress.mutex'))
+  assert.match(cmd, /mutex_path=os\.path\.expanduser\(sys\.argv\[1\]\)/)
   assert.match(cmd, /fcntl\.flock\(fd,fcntl\.LOCK_EX\)/)
   assert.match(cmd, /os\.O_CLOEXEC/)
   assert.match(
@@ -854,6 +855,12 @@ done
     })
 
     await exec(command, { shell: '/bin/bash' })
+
+    assert.equal(
+      await readFile(path.join(directory, 'home', '.hermes-update-in-progress.mutex'), 'utf8'),
+      '',
+      'the mutex must be created at the requested absolute home, without literal shell quotes'
+    )
 
     for (let attempt = 0; attempt < 40; attempt += 1) {
       try {

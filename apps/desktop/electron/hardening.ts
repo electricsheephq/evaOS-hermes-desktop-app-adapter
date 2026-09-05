@@ -153,7 +153,11 @@ function resolveTimeoutMs(timeoutMs, fallbackMs = DEFAULT_FETCH_TIMEOUT_MS) {
   return fallback
 }
 
-function encryptDesktopSecret(value, safeStorageApi, options: { allowPlainText?: boolean } = {}) {
+function encryptDesktopSecret(
+  value,
+  safeStorageApi,
+  options: boolean | { allowPlainText?: boolean; managed?: boolean } = {}
+) {
   const raw = String(value || '')
 
   if (!raw) {
@@ -163,7 +167,9 @@ function encryptDesktopSecret(value, safeStorageApi, options: { allowPlainText?:
   // Opt-in escape hatch for keyring-less Linux (e.g. Hyprland/Sway with no
   // GNOME Keyring or KWallet): the renderer sets this once the user confirms
   // the plain-text storage prompt in Settings → Gateway.
-  const allowPlainText = options?.allowPlainText === true
+  const normalizedOptions = typeof options === 'boolean' ? { managed: options } : options
+  const allowPlainText = normalizedOptions?.allowPlainText === true
+  const managed = normalizedOptions?.managed === true
 
   let encryptionAvailable = false
 
@@ -173,7 +179,25 @@ function encryptDesktopSecret(value, safeStorageApi, options: { allowPlainText?:
     encryptionAvailable = false
   }
 
-  if (!encryptionAvailable) {
+  let storageBackend = ''
+
+  try {
+    storageBackend = String(safeStorageApi?.getSelectedStorageBackend?.() || '')
+  } catch {
+    storageBackend = ''
+  }
+
+  // Electron's Linux `basic_text` backend uses a public hard-coded password.
+  // It is an explicit usability fallback for unmanaged Desktop, not secure
+  // storage for possession-bearing managed enrollment credentials.
+  if (!encryptionAvailable || (managed && storageBackend === 'basic_text')) {
+    if (managed) {
+      throw new Error(
+        'Secure storage is unavailable for evaOS Agent managed access. ' +
+          'Enable OS keychain access and try again, or contact Electric Sheep support.'
+      )
+    }
+
     // Only downgrade to plain text when the user has explicitly opted in;
     // decryptDesktopSecret returns the raw value for any non-'safeStorage'
     // encoding, so this round-trips without any decrypt-side change.
@@ -196,10 +220,65 @@ function encryptDesktopSecret(value, safeStorageApi, options: { allowPlainText?:
     }
   } catch (error) {
     const detail = error instanceof Error && error.message ? ` (${error.message})` : ''
+
+    if (managed) {
+      throw new Error(
+        `Failed to encrypt evaOS Agent managed access for secure storage${detail}. ` +
+          'Enable OS keychain access and try again, or contact Electric Sheep support.'
+      )
+    }
+
     throw new Error(
       `Failed to encrypt the remote gateway token for secure storage${detail}. ` +
         'Set HERMES_DESKTOP_REMOTE_URL and HERMES_DESKTOP_REMOTE_TOKEN in your environment as a fallback.'
     )
+  }
+}
+
+/**
+ * Preserve ES17's eager safeStorage read, including managed-runtime startup.
+ *
+ * Electron 40 permits macOS reads before app readiness and caches its derived
+ * key. A JavaScript readiness gate changes that first-read ordering. Let the
+ * native API decide availability, as ES17 did; errors still fail closed and
+ * the managed runtime retains unreadable enrollment for a later retry.
+ */
+type SafeStorageReadFailure = 'not-ready' | 'unavailable' | 'invalid-ciphertext' | 'decrypt-failed' | 'unexpected'
+
+function decryptSafeStorageValue(
+  value,
+  safeStorageApi,
+  options: { platform?: string; appReady?: boolean; onFailure?: (category: SafeStorageReadFailure) => void } = {}
+) {
+  const raw = String(value || '')
+
+  if (!raw) {
+    return ''
+  }
+
+  try {
+    return safeStorageApi.decryptString(Buffer.from(raw, 'base64'))
+  } catch (error) {
+    // Compare only Electron's fixed messages. Never forward an exception,
+    // stack, ciphertext or decrypted value to diagnostics.
+    const message = error instanceof Error ? error.message : ''
+    const prefix = 'Error while decrypting the ciphertext provided to safeStorage.decryptString.'
+    const category: SafeStorageReadFailure =
+      message === 'safeStorage cannot be used before app is ready'
+        ? 'not-ready'
+        : message === `${prefix} Decryption is not available.`
+          ? 'unavailable'
+          : message === `${prefix} Ciphertext does not appear to be encrypted.`
+            ? 'invalid-ciphertext'
+            : message === prefix
+              ? 'decrypt-failed'
+              : 'unexpected'
+    try {
+      options.onFailure?.(category)
+    } catch {
+      // A failed diagnostic sink must not change fail-closed credential reads.
+    }
+    return ''
   }
 }
 
@@ -535,6 +614,7 @@ export {
   DATA_URL_READ_MAX_MAX_MB,
   DATA_URL_READ_MIN_MAX_MB,
   dataUrlReadMaxBytesFromMb,
+  decryptSafeStorageValue,
   DEFAULT_FETCH_TIMEOUT_MS,
   enableBasicPasswordStoreEncryption,
   encryptDesktopSecret,

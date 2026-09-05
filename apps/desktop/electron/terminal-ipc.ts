@@ -18,6 +18,8 @@ import { buildWindowsInteractiveCommand } from './windows-remote-lifecycle'
 
 export interface TerminalIpcDeps {
   isWindows: boolean
+  assertLocalMutationAllowed: (operation: string) => void
+  assertLocalTerminalAllowed: () => void
   findOnPath: (command: string) => null | string
   rememberLog: (line: string) => void
   activeSshTerminalTarget: (webContentsId: number) => unknown
@@ -33,6 +35,8 @@ export interface TerminalIpcApi {
 
 export function registerTerminalIpc({
   isWindows,
+  assertLocalMutationAllowed,
+  assertLocalTerminalAllowed,
   findOnPath,
   rememberLog,
   activeSshTerminalTarget,
@@ -285,6 +289,7 @@ export function registerTerminalIpc({
   }
 
   ipcMain.handle('hermes:terminal:start', async (event, payload = {}) => {
+    assertLocalTerminalAllowed()
     ensureNodePtySpawnHelper()
 
     const id = crypto.randomUUID()
@@ -356,6 +361,8 @@ export function registerTerminalIpc({
   })
 
   ipcMain.handle('hermes:terminal:write', (_event, id, data) => {
+    assertLocalMutationAllowed('Writing to local terminal processes')
+
     const sessionInfo = terminalSessions.get(String(id || ''))
 
     if (!sessionInfo) {
@@ -368,6 +375,8 @@ export function registerTerminalIpc({
   })
 
   ipcMain.handle('hermes:terminal:resize', (_event, id, size = {}) => {
+    assertLocalMutationAllowed('Controlling local terminal processes')
+
     const sessionInfo = terminalSessions.get(String(id || ''))
 
     if (!sessionInfo) {
@@ -391,7 +400,11 @@ export function registerTerminalIpc({
     return sessionInfo.sshScope !== undefined ? null : readProcessCwd(sessionInfo.pty.pid)
   })
 
-  ipcMain.handle('hermes:terminal:dispose', (_event, id) => disposeTerminalSession(String(id || '')))
+  ipcMain.handle('hermes:terminal:dispose', (_event, id) => {
+    assertLocalMutationAllowed('Controlling local terminal processes')
+
+    return disposeTerminalSession(String(id || ''))
+  })
 
   return { disposeTerminalSession, disposeTerminalSessionsForSshScope, disposeAllTerminalSessions }
 }

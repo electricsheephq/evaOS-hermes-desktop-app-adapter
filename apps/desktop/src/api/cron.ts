@@ -144,7 +144,7 @@ export function instantiateAutomationBlueprint(
   profile: string
 ): Promise<CronJob> {
   return hermesApi<CronJob>({
-    ...profileScoped(),
+    ...profileScoped(profile),
     ...connectionScoped(),
     path: `/api/cron/blueprints/instantiate?profile=${encodeURIComponent(profile)}`,
     method: 'POST',

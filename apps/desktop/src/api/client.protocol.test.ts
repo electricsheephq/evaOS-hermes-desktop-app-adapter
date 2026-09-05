@@ -47,7 +47,7 @@ describe('HermesGateway Desktop UI protocol contract', () => {
     vi.unstubAllGlobals()
   })
 
-  it.each(['session.create', 'session.resume', 'session.activate'])('adds protocol 2 to %s', async method => {
+  it.each(['session.create', 'session.resume', 'session.activate'])('adds protocol 3 to %s', async method => {
     const gateway = new HermesGateway()
     const connecting = gateway.connect('ws://gateway.invalid')
     const socket = FakeWebSocket.instances[0]
@@ -58,7 +58,7 @@ describe('HermesGateway Desktop UI protocol contract', () => {
     const request = socket.lastRequest()
 
     expect(request.params).toEqual({
-      desktop_ui_protocol: 2,
+      desktop_ui_protocol: 3,
       session_id: 'synthetic-session',
       source: 'desktop'
     })
