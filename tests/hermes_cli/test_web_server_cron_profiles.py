@@ -39,6 +39,70 @@ def _drain_queue(q):
             return values
 
 
+def test_managed_cron_profile_home_rejects_sibling_before_profile_lookup(tmp_path, monkeypatch):
+    """The flat managed process cannot route cron I/O to a sibling home."""
+    from hermes_cli import profiles
+    import os
+    import pwd
+
+    managed_root = tmp_path / "managed"
+    owner_home = managed_root / "main"
+    sibling_home = managed_root / "profiles" / "sibling"
+    shared_auth = managed_root / "shared-auth" / "auth.json"
+    owner_home.mkdir(parents=True)
+    sibling_home.mkdir(parents=True)
+    shared_auth.parent.mkdir(parents=True)
+    shared_auth.write_text("{}", encoding="utf-8")
+
+    monkeypatch.setenv("HERMES_HOME", str(owner_home))
+    monkeypatch.setenv("HERMES_SHARED_AUTH_FILE", str(shared_auth))
+    monkeypatch.setattr(os, "geteuid", lambda: 4242)
+    monkeypatch.setattr(pwd, "getpwuid", lambda _uid: type("Pw", (), {"pw_name": "hermes-main"})())
+    monkeypatch.setattr(
+        profiles,
+        "profile_exists",
+        lambda _name: (_ for _ in ()).throw(AssertionError("sibling lookup must be denied first")),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        _web_server_cron._cron_profile_home("sibling")
+
+    assert exc_info.value.status_code == 403
+    assert "not authorized" in str(exc_info.value.detail)
+
+
+def test_invalid_managed_cron_binding_fails_closed_before_profile_lookup(tmp_path, monkeypatch):
+    """A malformed service identity cannot fall back to ordinary profile routing."""
+    from hermes_cli import profiles
+    import os
+    import pwd
+
+    managed_root = tmp_path / "managed"
+    owner_home = managed_root / "main"
+    sibling_home = managed_root / "profiles" / "sibling"
+    shared_auth = managed_root / "shared-auth" / "auth.json"
+    owner_home.mkdir(parents=True)
+    sibling_home.mkdir(parents=True)
+    shared_auth.parent.mkdir(parents=True)
+    shared_auth.write_text("{}", encoding="utf-8")
+
+    monkeypatch.setenv("HERMES_HOME", str(owner_home))
+    monkeypatch.setenv("HERMES_SHARED_AUTH_FILE", str(shared_auth))
+    monkeypatch.setattr(os, "geteuid", lambda: 4242)
+    monkeypatch.setattr(pwd, "getpwuid", lambda _uid: type("Pw", (), {"pw_name": "wrong-user"})())
+    monkeypatch.setattr(
+        profiles,
+        "profile_exists",
+        lambda _name: (_ for _ in ()).throw(AssertionError("invalid binding must fail first")),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        _web_server_cron._cron_profile_home("sibling")
+
+    assert exc_info.value.status_code == 503
+    assert "not bound to a named profile" in str(exc_info.value.detail)
+
+
 
 
 def test_fire_cron_job_scopes_store_and_runtime_home_together(
