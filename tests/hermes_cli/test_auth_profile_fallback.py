@@ -395,6 +395,26 @@ def test_managed_shared_auth_rejects_world_permissions(profile_env, monkeypatch)
         read_credential_pool("openrouter")
 
 
+def test_managed_shared_auth_rejects_unapproved_owner(profile_env, monkeypatch):
+    from hermes_cli import auth as auth_mod
+
+    if os.name == "nt":
+        pytest.skip("POSIX owner validation")
+    shared = profile_env["global"] / "shared-auth" / "auth.json"
+    shared.parent.mkdir()
+    _write(shared, _make_auth_store(pool={"openrouter": [_pool_entry()]}))
+    _write(profile_env["profile"] / "auth.json", _make_auth_store(pool={}))
+    monkeypatch.setenv("HERMES_SHARED_AUTH_FILE", str(shared))
+    monkeypatch.setattr(
+        auth_mod,
+        "_managed_shared_auth_owner_is_authorized",
+        lambda owner_uid, gid: False,
+    )
+
+    with pytest.raises(RuntimeError, match="unsafe metadata"):
+        auth_mod.read_credential_pool("openrouter")
+
+
 def test_managed_shared_pool_does_not_override_local_provider(profile_env, monkeypatch):
     from hermes_cli.auth import read_credential_pool_with_source
     shared = profile_env["global"] / "shared-auth" / "auth.json"
@@ -406,6 +426,110 @@ def test_managed_shared_pool_does_not_override_local_provider(profile_env, monke
     entries, source_path = read_credential_pool_with_source("openrouter")
     assert [entry["id"] for entry in entries] == ["local-1"]
     assert source_path == profile_auth
+
+
+def test_managed_shared_pool_preserves_concurrent_process_updates(
+    profile_env, monkeypatch
+):
+    shared = profile_env["global"] / "shared-auth" / "auth.json"
+    shared.parent.mkdir()
+    _write(shared, _make_auth_store(pool={
+        "openrouter": [
+            _pool_entry(id="shared-a", access_token="token-a", priority=0),
+            _pool_entry(id="shared-b", access_token="token-b", priority=1),
+        ],
+    }))
+    profile_b = profile_env["global"] / "profiles" / "reviewer"
+    profile_b.mkdir(parents=True)
+    _write(profile_env["profile"] / "auth.json", _make_auth_store(pool={}))
+    _write(profile_b / "auth.json", _make_auth_store(pool={}))
+    monkeypatch.setenv("HERMES_SHARED_AUTH_FILE", str(shared))
+
+    context = multiprocessing.get_context("spawn")
+    ready_queue = context.Queue()
+    start_event = context.Event()
+    processes = [
+        context.Process(
+            target=_mark_shared_credential_in_process,
+            args=(
+                str(profile_home),
+                str(shared),
+                credential_id,
+                ready_queue,
+                start_event,
+            ),
+        )
+        for profile_home, credential_id in (
+            (profile_env["profile"], "shared-a"),
+            (profile_b, "shared-b"),
+        )
+    ]
+    for process in processes:
+        process.start()
+    assert {ready_queue.get(timeout=10) for _ in processes} == {
+        "shared-a",
+        "shared-b",
+    }
+    start_event.set()
+    for process in processes:
+        process.join(timeout=15)
+        assert process.exitcode == 0
+
+    persisted = json.loads(shared.read_text())["credential_pool"]["openrouter"]
+    assert {entry["id"] for entry in persisted} == {"shared-a", "shared-b"}
+    assert {entry.get("last_status") for entry in persisted} == {"exhausted"}
+    if os.name != "nt":
+        assert stat.S_IMODE(shared.stat().st_mode) == 0o660
+        assert stat.S_IMODE(shared.with_suffix(".lock").stat().st_mode) == 0o660
+        assert shared.stat().st_gid == shared.with_suffix(".lock").stat().st_gid
+
+
+def test_managed_profile_cannot_remove_shared_pool_or_resurrect_root_removal(
+    profile_env, monkeypatch
+):
+    from agent.credential_pool import load_pool
+    from hermes_cli.auth import write_credential_pool
+
+    shared = profile_env["global"] / "shared-auth" / "auth.json"
+    shared.parent.mkdir()
+    initial = [
+        _pool_entry(id="shared-a", access_token="token-a", priority=0),
+        _pool_entry(id="shared-b", access_token="token-b", priority=1),
+    ]
+    _write(shared, _make_auth_store(pool={"openrouter": initial}))
+    _write(profile_env["profile"] / "auth.json", _make_auth_store(pool={}))
+    monkeypatch.setenv("HERMES_SHARED_AUTH_FILE", str(shared))
+
+    removing_pool = load_pool("openrouter")
+    stale_pool = load_pool("openrouter")
+    with pytest.raises(
+        PermissionError,
+        match="managed shared credentials cannot be removed from a profile",
+    ):
+        removing_pool.remove_index(1)
+    assert {
+        entry["id"]
+        for entry in json.loads(shared.read_text())["credential_pool"]["openrouter"]
+    } == {"shared-a", "shared-b"}
+
+    # A root-owned action removes A and rotates B after both pools loaded. The
+    # stale status update must preserve this token and must not recreate A.
+    write_credential_pool(
+        "openrouter",
+        [_pool_entry(id="shared-b", access_token="token-b-rotated", priority=0)],
+        removed_ids=["shared-a"],
+        target_path=shared,
+    )
+    stale_pool.mark_exhausted_and_rotate(
+        status_code=429,
+        credential_id="shared-b",
+    )
+
+    persisted = json.loads(shared.read_text())["credential_pool"]["openrouter"]
+    assert [entry["id"] for entry in persisted] == ["shared-b"]
+    assert persisted[0]["access_token"] == "token-b-rotated"
+    assert persisted[0]["last_status"] == "exhausted"
+    assert [entry.id for entry in stale_pool.entries()] == ["shared-b"]
 
 
 def test_managed_shared_pool_sanitizes_disk_only_borrowed_secrets(profile_env, monkeypatch):
