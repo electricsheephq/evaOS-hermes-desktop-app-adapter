@@ -129,6 +129,39 @@ describe('composer model persistence scope', () => {
     expect(window.localStorage.getItem('hermes.desktop.composer.model.registry.local.default')).toBeNull()
   })
 
+  it('preserves predecessor composer keys when the new owner-scoped path writes and rebinds', () => {
+    const legacy = {
+      'hermes.desktop.composer.model': 'legacy-model',
+      'hermes.desktop.composer.provider': 'legacy-provider',
+      'hermes.desktop.composer.model-source': 'manual'
+    }
+
+    for (const [key, value] of Object.entries(legacy)) {
+      window.localStorage.setItem(key, value)
+    }
+
+    setComposerSelectionOwner('remote-a', 'worker')
+    setCurrentModel('owner-model')
+    setCurrentProvider('owner-provider')
+    setCurrentModelSource('default')
+    setConnection(null)
+    setComposerSelectionOwner('remote-a', 'worker')
+    expect($currentModel.get()).toBe('owner-model')
+    expect($currentProvider.get()).toBe('owner-provider')
+
+    // The predecessor reads these bare keys. New owner-scoped writes must
+    // neither convert nor remove them; the retained legacy reader uses the
+    // same path when the local primary is selected again.
+    for (const [key, value] of Object.entries(legacy)) {
+      expect(window.localStorage.getItem(key)).toBe(value)
+    }
+
+    setConnection(local)
+    expect($currentModel.get()).toBe('legacy-model')
+    expect($currentProvider.get()).toBe('legacy-provider')
+    expect(window.localStorage.getItem('hermes.desktop.composer.model.registry.remote-a.worker')).toBe('owner-model')
+  })
+
   it('uses the live registry owner when the connection descriptor is stale', () => {
     const remote = (profile: string) =>
       ({ baseUrl: 'https://aibox.example', connectionId: 'aibox', mode: 'remote', profile }) as never
