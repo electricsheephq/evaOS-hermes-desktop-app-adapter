@@ -1179,6 +1179,7 @@ def test_mcp2_snake_case_tool_schema_is_written_to_cache(monkeypatch):
     from tools.registry import ToolRegistry
 
     captured = {}
+    registrations = []
 
     def capture_cache(_name, _fingerprint, **kwargs):
         captured.update(kwargs)
@@ -1188,7 +1189,9 @@ def test_mcp2_snake_case_tool_schema_is_written_to_cache(monkeypatch):
     monkeypatch.setattr(
         registration_module,
         "_track_mcp_tool_server",
-        lambda _tool_name, _server_name: None,
+        lambda tool_name, server_name, registration_home: registrations.append(
+            (tool_name, server_name, registration_home)
+        ),
     )
     task = MCPServerTask("lease-schema-probe")
     task._tools = [
@@ -1207,6 +1210,7 @@ def test_mcp2_snake_case_tool_schema_is_written_to_cache(monkeypatch):
     )
 
     assert registered == ["mcp__lease_schema_probe__read_sheet"]
+    assert registrations == [(registered[0], task.name, task.registration_home)]
     assert captured["tools"][0]["inputSchema"] == task._tools[0].input_schema
 
 
