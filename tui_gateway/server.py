@@ -2031,16 +2031,16 @@ def _desktop_ui_emit(sid: str, event: str, payload: dict) -> bool:
     attachment = _desktop_ui_attachment_for_session(sid)
     if error := _desktop_ui_emitter_protocol_error(sid, event, attachment=attachment):
         return False
-    _emit_on_transport(event, sid, payload, attachment[2])
+    dispatched = _emit_on_transport(event, sid, payload, attachment[2]) is not False
     required, tool_name = _DESKTOP_UI_EVENT_REQUIREMENTS[event]
     _log_desktop_ui_lifecycle(
         sid,
         tool_name,
-        "dispatched",
+        "dispatched" if dispatched else "transport_unavailable",
         required_protocol=required,
         negotiated_protocol=attachment[1],
     )
-    return True
+    return dispatched
 
 
 def _gui_surface_toolsets(platform: str, desktop_ui_protocol=None) -> set[str]:

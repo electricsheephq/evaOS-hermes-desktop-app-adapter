@@ -42,6 +42,8 @@ Root port `2d7305b325` restores the existing package/bundle/update identity, exa
 
 Protocol implementation `baf71de5a2` and inventory `0dc645e676` are integrated; the per-action contract passed 9/9 at `d0e24b501f097146924458009f38c7a5e5f98cc7`. The #244 lifecycle/attachment port is integrated in `b4602dcee9` and `22980aa3b9`. Its focused `test_desktop_ui_protocol.py` run passed 29/29 at `866055459c` after an initial 26/29 exposed a final-emission denial result, a moved MCP registration seam and a legacy action-description expectation. This proves that focused synthetic contract, not every pairing or an installed renderer.
 
+PR #256's initial independent implementation review identified a narrower transport outcome defect at `bd268fb2265ddd530946ffabd3f050150a2dfcda`: final protocol checks succeeded, but a detached or closed transport's `False` result was discarded. Six new open/close/tip regressions failed against that source while the existing 29 tests passed. The correction propagates the rejected write, logs only `transport_unavailable` metadata, and retains fire-and-forget dispatch semantics. The same focused file then passed 36/36, including one accepted-owner write and payload-free logging controls. This is synthetic source proof; exact-head CI/review and installed delivery remain separate gates.
+
 | Port / exact integrated source | Defining modules | Focused execution receipt |
 |---|---|---|
 | Shared auth `866055459c`, `3faabd5255`, retained tests `ce751fc671` | `auth.py`, `auth_codex.py`, `credential_pool.py`, `secret_scope.py` | At `ce751fc671`: profile fallback 20/20 and file-mode/TOCTOU 12/12. Earlier at `866055459c`: shared Codex refresh 7/7; at `3faabd5255`: credential-pool write-through 14/14. |

@@ -1,5 +1,6 @@
 """Desktop UI capabilities are negotiated per attached client session."""
 
+import asyncio
 import io
 import json
 import logging
@@ -466,6 +467,100 @@ def test_fire_and_forget_rechecks_attachment_before_routing(monkeypatch):
 
     assert current.frames == []
     assert legacy.frames == []
+
+
+@pytest.mark.parametrize("attachment_state", ["detached", "closed"])
+@pytest.mark.parametrize("action", ["open", "close", "tip"])
+def test_fire_and_forget_reports_failed_transport_write(
+    monkeypatch, caplog, attachment_state, action,
+):
+    """A resumable session must not report delivery to a disconnected renderer."""
+    from tools.tip_tool import tip_tool
+    from tui_gateway.ws import WSTransport
+
+    sid = "synthetic-disconnected-owner"
+    loop = asyncio.new_event_loop()
+    transport = WSTransport(None, loop)
+    monkeypatch.setitem(server._sessions, sid, {
+        "source": "desktop",
+        "desktop_ui_protocol": 3,
+        "transport": transport,
+        "close_on_disconnect": False,
+    })
+    monkeypatch.setattr(server, "_schedule_ws_orphan_reap", lambda _sid: None)
+    monkeypatch.setattr(desktop_ui, "_emit", server._desktop_ui_emit)
+    monkeypatch.setattr(
+        desktop_ui, "_protocol_error", server._desktop_ui_emitter_protocol_error,
+    )
+    monkeypatch.setattr(
+        desktop_ui, "get_session_env",
+        lambda name, default="": sid if name == "HERMES_UI_SESSION_ID" else default,
+    )
+    monkeypatch.setattr(
+        server, "_block",
+        lambda *_args, **_kwargs: pytest.fail("fire-and-forget must not wait"),
+    )
+    try:
+        if attachment_state == "detached":
+            assert server._close_sessions_for_transport(transport) == (0, 1)
+            assert server._sessions[sid]["transport"] is server._detached_ws_transport
+        else:
+            transport.close()
+        with caplog.at_level(logging.DEBUG, logger=server.logger.name):
+            if action == "open":
+                raw = open_preview_tool("https://example.com")
+            elif action == "close":
+                raw = preview_close()
+            else:
+                raw = tip_tool("synthetic tip payload", "[data-tour=preview]")
+    finally:
+        transport.close()
+        loop.close()
+
+    result = json.loads(raw)
+    assert result.get("error")
+    assert not result.get("success")
+    logs = "\n".join(record.getMessage() for record in caplog.records)
+    assert logs.count("outcome=transport_unavailable") == 1
+    assert "outcome=dispatched" not in logs
+    for excluded in (sid, "example.com", "synthetic tip payload", "data-tour"):
+        assert excluded not in logs
+
+
+def test_fire_and_forget_retains_one_successful_owner_write(monkeypatch, caplog):
+    sid = "synthetic-connected-owner"
+    frames = []
+
+    class _AcceptingTransport:
+        def write(self, frame):
+            frames.append(frame)
+            return True
+
+    monkeypatch.setitem(server._sessions, sid, {
+        "source": "desktop",
+        "desktop_ui_protocol": 3,
+        "transport": _AcceptingTransport(),
+    })
+    monkeypatch.setattr(desktop_ui, "_emit", server._desktop_ui_emit)
+    monkeypatch.setattr(
+        desktop_ui, "_protocol_error", server._desktop_ui_emitter_protocol_error,
+    )
+    monkeypatch.setattr(
+        desktop_ui, "get_session_env",
+        lambda name, default="": sid if name == "HERMES_UI_SESSION_ID" else default,
+    )
+    with caplog.at_level(logging.DEBUG, logger=server.logger.name):
+        result = json.loads(open_preview_tool("https://example.com"))
+
+    assert result["success"] is True
+    assert result["status"] == "dispatched"
+    assert len(frames) == 1
+    assert frames[0]["params"]["type"] == "preview.open"
+    logs = "\n".join(record.getMessage() for record in caplog.records)
+    assert logs.count("outcome=dispatched") == 1
+    assert "outcome=transport_unavailable" not in logs
+    assert sid not in logs
+    assert "example.com" not in logs
 
 
 def test_compute_host_carries_and_rebinds_desktop_ui_protocol():
