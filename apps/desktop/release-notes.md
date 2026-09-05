@@ -1,3 +1,55 @@
+# evaOS Agent 2026.9.5-es.1 — candidate
+
+This paired update brings the Mac app and managed Hermes runtime onto the same
+reviewed upstream snapshot, while keeping existing accounts, profile homes,
+conversation stores, encrypted enrollment and the current update stream.
+Implementation and release verification are still in progress; this is not a
+published-release receipt.
+
+## Highlights
+
+- Catches up to pinned upstream main `f159e581c7afd22a5c94652c569e3859f1b994d2`,
+  including its module cleanup and Astra catalog/routing support. The pin does
+  not follow a moving branch. [Release scope](https://github.com/electricsheephq/evaOS-hermes-desktop-app-adapter/issues/252)
+- Extends the existing Desktop UI protocol to level 3, with action-aware Preview
+  tools and newer UI responders. Older clients remain limited to actions they
+  can answer. [Compatibility gate](https://github.com/electricsheephq/evaOS-hermes-desktop-app-adapter/issues/254)
+
+## Changes
+
+- Uses `desktop_preview` actions for open/read/close and `gui_tour` for tours;
+  retained aliases use the same protocol and session-owner checks.
+- Ports managed authentication, assigned routing, MCP leases, profile isolation,
+  media and update behavior into upstream's current modules.
+- Keeps the existing installer and persistent locations. Synthetic predecessor
+  read/append checks are required before any in-place internal update.
+
+## Fixes
+
+- Rejects unsupported GUI actions before emission or waiting, including after
+  attachment changes, so a newer runtime cannot leave an older Mac waiting for
+  a responder it does not have.
+- Preserves existing managed configuration on ordinary package updates instead
+  of deleting prior values during upstream default normalization.
+
+## Known Boundaries
+
+- Release, internal continuity and actual updater acceptance are pending.
+  Customer VM rollout and employee/fleet acceptance are separate gates.
+- Astra fixtures verify catalog/routing, not provider entitlement or a live
+  model response. Preview remains on the Mac; VM-local port forwarding and VM GUI
+  are not added.
+
+## Release Verification
+
+- Source and artifacts: pending exact merged source and immutable runtime/Mac assets.
+- Checks and installed proof: tracked in [#255](https://github.com/electricsheephq/evaOS-hermes-desktop-app-adapter/issues/255).
+- Rollback: current Mac `v2026.8.27-es.1` and the verified deployed r30.7 package,
+  with stores retained in place.
+- Architecture and evidence: [ADR](../../docs/architecture/r31-paired-pinned-main.md),
+  [managed-delta ledger](../../docs/r31-managed-delta.md) and
+  [release packet](../../docs/releases/r31-paired-release.md).
+
 # evaOS Agent 2026.8.27-es.1
 
 - Aligns the Desktop UI with the exact Hermes r30 upstream base, including Preview read/drive, Bot Mode, tours, MCP setup, and related renderer behavior.

@@ -1,6 +1,6 @@
 # r31.1 release and compatibility packet
 
-Status: implementation pending. Canonical release gate [#255](https://github.com/electricsheephq/evaOS-hermes-desktop-app-adapter/issues/255), epic #252 and milestone 12.
+Status: implementation in progress; source freeze, CI/review, artifacts and protected canaries pending. Canonical release gate [#255](https://github.com/electricsheephq/evaOS-hermes-desktop-app-adapter/issues/255), epic #252 and milestone 12.
 
 ## Identity set
 
