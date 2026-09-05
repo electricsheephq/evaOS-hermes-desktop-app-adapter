@@ -86,6 +86,7 @@ function makeHarness({ managed }) {
       }
     },
     primaryBackendIsRemote: () => false,
+    remoteReauthFailure: null,
     primaryProfileKey: () => {
       if (!managed) {
         throw new Error('unmanaged fixture stopped after migration')
