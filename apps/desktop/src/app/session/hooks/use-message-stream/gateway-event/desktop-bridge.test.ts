@@ -14,7 +14,10 @@ const mocks = vi.hoisted(() => {
     revealDesktopPane: vi.fn(),
     requestGatewayForAgent: vi.fn(async () => ({})),
     runTour: vi.fn(async () => ({ success: true })),
-    setMessages: vi.fn()
+    setMessages: vi.fn(),
+    showTip: vi.fn(),
+    tipsEnabled: vi.fn(() => true),
+    toursEnabled: vi.fn(() => true)
   }
 })
 
@@ -32,6 +35,8 @@ vi.mock('@/store/preview', () => ({
 }))
 vi.mock('@/store/reactions-local', () => ({ recordAgentReaction: mocks.recordAgentReaction }))
 vi.mock('@/store/session', () => ({ setMessages: mocks.setMessages }))
+vi.mock('@/store/tips', () => ({ $tipsEnabled: { get: mocks.tipsEnabled }, showTip: mocks.showTip }))
+vi.mock('@/store/tours', () => ({ $toursEnabled: { get: mocks.toursEnabled } }))
 
 import { handleDesktopBridgeEvent } from './desktop-bridge'
 import type { GatewayEventContext } from './types'
@@ -71,6 +76,8 @@ describe('desktop bridge source and foreground isolation', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mocks.previewSurface.owned = true
+    mocks.tipsEnabled.mockReturnValue(true)
+    mocks.toursEnabled.mockReturnValue(true)
   })
 
   it('answers a background preview read on its source without reading the foreground pane', async () => {
@@ -171,12 +178,10 @@ describe('desktop bridge source and foreground isolation', () => {
     await vi.waitFor(() => expect(mocks.requestGatewayForAgent).toHaveBeenCalledOnce())
 
     expect(readWindowBelow).not.toHaveBeenCalled()
-    expect(mocks.requestGatewayForAgent).toHaveBeenCalledWith(
-      'source-b',
-      'background-profile',
-      'window.read.respond',
-      { request_id: 'request-1', text: '' }
-    )
+    expect(mocks.requestGatewayForAgent).toHaveBeenCalledWith('source-b', 'background-profile', 'window.read.respond', {
+      request_id: 'request-1',
+      text: ''
+    })
   })
 
   it('discards a native window read when its session loses the foreground while IPC is pending', async () => {
@@ -192,12 +197,10 @@ describe('desktop bridge source and foreground isolation', () => {
     pending.resolve({ frontmost: null, platform: 'darwin', window: null })
 
     await vi.waitFor(() => expect(mocks.requestGatewayForAgent).toHaveBeenCalledOnce())
-    expect(mocks.requestGatewayForAgent).toHaveBeenCalledWith(
-      'source-b',
-      'background-profile',
-      'window.read.respond',
-      { request_id: 'request-1', text: '' }
-    )
+    expect(mocks.requestGatewayForAgent).toHaveBeenCalledWith('source-b', 'background-profile', 'window.read.respond', {
+      request_id: 'request-1',
+      text: ''
+    })
   })
 
   it('does not paint a tour after its session loses the foreground during lazy loading', async () => {
@@ -257,5 +260,40 @@ describe('desktop bridge source and foreground isolation', () => {
 
     expect(handleDesktopBridgeEvent(ctx)).toBe(true)
     expect(mocks.setMessages).toHaveBeenCalledOnce()
+  })
+
+  it('renders a protocol-3 tip only for the active session owner', () => {
+    const ctx = context('tip.show', true)
+    ctx.payload = { selector: '#preview', text: 'Public preview' } as GatewayEventContext['payload']
+
+    expect(handleDesktopBridgeEvent(ctx)).toBe(true)
+    expect(mocks.showTip).toHaveBeenCalledExactlyOnceWith({
+      side: 'top',
+      targets: ['#preview'],
+      text: 'Public preview',
+      title: undefined
+    })
+    expect(mocks.requestGatewayForAgent).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    [false, false],
+    [true, false]
+  ])('does not paint a tip from an inactive owner (%s, %s)', (active, source) => {
+    const ctx = context('tip.show', active, source)
+    ctx.payload = { selector: '#preview', text: 'Public preview' } as GatewayEventContext['payload']
+
+    expect(handleDesktopBridgeEvent(ctx)).toBe(true)
+    expect(mocks.showTip).not.toHaveBeenCalled()
+  })
+
+  it('respects disabled tips without emitting a response', () => {
+    mocks.tipsEnabled.mockReturnValue(false)
+    const ctx = context('tip.show', true)
+    ctx.payload = { selector: '#preview', text: 'Public preview' } as GatewayEventContext['payload']
+
+    expect(handleDesktopBridgeEvent(ctx)).toBe(true)
+    expect(mocks.showTip).not.toHaveBeenCalled()
+    expect(mocks.requestGatewayForAgent).not.toHaveBeenCalled()
   })
 })

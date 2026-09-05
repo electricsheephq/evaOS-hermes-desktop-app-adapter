@@ -56,7 +56,7 @@ declare global {
         ok: boolean
         limits: PoolLimits
       }>
-      getGatewayWsUrl: (profile?: null | string) => Promise<GatewayWsUrlResult>
+      getGatewayWsUrl: (profile?: null | string, endpointPath?: string) => Promise<GatewayWsUrlResult>
       // Open (or focus) a standalone OS window for a single chat session so
       // the user can work with multiple chats side by side. Returns ok:false
       // with an error code when the sessionId is empty/invalid. `watch` opens
@@ -252,6 +252,8 @@ declare global {
       readFileDataUrl: (filePath: string) => Promise<string>
       /** Remote non-image attach: higher dedicated cap than preview/Settings default. */
       readFileDataUrlForAttach?: (filePath: string) => Promise<string>
+      /** Main-process authenticated, seekable managed-remote audio/video URL. */
+      getMediaStreamUrl?: (filePath: string, profile?: null | string) => Promise<null | string>
       /** Settings → Chat: max size for local files loaded as data URLs (attach/preview). */
       dataUrlReadMax?: {
         get: () => Promise<{ defaultMaxMb: number; maxBytes: number; maxMb: number }>

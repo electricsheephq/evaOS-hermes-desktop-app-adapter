@@ -15214,8 +15214,8 @@ ipcMain.handle('hermes:pool-limits:set', async (_event, raw) => {
 
   return { ok: true, limits: next }
 })
-ipcMain.handle('hermes:gateway:ws-url', async (_event, profile) => {
-  return gatewayWsUrlIpcResult(() => freshGatewayWsUrl(profile))
+ipcMain.handle('hermes:gateway:ws-url', async (_event, profile, endpointPath) => {
+  return gatewayWsUrlIpcResult(() => freshGatewayWsUrl(profile, endpointPath))
 })
 ipcMain.handle('hermes:window:openSession', async (_event, sessionId, opts) => {
   if (typeof sessionId !== 'string' || !sessionId.trim()) {
