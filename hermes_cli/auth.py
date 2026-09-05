@@ -78,9 +78,11 @@ from hermes_cli.auth_xai import (  # noqa: F401  re-exported
     _xai_validate_inference_base_url, refresh_xai_oauth_pure, resolve_xai_oauth_runtime_credentials)
 from hermes_cli.auth_codex import (  # noqa: F401  re-exported
     _codex_access_token_is_expiring, _codex_device_code_login, _codex_http_client,
-    _codex_pool_rate_limit_status, _codex_quota_probe_cache, _codex_usage_probe_url,
+    _codex_auth_store_transaction, _codex_pool_rate_limit_status, _codex_pool_store_transaction,
+    _codex_quota_probe_cache, _codex_usage_probe_url,
     _import_codex_cli_tokens, _is_codex_rate_limit_shaped, _login_openai_codex,
-    _probe_codex_quota_restored, _read_codex_tokens, _refresh_codex_auth_tokens, _save_codex_tokens,
+    _probe_codex_quota_restored, _read_codex_pool_entries, _read_codex_tokens,
+    _refresh_codex_auth_tokens, _save_codex_tokens, _validated_codex_token_state,
     clear_codex_pool_quota_cooldowns, refresh_codex_oauth_pure, resolve_codex_runtime_credentials)
 from hermes_cli.auth_spotify import (  # noqa: F401  re-exported
     _refresh_spotify_oauth_state, get_spotify_auth_status, login_spotify_command,
@@ -107,6 +109,8 @@ from hermes_cli.auth_constants import (  # noqa: F401  re-exported
     ACTUAL_LOCAL_NOAUTH_PLACEHOLDER, CODEX_RATE_LIMITED_CODE, AuthError, _nous_err, httpx)
 
 logger = logging.getLogger(__name__)
+
+_MANAGED_SHARED_AUTH_MODE = stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IWGRP
 
 try:
     import fcntl
@@ -452,24 +456,48 @@ def _auth_file_path() -> Path:
 
 
 def _global_auth_file_path() -> Optional[Path]:
-    """Global-root auth.json in profile mode; None when profile and global root are the same dir.
-
-    Read-only fallback path, so no pytest seat belt here (it lives on ``_auth_file_path()``)."""
+    """Global-root auth.json in profile mode, or the explicit managed source."""
+    shared_override = os.getenv("HERMES_SHARED_AUTH_FILE", "").strip()
+    if shared_override:
+        shared_path = Path(shared_override).expanduser()
+        if not shared_path.is_absolute():
+            raise RuntimeError("HERMES_SHARED_AUTH_FILE must be an absolute path")
+        try:
+            shared_stat = shared_path.lstat()
+        except OSError as exc:
+            raise RuntimeError("configured shared auth file is unavailable") from exc
+        if shared_path.is_symlink() or not stat.S_ISREG(shared_stat.st_mode):
+            raise RuntimeError(
+                "configured shared auth file must be a regular no-follow file"
+            )
+        return shared_path
     try:
         from hermes_constants import get_default_hermes_root
         global_root = get_default_hermes_root()
     except Exception:
         return None
-    return None if _same_path(get_hermes_home(), global_root) else global_root / "auth.json"
+    profile_home = get_hermes_home()
+    try:
+        if profile_home.resolve(strict=False) == global_root.resolve(strict=False):
+            return None
+    except Exception:
+        if profile_home == global_root:
+            return None
+    return global_root / "auth.json"
 
 
 def _load_global_auth_store() -> Dict[str, Any]:
-    """Load the global-root auth store (read-only fallback, mtime-memoised); ``{}`` when absent or
-    unreadable — a malformed global store must never break profile reads."""
+    """Load global fallback; managed shared auth is fail-closed."""
     global _global_auth_store_cache
+    shared_managed = bool(os.getenv("HERMES_SHARED_AUTH_FILE", "").strip())
     global_path = _global_auth_file_path()
-    if global_path is None or not global_path.exists():
+    if global_path is None:
         _global_auth_store_cache = None
+        return {}
+    if not global_path.exists():
+        _global_auth_store_cache = None
+        if shared_managed:
+            raise RuntimeError("configured shared auth file is unavailable")
         return {}
     try:
         cache_key: Optional[Tuple[str, int]] = (
@@ -488,8 +516,10 @@ def _load_global_auth_store() -> Dict[str, Any]:
         except Exception:
             pass
     try:
-        store = _load_auth_store(global_path)
+        store = _load_auth_store(global_path, fail_closed=shared_managed)
     except Exception:
+        if shared_managed:
+            raise
         _global_auth_store_cache = None
         return {}
     if cache_key is not None:
@@ -506,6 +536,172 @@ def _same_path(left: Path, right: Path) -> bool:
         return left.resolve(strict=False) == right.resolve(strict=False)
     except Exception:
         return left == right
+
+
+def _managed_shared_auth_gid(auth_path: Path) -> Optional[int]:
+    shared_override = os.getenv("HERMES_SHARED_AUTH_FILE", "").strip()
+    if not shared_override:
+        return None
+    shared_path = Path(shared_override).expanduser()
+    if not shared_path.is_absolute() or not _same_path(auth_path, shared_path):
+        return None
+    try:
+        shared_stat = shared_path.lstat()
+    except OSError as exc:
+        raise RuntimeError("configured shared auth file is unavailable") from exc
+    if shared_path.is_symlink() or not stat.S_ISREG(shared_stat.st_mode):
+        raise RuntimeError("configured shared auth file must be a regular no-follow file")
+    if not _managed_shared_auth_metadata_is_safe(shared_stat):
+        raise RuntimeError("configured shared auth file has unsafe metadata")
+    return shared_stat.st_gid
+
+
+def _managed_shared_auth_owner_is_authorized(owner_uid: int, gid: int) -> bool:
+    """Trust root or a user in the managed shared-auth group."""
+    if owner_uid == 0:
+        return True
+    try:
+        import grp
+        import pwd
+
+        owner = pwd.getpwuid(owner_uid)
+        group = grp.getgrgid(gid)
+    except (ImportError, KeyError, OSError):
+        return False
+    return owner.pw_gid == gid or owner.pw_name in group.gr_mem
+
+
+def _managed_shared_auth_metadata_is_safe(auth_stat: os.stat_result) -> bool:
+    return (
+        stat.S_ISREG(auth_stat.st_mode)
+        and stat.S_IMODE(auth_stat.st_mode) == _MANAGED_SHARED_AUTH_MODE
+        and _managed_shared_auth_owner_is_authorized(auth_stat.st_uid, auth_stat.st_gid)
+    )
+
+
+def _apply_managed_auth_fd_metadata(fd: int, gid: int) -> None:
+    try:
+        os.fchmod(fd, _MANAGED_SHARED_AUTH_MODE)
+        if hasattr(os, "fchown"):
+            os.fchown(fd, -1, gid)
+    except OSError as exc:
+        raise RuntimeError("could not preserve managed shared auth file group") from exc
+
+
+def _open_managed_auth_read_fd(auth_file: Path, gid: int) -> int:
+    fd = os.open(str(auth_file), os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    try:
+        auth_stat = os.fstat(fd)
+        if not _managed_shared_auth_metadata_is_safe(auth_stat) or auth_stat.st_gid != gid:
+            raise RuntimeError("managed auth store has unsafe metadata")
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
+
+
+def _read_managed_auth_store(auth_file: Path, gid: int) -> Dict[str, Any]:
+    fd = _open_managed_auth_read_fd(auth_file, gid)
+    try:
+        with os.fdopen(fd, "r", encoding="utf-8-sig") as handle:
+            fd = -1
+            return json.load(handle)
+    finally:
+        if fd >= 0:
+            os.close(fd)
+
+
+def _apply_managed_auth_path_metadata(path: Path, gid: int) -> None:
+    try:
+        fd = os.open(str(path), os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    except OSError as exc:
+        raise RuntimeError("could not secure managed shared auth file") from exc
+    try:
+        _apply_managed_auth_fd_metadata(fd, gid)
+    finally:
+        os.close(fd)
+
+
+def _prepare_managed_lock_file(lock_path: Path, gid: int) -> int:
+    flags = os.O_RDWR | getattr(os, "O_NOFOLLOW", 0)
+    tmp_path = lock_path.with_name(
+        f"{lock_path.name}.tmp.{os.getpid()}.{uuid.uuid4().hex}"
+    )
+    tmp_fd = -1
+    try:
+        tmp_fd = os.open(str(tmp_path), flags | os.O_CREAT | os.O_EXCL, _MANAGED_SHARED_AUTH_MODE)
+        _apply_managed_auth_fd_metadata(tmp_fd, gid)
+        try:
+            os.link(tmp_path, lock_path, follow_symlinks=False)
+        except FileExistsError:
+            pass
+    finally:
+        if tmp_fd >= 0:
+            os.close(tmp_fd)
+        try:
+            tmp_path.unlink()
+        except FileNotFoundError:
+            pass
+
+    fd = os.open(str(lock_path), flags)
+    try:
+        lock_stat = os.fstat(fd)
+        if (
+            not stat.S_ISREG(lock_stat.st_mode)
+            or lock_stat.st_gid != gid
+            or stat.S_IMODE(lock_stat.st_mode) != _MANAGED_SHARED_AUTH_MODE
+            or not _managed_shared_auth_owner_is_authorized(lock_stat.st_uid, gid)
+        ):
+            raise RuntimeError("existing managed shared auth lock has unsafe metadata")
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
+
+
+def _copy_managed_auth_artifact(auth_file: Path, corrupt_path: Path, gid: int) -> None:
+    try:
+        corrupt_stat = corrupt_path.lstat()
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        raise RuntimeError("could not inspect managed auth corruption copy") from exc
+    else:
+        if corrupt_path.is_symlink() or not stat.S_ISREG(corrupt_stat.st_mode):
+            raise RuntimeError("managed auth corruption copy must be a regular no-follow file")
+    tmp_path = corrupt_path.with_name(
+        f"{corrupt_path.name}.tmp.{os.getpid()}.{uuid.uuid4().hex}"
+    )
+    fd = -1
+    source_fd = -1
+    try:
+        try:
+            source_fd = os.open(str(auth_file), os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        except OSError as exc:
+            raise RuntimeError("managed auth corruption source is unsafe") from exc
+        source_stat = os.fstat(source_fd)
+        if not stat.S_ISREG(source_stat.st_mode) or source_stat.st_gid != gid:
+            raise RuntimeError("managed auth corruption source is unsafe")
+        fd = os.open(str(tmp_path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, _MANAGED_SHARED_AUTH_MODE)
+        _apply_managed_auth_fd_metadata(fd, gid)
+        with os.fdopen(source_fd, "rb") as source, os.fdopen(fd, "wb") as target:
+            source_fd = -1
+            fd = -1
+            shutil.copyfileobj(source, target)
+            target.flush()
+            os.fsync(target.fileno())
+        os.replace(tmp_path, corrupt_path)
+        _apply_managed_auth_path_metadata(corrupt_path, gid)
+    finally:
+        if source_fd >= 0:
+            os.close(source_fd)
+        if fd >= 0:
+            os.close(fd)
+        try:
+            if tmp_path.exists():
+                tmp_path.unlink()
+        except OSError:
+            pass
 
 
 def _is_same_auth_store(left: Path, right: Path) -> bool:
@@ -549,12 +745,14 @@ def _kernel_lock(lock_file: Any, acquire: bool) -> None:
 
 @contextmanager
 def _file_lock(
-    lock_path: Path, holder: threading.local, timeout_seconds: float, timeout_message: str):
-    """Cross-process advisory flock helper, reentrant per-thread via ``holder.depth``.
-
-    Falls back to a depth-only guard when neither ``fcntl`` nor ``msvcrt`` is available. Callers
-    supply their own ``threading.local`` so independent locks (profile store vs global root vs the
-    shared Nous store) track reentrancy separately."""
+    lock_path: Path,
+    holder: threading.local,
+    timeout_seconds: float,
+    timeout_message: str,
+    *,
+    artifact_gid: Optional[int] = None,
+):
+    """Cross-process advisory flock helper with managed inode validation."""
     if getattr(holder, "depth", 0) > 0:
         holder.depth += 1
         try:
@@ -564,53 +762,85 @@ def _file_lock(
         return
 
     lock_path.parent.mkdir(parents=True, exist_ok=True)
-    with ExitStack() as stack:
-        lock_file = None
-        if fcntl is not None or msvcrt is not None:
-            # msvcrt.locking needs a non-empty file with the pointer at 0. This convenience write can
-            # race another holder's byte-range lock and raise PermissionError (reproduced with 20
-            # concurrent processes on Windows); losing the race just means the file already has
-            # content, so swallow it.
-            if msvcrt and (not lock_path.exists() or lock_path.stat().st_size == 0):
-                try:
-                    lock_path.write_text(" ", encoding="utf-8")
-                except (OSError, PermissionError):
-                    pass
-            lock_file = stack.enter_context(lock_path.open("r+" if msvcrt else "a+", encoding="utf-8"))
-            deadline = time.monotonic() + max(1.0, timeout_seconds)
-            while True:
-                try:
-                    _kernel_lock(lock_file, True)
-                    break
-                except (BlockingIOError, OSError, PermissionError):
-                    if time.monotonic() >= deadline:
-                        raise TimeoutError(timeout_message)
-                    time.sleep(0.05)
-
+    managed_lock_fd = -1
+    if artifact_gid is not None:
+        managed_lock_fd = _prepare_managed_lock_file(lock_path, artifact_gid)
+    if fcntl is None and msvcrt is None:
+        if managed_lock_fd >= 0:
+            os.close(managed_lock_fd)
         holder.depth = 1
         try:
             yield
         finally:
             holder.depth = 0
-            if lock_file is not None:
+        return
+    if managed_lock_fd >= 0:
+        lock_file = os.fdopen(managed_lock_fd, "r+" if msvcrt else "a+", encoding="utf-8")
+        managed_lock_fd = -1
+    else:
+        if msvcrt and (not lock_path.exists() or lock_path.stat().st_size == 0):
+            lock_path.write_text(" ", encoding="utf-8")
+        lock_file = lock_path.open("r+" if msvcrt else "a+", encoding="utf-8")
+    try:
+        with lock_file:
+            if msvcrt and lock_file.tell() == 0:
+                lock_file.write(" ")
+                lock_file.flush()
+                lock_file.seek(0)
+            deadline = time.monotonic() + max(1.0, timeout_seconds)
+            while True:
                 try:
-                    _kernel_lock(lock_file, False)
-                except (OSError, IOError):
-                    pass
+                    if fcntl:
+                        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    else:
+                        lock_file.seek(0)
+                        msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
+                    break
+                except (BlockingIOError, OSError, PermissionError):
+                    if time.monotonic() >= deadline:
+                        raise TimeoutError(timeout_message)
+                    time.sleep(0.05)
+            holder.depth = 1
+            try:
+                yield
+            finally:
+                holder.depth = 0
+                if fcntl:
+                    try:
+                        fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+                    except (OSError, IOError):
+                        pass
+                elif msvcrt:
+                    try:
+                        lock_file.seek(0)
+                        msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+                    except (OSError, IOError):
+                        pass
+    finally:
+        if managed_lock_fd >= 0:
+            os.close(managed_lock_fd)
 
 
 @contextmanager
 def _auth_store_lock(
-    timeout_seconds: float = AUTH_LOCK_TIMEOUT_SECONDS, *, target_path: Optional[Path] = None):
+    timeout_seconds: float = AUTH_LOCK_TIMEOUT_SECONDS,
+    *,
+    target_path: Optional[Path] = None,
+):
     """Cross-process advisory lock for one auth.json read/write transaction.
 
     ``target_path`` is required for profile-to-global write-throughs: each path has its own
     reentrancy tracker and kernel lock. Lock ordering invariant: ``_auth_store_lock`` FIRST (outer),
     ``_nous_shared_store_lock`` SECOND (inner), else deadlock against a concurrent shared import."""
     auth_path = target_path if target_path is not None else _auth_file_path()
+    managed_gid = _managed_shared_auth_gid(auth_path)
     with _file_lock(
-        auth_path.with_suffix(".lock"), _auth_lock_holder_for(auth_path), timeout_seconds,
-        "Timed out waiting for auth store lock"):
+        auth_path.with_suffix(".lock"),
+        _auth_lock_holder_for(auth_path),
+        timeout_seconds,
+        "Timed out waiting for auth store lock",
+        artifact_gid=managed_gid,
+    ):
         yield
 
 
@@ -618,12 +848,24 @@ def _empty_auth_store() -> Dict[str, Any]:
     return {"version": AUTH_STORE_VERSION, "providers": {}}
 
 
-def _load_auth_store(auth_file: Optional[Path] = None) -> Dict[str, Any]:
+def _load_auth_store(
+    auth_file: Optional[Path] = None,
+    *,
+    fail_closed: bool = False,
+) -> Dict[str, Any]:
     auth_file = auth_file or _auth_file_path()
+    managed_gid = _managed_shared_auth_gid(auth_file)
+    fail_closed = fail_closed or managed_gid is not None
     if not auth_file.exists():
+        if fail_closed:
+            raise RuntimeError(f"managed auth store is unavailable: {auth_file}")
         return _empty_auth_store()
     try:
-        raw = json.loads(auth_file.read_text(encoding="utf-8-sig"))
+        raw = (
+            json.loads(auth_file.read_text(encoding="utf-8-sig"))
+            if managed_gid is None
+            else _read_managed_auth_store(auth_file, managed_gid)
+        )
     except OSError:
         # Exists but unreadable (EMFILE, EACCES, EIO, stalled mount): contents are not bad, and this
         # module read-modify-writes everywhere, so an empty store here is one _save_auth_store()
@@ -638,12 +880,17 @@ def _load_auth_store(auth_file: Optional[Path] = None) -> Dict[str, Any]:
         # advertise a backup that was not written.
         corrupt_path = auth_file.with_suffix(".json.corrupt")
         try:
-            shutil.copy2(auth_file, corrupt_path)
+            if managed_gid is None:
+                shutil.copy2(auth_file, corrupt_path)
+            else:
+                _copy_managed_auth_artifact(auth_file, corrupt_path, managed_gid)
             preserved = True
         except Exception:
             preserved = False
             logger.debug("auth: could not preserve a copy of the corrupt store at %s", corrupt_path,
                          exc_info=True)
+        if fail_closed:
+            raise RuntimeError(f"managed auth store is corrupt: {auth_file}") from exc
         logger.warning(
             "auth: failed to parse %s (%s), starting with empty store. %s %s",
             auth_file, exc,
@@ -663,6 +910,8 @@ def _load_auth_store(auth_file: Optional[Path] = None) -> Dict[str, Any]:
         providers = {"nous": systems["nous_portal"]} if "nous_portal" in systems else {}
         return {**_empty_auth_store(), "providers": providers,
                 "active_provider": "nous" if providers else None}
+    if fail_closed:
+        raise RuntimeError(f"managed auth store has an invalid shape: {auth_file}")
     return _empty_auth_store()
 
 
@@ -706,16 +955,57 @@ def _save_auth_store(auth_store: Dict[str, Any], target_path: Optional[Path] = N
     """Atomically persist *auth_store* (0o600, parent tightened to 0o700) to the active store, or to
     an explicit *target_path* (e.g. the global-root write-through for rotating xAI OAuth grants)."""
     auth_file = target_path if target_path is not None else _auth_file_path()
-    # Tighten parent dir to 0o700 so siblings can't traverse to creds. No-op on Windows (POSIX mode bits not
-    # enforced); ignore failures. secure_parent_dir refuses to chmod /, top-level dirs, or the hermes-agent
-    # install tree (#25821, #93050).
+    managed_gid = _managed_shared_auth_gid(auth_file)
+    if managed_gid is not None and not auth_file.exists():
+        raise RuntimeError(f"managed auth store is unavailable: {auth_file}")
+    # Tighten parent dir to 0o700 for legacy stores. Managed shared auth uses
+    # its provisioned group metadata instead.
     auth_store["version"] = AUTH_STORE_VERSION
     auth_store["updated_at"] = datetime.now(timezone.utc).isoformat()
-    _write_private_file_atomic(auth_file, json.dumps(auth_store, indent=2) + "\n", fsync_dir=True)
-    try:
-        auth_file.chmod(stat.S_IRUSR | stat.S_IWUSR)
-    except OSError:
-        pass
+    if managed_gid is None:
+        _write_private_file_atomic(auth_file, json.dumps(auth_store, indent=2) + "\n", fsync_dir=True)
+    else:
+        auth_file.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = auth_file.with_name(
+            f"{auth_file.name}.tmp.{os.getpid()}.{uuid.uuid4().hex}"
+        )
+        fd = -1
+        try:
+            fd = os.open(
+                str(tmp_path),
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                _MANAGED_SHARED_AUTH_MODE,
+            )
+            _apply_managed_auth_fd_metadata(fd, managed_gid)
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                fd = -1
+                handle.write(json.dumps(auth_store, indent=2) + "\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(tmp_path, auth_file)
+            _apply_managed_auth_path_metadata(auth_file, managed_gid)
+            try:
+                dir_fd = os.open(str(auth_file.parent), os.O_RDONLY)
+            except OSError:
+                dir_fd = None
+            if dir_fd is not None:
+                try:
+                    os.fsync(dir_fd)
+                finally:
+                    os.close(dir_fd)
+        finally:
+            if fd >= 0:
+                os.close(fd)
+            try:
+                if tmp_path.exists():
+                    tmp_path.unlink()
+            except OSError:
+                pass
+    if managed_gid is None:
+        try:
+            auth_file.chmod(stat.S_IRUSR | stat.S_IWUSR)
+        except OSError:
+            pass
     return auth_file
 
 
@@ -792,11 +1082,16 @@ def _save_active_provider_state(provider_id: str, state: Dict[str, Any]) -> Path
 
 
 def _persist_provider_state_to_store(
-    provider_id: str, state: Dict[str, Any], target_path: Path, *, set_active: bool = False,
+    provider_id: str,
+    state: Dict[str, Any],
+    target_path: Path,
+    *,
+    set_active: bool = False,
+    fail_closed: bool = False,
 ) -> Path:
     """Merge one provider into a specific auth store under that store's lock."""
     with _auth_store_lock(target_path=target_path):
-        auth_store = _load_auth_store(target_path)
+        auth_store = _load_auth_store(target_path, fail_closed=fail_closed)
         _store_provider_state(auth_store, provider_id, dict(state), set_active=set_active)
         return _save_auth_store(auth_store, target_path=target_path)
 
@@ -850,13 +1145,15 @@ def is_runtime_provider_routable(provider_id: str) -> bool:
     return True
 
 
-def read_credential_pool(provider_id: Optional[str] = None) -> Dict[str, Any]:
-    """Return the persisted credential pool, or one provider slice.
-
-    In profile mode the global-root ``auth.json`` is a read-only fallback applied per provider ONLY
-    when the profile has zero entries for it (``hermes auth add`` in the profile shadows global)."""
+def read_credential_pool_with_source(
+    provider_id: Optional[str] = None,
+) -> Tuple[Any, Path]:
+    """Return credential-pool data and its persistence authority."""
+    active_path = _auth_file_path()
+    managed_shared = bool(os.getenv("HERMES_SHARED_AUTH_FILE", "").strip())
     pool = _load_auth_store().get("credential_pool")
     pool = pool if isinstance(pool, dict) else {}
+    global_path = _global_auth_file_path()
     global_pool = _load_global_auth_store().get("credential_pool")
     global_pool = global_pool if isinstance(global_pool, dict) else {}
 
@@ -868,13 +1165,24 @@ def read_credential_pool(provider_id: Optional[str] = None) -> Dict[str, Any]:
                 continue
             if not (isinstance(existing, list) and existing):  # profile wins when it has ANY entries
                 merged[gp_key] = list(gp_entries)
-        return merged
+        return merged, active_path
 
     provider_entries = pool.get(provider_id)
     if isinstance(provider_entries, list) and provider_entries:
-        return list(provider_entries)
+        return list(provider_entries), active_path
     global_entries = global_pool.get(provider_id)
-    return list(global_entries) if isinstance(global_entries, list) else []
+    if isinstance(global_entries, list):
+        source_path = (
+            global_path if managed_shared and global_path is not None else active_path
+        )
+        return list(global_entries), source_path
+    return [], active_path
+
+
+def read_credential_pool(provider_id: Optional[str] = None) -> Dict[str, Any]:
+    """Return the persisted credential pool, or one provider slice."""
+    data, _source_path = read_credential_pool_with_source(provider_id)
+    return data
 
 
 _POOL_STATUS_FIELDS = (
@@ -924,16 +1232,29 @@ def _entry_ids(entries: Iterable[Any]) -> Dict[str, Dict[str, Any]]:
 
 
 def write_credential_pool(
-    provider_id: str, entries: List[Dict[str, Any]], *, removed_ids: Optional[Iterable[str]] = None,
+    provider_id: str,
+    entries: List[Dict[str, Any]],
+    *,
+    removed_ids: Optional[Iterable[str]] = None,
+    target_path: Optional[Path] = None,
+    base_entries: Optional[Iterable[Dict[str, Any]]] = None,
 ) -> Path:
     """Persist one provider's credential pool under auth.json.
 
     Final disk-boundary sanitizer for borrowed credentials (callers may pass raw dicts). Entries on
-    disk but missing from *entries* (added concurrently) are merged back unless in *removed_ids*,
-    so a rotation/exhaustion rewrite never drops a concurrent credential."""
+    disk but missing from *entries* (added concurrently) are merged back unless in *removed_ids*.
+    Managed shared callers may provide the pre-mutation ``base_entries`` for a three-way merge.
+    """
     removed = {rid for rid in (removed_ids or ()) if rid}
-    with _auth_store_lock():
-        auth_store = _load_auth_store()
+    active_path = _auth_file_path()
+    persistence_path = target_path or active_path
+    shared_path = _global_auth_file_path()
+    managed_shared = bool(os.getenv("HERMES_SHARED_AUTH_FILE", "").strip())
+    strict_shared = bool(
+        managed_shared and shared_path is not None and _same_path(persistence_path, shared_path)
+    )
+    with _auth_store_lock(target_path=persistence_path):
+        auth_store = _load_auth_store(persistence_path, fail_closed=strict_shared)
         pool = _store_section(auth_store, "credential_pool")
         sanitized = [
             sanitize_borrowed_credential_payload(e, provider_id) if isinstance(e, dict) else e
@@ -942,16 +1263,68 @@ def write_credential_pool(
         existing_list = existing_list if isinstance(existing_list, list) else []
         existing_by_id = _entry_ids(existing_list)
         new_ids = set(_entry_ids(sanitized))
-        merged: List[Dict[str, Any]] = [
-            _merge_disk_cooldown_state(e, existing_by_id.get(e.get("id")), provider_id)
-            if isinstance(e, dict) else e
-            for e in sanitized]
+        if base_entries is None:
+            merged: List[Dict[str, Any]] = [
+                _merge_disk_cooldown_state(e, existing_by_id.get(e.get("id")), provider_id)
+                if isinstance(e, dict) else e
+                for e in sanitized
+            ]
+        else:
+            sanitized_base_entries = [
+                sanitize_borrowed_credential_payload(entry, provider_id)
+                for entry in base_entries
+                if isinstance(entry, dict)
+            ]
+            base_by_id = {
+                entry.get("id"): entry for entry in sanitized_base_entries if entry.get("id")
+            }
+            merged = []
+            missing = object()
+
+            def _equivalent(left: Any, right: Any) -> bool:
+                if left is missing:
+                    return right is missing or right is None
+                if right is missing:
+                    return left is None
+                return left == right
+
+            for entry in sanitized:
+                if not isinstance(entry, dict):
+                    merged.append(entry)
+                    continue
+                entry_id = entry.get("id")
+                if not entry_id or entry_id in removed:
+                    if not entry_id:
+                        merged.append(entry)
+                    continue
+                base_entry = base_by_id.get(entry_id)
+                disk_entry = existing_by_id.get(entry_id)
+                if base_entry is not None and disk_entry is None:
+                    continue
+                if base_entry is None:
+                    candidate = dict(disk_entry) if disk_entry is not None else dict(entry)
+                else:
+                    candidate = dict(disk_entry)
+                    for key in sorted(set(base_entry) | set(entry)):
+                        base_value = base_entry.get(key, missing)
+                        incoming_value = entry.get(key, missing)
+                        if _equivalent(incoming_value, base_value):
+                            continue
+                        disk_value = disk_entry.get(key, missing)
+                        if not _equivalent(disk_value, base_value):
+                            continue
+                        if incoming_value is missing:
+                            candidate.pop(key, None)
+                        else:
+                            candidate[key] = incoming_value
+                    candidate = _merge_disk_cooldown_state(candidate, disk_entry, provider_id)
+                merged.append(sanitize_borrowed_credential_payload(candidate, provider_id))
         for disk_entry in existing_list:
             disk_id = disk_entry.get("id") if isinstance(disk_entry, dict) else None
             if disk_id and disk_id not in new_ids and disk_id not in removed:
                 merged.append(sanitize_borrowed_credential_payload(disk_entry, provider_id))
         pool[provider_id] = merged
-        return _save_auth_store(auth_store)
+        return _save_auth_store(auth_store, target_path=persistence_path)
 
 
 def _suppressed_source_list(suppressed: Dict[str, Any], provider_id: str) -> Optional[List[str]]:
