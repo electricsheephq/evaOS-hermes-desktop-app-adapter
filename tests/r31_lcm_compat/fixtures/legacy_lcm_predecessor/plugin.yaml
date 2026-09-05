@@ -1,0 +1,5 @@
+name: legacy-lcm-predecessor
+version: "0.20.0-predecessor"
+description: Frozen predecessor fixture for the native plugin compatibility gate
+provides_hooks:
+  - on_session_start
