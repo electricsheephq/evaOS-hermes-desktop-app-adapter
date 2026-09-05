@@ -12,6 +12,8 @@ This ledger maps retained behavior into pinned upstream modules. It supplements 
 
 Fork main is not the complete released runtime overlay. Compare runtime against its own released source and Desktop against its own released source. KEEP/PORT below are design dispositions, not completed parity evidence.
 
+The live Git merge base of released fork main and the pinned target is `4075c8fd5ade673c93f757903b003ddc52603577`. The historical 8.27 ledger contains a different, unresolvable common-ancestor string; that ledger is preserved as historical evidence, not used to select source. Runtime replay is the exact `5fc308a…` → `d02f246…` delta; Desktop replay is the exact `5fc308a…` → `7a99c3e…` Desktop delta.
+
 | Capability | Released source | Target module(s) / disposition | Required regression evidence |
 |---|---|---|---|
 | Managed flat profile/service scope | `hermes_cli/managed_profile_scope.py`, `profiles.py`, web profile routes | KEEP policy; PORT to current profile/web defining modules | Default/sibling denial, boot/reconnect, same user/home/unit |
