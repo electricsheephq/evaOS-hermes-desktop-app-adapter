@@ -888,7 +888,8 @@ test('admin customer scope routes and aggregates only its granted profiles', asy
   assert.equal(sidebar.messaging.sessions.length, 2)
   const filtered = await runtime.requestApi({ path: '/api/profiles/sessions/sidebar?recents_profile=sibling', profile: 'default' })
   assert.deepEqual(filtered.recents.sessions.map(row => row.profile), ['sibling'])
-  assert.equal(filtered.messaging.sessions.length, 2)
+  assert.deepEqual(filtered.cron.sessions.map(row => row.profile), ['sibling'])
+  assert.deepEqual(filtered.messaging.sessions.map(row => row.profile), ['sibling'])
   await runtime.requestApi({ path: '/api/skills?profile=default', profile: 'default' })
   const beforeDenial = paths.length
   await assert.rejects(runtime.requestApi({ path: '/api/skills', profile: 'outside' }), error => error.code === 'support-profile-mismatch')
@@ -1061,7 +1062,7 @@ test('admin aggregate reads isolate unavailable profiles but reject authorizatio
   }
 })
 
-test('admin discovery retains last-good profile and project rows only inside the same support lease', async t => {
+test('admin discovery retains last-good rows on transport and reported failures only inside the same support lease', async t => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-support-cache-'))
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
   const statePath = path.join(directory, 'state.json')
@@ -1077,7 +1078,12 @@ test('admin discovery retains last-good profile and project rows only inside the
     fetchJson: async url => {
       const parsed = new URL(url)
       const profile = parsed.searchParams.get('profile')
-      if (unavailable && profile === 'sibling') throw new EvaBrokerError('private upstream detail', 503, 'unavailable')
+      if (unavailable && profile === 'sibling') {
+        if (unavailable === 'reported') return parsed.pathname === '/api/profiles'
+          ? { profiles: [] }
+          : { projects: [], scoped_session_ids: [], errors: [{ profile, error: 'Profile database unavailable.' }] }
+        throw new EvaBrokerError('private upstream detail', 503, 'unavailable')
+      }
       return parsed.pathname === '/api/profiles'
         ? { profiles: [{ name: profile, display_name: `${profile}-${revision}` }] }
         : { projects: [{ id: profile, name: `${profile}-${revision}`, sessionCount: 1,
@@ -1088,15 +1094,17 @@ test('admin discovery retains last-good profile and project rows only inside the
   await runtime.claimSupportRequest('cache-request')
   const paths = ['/api/profiles', '/api/profiles/projects/tree']
   for (const path of paths) await runtime.requestApi({ path })
-  unavailable = true
   revision = 2
-  for (const path of paths) {
-    const partial = await runtime.requestApi({ path })
-    const rows = partial.profiles ?? partial.projects
-    assert.equal(rows.length, 2)
-    assert.deepEqual(rows.map(row => row.display_name ?? row.name), ['support-2', 'sibling-1'])
-    assert.ok(partial.errors.some(error => error.profile === 'sibling'))
-    assert.equal(JSON.stringify(partial).includes('private upstream detail'), false)
+  for (const failure of ['transport', 'reported']) {
+    unavailable = failure
+    for (const path of paths) {
+      const partial = await runtime.requestApi({ path })
+      const rows = partial.profiles ?? partial.projects
+      assert.equal(rows.length, 2)
+      assert.deepEqual(rows.map(row => row.display_name ?? row.name), ['support-2', 'sibling-1'])
+      assert.ok(partial.errors.some(error => error.profile === 'sibling'))
+      assert.equal(JSON.stringify(partial).includes('private upstream detail'), false)
+    }
   }
   assert.deepEqual(await runtime.endSupportSession(), { ok: true })
   payload = { ...payload, support_session_id: 'next-support-session' }

@@ -1275,11 +1275,15 @@ function createEvaManagedRuntime(options) {
         assertSupportRequestCurrent(guard)
         const result = await readDelegatedProfile({ ...request, profile, path: `/api/profiles?profile=${encodeURIComponent(profile)}` }, retry, errors)
         assertSupportRequestCurrent(guard)
-        const rows = result?.profiles ?? cache.get(profile) ?? []
-        for (const row of rows) {
+        const freshRows = result?.profiles ?? []
+        for (const row of freshRows) {
           if (row.name !== profile) throw supportProfileError()
         }
-        if (result) cache.set(profile, structuredClone(rows))
+        // The exact managed route suppresses metadata failures as an empty
+        // successful response; it cannot delete a member of this live grant.
+        if (result && !freshRows.length) errors.push({ profile, error: 'Profile temporarily unavailable.' })
+        const rows = freshRows.length ? freshRows : cache.get(profile) ?? []
+        if (freshRows.length) cache.set(profile, structuredClone(rows))
         profiles.push(...structuredClone(rows))
       }
       return { profiles, ...(errors.length ? { errors } : {}) }
@@ -1326,9 +1330,10 @@ function createEvaManagedRuntime(options) {
         // A failed read is not authoritative deletion. Keep this lease's last
         // matching view, while the errors array still reports the outage.
         const cached = cache.get(profile)
-        const result = fresh ?? (cached?.previewLimit === previewLimit ? structuredClone(cached.result) : null)
+        const failed = !fresh || fresh.errors?.length
+        const result = failed && cached?.previewLimit === previewLimit ? structuredClone(cached.result) : fresh
         for (const id of result?.scoped_session_ids ?? []) scopedIds.add(id)
-        errors.push(...(result?.errors ?? []))
+        errors.push(...(fresh?.errors ?? []))
         for (const raw of result?.projects ?? []) {
           const bind = row => ({ ...bindSupportSession(row, profile), is_default_profile: profile === 'default' })
           let project = { ...raw, previewSessions: (raw.previewSessions ?? []).map(bind),
@@ -1392,8 +1397,8 @@ function createEvaManagedRuntime(options) {
 
     const [recentsResult, cronResult, messagingResult] = await Promise.all([
       requestDelegatedSessionList(runtime, { ...request, method: 'GET', path: `/api/profiles/sessions?${recents}` }, recentsProfiles, retry),
-      requestDelegatedSessionList(runtime, { ...request, method: 'GET', path: `/api/profiles/sessions?${cron}` }, runtime.allowedProfiles, retry),
-      requestDelegatedSessionList(runtime, { ...request, method: 'GET', path: `/api/profiles/sessions?${messaging}` }, runtime.allowedProfiles, retry)
+      requestDelegatedSessionList(runtime, { ...request, method: 'GET', path: `/api/profiles/sessions?${cron}` }, recentsProfiles, retry),
+      requestDelegatedSessionList(runtime, { ...request, method: 'GET', path: `/api/profiles/sessions?${messaging}` }, recentsProfiles, retry)
     ])
     const errors = [
       ...(recentsResult?.errors ?? []),
