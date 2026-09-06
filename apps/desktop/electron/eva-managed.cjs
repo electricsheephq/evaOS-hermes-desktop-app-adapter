@@ -409,6 +409,7 @@ function buildEvaDesktopAuthUrl(codeChallenge, authState, policy = EVA_MANAGED_P
   url.searchParams.set('desktop_auth_state', String(authState))
   url.searchParams.set('desktop_code_challenge', challenge)
   url.searchParams.set('desktop_code_challenge_method', 'S256')
+  url.searchParams.set('desktop_support_login_version', '1')
   url.searchParams.set('switch_account', '1')
   url.searchParams.set('prompt', 'select_account')
   return url.toString()
@@ -743,17 +744,24 @@ async function claimEvaDeviceCode(deviceCode, deviceCodeVerifier, options = {}) 
   if (normalizedCode.length < 8 || normalizedCode.length > 40) {
     throw new EvaBrokerError('evaOS Agent device code is invalid.', 400, 'invalid-device-code')
   }
-  return normalizeDesktopSession(
-    await brokerPost(
+  const payload = await brokerPost(
       {
         action: 'claim_desktop_device_code',
         device_code: normalizedCode,
-        device_code_verifier: normalizeDeviceCodeVerifier(deviceCodeVerifier)
+        device_code_verifier: normalizeDeviceCodeVerifier(deviceCodeVerifier),
+        desktop_support_login_version: 1
       },
       options
-    ),
-    options.now ?? Date.now()
-  )
+    )
+  const desktop = normalizeDesktopSession(payload, options.now ?? Date.now())
+  if (payload.support_request_id !== undefined || payload.desktop_support_login_version !== undefined) {
+    if (payload.desktop_support_login_version !== 1 ||
+        !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(String(payload.support_request_id || ''))) {
+      throw new EvaBrokerError('Electric Sheep returned an invalid support sign-in binding.', 409, 'invalid-support-request')
+    }
+    return { ...desktop, supportRequestId: payload.support_request_id }
+  }
+  return desktop
 }
 
 async function pollEvaDeviceCode(deviceCode, deviceCodeVerifier, options = {}) {

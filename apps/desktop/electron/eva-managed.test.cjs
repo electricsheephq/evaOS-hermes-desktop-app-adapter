@@ -298,7 +298,8 @@ test('device-code polling treats an unregistered code as pending and then accept
       assert.deepEqual(body, {
         action: 'claim_desktop_device_code',
         device_code: 'A'.repeat(12),
-        device_code_verifier: verifier
+        device_code_verifier: verifier,
+        desktop_support_login_version: 1
       })
       if (requests === 1) {
         return new Response(JSON.stringify({ error: 'Invalid or expired one-time code' }), {
@@ -319,6 +320,17 @@ test('device-code polling treats an unregistered code as pending and then accept
   assert.equal(requests, 2)
   assert.equal(result.token, 'eds_device_session')
   assert.equal(result.email, 'employee@example.invalid')
+})
+
+test('device-code support binding is available only from a compatible authenticated broker response', async () => {
+  const requestId = '00000000-0000-4000-8000-000000000099'
+  const payload = { desktop_session: 'employee-session', desktop_session_expires_at: FUTURE, email: 'employee@example.invalid', desktop_support_login_version: 1, support_request_id: requestId }
+  const fetchImpl = async () => new Response(JSON.stringify(payload), { status: 200 })
+  const result = await pollEvaDeviceCode('A'.repeat(12), 'v'.repeat(43), { fetchImpl })
+  assert.equal(result.supportRequestId, requestId)
+  assert.equal(result.token, 'employee-session')
+  payload.desktop_support_login_version = 2
+  await assert.rejects(pollEvaDeviceCode('A'.repeat(12), 'v'.repeat(43), { fetchImpl }), error => error.code === 'invalid-support-request')
 })
 
 test('device-code polling fails immediately on a malformed successful claim', async () => {

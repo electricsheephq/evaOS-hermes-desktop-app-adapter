@@ -1731,6 +1731,68 @@ test('PKCE sign-in keeps one verifier per attempt, rejects wrong callbacks, and 
   assert.equal(issuedVerifiers.length, 0)
 })
 
+test('post-login support selection claims with the new employee session before any own-runtime launch', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-support-sign-in-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  const requestId = '00000000-0000-4000-8000-000000000099'
+  let opened
+  let releaseClaim
+  let ownLaunches = 0
+  const claimGate = new Promise(resolve => { releaseClaim = resolve })
+  const runtime = makeManagedRuntime(statePath, {
+    openExternal: async url => { opened = new URL(url) },
+    pollDeviceCode: async () => ({ token: 'new-employee-session', expiresAt: FUTURE, email: 'employee@example.invalid', supportRequestId: requestId }),
+    launchRuntime: async () => { ownLaunches += 1; throw new Error('wrong workspace') },
+    brokerPost: async (body, options) => {
+      assert.equal(body.action, 'claim_internal_support_request')
+      assert.equal(body.request_id, requestId)
+      assert.equal(options.desktopSession, 'new-employee-session')
+      await claimGate
+      return supportEnrollment()
+    }
+  })
+  t.after(() => runtime.close())
+  const signingIn = runtime.signIn()
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(opened.searchParams.get('desktop_support_login_version'), '1')
+  await runtime.completeCallback(`evaos-agent://auth/callback?device_code=ABCDEFGH&desktop_auth_state=${opened.searchParams.get('desktop_auth_state')}`)
+  await new Promise(resolve => setImmediate(resolve))
+  await assert.rejects(runtime.resolveBackend(), error => error.code === 'support-sign-in-pending')
+  assert.equal(ownLaunches, 0)
+  releaseClaim()
+  const status = await signingIn
+  assert.equal(status.delegatedSupportActive, true)
+  assert.equal(status.email, 'employee@example.invalid')
+  assert.equal((await runtime.resolveBackend({ profile: 'support' })).profile, 'support')
+  await assert.rejects(runtime.resolveBackend({ profile: 'other' }), error => error.code === 'support-profile-mismatch')
+  await assert.rejects(runtime.signIn(), error => error.code === 'support-session-active')
+  assert.equal(fs.readFileSync(statePath, 'utf8').includes(requestId), false)
+  assert.equal(ownLaunches, 0)
+})
+
+test('a failed selected support claim revokes the new employee session without own-workspace fallback', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-support-sign-in-failure-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  let opened
+  const revoked = []
+  const runtime = makeManagedRuntime(statePath, {
+    openExternal: async url => { opened = new URL(url) },
+    pollDeviceCode: async () => ({ token: 'new-employee-session', expiresAt: FUTURE, email: 'employee@example.invalid', supportRequestId: '00000000-0000-4000-8000-000000000099' }),
+    launchRuntime: async () => { throw new Error('must not launch another workspace') },
+    brokerPost: async () => { throw new EvaBrokerError('Expired support request', 403, 'support-expired') },
+    revokeDesktopSession: async token => { revoked.push(token); return true }
+  })
+  const signingIn = runtime.signIn()
+  await new Promise(resolve => setImmediate(resolve))
+  await runtime.completeCallback(`evaos-agent://auth/callback?device_code=ABCDEFGH&desktop_auth_state=${opened.searchParams.get('desktop_auth_state')}`)
+  await assert.rejects(signingIn, error => error.code === 'support-expired')
+  assert.deepEqual(revoked, ['new-employee-session'])
+  assert.equal(runtime.status().delegatedSupportActive, false)
+  assert.equal(fs.readFileSync(statePath, 'utf8').includes('new-employee-session'), false)
+})
+
 test('managed sign-in checks callback ownership before clearing the existing enrollment', async t => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-callback-preflight-'))
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }))

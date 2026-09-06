@@ -592,10 +592,24 @@ function createEvaManagedRuntime(options) {
         } finally {
           clearTimeout(callbackTimer)
         }
-        const desktop = await pollDeviceCode(deviceCode, verifier, { signal: controller.signal })
+        const { supportRequestId, ...desktop } = await pollDeviceCode(deviceCode, verifier, { signal: controller.signal })
         controller.abort()
         assertGeneration(generation)
+        attempt.supportPending = Boolean(supportRequestId)
         writeState({ desktop, runtime: null, delegatedSupport: null })
+        if (supportRequestId) {
+          try {
+            await claimSupportRequest(supportRequestId)
+            assertGeneration(generation)
+          } catch (error) {
+            // No fallback to another workspace after an explicit customer
+            // choice. Revoke only this just-created employee session and clear
+            // its local view; a newer sign-in/sign-out retains state ownership.
+            if (generation === authGeneration) await signOut()
+            else await revokeDesktopSession(desktop.token).catch(() => false)
+            throw error
+          }
+        }
         await advanceBootProgress('eva.authorized', 'Electric Sheep sign-in complete', 22)
         return desktop
       } finally {
@@ -851,6 +865,9 @@ function createEvaManagedRuntime(options) {
 
   async function ensureRuntimeEnrollment(input = {}) {
     await requireRendererIsolation()
+    if (pendingAuth?.supportPending) {
+      throw new EvaBrokerError('Customer support sign-in is still being confirmed.', 409, 'support-sign-in-pending')
+    }
     const force = input.force === true
     if (runtimeEnrollmentPromise) {
       if (!force || runtimeEnrollmentPromiseForced) return runtimeEnrollmentPromise
@@ -1007,6 +1024,9 @@ function createEvaManagedRuntime(options) {
 
   async function signIn() {
     await requireRendererIsolation()
+    if (currentState().delegatedSupport) {
+      throw new EvaBrokerError('End the current support session before signing in again.', 409, 'support-session-active')
+    }
     try {
       await ensureSignInCallbackReady()
     } catch (error) {
@@ -1029,9 +1049,9 @@ function createEvaManagedRuntime(options) {
     writeState(emptyState())
     supportRevalidated = false
     const desktop = await beginSignIn()
-    const runtime = await ensureRuntimeEnrollment({ force: true })
+    await ensureRuntimeEnrollment({ force: !currentState().delegatedSupport })
     resetConnection()
-    return publicEvaEnrollmentStatus({ desktop, runtime })
+    return publicEvaEnrollmentStatus({ desktop, runtime: currentState().runtime, delegatedSupport: currentState().delegatedSupport ?? null })
   }
 
   async function signOut() {
