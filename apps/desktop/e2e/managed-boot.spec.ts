@@ -83,8 +83,8 @@ test.describe('managed signed-out boot', () => {
   })
 
   test('support End receives a real click above the managed boot failure', async () => {
-    // Only the isolated fixture's IPC authority is synthetic. Keep the real
-    // renderer, preload, failure overlay and CSS so Playwright hit-tests End.
+    // Supply synthetic authority and a boot failure at the real IPC/event
+    // boundary. Keep the renderer, preload, failure overlay and CSS intact.
     await fixture!.app.evaluate(({ ipcMain }) => {
       let active = true
       const expiresAt = new Date(Date.now() + 30 * 60 * 1_000).toISOString()
@@ -121,9 +121,29 @@ test.describe('managed signed-out boot', () => {
 
     await expect(page.getByRole('button', { name: 'Sign in to evaOS Agent', exact: true })).toBeVisible()
     await expect(banner).toBeVisible()
+    await fixture!.app.evaluate(({ BrowserWindow }) => {
+      for (const window of BrowserWindow.getAllWindows()) {
+        window.webContents.send('hermes:boot-progress', {
+          error: 'Synthetic customer gateway unavailable',
+          message: 'Synthetic customer gateway unavailable',
+          phase: 'eva.enroll.error',
+          progress: 100,
+          running: false,
+          fakeMode: false,
+          timestamp: Date.now()
+        })
+      }
+    })
+    await expect(page.getByRole('heading', { name: /couldn't start/ })).toBeVisible()
+    await expect(page.getByText('Synthetic customer gateway unavailable', { exact: true })).toBeVisible()
+    await test.info().attach('support-controls-over-failed-gateway', {
+      body: await page.screenshot(),
+      contentType: 'image/png'
+    })
     // Do not force the click: it must fail if the real boot overlay covers it.
     await banner.getByRole('button', { name: 'End support session', exact: true }).click()
     await expect(banner).toBeHidden()
+    await expect(page.getByText('Synthetic customer gateway unavailable', { exact: true })).toBeVisible()
     await expect(page.getByRole('button', { name: 'Sign in to evaOS Agent', exact: true })).toBeVisible()
   })
 })
