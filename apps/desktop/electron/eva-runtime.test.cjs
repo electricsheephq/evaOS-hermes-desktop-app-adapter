@@ -896,6 +896,79 @@ test('admin customer scope routes and aggregates only its granted profiles', asy
   assert.equal(paths.length, beforeDenial)
 })
 
+test('admin session pages merge recency before the global pinned-aware window', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-support-page-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'state.json')
+  writeActiveEnrollment(statePath)
+  const payload = supportEnrollment()
+  payload.admin_bypass = true
+  payload.assignment_version = null
+  payload.remote_backend.allowed_profiles = ['support', 'sibling']
+  const byProfile = {
+    support: [{ id: 'older', profile: 'support', last_active: 10 }, { id: 'oldest', profile: 'support', last_active: 9 }],
+    sibling: [{ id: 'newest', profile: 'sibling', last_active: 30 }, { id: 'next', profile: 'sibling', last_active: 20 },
+      { id: 'pinned', profile: 'sibling', last_active: 1, pinned: true }]
+  }
+  const requests = []
+  const runtime = makeManagedRuntime(statePath, {
+    brokerPost: async () => payload,
+    fetchJson: async url => {
+      const parsed = new URL(url)
+      requests.push(parsed)
+      const profile = parsed.searchParams.get('profile')
+      const rows = byProfile[profile]
+      const limit = Number(parsed.searchParams.get('limit'))
+      return { sessions: [...rows.slice(0, limit), ...rows.slice(limit).filter(row => row.pinned)],
+        total: rows.length, profile_totals: { [profile]: rows.length },
+        errors: profile === 'support' ? [{ profile, error: 'synthetic partial scan' }] : [] }
+    }
+  })
+  t.after(() => runtime.close())
+  await runtime.claimSupportRequest('page-request')
+  const first = await runtime.requestApi({ path: '/api/profiles/sessions?profile=all&limit=2&order=recent' })
+  assert.deepEqual(first.sessions.map(row => row.id), ['newest', 'next', 'pinned'])
+  assert.equal(first.total, 5)
+  assert.deepEqual(first.profiles_truncated, { support: true, sibling: false })
+  assert.equal(first.errors.length, 1)
+  const second = await runtime.requestApi({ path: '/api/profiles/sessions?profile=all&limit=2&offset=1&order=recent' })
+  assert.deepEqual(second.sessions.map(row => row.id), ['next', 'older', 'pinned'])
+  assert.deepEqual(requests.slice(-2).map(url => [url.searchParams.get('limit'), url.searchParams.get('offset')]), [['3', '0'], ['3', '0']])
+})
+
+test('admin profile discovery reads every granted agent even without sessions', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-support-profiles-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'state.json')
+  writeActiveEnrollment(statePath)
+  const payload = supportEnrollment()
+  payload.admin_bypass = true
+  payload.assignment_version = null
+  payload.remote_backend.allowed_profiles = ['support', 'quiet']
+  const requests = []
+  let wrongProfile = false
+  const runtime = makeManagedRuntime(statePath, {
+    brokerPost: async () => payload,
+    fetchJson: async url => {
+      const parsed = new URL(url)
+      requests.push(parsed)
+      assert.equal(parsed.pathname, '/api/profiles')
+      const profile = parsed.searchParams.get('profile')
+      assert.ok(['support', 'quiet'].includes(profile))
+      return { profiles: [{ name: wrongProfile ? 'outside' : profile, skill_count: 3 }] }
+    }
+  })
+  t.after(() => runtime.close())
+  await runtime.claimSupportRequest('profiles-request')
+  assert.deepEqual((await runtime.requestApi({ path: '/api/profiles', profile: 'default' })).profiles,
+    [{ name: 'support', skill_count: 3 }, { name: 'quiet', skill_count: 3 }])
+  assert.equal(requests.length, 2)
+  const scoped = await runtime.requestApi({ path: '/api/profiles?profile=quiet', profile: 'quiet' })
+  assert.deepEqual(scoped.profiles.map(row => row.name), ['quiet'])
+  wrongProfile = true
+  await assert.rejects(runtime.requestApi({ path: '/api/profiles' }), error => error.code === 'support-profile-mismatch')
+})
+
 test('support readiness 401 revalidates the same delegated assignment without ordinary fallback', async t => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-support-readiness-401-'))
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
@@ -1853,6 +1926,42 @@ test('a rejected support enrollment logs its safe stage and exposes sign-in reco
   assert.match(boot.error, /unsafe support deadline/)
   assert.match(logs.join('\n'), /support-claim failed:.*unsafe support deadline/)
   assert.equal(logs.join('\n').includes('private-desktop-token'), false)
+})
+
+test('sign-in recovery distinguishes real early failures from clean sign-out', async t => {
+  for (const stage of ['browser-sign-in', 'device-code-claim']) {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-early-sign-in-'))
+    t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+    let opened
+    let boot
+    const logs = []
+    const runtime = makeManagedRuntime(path.join(directory, 'state.json'), {
+      openExternal: async url => {
+        opened = new URL(url)
+        if (stage === 'browser-sign-in') throw new Error('private-browser-context')
+      },
+      pollDeviceCode: async () => { throw new EvaBrokerError('Sign-in service timed out.', 408, 'timeout') },
+      rememberLog: line => logs.push(line),
+      updateBootProgress: value => { boot = value }
+    })
+    t.after(() => runtime.close())
+    await assert.rejects(runtime.resolveBackend(), error => error.code === 'sign-in-required')
+    assert.equal(boot.error, null)
+    const signingIn = runtime.signIn()
+    const rejection = assert.rejects(signingIn)
+    if (stage === 'device-code-claim') {
+      await new Promise(resolve => setImmediate(resolve))
+      await runtime.completeCallback(`evaos-agent://auth/callback?device_code=ABCDEFGH&desktop_auth_state=${opened.searchParams.get('desktop_auth_state')}`)
+    }
+    await rejection
+    await assert.rejects(runtime.resolveBackend(), error => error.code === 'sign-in-required')
+    assert.equal(boot.error, stage === 'browser-sign-in' ? 'evaOS Agent sign-in could not be completed.' : 'Sign-in service timed out.')
+    assert.ok(logs.some(line => line.includes(`${stage} failed:`)))
+    assert.equal(logs.join('\n').includes('private-browser-context'), false)
+    await runtime.signOut()
+    await assert.rejects(runtime.resolveBackend(), error => error.code === 'sign-in-required')
+    assert.equal(boot.error, null)
+  }
 })
 
 for (const expired of [false, true]) test(`interrupted support sign-in recovers through visible Sign In (expired=${expired})`, async t => {

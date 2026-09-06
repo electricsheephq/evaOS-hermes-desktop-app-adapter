@@ -563,6 +563,7 @@ function createEvaManagedRuntime(options) {
     const generation = authGeneration
     const task = (async () => {
       let stage = 'browser-sign-in'
+      let cleanupGeneration = null
       let authState = makeAuthState()
       let verifier = makeCodeVerifier()
       let deviceCode = null
@@ -574,6 +575,9 @@ function createEvaManagedRuntime(options) {
         resolveDeviceCode = resolve
         rejectDeviceCode = reject
       })
+      // Browser launch may fail before we await the callback. Cancellation
+      // still rejects the original promise, but never becomes unhandled.
+      void deviceCodePromise.catch(() => undefined)
       const attempt = {
         authState,
         controller,
@@ -616,7 +620,10 @@ function createEvaManagedRuntime(options) {
             // No fallback to another workspace after an explicit customer
             // choice. Revoke only this just-created employee session and clear
             // its local view; a newer sign-in/sign-out retains state ownership.
-            if (generation === authGeneration) await signOut()
+            if (generation === authGeneration) {
+              cleanupGeneration = generation + 1
+              await signOut()
+            }
             else await revokeDesktopSession(desktop.token).catch(() => false)
             throw error
           }
@@ -630,7 +637,10 @@ function createEvaManagedRuntime(options) {
           ? error.message
           : 'evaOS Agent sign-in could not be completed.'
         rememberLog(`[eva-managed] ${stage} failed: ${message}`)
-        if (currentState().signedOut && !pendingAuth) signInFailure = message
+        if ((generation === authGeneration && pendingAuth === attempt) ||
+          (cleanupGeneration === authGeneration && currentState().signedOut && !pendingAuth)) {
+          signInFailure = message
+        }
         throw error
       } finally {
         controller.abort()
@@ -663,7 +673,7 @@ function createEvaManagedRuntime(options) {
         message: signInFailure ?? 'Sign in to evaOS Agent from Settings.',
         progress: 8,
         running: false,
-        error: signInFailure ?? 'Sign in to evaOS Agent from Settings.'
+        error: signInFailure
       },
       { allowDecrease: true }
     )
@@ -1084,6 +1094,7 @@ function createEvaManagedRuntime(options) {
   async function signOut() {
     const state = currentState()
     invalidateAuthWork()
+    signInFailure = null
     clearSupportExpiryTimer()
     supportEndError = null
     rendererResetPending = true
@@ -1174,16 +1185,63 @@ function createEvaManagedRuntime(options) {
 
   async function requestDelegatedSessionList(runtime, request, profiles, retry) {
     const parsed = new URL(String(request.path), 'http://eva-managed.invalid')
+    const limit = Number(parsed.searchParams.get('limit') ?? 20)
+    const offset = Number(parsed.searchParams.get('offset') ?? 0)
+    if (!Number.isInteger(limit) || limit < 0 || limit > 500 || !Number.isInteger(offset) || offset < 0) {
+      throw new EvaBrokerError('Invalid session page.', 400, 'managed-policy')
+    }
+    // Match the server's all-profile merge: fetch from zero on each profile,
+    // then apply the requested page once to the globally ordered rows.
+    parsed.searchParams.set('limit', String(Math.min(limit + offset, 500)))
+    parsed.searchParams.set('offset', '0')
     const results = []
-    for (const profile of profiles) {
-      parsed.searchParams.set('profile', profile)
-      results.push(await requestApi({ ...request, profile, path: `${parsed.pathname}?${parsed.searchParams}` }, retry))
+    const guard = startSupportRequestGuard(runtime)
+    try {
+      for (const profile of profiles) {
+        assertSupportRequestCurrent(guard)
+        parsed.searchParams.set('profile', profile)
+        results.push(await requestApi({ ...request, profile, path: `${parsed.pathname}?${parsed.searchParams}` }, retry))
+        assertSupportRequestCurrent(guard)
+      }
+    } finally {
+      finishSupportRequestGuard(guard)
+    }
+    const sortKey = parsed.searchParams.get('order') === 'created' ? 'started_at' : 'last_active'
+    const rows = results.flatMap(result => result?.sessions ?? [])
+      .sort((a, b) => (b[sortKey] || b.started_at || 0) - (a[sortKey] || a.started_at || 0))
+    const sessions = [...rows.slice(offset, offset + limit), ...rows.slice(offset + limit).filter(row => row.pinned)]
+    const profileTotals = Object.assign({}, ...results.map(result => result?.profile_totals ?? {}))
+    const profilesTruncated = Object.assign({}, ...results.map(result => result?.profiles_truncated ?? {}))
+    for (const [profile, total] of Object.entries(profileTotals)) {
+      profilesTruncated[profile] = total > sessions.filter(row => row.profile === profile).length
     }
     return {
-      sessions: results.flatMap(result => result?.sessions ?? []),
+      sessions,
       total: results.reduce((sum, result) => sum + (result?.total ?? result?.sessions?.length ?? 0), 0),
-      profiles_truncated: Object.assign({}, ...results.map(result => result?.profiles_truncated ?? {})),
+      limit,
+      offset,
+      profile_totals: profileTotals,
+      profiles_truncated: profilesTruncated,
       errors: results.flatMap(result => result?.errors ?? [])
+    }
+  }
+
+  async function requestDelegatedProfiles(runtime, request, retry) {
+    const profiles = []
+    const guard = startSupportRequestGuard(runtime)
+    try {
+      for (const profile of runtime.allowedProfiles) {
+        assertSupportRequestCurrent(guard)
+        const result = await requestApi({ ...request, profile, path: `/api/profiles?profile=${encodeURIComponent(profile)}` }, retry)
+        assertSupportRequestCurrent(guard)
+        for (const row of result?.profiles ?? []) {
+          if (row.name !== profile) throw supportProfileError()
+          profiles.push(row)
+        }
+      }
+      return { profiles }
+    } finally {
+      finishSupportRequestGuard(guard)
     }
   }
 
@@ -1243,7 +1301,14 @@ function createEvaManagedRuntime(options) {
   async function requestApi(request, retry = true) {
     const runtime = await ensureRuntimeEnrollment()
     const supportRequest = runtime.sessionKind === 'delegated_support'
-    const requestPath = new URL(String(request?.path || ''), 'http://eva-managed.invalid').pathname
+    const parsedRequest = new URL(String(request?.path || ''), 'http://eva-managed.invalid')
+    const requestPath = parsedRequest.pathname
+    if (supportRequest && String(request?.method || 'GET').toUpperCase() === 'GET' &&
+      requestPath === '/api/profiles' &&
+      (!parsedRequest.searchParams.has('profile') || parsedRequest.searchParams.get('profile') === 'all')) {
+      assertEvaManagedApiRequestAllowed({ ...request, profile: supportProfileFor(runtime, request?.profile) })
+      return requestDelegatedProfiles(runtime, request, retry)
+    }
     if (supportRequest && String(request?.method || 'GET').toUpperCase() === 'GET' &&
       requestPath === '/api/profiles/sessions' &&
       new URL(request.path, 'http://eva-managed.invalid').searchParams.get('profile') === 'all') {
