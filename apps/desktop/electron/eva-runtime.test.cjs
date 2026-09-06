@@ -1044,6 +1044,7 @@ test('admin pull-request recovery scans the finite grant without permanently rec
       profiles.push(profile)
       assert.equal(options.method, 'POST')
       assert.deepEqual(options.body.ids, ids)
+      if (profile === 'sibling' && failure === 'suppressed') return { pull_requests: {}, scanned: ids }
       if (profile === 'sibling' && failure) throw failure
       return { pull_requests: { [`${profile}-session`]: { number: profile === 'support' ? 1 : 2 } }, scanned: ids }
     }
@@ -1061,6 +1062,9 @@ test('admin pull-request recovery scans the finite grant without permanently rec
   assert.equal(partial.pull_requests['support-session'].number, 1)
   assert.ok(partial.errors.some(error => error.profile === 'sibling'))
   assert.equal(JSON.stringify(partial).includes('private upstream detail'), false)
+  failure = 'suppressed'
+  const suppressed = await runtime.requestApi(request)
+  assert.deepEqual(suppressed.scanned, ['support-session'])
   failure = new EvaBrokerError('permission revoked', 403, 'forbidden')
   await assert.rejects(runtime.requestApi(request), error => error.statusCode === 403)
 })

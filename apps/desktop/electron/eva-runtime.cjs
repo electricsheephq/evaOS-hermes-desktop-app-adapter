@@ -1383,8 +1383,11 @@ function createEvaManagedRuntime(options) {
         scanned = scanned === null ? [...completed] : scanned.filter(id => completed.has(id))
       }
       // The consumer persists misses permanently. A partial read is not proof
-      // that a requested session has no PR in another granted profile.
-      return { pull_requests: pullRequests, scanned: errors.length ? [] : scanned ?? [],
+      // that a requested session has no PR in another granted profile. Legacy
+      // leaves can also suppress DB errors, so only positive results prove
+      // completion; absent PRs must remain eligible for a later read.
+      const confirmed = (scanned ?? []).filter(id => Object.hasOwn(pullRequests, id))
+      return { pull_requests: pullRequests, scanned: errors.length ? [] : confirmed,
         ...(errors.length ? { errors } : {}) }
     } finally {
       finishSupportRequestGuard(guard)
