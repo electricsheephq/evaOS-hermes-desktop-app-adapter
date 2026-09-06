@@ -7,6 +7,12 @@ The customer-wide admin extension advertises
 immutable authorized profile set: no unrestricted wildcard and no credential
 copying. Aggregate session reads are expanded inside Electron; foreground and
 filtered reads retain their exact profile. Resume rejects any changed set.
+The managed roster IPC consumes that same live grant, including agents with no
+sessions. Project-tree reads use finite exact-profile leaves and preserve the
+existing folder/Home merge, declared metadata, counts and preview semantics.
+Explicit returned session-profile mismatches fail closed; profile-less legacy
+rows are bound to their requested leaf. A profile outage is reported separately
+without hiding healthy profiles; authorization failures remain global failures.
 Managers retain single-profile grants. The canonical authority and schema
 sequence are documented in the dashboard's `docs/desktop-support-sign-in.md`.
 

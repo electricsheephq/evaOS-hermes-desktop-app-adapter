@@ -16038,7 +16038,7 @@ async function enumerateRegistryAgentSources(registry = readDesktopConnectionsRe
 
 ipcMain.handle('hermes:agents:roster', async () => {
   if (EVA_MANAGED_BUILD) {
-    return buildEvaManagedAgentRoster(primaryProfileKey())
+    return buildEvaManagedAgentRoster((await evaManagedRuntime.delegatedProfiles()) ?? primaryProfileKey())
   }
 
   const registry = readDesktopConnectionsRegistry()

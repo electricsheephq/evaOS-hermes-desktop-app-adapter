@@ -853,9 +853,9 @@ test('delegated sidebar requests are split into exact-profile session slices', a
   assert.ok(urls.every(url => new URL(url).pathname === '/api/profiles/sessions'))
   assert.ok(urls.every(url => new URL(url).searchParams.get('profile') === 'support'))
   assert.ok(urls.every(url => !url.includes('profile=all')))
-  assert.deepEqual(result.recents.sessions, [{ id: 'messaging' }])
-  assert.deepEqual(result.cron.sessions, [{ id: 'cron' }])
-  assert.deepEqual(result.messaging.sessions, [{ id: 'messaging' }])
+  assert.deepEqual(result.recents.sessions, [{ id: 'messaging', profile: 'support' }])
+  assert.deepEqual(result.cron.sessions, [{ id: 'cron', profile: 'support' }])
+  assert.deepEqual(result.messaging.sessions, [{ id: 'messaging', profile: 'support' }])
 })
 
 test('admin customer scope routes and aggregates only its granted profiles', async t => {
@@ -960,6 +960,10 @@ test('admin profile discovery reads every granted agent even without sessions', 
   })
   t.after(() => runtime.close())
   await runtime.claimSupportRequest('profiles-request')
+  const granted = await runtime.delegatedProfiles()
+  assert.deepEqual(granted, ['support', 'quiet'])
+  granted.push('outside')
+  assert.deepEqual(await runtime.delegatedProfiles(), ['support', 'quiet'])
   assert.deepEqual((await runtime.requestApi({ path: '/api/profiles', profile: 'default' })).profiles,
     [{ name: 'support', skill_count: 3 }, { name: 'quiet', skill_count: 3 }])
   assert.equal(requests.length, 2)
@@ -969,8 +973,59 @@ test('admin profile discovery reads every granted agent even without sessions', 
   await assert.rejects(runtime.requestApi({ path: '/api/profiles' }), error => error.code === 'support-profile-mismatch')
 })
 
+test('admin project tree merges granted profiles and rejects mismatched session rows', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-support-tree-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'state.json')
+  writeActiveEnrollment(statePath)
+  const payload = supportEnrollment()
+  payload.admin_bypass = true
+  payload.assignment_version = null
+  payload.remote_backend.allowed_profiles = ['support', 'sibling']
+  let wrongProfile = false
+  const requests = []
+  const runtime = makeManagedRuntime(statePath, {
+    brokerPost: async () => payload,
+    fetchJson: async url => {
+      const parsed = new URL(url)
+      const profile = parsed.searchParams.get('profile')
+      requests.push(profile)
+      assert.ok(['support', 'sibling'].includes(profile))
+      const row = { id: `retained-${profile}`, last_active: profile === 'sibling' ? 20 : 10,
+        ...(wrongProfile ? { profile: 'outside' } : {}) }
+      if (parsed.pathname === '/api/profiles/sessions') return { sessions: [row], total: 1 }
+      assert.equal(parsed.pathname, '/api/profiles/projects/tree')
+      return { projects: [{ id: profile, path: '/synthetic/shared', isAuto: profile === 'support',
+        sessionCount: 1, totalTokens: 10, totalCostUsd: 0.5, lastActive: row.last_active,
+        previewSessions: [row], repos: [{ id: 'repo', sessionCount: 1,
+          groups: [{ id: 'lane', sessionCount: 1, sessions: [row] }] }] }],
+        active_id: profile, scoped_session_ids: [row.id], errors: [] }
+    }
+  })
+  t.after(() => runtime.close())
+  await runtime.claimSupportRequest('tree-request')
+  const result = await runtime.requestApi({ path: '/api/profiles/projects/tree?preview_limit=1' })
+  assert.deepEqual(requests, ['support', 'sibling'])
+  assert.equal(result.active_id, null)
+  assert.deepEqual(result.scoped_session_ids, ['retained-support', 'retained-sibling'])
+  assert.equal(result.projects.length, 1)
+  const project = result.projects[0]
+  assert.equal(project.id, 'sibling')
+  assert.equal(project.sessionCount, 2)
+  assert.equal(project.totalTokens, 20)
+  assert.equal(project.totalCostUsd, 1)
+  assert.deepEqual(project.previewSessions.map(row => row.profile), ['sibling'])
+  assert.deepEqual(project.repos[0].groups[0].sessions.map(row => row.profile).sort(), ['sibling', 'support'])
+  const sessions = await runtime.requestApi({ path: '/api/profiles/sessions?profile=all' })
+  assert.deepEqual(sessions.sessions.map(row => row.profile), ['sibling', 'support'])
+  wrongProfile = true
+  for (const path of ['/api/profiles/projects/tree', '/api/profiles/sessions?profile=all', '/api/profiles/sessions/sidebar']) {
+    await assert.rejects(runtime.requestApi({ path }), error => error.code === 'support-profile-mismatch')
+  }
+})
+
 test('admin aggregate reads isolate unavailable profiles but reject authorization failures', async t => {
-  for (const requestPath of ['/api/profiles', '/api/profiles/sessions?profile=all', '/api/profiles/sessions/sidebar']) {
+  for (const requestPath of ['/api/profiles', '/api/profiles/projects/tree', '/api/profiles/sessions?profile=all', '/api/profiles/sessions/sidebar']) {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-support-partial-'))
     t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
     const statePath = path.join(directory, 'state.json')
@@ -986,6 +1041,7 @@ test('admin aggregate reads isolate unavailable profiles but reject authorizatio
         const parsed = new URL(url)
         const profile = parsed.searchParams.get('profile')
         if (profile === 'support') throw failure
+        if (parsed.pathname === '/api/profiles/projects/tree') return { projects: [{ id: profile }], errors: [] }
         return parsed.pathname === '/api/profiles'
           ? { profiles: [{ name: profile }] }
           : { sessions: [{ id: profile, profile }], total: 1 }
@@ -996,7 +1052,7 @@ test('admin aggregate reads isolate unavailable profiles but reject authorizatio
     for (const error of [failure, new Error('synthetic private network detail')]) {
       failure = error
       const result = await runtime.requestApi({ path: requestPath })
-      assert.equal((result.profiles ?? result.sessions ?? result.recents.sessions).length, 1)
+      assert.equal((result.profiles ?? result.projects ?? result.sessions ?? result.recents.sessions).length, 1)
       assert.ok(result.errors.some(entry => entry.profile === 'support'))
       assert.equal(JSON.stringify(result).includes('synthetic private'), false)
     }
@@ -1006,7 +1062,7 @@ test('admin aggregate reads isolate unavailable profiles but reject authorizatio
 })
 
 test('admin aggregate reads recover once after same-grant credential refresh', async t => {
-  for (const requestPath of ['/api/profiles', '/api/profiles/sessions?profile=all', '/api/profiles/sessions/sidebar']) {
+  for (const requestPath of ['/api/profiles', '/api/profiles/projects/tree', '/api/profiles/sessions?profile=all', '/api/profiles/sessions/sidebar']) {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-support-aggregate-refresh-'))
     t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
     const statePath = path.join(directory, 'state.json')
@@ -1026,6 +1082,7 @@ test('admin aggregate reads recover once after same-grant credential refresh', a
         if (++fetchCount === 1) throw new EvaBrokerError('refresh required', 401, 'session_expired')
         const parsed = new URL(url)
         const profile = parsed.searchParams.get('profile')
+        if (parsed.pathname === '/api/profiles/projects/tree') return { projects: [{ id: profile }], errors: [] }
         return parsed.pathname === '/api/profiles'
           ? { profiles: [{ name: profile }] }
           : { sessions: [{ id: profile, profile }], total: 1 }
@@ -1034,7 +1091,7 @@ test('admin aggregate reads recover once after same-grant credential refresh', a
     t.after(() => runtime.close())
     await runtime.claimSupportRequest('aggregate-refresh-request')
     const result = await runtime.requestApi({ path: requestPath })
-    assert.equal((result.profiles ?? result.sessions ?? result.recents.sessions).length, 2)
+    assert.equal((result.profiles ?? result.projects ?? result.sessions ?? result.recents.sessions).length, 2)
     assert.equal(resumes, 1)
     assert.equal(runtime.status().delegatedSupportActive, true)
   }

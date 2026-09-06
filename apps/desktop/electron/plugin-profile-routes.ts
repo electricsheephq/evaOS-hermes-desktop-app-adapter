@@ -202,21 +202,22 @@ export function buildEvaManagedProfileRoutes(
 /** Managed Desktop has exactly one source: the opaque enrollment-bound
  * runtime. Keep the union-roster IPC on that identity so Bot Mode never reads
  * or probes workstation connection-registry entries left by another build. */
-export function buildEvaManagedAgentRoster(primaryProfile: string) {
-  const profile = normalizeProfile(primaryProfile)
+export function buildEvaManagedAgentRoster(primaryProfile: string | readonly string[]) {
+  const profiles = [
+    ...new Set((typeof primaryProfile === 'string' ? [primaryProfile] : primaryProfile).map(normalizeProfile))
+  ]
+
   const label = 'Assigned runtime'
 
   return {
-    agents: [
-      {
-        connectionId: EVA_MANAGED_CONNECTION_ID,
-        connectionKind: 'remote' as const,
-        connectionLabel: label,
-        handle: profile,
-        profile,
-        targetProfile: profile
-      }
-    ],
+    agents: profiles.map(profile => ({
+      connectionId: EVA_MANAGED_CONNECTION_ID,
+      connectionKind: 'remote' as const,
+      connectionLabel: label,
+      handle: profile,
+      profile,
+      targetProfile: profile
+    })),
     primaryConnectionId: EVA_MANAGED_CONNECTION_ID,
     sources: [
       {

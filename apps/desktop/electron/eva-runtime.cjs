@@ -1205,6 +1205,11 @@ function createEvaManagedRuntime(options) {
     }
   }
 
+  function bindSupportSession(row, profile) {
+    if (row.profile != null && row.profile !== profile) throw supportProfileError()
+    return { ...row, profile }
+  }
+
   async function requestDelegatedSessionList(runtime, request, profiles, retry) {
     const parsed = new URL(String(request.path), 'http://eva-managed.invalid')
     const limit = Number(parsed.searchParams.get('limit') ?? 20)
@@ -1223,8 +1228,9 @@ function createEvaManagedRuntime(options) {
       for (const profile of profiles) {
         assertSupportRequestCurrent(guard)
         parsed.searchParams.set('profile', profile)
-        results.push(await readDelegatedProfile({ ...request, profile, path: `${parsed.pathname}?${parsed.searchParams}` }, retry, readErrors))
+        const result = await readDelegatedProfile({ ...request, profile, path: `${parsed.pathname}?${parsed.searchParams}` }, retry, readErrors)
         assertSupportRequestCurrent(guard)
+        results.push(result && { ...result, sessions: (result.sessions ?? []).map(row => bindSupportSession(row, profile)) })
       }
     } finally {
       finishSupportRequestGuard(guard)
@@ -1264,6 +1270,73 @@ function createEvaManagedRuntime(options) {
         }
       }
       return { profiles, ...(errors.length ? { errors } : {}) }
+    } finally {
+      finishSupportRequestGuard(guard)
+    }
+  }
+
+  async function requestDelegatedProjectTree(runtime, request, retry) {
+    const parsed = new URL(String(request.path), 'http://eva-managed.invalid')
+    const previewLimit = Number(parsed.searchParams.get('preview_limit') ?? 3)
+    if (!Number.isInteger(previewLimit) || previewLimit < 0) {
+      throw new EvaBrokerError('Invalid project preview.', 400, 'managed-policy')
+    }
+    const projects = new Map()
+    const scopedIds = new Set()
+    const errors = []
+    const guard = startSupportRequestGuard(runtime)
+    // Match hermes_cli.web_routers.profiles._merge_profile_tree: folders/Home
+    // merge, declared metadata wins over auto metadata, and counts sum.
+    const recency = row => row.last_active || row.started_at || 0
+    const mergeChildren = (existing, incoming, childKey) => {
+      const byId = new Map((existing ?? []).map(row => [row.id, row]))
+      for (const row of incoming ?? []) {
+        const previous = byId.get(row.id)
+        if (!previous) {
+          byId.set(row.id, row)
+          continue
+        }
+        previous[childKey] = childKey === 'sessions'
+          ? [...(previous.sessions ?? []), ...(row.sessions ?? [])]
+          : mergeChildren(previous[childKey], row[childKey], 'sessions')
+        if ('sessionCount' in previous) previous.sessionCount = (previous.sessionCount || 0) + (row.sessionCount || 0)
+      }
+      return [...byId.values()]
+    }
+    try {
+      for (const profile of runtime.allowedProfiles) {
+        assertSupportRequestCurrent(guard)
+        parsed.searchParams.set('profile', profile)
+        const result = await readDelegatedProfile({ ...request, profile, path: `${parsed.pathname}?${parsed.searchParams}` }, retry, errors)
+        assertSupportRequestCurrent(guard)
+        for (const id of result?.scoped_session_ids ?? []) scopedIds.add(id)
+        errors.push(...(result?.errors ?? []))
+        for (const raw of result?.projects ?? []) {
+          const bind = row => ({ ...bindSupportSession(row, profile), is_default_profile: profile === 'default' })
+          let project = { ...raw, previewSessions: (raw.previewSessions ?? []).map(bind),
+            repos: (raw.repos ?? []).map(repo => ({ ...repo,
+              groups: (repo.groups ?? []).map(group => ({ ...group, sessions: (group.sessions ?? []).map(bind) })) })) }
+          const key = project.path || project.id
+          let existing = projects.get(key)
+          if (!existing) {
+            projects.set(key, project)
+            continue
+          }
+          if (existing.isAuto && !project.isAuto) {
+            ;[existing, project] = [project, existing]
+            projects.set(key, existing)
+          }
+          existing.repos = mergeChildren(existing.repos, project.repos, 'groups')
+          for (const field of ['sessionCount', 'totalTokens', 'totalCostUsd']) {
+            existing[field] = (existing[field] || 0) + (project[field] || 0)
+          }
+          existing.lastActive = Math.max(existing.lastActive || 0, project.lastActive || 0)
+          existing.previewSessions = [...existing.previewSessions, ...project.previewSessions]
+            .sort((a, b) => recency(b) - recency(a)).slice(0, previewLimit)
+        }
+      }
+      return { projects: [...projects.values()].sort((a, b) => (b.lastActive || 0) - (a.lastActive || 0)),
+        active_id: null, scoped_session_ids: [...scopedIds], errors }
     } finally {
       finishSupportRequestGuard(guard)
     }
@@ -1341,6 +1414,11 @@ function createEvaManagedRuntime(options) {
       }
       if (supportRequest && requestPath === '/api/profiles/sessions/sidebar') {
         return await requestDelegatedSidebar(runtime, request, retry)
+      }
+      if (supportRequest && String(request?.method || 'GET').toUpperCase() === 'GET' &&
+        requestPath === '/api/profiles/projects/tree' && !parsedRequest.searchParams.has('profile')) {
+        assertEvaManagedApiRequestAllowed({ ...request, profile: supportProfileFor(runtime, request?.profile) })
+        return await requestDelegatedProjectTree(runtime, request, retry)
       }
     } catch (error) {
       // A successful leaf 401 refresh invalidates earlier generation guards.
@@ -1487,6 +1565,10 @@ function createEvaManagedRuntime(options) {
   }
 
   return {
+    delegatedProfiles: async () => {
+      const runtime = await ensureRuntimeEnrollment()
+      return runtime.sessionKind === 'delegated_support' ? [...runtime.allowedProfiles] : null
+    },
     claimSupportRequest,
     close,
     completeCallback,

@@ -1,3 +1,6 @@
+import fs from 'node:fs'
+import { runInNewContext } from 'node:vm'
+
 import { describe, expect, it, vi } from 'vitest'
 
 import {
@@ -111,6 +114,32 @@ describe('managed plugin profile routes', () => {
         targetProfile: 'research'
       }
     ])
+  })
+
+  it('feeds the managed roster IPC from the live finite delegated grant', async () => {
+    const mainSource = fs.readFileSync(new URL('./main.ts', import.meta.url), 'utf8')
+    const start = mainSource.indexOf("ipcMain.handle('hermes:agents:roster'")
+    expect(start).toBeGreaterThan(-1)
+    const ipcMain = { handle: vi.fn() }
+    const delegatedProfiles = vi.fn().mockResolvedValue(['support', 'sibling'])
+    const primaryProfileKey = vi.fn(() => 'ordinary')
+    runInNewContext(mainSource.slice(start, mainSource.indexOf('\n})', start) + 3), {
+      EVA_MANAGED_BUILD: true,
+      buildEvaManagedAgentRoster,
+      evaManagedRuntime: { delegatedProfiles },
+      ipcMain,
+      primaryProfileKey
+    })
+    expect(ipcMain.handle.mock.calls[0][0]).toBe('hermes:agents:roster')
+    const roster = ipcMain.handle.mock.calls[0][1]
+    const result = await roster()
+    expect(result.agents.map((row: { profile: string }) => row.profile)).toEqual(['support', 'sibling'])
+    expect(result.sources).toHaveLength(1)
+    expect(primaryProfileKey).not.toHaveBeenCalled()
+    delegatedProfiles.mockResolvedValueOnce(null)
+    expect((await roster()).agents[0].profile).toBe('ordinary')
+    delegatedProfiles.mockRejectedValueOnce(new Error('support session expired'))
+    await expect(roster()).rejects.toThrow('support session expired')
   })
 
   it('accepts only the exact managed route identity', () => {
