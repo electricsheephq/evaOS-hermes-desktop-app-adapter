@@ -1192,6 +1192,19 @@ function createEvaManagedRuntime(options) {
     }
   }
 
+  async function readDelegatedProfile(request, retry, errors) {
+    try {
+      return await requestApi(request, retry)
+    } catch (error) {
+      const status = statusCodeOf(error)
+      // A route outage is local to this profile. Authorization, policy and
+      // lease failures still invalidate the aggregate rather than hiding them.
+      if (status !== null && status < 500) throw error
+      errors.push({ profile: request.profile, error: 'Profile temporarily unavailable.' })
+      return null
+    }
+  }
+
   async function requestDelegatedSessionList(runtime, request, profiles, retry) {
     const parsed = new URL(String(request.path), 'http://eva-managed.invalid')
     const limit = Number(parsed.searchParams.get('limit') ?? 20)
@@ -1204,12 +1217,13 @@ function createEvaManagedRuntime(options) {
     parsed.searchParams.set('limit', String(Math.min(limit + offset, 500)))
     parsed.searchParams.set('offset', '0')
     const results = []
+    const readErrors = []
     const guard = startSupportRequestGuard(runtime)
     try {
       for (const profile of profiles) {
         assertSupportRequestCurrent(guard)
         parsed.searchParams.set('profile', profile)
-        results.push(await requestApi({ ...request, profile, path: `${parsed.pathname}?${parsed.searchParams}` }, retry))
+        results.push(await readDelegatedProfile({ ...request, profile, path: `${parsed.pathname}?${parsed.searchParams}` }, retry, readErrors))
         assertSupportRequestCurrent(guard)
       }
     } finally {
@@ -1231,24 +1245,25 @@ function createEvaManagedRuntime(options) {
       offset,
       profile_totals: profileTotals,
       profiles_truncated: profilesTruncated,
-      errors: results.flatMap(result => result?.errors ?? [])
+      errors: [...readErrors, ...results.flatMap(result => result?.errors ?? [])]
     }
   }
 
   async function requestDelegatedProfiles(runtime, request, retry) {
     const profiles = []
+    const errors = []
     const guard = startSupportRequestGuard(runtime)
     try {
       for (const profile of runtime.allowedProfiles) {
         assertSupportRequestCurrent(guard)
-        const result = await requestApi({ ...request, profile, path: `/api/profiles?profile=${encodeURIComponent(profile)}` }, retry)
+        const result = await readDelegatedProfile({ ...request, profile, path: `/api/profiles?profile=${encodeURIComponent(profile)}` }, retry, errors)
         assertSupportRequestCurrent(guard)
         for (const row of result?.profiles ?? []) {
           if (row.name !== profile) throw supportProfileError()
           profiles.push(row)
         }
       }
-      return { profiles }
+      return { profiles, ...(errors.length ? { errors } : {}) }
     } finally {
       finishSupportRequestGuard(guard)
     }

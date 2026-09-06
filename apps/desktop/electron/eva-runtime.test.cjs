@@ -969,6 +969,42 @@ test('admin profile discovery reads every granted agent even without sessions', 
   await assert.rejects(runtime.requestApi({ path: '/api/profiles' }), error => error.code === 'support-profile-mismatch')
 })
 
+test('admin aggregate reads isolate unavailable profiles but reject authorization failures', async t => {
+  for (const requestPath of ['/api/profiles', '/api/profiles/sessions?profile=all', '/api/profiles/sessions/sidebar']) {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-support-partial-'))
+    t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+    const statePath = path.join(directory, 'state.json')
+    writeActiveEnrollment(statePath)
+    const payload = supportEnrollment()
+    payload.admin_bypass = true
+    payload.assignment_version = null
+    payload.remote_backend.allowed_profiles = ['support', 'sibling']
+    let failure = new EvaBrokerError('synthetic private upstream detail', 503, 'upstream_unavailable')
+    const runtime = makeManagedRuntime(statePath, {
+      brokerPost: async () => payload,
+      fetchJson: async url => {
+        const parsed = new URL(url)
+        const profile = parsed.searchParams.get('profile')
+        if (profile === 'support') throw failure
+        return parsed.pathname === '/api/profiles'
+          ? { profiles: [{ name: profile }] }
+          : { sessions: [{ id: profile, profile }], total: 1 }
+      }
+    })
+    t.after(() => runtime.close())
+    await runtime.claimSupportRequest('partial-request')
+    for (const error of [failure, new Error('synthetic private network detail')]) {
+      failure = error
+      const result = await runtime.requestApi({ path: requestPath })
+      assert.equal((result.profiles ?? result.sessions ?? result.recents.sessions).length, 1)
+      assert.ok(result.errors.some(entry => entry.profile === 'support'))
+      assert.equal(JSON.stringify(result).includes('synthetic private'), false)
+    }
+    failure = new EvaBrokerError('authorization revoked', 403, 'forbidden')
+    await assert.rejects(runtime.requestApi({ path: requestPath }), error => error.statusCode === 403)
+  }
+})
+
 test('admin aggregate reads recover once after same-grant credential refresh', async t => {
   for (const requestPath of ['/api/profiles', '/api/profiles/sessions?profile=all', '/api/profiles/sessions/sidebar']) {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-support-aggregate-refresh-'))
