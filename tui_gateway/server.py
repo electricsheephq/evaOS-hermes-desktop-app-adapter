@@ -874,21 +874,22 @@ def _finalize_session(session: dict | None, end_reason: str = "tui_close") -> No
             # End the row in the *session's* profile state.db (app-global
             # remote mode), not the launch profile's shared handle.
             with _session_db(session) as db:
-                if db is not None:
-                    # Don't end gateway-originated sessions — the gateway owns
-                    # their lifecycle.  The TUI is a viewer, not the owner.
-                    # Ending a gateway session in state.db triggers a Groundhog
-                    # Day routing loop: the gateway's #54878 self-heal detects
-                    # the stale entry, recovers to the parent session, context
-                    # compression splits back to the reaped child, and the cycle
-                    # repeats on every inbound message.  (#60609)
-                    row = db.get_session(session_id)
-                    source = (row or {}).get("source", "")
-                    _tui_owns_lifecycle = not _is_gateway_owned_source(source)
-                    if agent is not None:
-                        agent._end_session_on_close = _tui_owns_lifecycle
-                    if _tui_owns_lifecycle:
-                        db.end_session(session_id, end_reason)
+                if db is None:
+                    raise RuntimeError("session profile database unavailable")
+                # Don't end gateway-originated sessions — the gateway owns
+                # their lifecycle.  The TUI is a viewer, not the owner.
+                # Ending a gateway session in state.db triggers a Groundhog
+                # Day routing loop: the gateway's #54878 self-heal detects
+                # the stale entry, recovers to the parent session, context
+                # compression splits back to the reaped child, and the cycle
+                # repeats on every inbound message.  (#60609)
+                row = db.get_session(session_id)
+                source = (row or {}).get("source", "")
+                _tui_owns_lifecycle = not _is_gateway_owned_source(source)
+                if agent is not None:
+                    agent._end_session_on_close = _tui_owns_lifecycle
+                if _tui_owns_lifecycle:
+                    db.end_session(session_id, end_reason)
         except Exception:
             # The profile-scoped lookup handle may be transiently unavailable,
             # while AIAgent still owns a usable handle for this session. Use it

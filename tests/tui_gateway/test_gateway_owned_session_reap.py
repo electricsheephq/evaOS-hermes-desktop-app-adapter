@@ -10,6 +10,7 @@ loops.  The TUI is only a viewer of those sessions.
 
 import sqlite3
 import threading
+from contextlib import nullcontext
 from unittest.mock import MagicMock, patch
 
 from tui_gateway.server import _finalize_session, _is_gateway_owned_source, _teardown_session
@@ -221,3 +222,24 @@ class TestRealSessionDBTeardown:
         assert row["ended_at"] is None
         assert row["end_reason"] is None
         assert agent._end_session_on_close is False
+
+    def test_none_profile_db_falls_back_to_agent_db_before_real_close(
+        self, tmp_path, monkeypatch
+    ):
+        _db, db_path, session, agent = _make_real_session(
+            tmp_path,
+            monkeypatch,
+            source="tui",
+            session_id="real-none-db-session",
+        )
+
+        with patch(
+            "tui_gateway.server._session_db", return_value=nullcontext(None)
+        ):
+            _teardown_session(session, end_reason="tui_close")
+
+        row = _read_real_row(db_path, "real-none-db-session")
+        assert row["source"] == "tui"
+        assert row["ended_at"] is not None
+        assert row["end_reason"] == "tui_close"
+        assert agent._end_session_on_close is True
