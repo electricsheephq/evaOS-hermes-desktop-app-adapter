@@ -969,6 +969,41 @@ test('admin profile discovery reads every granted agent even without sessions', 
   await assert.rejects(runtime.requestApi({ path: '/api/profiles' }), error => error.code === 'support-profile-mismatch')
 })
 
+test('admin aggregate reads recover once after same-grant credential refresh', async t => {
+  for (const requestPath of ['/api/profiles', '/api/profiles/sessions?profile=all', '/api/profiles/sessions/sidebar']) {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-support-aggregate-refresh-'))
+    t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+    const statePath = path.join(directory, 'state.json')
+    writeActiveEnrollment(statePath)
+    const payload = supportEnrollment()
+    payload.admin_bypass = true
+    payload.assignment_version = null
+    payload.remote_backend.allowed_profiles = ['support', 'sibling']
+    let fetchCount = 0
+    let resumes = 0
+    const runtime = makeManagedRuntime(statePath, {
+      brokerPost: async body => {
+        if (body.action === 'internal_support_session_resume') resumes += 1
+        return payload
+      },
+      fetchJson: async url => {
+        if (++fetchCount === 1) throw new EvaBrokerError('refresh required', 401, 'session_expired')
+        const parsed = new URL(url)
+        const profile = parsed.searchParams.get('profile')
+        return parsed.pathname === '/api/profiles'
+          ? { profiles: [{ name: profile }] }
+          : { sessions: [{ id: profile, profile }], total: 1 }
+      }
+    })
+    t.after(() => runtime.close())
+    await runtime.claimSupportRequest('aggregate-refresh-request')
+    const result = await runtime.requestApi({ path: requestPath })
+    assert.equal((result.profiles ?? result.sessions ?? result.recents.sessions).length, 2)
+    assert.equal(resumes, 1)
+    assert.equal(runtime.status().delegatedSupportActive, true)
+  }
+})
+
 test('support readiness 401 revalidates the same delegated assignment without ordinary fallback', async t => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-support-readiness-401-'))
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
@@ -1216,39 +1251,42 @@ test('renderer reset returning false refuses and remotely ends a claimed support
 })
 
 test('ending delegated support aborts and rejects an in-flight JSON request', async t => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-support-request-abort-'))
-  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
-  const statePath = path.join(directory, 'eva-enrollment.json')
-  writeActiveEnrollment(statePath)
-  let releaseFetch
-  let requestSignal
-  const fetchGate = new Promise(resolve => {
-    releaseFetch = resolve
-  })
-  const runtime = makeManagedRuntime(statePath, {
-    brokerPost: async body => {
-      if (body.action === 'claim_internal_support_request') return supportEnrollment()
-      if (body.action === 'internal_support_session_end') return { ok: true }
-      throw new Error('unexpected action')
-    },
-    fetchJson: async (_url, _token, options) => {
-      requestSignal = options.signal
-      await fetchGate
-      return { customer: 'must-not-escape' }
-    }
-  })
+  for (const requestPath of ['/api/sessions', '/api/profiles', '/api/profiles/sessions?profile=all']) {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-support-request-abort-'))
+    t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+    const statePath = path.join(directory, 'eva-enrollment.json')
+    writeActiveEnrollment(statePath)
+    let releaseFetch
+    let requestSignal
+    const fetchGate = new Promise(resolve => {
+      releaseFetch = resolve
+    })
+    const runtime = makeManagedRuntime(statePath, {
+      brokerPost: async body => {
+        if (body.action === 'claim_internal_support_request') return supportEnrollment()
+        if (body.action === 'internal_support_session_end') return { ok: true }
+        throw new Error('unexpected action')
+      },
+      fetchJson: async (_url, _token, options) => {
+        requestSignal = options.signal
+        await fetchGate
+        return { customer: 'must-not-escape' }
+      }
+    })
 
-  await runtime.claimSupportRequest('request-123')
-  const request = runtime.requestApi({ method: 'GET', path: '/api/sessions', profile: 'support' })
-  await new Promise(resolve => setImmediate(resolve))
-  assert.equal(requestSignal?.aborted, false)
-  assert.deepEqual(await runtime.endSupportSession(), { ok: true })
-  assert.equal(requestSignal.aborted, true)
-  releaseFetch()
-  await assert.rejects(
-    request,
-    error => error instanceof EvaBrokerError && error.code === 'support-session-expired'
-  )
+    await runtime.claimSupportRequest('request-123')
+    const request = runtime.requestApi({ method: 'GET', path: requestPath, profile: 'support' })
+    await new Promise(resolve => setImmediate(resolve))
+    assert.equal(requestSignal?.aborted, false)
+    assert.deepEqual(await runtime.endSupportSession(), { ok: true })
+    assert.equal(requestSignal.aborted, true)
+    releaseFetch()
+    await assert.rejects(
+      request,
+      error => error instanceof EvaBrokerError && error.code === 'support-session-expired'
+    )
+    await runtime.close()
+  }
 })
 
 test('ending delegated support aborts and rejects an in-flight media request', async t => {

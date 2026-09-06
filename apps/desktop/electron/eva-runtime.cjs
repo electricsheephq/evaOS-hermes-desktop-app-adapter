@@ -1303,20 +1303,30 @@ function createEvaManagedRuntime(options) {
     const supportRequest = runtime.sessionKind === 'delegated_support'
     const parsedRequest = new URL(String(request?.path || ''), 'http://eva-managed.invalid')
     const requestPath = parsedRequest.pathname
-    if (supportRequest && String(request?.method || 'GET').toUpperCase() === 'GET' &&
-      requestPath === '/api/profiles' &&
-      (!parsedRequest.searchParams.has('profile') || parsedRequest.searchParams.get('profile') === 'all')) {
-      assertEvaManagedApiRequestAllowed({ ...request, profile: supportProfileFor(runtime, request?.profile) })
-      return requestDelegatedProfiles(runtime, request, retry)
-    }
-    if (supportRequest && String(request?.method || 'GET').toUpperCase() === 'GET' &&
-      requestPath === '/api/profiles/sessions' &&
-      new URL(request.path, 'http://eva-managed.invalid').searchParams.get('profile') === 'all') {
-      assertEvaManagedApiRequestAllowed({ ...request, profile: supportProfileFor(runtime, request?.profile) })
-      return requestDelegatedSessionList(runtime, request, runtime.allowedProfiles, retry)
-    }
-    if (supportRequest && requestPath === '/api/profiles/sessions/sidebar') {
-      return requestDelegatedSidebar(runtime, request, retry)
+    try {
+      if (supportRequest && String(request?.method || 'GET').toUpperCase() === 'GET' &&
+        requestPath === '/api/profiles' &&
+        (!parsedRequest.searchParams.has('profile') || parsedRequest.searchParams.get('profile') === 'all')) {
+        assertEvaManagedApiRequestAllowed({ ...request, profile: supportProfileFor(runtime, request?.profile) })
+        return await requestDelegatedProfiles(runtime, request, retry)
+      }
+      if (supportRequest && String(request?.method || 'GET').toUpperCase() === 'GET' &&
+        requestPath === '/api/profiles/sessions' && parsedRequest.searchParams.get('profile') === 'all') {
+        assertEvaManagedApiRequestAllowed({ ...request, profile: supportProfileFor(runtime, request?.profile) })
+        return await requestDelegatedSessionList(runtime, request, runtime.allowedProfiles, retry)
+      }
+      if (supportRequest && requestPath === '/api/profiles/sessions/sidebar') {
+        return await requestDelegatedSidebar(runtime, request, retry)
+      }
+    } catch (error) {
+      // A successful leaf 401 refresh invalidates earlier generation guards.
+      // Restart only these read aggregates, once, under the same live lease.
+      // End/sign-out, a new target, and real expiry must never be retried.
+      const current = readState().delegatedSupport
+      if (!retry || error?.code !== 'support-session-expired' || !current ||
+        current.supportSessionId !== runtime.supportSessionId || expiresSoon(current.supportExpiresAt, 0, now())) throw error
+      assertSupportResumeMatches(runtime, current)
+      return requestApi(request, false)
     }
     const bound = bindSupportRequest(runtime, request)
     const allowed = assertEvaManagedApiRequestAllowed(bound.profile ? { ...bound.request, profile: bound.profile } : bound.request, bound.policy)
