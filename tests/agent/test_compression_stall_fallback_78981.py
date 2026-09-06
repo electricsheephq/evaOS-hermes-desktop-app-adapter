@@ -80,7 +80,10 @@ class _StalledSummaryWorker:
             attempt = len(self.routes)
         if attempt <= self.stall_attempts:
             # Connection open, zero tokens, zero fence progress.
-            self.release.wait(timeout=10)
+            # Keep the fake provider hold bounded to the fixture's 200ms
+            # cancellation window so a heavily scheduled host cannot strand
+            # the fallback retry behind this test-only worker.
+            self.release.wait(timeout=0.2)
             return ([{"role": "assistant", "content": "late"}], "late-prompt")
         if not fence.begin_commit():
             return ([{"role": "assistant", "content": "cancelled"}], "cancelled")

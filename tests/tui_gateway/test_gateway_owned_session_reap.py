@@ -8,9 +8,11 @@ drops the ended-but-routed entry, recovers hours-old parent context, and
 loops.  The TUI is only a viewer of those sessions.
 """
 
+import sqlite3
+import threading
 from unittest.mock import MagicMock, patch
 
-from tui_gateway.server import _finalize_session, _is_gateway_owned_source
+from tui_gateway.server import _finalize_session, _is_gateway_owned_source, _teardown_session
 
 
 class TestIsGatewayOwnedSource:
@@ -49,6 +51,44 @@ def _make_session(session_id="sess_1"):
     }
 
 
+def _make_real_session(tmp_path, monkeypatch, *, source, session_id):
+    from hermes_state import SessionDB
+    from run_agent import AIAgent
+
+    hermes_home = tmp_path / "hermes_home"
+    hermes_home.mkdir()
+    monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+    db_path = hermes_home / "state.db"
+    db = SessionDB(db_path=db_path)
+    db.create_session(session_id, source=source)
+
+    # Bypass provider construction while still exercising the production AIAgent.close() implementation against a
+    # real SessionDB handle.
+    agent = AIAgent.__new__(AIAgent)
+    agent.session_id = session_id
+    agent._session_db = db
+    agent._owns_session_db = True
+    agent._end_session_on_close = True
+    agent._session_messages = []
+    agent._active_children_lock = threading.Lock()
+    agent._active_children = []
+
+    session = _make_session(session_id)
+    session["agent"] = agent
+    session["profile_home"] = str(hermes_home)
+    return db, db_path, session, agent
+
+
+def _read_real_row(db_path, session_id):
+    from hermes_state import SessionDB
+
+    db = SessionDB(db_path=db_path)
+    try:
+        return db.get_session(session_id)
+    finally:
+        db.close()
+
+
 class TestFinalizeSkipsGatewaySessions:
     @patch("tui_gateway.server._get_db")
     def test_gateway_session_not_ended(self, mock_get_db):
@@ -72,3 +112,57 @@ class TestFinalizeSkipsGatewaySessions:
         _finalize_session(_make_session(), end_reason="tui_close")
 
         db.end_session.assert_called_once_with("sess_1", "tui_close")
+
+
+class TestRealSessionDBTeardown:
+    def test_lookup_failure_falls_back_to_agent_db_before_real_close(self, tmp_path, monkeypatch):
+        _db, db_path, session, agent = _make_real_session(
+            tmp_path,
+            monkeypatch,
+            source="telegram",
+            session_id="real-lookup-failure-session",
+        )
+        from hermes_state import SessionDB
+
+        agent_db = agent._session_db
+        original_get_session = SessionDB.get_session
+        calls = []
+
+        def fail_first_lookup(handle, session_id):
+            calls.append(handle)
+            if len(calls) == 1:
+                raise sqlite3.OperationalError("database is locked")
+            return original_get_session(handle, session_id)
+
+        with patch.object(SessionDB, "get_session", fail_first_lookup):
+            _teardown_session(session, end_reason="ws_orphan_reap")
+
+        assert len(calls) == 2
+        assert calls[0] is not agent_db
+        assert calls[1] is agent_db
+        row = _read_real_row(db_path, "real-lookup-failure-session")
+        assert row["source"] == "telegram"
+        assert row["ended_at"] is None
+        assert row["end_reason"] is None
+        assert agent._end_session_on_close is False
+
+    def test_both_lookup_failures_disable_agent_close(self, tmp_path, monkeypatch):
+        _db, db_path, session, agent = _make_real_session(
+            tmp_path,
+            monkeypatch,
+            source="telegram",
+            session_id="real-both-lookup-failure-session",
+        )
+        from hermes_state import SessionDB
+
+        def fail_lookup(_handle, _session_id):
+            raise sqlite3.OperationalError("database is locked")
+
+        with patch.object(SessionDB, "get_session", fail_lookup):
+            _teardown_session(session, end_reason="ws_orphan_reap")
+
+        row = _read_real_row(db_path, "real-both-lookup-failure-session")
+        assert row["source"] == "telegram"
+        assert row["ended_at"] is None
+        assert row["end_reason"] is None
+        assert agent._end_session_on_close is False

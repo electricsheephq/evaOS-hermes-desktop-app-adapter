@@ -236,24 +236,53 @@ def _finalize_session(session: dict | None, end_reason: str = "tui_close") -> No
     # End the state.db row so it doesn't linger as a ghost in /resume. Use session_id (agent.session_id), not
     # session_key: after compression the key may be the stale ended parent while session_id is the live continuation.
     # Fix for #20001.
+    # Unknown ownership is unsafe to hand to AIAgent.close(): a profile DB lookup can fail while the agent's
+    # already-open handle remains usable. Keep the close policy conservative until one of the two handles qualifies
+    # the row; if both lookups fail, the agent must not end it during close.
+    _tui_owns_lifecycle = False
+    if agent is not None and hasattr(agent, "_end_session_on_close"):
+        agent._end_session_on_close = False
     if _desktop_automatic_cleanup and not session_id:
         _release_active_session_slot(session)
     _lifecycle_guard = (_other_runtime_lease_guard(session_id, session)
                         if _desktop_automatic_cleanup and session_id else contextlib.nullcontext(False))
     with _lifecycle_guard as _other_runtime_owns_lifecycle:
-        _tui_owns_lifecycle = not _other_runtime_owns_lifecycle
         if _other_runtime_owns_lifecycle:
             logger.info("Preserving session %s during %s: another backend owns an active lease", session_id, end_reason)
         if session_id:
-            # The *session's* profile state.db (app-global remote mode), not the launch profile's.
-            with contextlib.suppress(Exception), _session_db(session) as db:
-                if db is not None:
+            try:
+                # The *session's* profile state.db (app-global remote mode), not the launch profile's.
+                with _session_db(session) as db:
+                    if db is None:
+                        raise RuntimeError("session profile database unavailable")
                     # Never end gateway-originated sessions: Groundhog Day loop (gateway self-heals to the parent,
                     # compression splits back to the reaped child, forever).
-                    if _is_gateway_owned_source((db.get_session(session_id) or {}).get("source", "")):
-                        _tui_owns_lifecycle = False
-                    elif _tui_owns_lifecycle:
+                    source = (db.get_session(session_id) or {}).get("source", "")
+                    _tui_owns_lifecycle = (
+                        not _other_runtime_owns_lifecycle and not _is_gateway_owned_source(source))
+                    if agent is not None and hasattr(agent, "_end_session_on_close"):
+                        agent._end_session_on_close = _tui_owns_lifecycle
+                    if _tui_owns_lifecycle:
                         db.end_session(session_id, end_reason)
+            except Exception:
+                # The profile-scoped lookup handle may be transiently unavailable, while AIAgent still owns a usable
+                # handle for this session. Use it to qualify ownership before the real agent close; if that second
+                # lookup also fails, retain the conservative close policy above.
+                try:
+                    owner_db = getattr(agent, "_session_db", None)
+                    if owner_db is None:
+                        raise RuntimeError("session owner database unavailable")
+                    source = (owner_db.get_session(session_id) or {}).get("source", "")
+                    _tui_owns_lifecycle = (
+                        not _other_runtime_owns_lifecycle and not _is_gateway_owned_source(source))
+                    if agent is not None and hasattr(agent, "_end_session_on_close"):
+                        agent._end_session_on_close = _tui_owns_lifecycle
+                    if _tui_owns_lifecycle:
+                        owner_db.end_session(session_id, end_reason)
+                except Exception:
+                    _tui_owns_lifecycle = False
+                    if agent is not None and hasattr(agent, "_end_session_on_close"):
+                        agent._end_session_on_close = False
     # In-flight async delegations end WITH the session (no return address left). Always interrupt by THIS live UI
     # sid; by durable session_key only when the TUI owns the lifecycle — a viewer tab must not kill gateway work.
     with contextlib.suppress(Exception):
