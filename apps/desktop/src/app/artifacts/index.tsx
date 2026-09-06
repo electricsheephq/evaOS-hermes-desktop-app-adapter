@@ -127,6 +127,7 @@ export function ArtifactsView({ setStatusbarItemGroup: _setStatusbarItemGroup, .
   const [refreshing, setRefreshing] = useState(false)
   const [scanProgress, setScanProgress] = useState<{ completed: number; total: number } | null>(null)
   const refreshInFlightRef = useRef(false)
+  const hasCompletedScanRef = useRef(false)
 
   const refreshArtifacts = useCallback(async () => {
     if (refreshInFlightRef.current) {
@@ -147,7 +148,7 @@ export function ArtifactsView({ setStatusbarItemGroup: _setStatusbarItemGroup, .
         progress => {
           setScanProgress({ completed: progress.completed, total: progress.total })
 
-          if (progress.artifacts.length > 0) {
+          if (!hasCompletedScanRef.current && progress.artifacts.length > 0) {
             setArtifacts(progress.artifacts.sort((left, right) => right.timestamp - left.timestamp))
           }
         }
@@ -177,6 +178,7 @@ export function ArtifactsView({ setStatusbarItemGroup: _setStatusbarItemGroup, .
         })
       }
 
+      hasCompletedScanRef.current = true
       setArtifacts(nextArtifacts.sort((left, right) => right.timestamp - left.timestamp))
     } catch (err) {
       notifyError(err, a.failedLoad)
@@ -332,18 +334,25 @@ export function ArtifactsView({ setStatusbarItemGroup: _setStatusbarItemGroup, .
       searchHints={searchHints}
       searchPlaceholder={a.search}
       searchTrailingAction={
-        <Tip label={refreshing ? indexingLabel : a.refresh}>
-          <Button
-            aria-label={refreshing ? indexingLabel : a.refresh}
-            className="text-(--ui-text-tertiary) hover:bg-(--chrome-action-hover) hover:text-foreground"
-            disabled={refreshing}
-            onClick={() => void refreshArtifacts()}
-            size="icon-titlebar"
-            variant="ghost"
-          >
-            {refreshing ? <TitlebarIcon name="loading" spinning /> : <TitlebarIcon name="refresh" />}
-          </Button>
-        </Tip>
+        <div className="flex min-w-0 items-center gap-2">
+          {refreshing && (
+            <span aria-live="polite" className="truncate text-xs text-muted-foreground" role="status">
+              {indexingLabel}
+            </span>
+          )}
+          <Tip label={refreshing ? indexingLabel : a.refresh}>
+            <Button
+              aria-label={refreshing ? indexingLabel : a.refresh}
+              className="text-(--ui-text-tertiary) hover:bg-(--chrome-action-hover) hover:text-foreground"
+              disabled={refreshing}
+              onClick={() => void refreshArtifacts()}
+              size="icon-titlebar"
+              variant="ghost"
+            >
+              {refreshing ? <TitlebarIcon name="loading" spinning /> : <TitlebarIcon name="refresh" />}
+            </Button>
+          </Tip>
+        </div>
       }
       searchValue={query}
       tabs={[
