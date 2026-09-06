@@ -868,7 +868,7 @@ function createEvaManagedRuntime(options) {
   async function ensureRuntimeEnrollment(input = {}) {
     await requireRendererIsolation()
     if (pendingAuth?.supportPending || currentState().supportSignInPending) {
-      throw new EvaBrokerError('Customer support sign-in is incomplete. If interrupted, sign out and start a fresh sign-in.', 409, 'support-sign-in-pending')
+      throw new EvaBrokerError('Customer support sign-in is incomplete. If interrupted, choose Sign In to clear it and start a fresh sign-in.', 409, 'support-sign-in-pending')
     }
     const force = input.force === true
     if (runtimeEnrollmentPromise) {
@@ -1026,9 +1026,6 @@ function createEvaManagedRuntime(options) {
 
   async function signIn() {
     await requireRendererIsolation()
-    if (currentState().supportSignInPending) {
-      throw new EvaBrokerError('Sign out before retrying an interrupted customer support sign-in.', 409, 'support-sign-in-pending')
-    }
     if (currentState().delegatedSupport) {
       throw new EvaBrokerError('End the current support session before signing in again.', 409, 'support-session-active')
     }
@@ -1050,6 +1047,9 @@ function createEvaManagedRuntime(options) {
         code
       )
     }
+    // Boot recovery exposes Sign In, not Settings sign-out. Consume the
+    // interrupted enrollment through the existing cleanup before new login.
+    if (currentState().supportSignInPending) await signOut()
     invalidateAuthWork()
     writeState(emptyState())
     supportRevalidated = false
