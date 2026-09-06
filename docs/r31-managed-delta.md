@@ -1,5 +1,16 @@
 # r31.1 managed-delta ledger
 
+## Pending Desktop support-picker integration
+
+The managed sign-in URL advertises `desktop_support_login_version=1`. The broker
+may return an opaque support request only after possession-bound employee login;
+the native process claims it before exposing a gateway. While that claim is
+pending, ordinary enrollment is blocked. Failure clears the new login instead
+of silently opening another workspace. Existing exact-profile, one-hour expiry,
+renderer isolation and End behavior remain authoritative. This source change
+requires a compatible broker and signed Desktop delivery; it is not installed
+delegated-access acceptance or permission to reset a customer conversation.
+
 This ledger maps retained behavior into pinned upstream modules. It supplements the actual Git diff, never substitutes for it. Preserve [the previous 8.27 ledger](desktop-v2026.8.27-managed-delta.md) unchanged.
 
 ## Identities

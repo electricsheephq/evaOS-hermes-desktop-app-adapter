@@ -166,6 +166,7 @@ function createEvaManagedRuntime(options) {
       delegatedSupport,
       delegatedSupportNeedsClear,
       desktopCredentialUnreadable,
+      supportSignInPending: parsed.support_sign_in_pending === true,
       rendererCleanupPending: parsed.renderer_cleanup_pending === true,
       signedOut: parsed.signed_out === true
     }
@@ -202,6 +203,7 @@ function createEvaManagedRuntime(options) {
     atomicWrite({
       schema_version: EVA_MANAGED_POLICY.schemaVersion,
       signed_out: false,
+      ...(state.supportSignInPending ? { support_sign_in_pending: true } : {}),
       ...(state.rendererCleanupPending ? { renderer_cleanup_pending: true } : {}),
       desktop: {
         token: options.encryptSecret(state.desktop.token),
@@ -592,10 +594,24 @@ function createEvaManagedRuntime(options) {
         } finally {
           clearTimeout(callbackTimer)
         }
-        const desktop = await pollDeviceCode(deviceCode, verifier, { signal: controller.signal })
+        const { supportRequestId, ...desktop } = await pollDeviceCode(deviceCode, verifier, { signal: controller.signal })
         controller.abort()
         assertGeneration(generation)
-        writeState({ desktop, runtime: null, delegatedSupport: null })
+        attempt.supportPending = Boolean(supportRequestId)
+        writeState({ desktop, runtime: null, delegatedSupport: null, supportSignInPending: Boolean(supportRequestId) })
+        if (supportRequestId) {
+          try {
+            await claimSupportRequest(supportRequestId)
+            assertGeneration(generation)
+          } catch (error) {
+            // No fallback to another workspace after an explicit customer
+            // choice. Revoke only this just-created employee session and clear
+            // its local view; a newer sign-in/sign-out retains state ownership.
+            if (generation === authGeneration) await signOut()
+            else await revokeDesktopSession(desktop.token).catch(() => false)
+            throw error
+          }
+        }
         await advanceBootProgress('eva.authorized', 'Electric Sheep sign-in complete', 22)
         return desktop
       } finally {
@@ -851,6 +867,9 @@ function createEvaManagedRuntime(options) {
 
   async function ensureRuntimeEnrollment(input = {}) {
     await requireRendererIsolation()
+    if (pendingAuth?.supportPending || currentState().supportSignInPending) {
+      throw new EvaBrokerError('Customer support sign-in is incomplete. If interrupted, choose Sign In to clear it and start a fresh sign-in.', 409, 'support-sign-in-pending')
+    }
     const force = input.force === true
     if (runtimeEnrollmentPromise) {
       if (!force || runtimeEnrollmentPromiseForced) return runtimeEnrollmentPromise
@@ -1007,6 +1026,9 @@ function createEvaManagedRuntime(options) {
 
   async function signIn() {
     await requireRendererIsolation()
+    if (currentState().delegatedSupport) {
+      throw new EvaBrokerError('End the current support session before signing in again.', 409, 'support-session-active')
+    }
     try {
       await ensureSignInCallbackReady()
     } catch (error) {
@@ -1025,13 +1047,16 @@ function createEvaManagedRuntime(options) {
         code
       )
     }
+    // Boot recovery exposes Sign In, not Settings sign-out. Consume the
+    // interrupted enrollment through the existing cleanup before new login.
+    if (currentState().supportSignInPending) await signOut()
     invalidateAuthWork()
     writeState(emptyState())
     supportRevalidated = false
     const desktop = await beginSignIn()
-    const runtime = await ensureRuntimeEnrollment({ force: true })
+    await ensureRuntimeEnrollment({ force: !currentState().delegatedSupport })
     resetConnection()
-    return publicEvaEnrollmentStatus({ desktop, runtime })
+    return publicEvaEnrollmentStatus({ desktop, runtime: currentState().runtime, delegatedSupport: currentState().delegatedSupport ?? null })
   }
 
   async function signOut() {
@@ -1327,7 +1352,8 @@ function createEvaManagedRuntime(options) {
     resolveBackend,
     signIn: async () => {
       const status = await signIn()
-      await resetRenderer()
+      // claimSupportRequest already isolated and reloaded this window.
+      if (!status.delegatedSupportActive) await resetRenderer()
       return status
     },
     signOut,
