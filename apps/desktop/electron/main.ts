@@ -296,12 +296,12 @@ import {
 } from './plugin-compat-notice'
 import {
   assertEvaManagedConnectionId,
-  buildEvaManagedAgentRoster,
   buildEvaManagedConnectionsRegistry,
   buildEvaManagedProfileRoutes,
   buildRegistryProfileRoutes,
   EVA_MANAGED_CONNECTION_ID,
   isLocalEnumerationFailure,
+  loadEvaManagedAgentRoster,
   localRouteFallbackProfiles,
   normalizeEvaManagedActiveRoute,
   undialedSshRouteSeeds
@@ -16038,7 +16038,7 @@ async function enumerateRegistryAgentSources(registry = readDesktopConnectionsRe
 
 ipcMain.handle('hermes:agents:roster', async () => {
   if (EVA_MANAGED_BUILD) {
-    return buildEvaManagedAgentRoster((await evaManagedRuntime.delegatedProfiles()) ?? primaryProfileKey())
+    return loadEvaManagedAgentRoster(evaManagedRuntime, primaryProfileKey)
   }
 
   const registry = readDesktopConnectionsRegistry()

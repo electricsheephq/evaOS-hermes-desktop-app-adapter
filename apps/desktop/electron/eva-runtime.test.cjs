@@ -1061,6 +1061,53 @@ test('admin aggregate reads isolate unavailable profiles but reject authorizatio
   }
 })
 
+test('admin discovery retains last-good profile and project rows only inside the same support lease', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-support-cache-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'state.json')
+  writeActiveEnrollment(statePath)
+  let payload = supportEnrollment()
+  payload.admin_bypass = true
+  payload.assignment_version = null
+  payload.remote_backend.allowed_profiles = ['support', 'sibling']
+  let unavailable = false
+  let revision = 1
+  const runtime = makeManagedRuntime(statePath, {
+    brokerPost: async body => body.action === 'internal_support_session_end' ? { ok: true } : payload,
+    fetchJson: async url => {
+      const parsed = new URL(url)
+      const profile = parsed.searchParams.get('profile')
+      if (unavailable && profile === 'sibling') throw new EvaBrokerError('private upstream detail', 503, 'unavailable')
+      return parsed.pathname === '/api/profiles'
+        ? { profiles: [{ name: profile, display_name: `${profile}-${revision}` }] }
+        : { projects: [{ id: profile, name: `${profile}-${revision}`, sessionCount: 1,
+          repos: [{ id: 'repo', groups: [{ id: 'lane', sessions: [{ id: profile, profile }] }] }] }] }
+    }
+  })
+  t.after(() => runtime.close())
+  await runtime.claimSupportRequest('cache-request')
+  const paths = ['/api/profiles', '/api/profiles/projects/tree']
+  for (const path of paths) await runtime.requestApi({ path })
+  unavailable = true
+  revision = 2
+  for (const path of paths) {
+    const partial = await runtime.requestApi({ path })
+    const rows = partial.profiles ?? partial.projects
+    assert.equal(rows.length, 2)
+    assert.deepEqual(rows.map(row => row.display_name ?? row.name), ['support-2', 'sibling-1'])
+    assert.ok(partial.errors.some(error => error.profile === 'sibling'))
+    assert.equal(JSON.stringify(partial).includes('private upstream detail'), false)
+  }
+  assert.deepEqual(await runtime.endSupportSession(), { ok: true })
+  payload = { ...payload, support_session_id: 'next-support-session' }
+  await runtime.claimSupportRequest('next-cache-request')
+  for (const path of paths) {
+    const fresh = await runtime.requestApi({ path })
+    assert.equal((fresh.profiles ?? fresh.projects).length, 1)
+    assert.equal(JSON.stringify(fresh).includes('sibling-1'), false)
+  }
+})
+
 test('admin aggregate reads recover once after same-grant credential refresh', async t => {
   for (const requestPath of ['/api/profiles', '/api/profiles/projects/tree', '/api/profiles/sessions?profile=all', '/api/profiles/sessions/sidebar']) {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-support-aggregate-refresh-'))

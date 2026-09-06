@@ -230,6 +230,14 @@ export function buildEvaManagedAgentRoster(primaryProfile: string | readonly str
   }
 }
 
+/** The IPC reads the live grant before consulting ordinary-login fallback. */
+export async function loadEvaManagedAgentRoster(
+  runtime: { delegatedProfiles: () => Promise<readonly string[] | null> },
+  primaryProfile: () => string
+) {
+  return buildEvaManagedAgentRoster((await runtime.delegatedProfiles()) ?? primaryProfile())
+}
+
 /** Managed plugins may request only the synthetic enrolled-runtime route.
  * Generic registry ids stay unavailable in evaOS Agent. */
 export function assertEvaManagedConnectionId(value: unknown): typeof EVA_MANAGED_CONNECTION_ID {

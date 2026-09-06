@@ -70,6 +70,7 @@ function createEvaManagedRuntime(options) {
   let rendererResetPending = false
   let rendererResetPromise = null
   const supportRequestControllers = new Set()
+  let delegatedReadCache = null
 
   function emptyState(signedOut = false) {
     return {
@@ -369,6 +370,7 @@ function createEvaManagedRuntime(options) {
     state = currentState(),
     { resetRendererState = true, invalidateEnrollment = true } = {}
   ) {
+    delegatedReadCache = null
     supportRevalidated = false
     supportEndError = null
     clearSupportExpiryTimer()
@@ -524,6 +526,7 @@ function createEvaManagedRuntime(options) {
   }
 
   function invalidateAuthWork() {
+    delegatedReadCache = null
     authGeneration += 1
     runtimeGeneration += 1
     runtimeSessionGeneration += 1
@@ -1210,6 +1213,13 @@ function createEvaManagedRuntime(options) {
     return { ...row, profile }
   }
 
+  function supportReadCache(runtime) {
+    if (delegatedReadCache?.sessionId !== runtime.supportSessionId) {
+      delegatedReadCache = { sessionId: runtime.supportSessionId, profiles: new Map(), projects: new Map() }
+    }
+    return delegatedReadCache
+  }
+
   async function requestDelegatedSessionList(runtime, request, profiles, retry) {
     const parsed = new URL(String(request.path), 'http://eva-managed.invalid')
     const limit = Number(parsed.searchParams.get('limit') ?? 20)
@@ -1259,15 +1269,18 @@ function createEvaManagedRuntime(options) {
     const profiles = []
     const errors = []
     const guard = startSupportRequestGuard(runtime)
+    const cache = supportReadCache(runtime).profiles
     try {
       for (const profile of runtime.allowedProfiles) {
         assertSupportRequestCurrent(guard)
         const result = await readDelegatedProfile({ ...request, profile, path: `/api/profiles?profile=${encodeURIComponent(profile)}` }, retry, errors)
         assertSupportRequestCurrent(guard)
-        for (const row of result?.profiles ?? []) {
+        const rows = result?.profiles ?? cache.get(profile) ?? []
+        for (const row of rows) {
           if (row.name !== profile) throw supportProfileError()
-          profiles.push(row)
         }
+        if (result) cache.set(profile, structuredClone(rows))
+        profiles.push(...structuredClone(rows))
       }
       return { profiles, ...(errors.length ? { errors } : {}) }
     } finally {
@@ -1285,6 +1298,7 @@ function createEvaManagedRuntime(options) {
     const scopedIds = new Set()
     const errors = []
     const guard = startSupportRequestGuard(runtime)
+    const cache = supportReadCache(runtime).projects
     // Match hermes_cli.web_routers.profiles._merge_profile_tree: folders/Home
     // merge, declared metadata wins over auto metadata, and counts sum.
     const recency = row => row.last_active || row.started_at || 0
@@ -1307,8 +1321,12 @@ function createEvaManagedRuntime(options) {
       for (const profile of runtime.allowedProfiles) {
         assertSupportRequestCurrent(guard)
         parsed.searchParams.set('profile', profile)
-        const result = await readDelegatedProfile({ ...request, profile, path: `${parsed.pathname}?${parsed.searchParams}` }, retry, errors)
+        const fresh = await readDelegatedProfile({ ...request, profile, path: `${parsed.pathname}?${parsed.searchParams}` }, retry, errors)
         assertSupportRequestCurrent(guard)
+        // A failed read is not authoritative deletion. Keep this lease's last
+        // matching view, while the errors array still reports the outage.
+        const cached = cache.get(profile)
+        const result = fresh ?? (cached?.previewLimit === previewLimit ? structuredClone(cached.result) : null)
         for (const id of result?.scoped_session_ids ?? []) scopedIds.add(id)
         errors.push(...(result?.errors ?? []))
         for (const raw of result?.projects ?? []) {
@@ -1334,6 +1352,7 @@ function createEvaManagedRuntime(options) {
           existing.previewSessions = [...existing.previewSessions, ...project.previewSessions]
             .sort((a, b) => recency(b) - recency(a)).slice(0, previewLimit)
         }
+        if (fresh && !fresh.errors?.length) cache.set(profile, { previewLimit, result: structuredClone(fresh) })
       }
       return { projects: [...projects.values()].sort((a, b) => (b.lastActive || 0) - (a.lastActive || 0)),
         active_id: null, scoped_session_ids: [...scopedIds], errors }

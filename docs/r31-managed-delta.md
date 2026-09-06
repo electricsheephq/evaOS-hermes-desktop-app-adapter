@@ -13,6 +13,9 @@ existing folder/Home merge, declared metadata, counts and preview semantics.
 Explicit returned session-profile mismatches fail closed; profile-less legacy
 rows are bound to their requested leaf. A profile outage is reported separately
 without hiding healthy profiles; authorization failures remain global failures.
+Already-read profile and matching project metadata survive transient read failures
+within that same lease. This in-memory cache is cleared on End, expiry, sign-out
+or a different lease, and outage errors remain in the response.
 Managers retain single-profile grants. The canonical authority and schema
 sequence are documented in the dashboard's `docs/desktop-support-sign-in.md`.
 
