@@ -1762,9 +1762,17 @@ test('post-login support selection claims with the new employee session before a
   await new Promise(resolve => setImmediate(resolve))
   await assert.rejects(runtime.resolveBackend(), error => error.code === 'support-sign-in-pending')
   assert.equal(ownLaunches, 0)
+  assert.equal(JSON.parse(fs.readFileSync(statePath, 'utf8')).support_sign_in_pending, true)
+  const restarted = makeManagedRuntime(statePath, {
+    launchRuntime: async () => { ownLaunches += 1; throw new Error('wrong workspace after restart') }
+  })
+  await assert.rejects(restarted.resolveBackend(), error => error.code === 'support-sign-in-pending')
+  await assert.rejects(restarted.signIn(), error => error.code === 'support-sign-in-pending')
+  restarted.close()
   releaseClaim()
   const status = await signingIn
   assert.equal(status.delegatedSupportActive, true)
+  assert.equal(JSON.parse(fs.readFileSync(statePath, 'utf8')).support_sign_in_pending, undefined)
   assert.equal(rendererResets, 1)
   assert.equal(status.email, 'employee@example.invalid')
   assert.equal((await runtime.resolveBackend({ profile: 'support' })).profile, 'support')
@@ -1772,6 +1780,31 @@ test('post-login support selection claims with the new employee session before a
   await assert.rejects(runtime.signIn(), error => error.code === 'support-session-active')
   assert.equal(fs.readFileSync(statePath, 'utf8').includes(requestId), false)
   assert.equal(ownLaunches, 0)
+})
+
+test('interrupted support sign-in is cleared only by explicit sign-out before retry', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-support-sign-in-interrupted-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeActiveEnrollment(statePath)
+  const state = JSON.parse(fs.readFileSync(statePath, 'utf8'))
+  state.support_sign_in_pending = true
+  fs.writeFileSync(statePath, JSON.stringify(state))
+  const revoked = []
+  let launches = 0
+  const runtime = makeManagedRuntime(statePath, {
+    revokeDesktopSession: async token => { revoked.push(token); return true },
+    launchRuntime: async () => { launches += 1; throw new Error('must not launch') }
+  })
+  t.after(() => runtime.close())
+  await assert.rejects(runtime.resolveBackend(), error => error.code === 'support-sign-in-pending')
+  await assert.rejects(runtime.signIn(), error => error.code === 'support-sign-in-pending')
+  await runtime.signOut()
+  assert.equal(launches, 0)
+  assert.equal(revoked.length, 1)
+  assert.equal(JSON.parse(fs.readFileSync(statePath, 'utf8')).support_sign_in_pending, undefined)
+  assert.equal(runtime.status().desktopSessionActive, false)
+  assert.equal(runtime.status().signedOut, true)
 })
 
 test('a failed selected support claim revokes the new employee session without own-workspace fallback', async t => {

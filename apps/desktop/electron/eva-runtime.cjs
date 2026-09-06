@@ -166,6 +166,7 @@ function createEvaManagedRuntime(options) {
       delegatedSupport,
       delegatedSupportNeedsClear,
       desktopCredentialUnreadable,
+      supportSignInPending: parsed.support_sign_in_pending === true,
       rendererCleanupPending: parsed.renderer_cleanup_pending === true,
       signedOut: parsed.signed_out === true
     }
@@ -202,6 +203,7 @@ function createEvaManagedRuntime(options) {
     atomicWrite({
       schema_version: EVA_MANAGED_POLICY.schemaVersion,
       signed_out: false,
+      ...(state.supportSignInPending ? { support_sign_in_pending: true } : {}),
       ...(state.rendererCleanupPending ? { renderer_cleanup_pending: true } : {}),
       desktop: {
         token: options.encryptSecret(state.desktop.token),
@@ -596,7 +598,7 @@ function createEvaManagedRuntime(options) {
         controller.abort()
         assertGeneration(generation)
         attempt.supportPending = Boolean(supportRequestId)
-        writeState({ desktop, runtime: null, delegatedSupport: null })
+        writeState({ desktop, runtime: null, delegatedSupport: null, supportSignInPending: Boolean(supportRequestId) })
         if (supportRequestId) {
           try {
             await claimSupportRequest(supportRequestId)
@@ -865,8 +867,8 @@ function createEvaManagedRuntime(options) {
 
   async function ensureRuntimeEnrollment(input = {}) {
     await requireRendererIsolation()
-    if (pendingAuth?.supportPending) {
-      throw new EvaBrokerError('Customer support sign-in is still being confirmed.', 409, 'support-sign-in-pending')
+    if (pendingAuth?.supportPending || currentState().supportSignInPending) {
+      throw new EvaBrokerError('Customer support sign-in is incomplete. If interrupted, sign out and start a fresh sign-in.', 409, 'support-sign-in-pending')
     }
     const force = input.force === true
     if (runtimeEnrollmentPromise) {
@@ -1024,6 +1026,9 @@ function createEvaManagedRuntime(options) {
 
   async function signIn() {
     await requireRendererIsolation()
+    if (currentState().supportSignInPending) {
+      throw new EvaBrokerError('Sign out before retrying an interrupted customer support sign-in.', 409, 'support-sign-in-pending')
+    }
     if (currentState().delegatedSupport) {
       throw new EvaBrokerError('End the current support session before signing in again.', 409, 'support-session-active')
     }
