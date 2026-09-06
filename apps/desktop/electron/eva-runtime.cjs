@@ -1347,7 +1347,8 @@ function createEvaManagedRuntime(options) {
     resolveBackend,
     signIn: async () => {
       const status = await signIn()
-      await resetRenderer()
+      // claimSupportRequest already isolated and reloaded this window.
+      if (!status.delegatedSupportActive) await resetRenderer()
       return status
     },
     signOut,

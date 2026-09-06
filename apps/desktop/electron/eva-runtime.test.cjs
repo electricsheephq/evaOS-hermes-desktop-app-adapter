@@ -1739,8 +1739,10 @@ test('post-login support selection claims with the new employee session before a
   let opened
   let releaseClaim
   let ownLaunches = 0
+  let rendererResets = 0
   const claimGate = new Promise(resolve => { releaseClaim = resolve })
   const runtime = makeManagedRuntime(statePath, {
+    resetRenderer: async () => { rendererResets += 1; return true },
     openExternal: async url => { opened = new URL(url) },
     pollDeviceCode: async () => ({ token: 'new-employee-session', expiresAt: FUTURE, email: 'employee@example.invalid', supportRequestId: requestId }),
     launchRuntime: async () => { ownLaunches += 1; throw new Error('wrong workspace') },
@@ -1763,6 +1765,7 @@ test('post-login support selection claims with the new employee session before a
   releaseClaim()
   const status = await signingIn
   assert.equal(status.delegatedSupportActive, true)
+  assert.equal(rendererResets, 1)
   assert.equal(status.email, 'employee@example.invalid')
   assert.equal((await runtime.resolveBackend({ profile: 'support' })).profile, 'support')
   await assert.rejects(runtime.resolveBackend({ profile: 'other' }), error => error.code === 'support-profile-mismatch')
