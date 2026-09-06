@@ -864,7 +864,11 @@ def _finalize_session(session: dict | None, end_reason: str = "tui_close") -> No
     # Use session_id (from agent.session_id) not session_key — after compression,
     # session_key may be stale (the ended parent) while session_id is the live
     # continuation. Fix for #20001.
-    _tui_owns_lifecycle = True
+    # Unknown ownership is unsafe to hand to AIAgent.close(): a profile DB
+    # lookup can fail while the agent's already-open handle remains usable.
+    _tui_owns_lifecycle = False
+    if agent is not None:
+        agent._end_session_on_close = False
     if session_id:
         try:
             # End the row in the *session's* profile state.db (app-global
@@ -881,14 +885,28 @@ def _finalize_session(session: dict | None, end_reason: str = "tui_close") -> No
                     row = db.get_session(session_id)
                     source = (row or {}).get("source", "")
                     _tui_owns_lifecycle = not _is_gateway_owned_source(source)
-                    if not _tui_owns_lifecycle and agent is not None:
-                        # _teardown_session closes the viewer after finalize; keep that close from ending the
-                        # gateway-owned row through AIAgent's default close policy.
-                        agent._end_session_on_close = False
+                    if agent is not None:
+                        agent._end_session_on_close = _tui_owns_lifecycle
                     if _tui_owns_lifecycle:
                         db.end_session(session_id, end_reason)
         except Exception:
-            pass
+            # The profile-scoped lookup handle may be transiently unavailable,
+            # while AIAgent still owns a usable handle for this session. Use it
+            # to qualify ownership before the real agent close; if that second
+            # lookup also fails, retain the conservative close policy above.
+            try:
+                owner_db = getattr(agent, "_session_db", None)
+                if owner_db is None:
+                    raise RuntimeError("session owner database unavailable")
+                row = owner_db.get_session(session_id)
+                source = (row or {}).get("source", "")
+                _tui_owns_lifecycle = not _is_gateway_owned_source(source)
+                if agent is not None:
+                    agent._end_session_on_close = _tui_owns_lifecycle
+                if _tui_owns_lifecycle:
+                    owner_db.end_session(session_id, end_reason)
+            except Exception:
+                pass
 
     # A session's in-flight async delegations end WITH the session (#55578):
     # once nobody owns the return address, a still-running background subagent
