@@ -144,6 +144,6 @@ test.describe('managed signed-out boot', () => {
     await banner.getByRole('button', { name: 'End support session', exact: true }).click()
     await expect(banner).toBeHidden()
     await expect(page.getByText('Synthetic customer gateway unavailable', { exact: true })).toBeVisible()
-    await expect(page.getByRole('button', { name: 'Sign in to evaOS Agent', exact: true })).toBeVisible()
+    await expect(page.getByRole('heading', { name: /couldn't start/ })).toBeVisible()
   })
 })
