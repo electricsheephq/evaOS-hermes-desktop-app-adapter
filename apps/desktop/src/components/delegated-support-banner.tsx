@@ -72,7 +72,7 @@ export function DelegatedSupportBanner() {
   return (
     <div
       aria-label={t.delegatedSupport.actingForCustomer(status.supportCustomerLabel)}
-      className="fixed inset-x-0 z-(--z-over-modal) flex min-h-10 items-center justify-center gap-3 border-b border-(--ui-stroke-tertiary) bg-(--ui-bg-quaternary) px-4 py-2 text-sm text-(--ui-text-primary)"
+      className="fixed inset-x-0 z-(--z-support-session) flex min-h-10 items-center justify-center gap-3 border-b border-(--ui-stroke-tertiary) bg-(--ui-bg-quaternary) px-4 py-2 text-sm text-(--ui-text-primary)"
       role="region"
       style={{ top: TITLEBAR_HEIGHT }}
     >
