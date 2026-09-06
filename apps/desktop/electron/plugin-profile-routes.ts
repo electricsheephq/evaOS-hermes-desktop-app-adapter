@@ -215,6 +215,7 @@ export function buildEvaManagedAgentRoster(primaryProfile: string | readonly str
       connectionKind: 'remote' as const,
       connectionLabel: label,
       handle: profile,
+      managedSource: true,
       profile,
       targetProfile: profile
     })),

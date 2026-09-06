@@ -1366,6 +1366,31 @@ function createEvaManagedRuntime(options) {
     }
   }
 
+  async function requestDelegatedPullRequests(runtime, request, retry) {
+    const errors = []
+    let pullRequests = {}
+    let scanned = null
+    const guard = startSupportRequestGuard(runtime)
+    try {
+      for (const profile of runtime.allowedProfiles) {
+        assertSupportRequestCurrent(guard)
+        const result = await readDelegatedProfile({ ...request, profile,
+          path: `/api/profiles/sessions/pull-requests?profile=${encodeURIComponent(profile)}` }, retry, errors)
+        assertSupportRequestCurrent(guard)
+        pullRequests = { ...pullRequests, ...(result?.pull_requests ?? {}) }
+        errors.push(...(result?.errors ?? []))
+        const completed = new Set(result?.scanned ?? [])
+        scanned = scanned === null ? [...completed] : scanned.filter(id => completed.has(id))
+      }
+      // The consumer persists misses permanently. A partial read is not proof
+      // that a requested session has no PR in another granted profile.
+      return { pull_requests: pullRequests, scanned: errors.length ? [] : scanned ?? [],
+        ...(errors.length ? { errors } : {}) }
+    } finally {
+      finishSupportRequestGuard(guard)
+    }
+  }
+
   async function requestDelegatedSidebar(runtime, request, retry) {
     const parsed = new URL(String(request?.path || ''), 'http://eva-managed.invalid')
     const profile = runtime.profile
@@ -1443,6 +1468,11 @@ function createEvaManagedRuntime(options) {
         requestPath === '/api/profiles/projects/tree' && !parsedRequest.searchParams.has('profile')) {
         assertEvaManagedApiRequestAllowed({ ...request, profile: supportProfileFor(runtime, request?.profile) })
         return await requestDelegatedProjectTree(runtime, request, retry)
+      }
+      if (supportRequest && String(request?.method || 'GET').toUpperCase() === 'POST' &&
+        requestPath === '/api/profiles/sessions/pull-requests' && !parsedRequest.searchParams.has('profile')) {
+        assertEvaManagedApiRequestAllowed({ ...request, profile: supportProfileFor(runtime, request?.profile) })
+        return await requestDelegatedPullRequests(runtime, request, retry)
       }
     } catch (error) {
       // A successful leaf 401 refresh invalidates earlier generation guards.

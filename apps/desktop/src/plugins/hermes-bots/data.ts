@@ -619,6 +619,7 @@ interface UnionAgentRow {
   connectionKind?: string
   connectionLabel?: string
   handle?: string
+  managedSource?: boolean
   profile?: string
   targetProfile?: string
 }
@@ -875,9 +876,11 @@ function mergeMultiSourceRoster(
       continue
     }
 
-    if (isActiveSource) {
+    if (isActiveSource && !agent.managedSource) {
       // Union saw an active-source profile profiles.list didn't return (older
-      // backend mid-refresh) — skip rather than invent a thin row.
+      // backend mid-refresh) — skip rather than invent a thin row. Managed
+      // membership comes from Electron's finite grant: each flat backend's
+      // profiles.list intentionally cannot enumerate its granted siblings.
       continue
     }
 
@@ -894,7 +897,7 @@ function mergeMultiSourceRoster(
         profile,
         targetProfile: agent.targetProfile || profile
       },
-      remoteSource: true,
+      remoteSource: !isActiveSource,
       sourceScoped: true
     })
   }

@@ -1025,6 +1025,46 @@ test('admin project tree merges granted profiles and rejects mismatched session 
   }
 })
 
+test('admin pull-request recovery scans the finite grant without permanently recording partial misses', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-support-pr-scan-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'state.json')
+  writeActiveEnrollment(statePath)
+  const payload = supportEnrollment()
+  payload.admin_bypass = true
+  payload.assignment_version = null
+  payload.remote_backend.allowed_profiles = ['support', 'sibling']
+  let failure = null
+  const profiles = []
+  const ids = ['support-session', 'sibling-session']
+  const runtime = makeManagedRuntime(statePath, {
+    brokerPost: async () => payload,
+    fetchJson: async (url, _token, options) => {
+      const profile = new URL(url).searchParams.get('profile')
+      profiles.push(profile)
+      assert.equal(options.method, 'POST')
+      assert.deepEqual(options.body.ids, ids)
+      if (profile === 'sibling' && failure) throw failure
+      return { pull_requests: { [`${profile}-session`]: { number: profile === 'support' ? 1 : 2 } }, scanned: ids }
+    }
+  })
+  t.after(() => runtime.close())
+  await runtime.claimSupportRequest('pr-scan-request')
+  const request = { method: 'POST', path: '/api/profiles/sessions/pull-requests', body: { ids } }
+  const complete = await runtime.requestApi(request)
+  assert.deepEqual(profiles, ['support', 'sibling'])
+  assert.deepEqual(Object.keys(complete.pull_requests).sort(), ['sibling-session', 'support-session'])
+  assert.deepEqual(complete.scanned, ids)
+  failure = new EvaBrokerError('private upstream detail', 503, 'unavailable')
+  const partial = await runtime.requestApi(request)
+  assert.deepEqual(partial.scanned, [])
+  assert.equal(partial.pull_requests['support-session'].number, 1)
+  assert.ok(partial.errors.some(error => error.profile === 'sibling'))
+  assert.equal(JSON.stringify(partial).includes('private upstream detail'), false)
+  failure = new EvaBrokerError('permission revoked', 403, 'forbidden')
+  await assert.rejects(runtime.requestApi(request), error => error.statusCode === 403)
+})
+
 test('admin aggregate reads isolate unavailable profiles but reject authorization failures', async t => {
   for (const requestPath of ['/api/profiles', '/api/profiles/projects/tree', '/api/profiles/sessions?profile=all', '/api/profiles/sessions/sidebar']) {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-support-partial-'))

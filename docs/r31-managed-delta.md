@@ -8,7 +8,10 @@ immutable authorized profile set: no unrestricted wildcard and no credential
 copying. Aggregate session reads are expanded inside Electron; foreground and
 filtered reads retain their exact profile. Resume rejects any changed set.
 The managed roster IPC consumes that same live grant, including agents with no
-sessions. Project-tree reads use finite exact-profile leaves and preserve the
+sessions. Its qualified rows survive the Bot Mode merge even when the active
+flat backend reports only its own profile; no session pointer is invented.
+Read-only session PR scans fan out through the grant, and partial scans do not
+permanently mark missing results as complete. Project-tree reads use finite exact-profile leaves and preserve the
 existing folder/Home merge, declared metadata, counts and preview semantics.
 Explicit returned session-profile mismatches fail closed; profile-less legacy
 rows are bound to their requested leaf. A profile outage is reported separately

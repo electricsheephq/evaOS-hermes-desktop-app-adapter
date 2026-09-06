@@ -77,6 +77,7 @@ describe('managed plugin profile routes', () => {
           connectionKind: 'remote',
           connectionLabel: 'Assigned runtime',
           handle: 'research',
+          managedSource: true,
           profile: 'research',
           targetProfile: 'research'
         }
