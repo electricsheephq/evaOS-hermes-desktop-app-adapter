@@ -881,6 +881,10 @@ def _finalize_session(session: dict | None, end_reason: str = "tui_close") -> No
                     row = db.get_session(session_id)
                     source = (row or {}).get("source", "")
                     _tui_owns_lifecycle = not _is_gateway_owned_source(source)
+                    if not _tui_owns_lifecycle and agent is not None:
+                        # _teardown_session closes the viewer after finalize; keep that close from ending the
+                        # gateway-owned row through AIAgent's default close policy.
+                        agent._end_session_on_close = False
                     if _tui_owns_lifecycle:
                         db.end_session(session_id, end_reason)
         except Exception:

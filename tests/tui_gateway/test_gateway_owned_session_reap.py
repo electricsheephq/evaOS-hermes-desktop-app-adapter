@@ -10,7 +10,7 @@ loops.  The TUI is only a viewer of those sessions.
 
 from unittest.mock import MagicMock, patch
 
-from tui_gateway.server import _finalize_session, _is_gateway_owned_source
+from tui_gateway.server import _finalize_session, _is_gateway_owned_source, _teardown_session
 
 
 class TestIsGatewayOwnedSource:
@@ -72,3 +72,46 @@ class TestFinalizeSkipsGatewaySessions:
         _finalize_session(_make_session(), end_reason="tui_close")
 
         db.end_session.assert_called_once_with("sess_1", "tui_close")
+
+
+class _SessionClosingAgent:
+    """Small close seam matching AIAgent's row-ending close policy."""
+
+    def __init__(self, db, session_id="sess_1"):
+        self.db = db
+        self.session_id = session_id
+        self._end_session_on_close = True
+
+    def close(self):
+        if self._end_session_on_close:
+            self.db.end_session(self.session_id, "agent_close")
+
+
+class TestTeardownPreservesGatewaySessions:
+    @patch("tui_gateway.server._get_db")
+    def test_gateway_session_close_does_not_end_row(self, mock_get_db):
+        db = MagicMock()
+        db.get_session.return_value = {"id": "sess_1", "source": "telegram"}
+        mock_get_db.return_value = db
+        agent = _SessionClosingAgent(db)
+        session = _make_session()
+        session["agent"] = agent
+
+        _teardown_session(session, end_reason="ws_orphan_reap")
+
+        db.end_session.assert_not_called()
+        assert agent._end_session_on_close is False
+
+    @patch("tui_gateway.server._get_db")
+    def test_non_gateway_session_keeps_close_end_policy(self, mock_get_db):
+        db = MagicMock()
+        db.get_session.return_value = {"id": "sess_1", "source": "tui"}
+        mock_get_db.return_value = db
+        agent = _SessionClosingAgent(db)
+        session = _make_session()
+        session["agent"] = agent
+
+        _teardown_session(session, end_reason="tui_close")
+
+        assert agent._end_session_on_close is True
+        assert db.end_session.call_args_list[-1].args == ("sess_1", "agent_close")
