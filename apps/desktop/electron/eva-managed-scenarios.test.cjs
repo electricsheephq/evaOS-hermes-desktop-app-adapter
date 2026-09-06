@@ -146,7 +146,8 @@ test('managed.signin-assignment-chat', async t => {
       assert.deepEqual(JSON.parse(init.body), {
         action: 'claim_desktop_device_code',
         device_code: 'A'.repeat(32),
-        device_code_verifier: deviceCodeVerifier
+        device_code_verifier: deviceCodeVerifier,
+        desktop_support_login_version: 1
       })
       assert.equal(String(url).includes(deviceCodeVerifier), false)
       assert.equal(JSON.stringify(init.headers ?? {}).includes(deviceCodeVerifier), false)
