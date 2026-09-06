@@ -867,7 +867,7 @@ def _finalize_session(session: dict | None, end_reason: str = "tui_close") -> No
     # Unknown ownership is unsafe to hand to AIAgent.close(): a profile DB
     # lookup can fail while the agent's already-open handle remains usable.
     _tui_owns_lifecycle = False
-    if agent is not None:
+    if agent is not None and hasattr(agent, "_end_session_on_close"):
         agent._end_session_on_close = False
     if session_id:
         try:
@@ -886,7 +886,7 @@ def _finalize_session(session: dict | None, end_reason: str = "tui_close") -> No
                 row = db.get_session(session_id)
                 source = (row or {}).get("source", "")
                 _tui_owns_lifecycle = not _is_gateway_owned_source(source)
-                if agent is not None:
+                if agent is not None and hasattr(agent, "_end_session_on_close"):
                     agent._end_session_on_close = _tui_owns_lifecycle
                 if _tui_owns_lifecycle:
                     db.end_session(session_id, end_reason)
@@ -902,7 +902,7 @@ def _finalize_session(session: dict | None, end_reason: str = "tui_close") -> No
                 row = owner_db.get_session(session_id)
                 source = (row or {}).get("source", "")
                 _tui_owns_lifecycle = not _is_gateway_owned_source(source)
-                if agent is not None:
+                if agent is not None and hasattr(agent, "_end_session_on_close"):
                     agent._end_session_on_close = _tui_owns_lifecycle
                 if _tui_owns_lifecycle:
                     owner_db.end_session(session_id, end_reason)
