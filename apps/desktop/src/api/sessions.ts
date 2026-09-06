@@ -116,14 +116,13 @@ export interface SessionSourceFilter {
 }
 
 function sessionListScope(profile: 'all' | (string & {})): { queryProfile: string; routingProfile: string } {
-  // A managed enrollment authorizes one concrete profile. Keep aggregate
-  // reads bound to that assignment while preserving explicit selectors so
-  // Electron can reject a mismatch before it reaches Hermes.
+  // Electron expands aggregate support reads over the immutable authorized
+  // profile set. Do not collapse "all" into the foreground agent here.
   if (isManagedEvaosAgent()) {
     const routingProfile = getApiRequestProfile() || 'default'
 
     return {
-      queryProfile: profile === 'all' ? routingProfile : profile,
+      queryProfile: profile,
       routingProfile
     }
   }

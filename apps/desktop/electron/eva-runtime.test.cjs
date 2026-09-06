@@ -325,6 +325,7 @@ test('support claim separates encrypted delegated state and restores the ordinar
   assert.equal(JSON.parse(unsealed(persisted.delegated_support.enrollment)).admin_bypass, true)
   assert.deepEqual(brokerCalls[0].body, {
     action: 'claim_internal_support_request',
+    desktop_support_profiles_version: 1,
     request_id: 'request-123'
   })
   assert.equal(brokerCalls[0].options.desktopSession, 'desktop-token')
@@ -658,6 +659,7 @@ test('restart resumes only the same support assignment and rejects actor or repl
   assert.equal(resumeCalls.length, 1)
   assert.deepEqual(resumeCalls[0].body, {
     action: 'internal_support_session_resume',
+    desktop_support_profiles_version: 1,
     support_session_id: 'support-session'
   })
   assert.equal(resumeCalls[0].options.desktopSession, 'desktop-token')
@@ -854,6 +856,44 @@ test('delegated sidebar requests are split into exact-profile session slices', a
   assert.deepEqual(result.recents.sessions, [{ id: 'messaging' }])
   assert.deepEqual(result.cron.sessions, [{ id: 'cron' }])
   assert.deepEqual(result.messaging.sessions, [{ id: 'messaging' }])
+})
+
+test('admin customer scope routes and aggregates only its granted profiles', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-support-scope-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'state.json')
+  writeActiveEnrollment(statePath)
+  const payload = supportEnrollment()
+  payload.admin_bypass = true
+  payload.assignment_version = null
+  payload.remote_backend.allowed_profiles = ['support', 'sibling']
+  const paths = []
+  const runtime = makeManagedRuntime(statePath, {
+    brokerPost: async () => payload,
+    fetchJson: async url => {
+      const parsed = new URL(url)
+      paths.push(parsed)
+      const profile = parsed.searchParams.get('profile')
+      assert.ok(['support', 'sibling'].includes(profile))
+      return { sessions: [{ id: `retained-${profile}`, profile }], total: 1 }
+    }
+  })
+  t.after(() => runtime.close())
+  await runtime.claimSupportRequest('scope-request')
+  assert.equal((await runtime.resolveBackend({ profile: 'sibling' })).profile, 'sibling')
+  assert.equal((await runtime.resolveBackend({ profile: 'default' })).profile, 'support')
+  const result = await runtime.requestApi({ path: '/api/profiles/sessions?profile=all', profile: 'default' })
+  assert.deepEqual(result.sessions.map(row => row.profile).sort(), ['sibling', 'support'])
+  const sidebar = await runtime.requestApi({ path: '/api/profiles/sessions/sidebar', profile: 'default' })
+  assert.equal(sidebar.messaging.sessions.length, 2)
+  const filtered = await runtime.requestApi({ path: '/api/profiles/sessions/sidebar?recents_profile=sibling', profile: 'default' })
+  assert.deepEqual(filtered.recents.sessions.map(row => row.profile), ['sibling'])
+  assert.equal(filtered.messaging.sessions.length, 2)
+  await runtime.requestApi({ path: '/api/skills?profile=default', profile: 'default' })
+  const beforeDenial = paths.length
+  await assert.rejects(runtime.requestApi({ path: '/api/skills', profile: 'outside' }), error => error.code === 'support-profile-mismatch')
+  await assert.rejects(runtime.requestApi({ path: '/api/skills', profile: 'sibling', body: { profile: 'support' } }), error => error.code === 'support-profile-mismatch')
+  assert.equal(paths.length, beforeDenial)
 })
 
 test('support readiness 401 revalidates the same delegated assignment without ordinary fallback', async t => {
@@ -1740,8 +1780,12 @@ test('post-login support selection claims with the new employee session before a
   let releaseClaim
   let ownLaunches = 0
   let rendererResets = 0
+  const clock = Date.now()
+  const activation = new Date(clock + 2_000).toISOString()
+  const deadline = new Date(clock + 3_602_000).toISOString()
   const claimGate = new Promise(resolve => { releaseClaim = resolve })
   const runtime = makeManagedRuntime(statePath, {
+    now: () => clock,
     resetRenderer: async () => { rendererResets += 1; return true },
     openExternal: async url => { opened = new URL(url) },
     pollDeviceCode: async () => ({ token: 'new-employee-session', expiresAt: FUTURE, email: 'employee@example.invalid', supportRequestId: requestId }),
@@ -1751,7 +1795,7 @@ test('post-login support selection claims with the new employee session before a
       assert.equal(body.request_id, requestId)
       assert.equal(options.desktopSession, 'new-employee-session')
       await claimGate
-      return supportEnrollment()
+      return supportEnrollment(clock, { activated_at: activation, support_expires_at: deadline })
     }
   })
   t.after(() => runtime.close())
@@ -1771,6 +1815,10 @@ test('post-login support selection claims with the new employee session before a
   releaseClaim()
   const status = await signingIn
   assert.equal(status.delegatedSupportActive, true)
+  assert.equal(status.supportExpiresAt, deadline)
+  const persisted = JSON.parse(JSON.parse(fs.readFileSync(statePath, 'utf8')).delegated_support.enrollment)
+  assert.equal(persisted.activated_at, activation)
+  assert.equal(persisted.support_expires_at, deadline)
   assert.equal(JSON.parse(fs.readFileSync(statePath, 'utf8')).support_sign_in_pending, undefined)
   assert.equal(rendererResets, 1)
   assert.equal(status.email, 'employee@example.invalid')
@@ -1779,6 +1827,32 @@ test('post-login support selection claims with the new employee session before a
   await assert.rejects(runtime.signIn(), error => error.code === 'support-session-active')
   assert.equal(fs.readFileSync(statePath, 'utf8').includes(requestId), false)
   assert.equal(ownLaunches, 0)
+})
+
+test('a rejected support enrollment logs its safe stage and exposes sign-in recovery after cleanup', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-support-failure-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  let opened
+  let boot
+  const logs = []
+  const runtime = makeManagedRuntime(path.join(directory, 'state.json'), {
+    openExternal: async url => { opened = new URL(url) },
+    pollDeviceCode: async () => ({ token: 'private-desktop-token', expiresAt: FUTURE, email: 'employee@example.invalid', supportRequestId: '00000000-0000-4000-8000-000000000099' }),
+    revokeDesktopSession: async () => true,
+    brokerPost: async () => supportEnrollment(Date.now(), { support_expires_at: new Date(Date.now() + 7_200_000).toISOString() }),
+    rememberLog: line => logs.push(line),
+    updateBootProgress: value => { boot = value }
+  })
+  t.after(() => runtime.close())
+  const signingIn = runtime.signIn()
+  await new Promise(resolve => setImmediate(resolve))
+  await runtime.completeCallback(`evaos-agent://auth/callback?device_code=ABCDEFGH&desktop_auth_state=${opened.searchParams.get('desktop_auth_state')}`)
+  await assert.rejects(signingIn, error => error.code === 'invalid-support-session')
+  await assert.rejects(runtime.resolveBackend(), error => error.code === 'sign-in-required')
+  assert.equal(boot.phase, 'eva.sign-in-required')
+  assert.match(boot.error, /unsafe support deadline/)
+  assert.match(logs.join('\n'), /support-claim failed:.*unsafe support deadline/)
+  assert.equal(logs.join('\n').includes('private-desktop-token'), false)
 })
 
 for (const expired of [false, true]) test(`interrupted support sign-in recovers through visible Sign In (expired=${expired})`, async t => {

@@ -754,6 +754,36 @@ test('delegated support enrollment requires a bounded assignment and presentatio
   )
   assert.equal(adminSupport.adminBypass, true)
   assert.equal(adminSupport.assignmentVersion, null)
+  const customerScope = { ...payload, admin_bypass: true, assignment_version: null,
+    remote_backend: { ...payload.remote_backend, allowed_profiles: ['support', 'sibling'] } }
+  assert.deepEqual(normalizeSupportEnrollment(customerScope, { now }).allowedProfiles, ['support', 'sibling'])
+  for (const allowed_profiles of [[], ['support', 'support'], ['all'], ['sibling'], ['support', '../outside']]) {
+    assert.throws(() => normalizeSupportEnrollment({ ...customerScope,
+      remote_backend: { ...customerScope.remote_backend, allowed_profiles } }, { now }),
+    error => error instanceof EvaBrokerError)
+  }
+  assert.throws(() => normalizeSupportEnrollment({ ...customerScope, admin_bypass: false,
+    assignment_version: 'assignment-v1' }, { now }), error => error instanceof EvaBrokerError)
+
+  // The broker and Mac need not agree to the millisecond. The absolute
+  // deadline and one-hour duration survive normalization and persistence.
+  const activatedAt = now + 2_000
+  const deadline = new Date(activatedAt + 60 * 60 * 1_000).toISOString()
+  const skewed = normalizeSupportEnrollment({
+    ...payload,
+    activated_at: new Date(activatedAt).toISOString(),
+    support_expires_at: deadline
+  }, { now })
+  assert.equal(skewed.supportExpiresAt, deadline)
+  assert.equal(skewed.supportActivatedAt, new Date(activatedAt).toISOString())
+  for (const invalid of [
+    { activated_at: 'invalid', support_expires_at: deadline },
+    { activated_at: new Date(activatedAt).toISOString(), support_expires_at: new Date(activatedAt + 3_600_001).toISOString() },
+    { activated_at: new Date(now + 60_001).toISOString(), support_expires_at: deadline }
+  ]) {
+    assert.throws(() => normalizeSupportEnrollment({ ...payload, ...invalid }, { now }),
+      error => error instanceof EvaBrokerError && error.code === 'invalid-support-session')
+  }
 
   for (const invalid of [
     { ...payload, session_kind: 'ordinary' },

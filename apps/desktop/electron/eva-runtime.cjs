@@ -66,6 +66,7 @@ function createEvaManagedRuntime(options) {
   let supportExpiryTimer = null
   let supportExpiryTimestamp = null
   let supportEndError = null
+  let signInFailure = null
   let rendererResetPending = false
   let rendererResetPromise = null
   const supportRequestControllers = new Set()
@@ -233,6 +234,7 @@ function createEvaManagedRuntime(options) {
                   session_token: state.delegatedSupport.token,
                   expires_at: state.delegatedSupport.expiresAt,
                   agent_id: state.delegatedSupport.agentId,
+                  allowed_profiles: state.delegatedSupport.allowedProfiles,
                   agent_display_name: state.delegatedSupport.agentDisplayName
                 },
                 session_kind: state.delegatedSupport.sessionKind,
@@ -240,6 +242,7 @@ function createEvaManagedRuntime(options) {
                 assignment_version: state.delegatedSupport.assignmentVersion,
                 admin_bypass: state.delegatedSupport.adminBypass,
                 support_expires_at: state.delegatedSupport.supportExpiresAt,
+                activated_at: state.delegatedSupport.supportActivatedAt,
                 profile: state.delegatedSupport.profile,
                 presentation: {
                   customer_label: state.delegatedSupport.supportCustomerLabel,
@@ -392,16 +395,19 @@ function createEvaManagedRuntime(options) {
   }
 
   function supportProfileFor(runtime, requestedProfile) {
-    const requested = normalizeEvaWsProfile(requestedProfile)
+    let requested = normalizeEvaWsProfile(requestedProfile)
     if (runtime?.sessionKind === 'delegated_support') {
-      if (requested !== null && requested !== runtime.profile) {
+      // Match the gateway's default alias, without overriding a real profile
+      // named default when that profile is explicitly in the grant.
+      if (requested === 'default' && !runtime.allowedProfiles.includes('default')) requested = null
+      if (requested !== null && !runtime.allowedProfiles.includes(requested)) {
         throw new EvaBrokerError(
           'evaOS Agent rejected a profile outside the support assignment.',
           403,
           'support-profile-mismatch'
         )
       }
-      return runtime.profile ?? null
+      return requested ?? runtime.profile ?? null
     }
     return requested
   }
@@ -556,6 +562,7 @@ function createEvaManagedRuntime(options) {
 
     const generation = authGeneration
     const task = (async () => {
+      let stage = 'browser-sign-in'
       let authState = makeAuthState()
       let verifier = makeCodeVerifier()
       let deviceCode = null
@@ -594,12 +601,14 @@ function createEvaManagedRuntime(options) {
         } finally {
           clearTimeout(callbackTimer)
         }
+        stage = 'device-code-claim'
         const { supportRequestId, ...desktop } = await pollDeviceCode(deviceCode, verifier, { signal: controller.signal })
         controller.abort()
         assertGeneration(generation)
         attempt.supportPending = Boolean(supportRequestId)
         writeState({ desktop, runtime: null, delegatedSupport: null, supportSignInPending: Boolean(supportRequestId) })
         if (supportRequestId) {
+          stage = 'support-claim'
           try {
             await claimSupportRequest(supportRequestId)
             assertGeneration(generation)
@@ -614,6 +623,15 @@ function createEvaManagedRuntime(options) {
         }
         await advanceBootProgress('eva.authorized', 'Electric Sheep sign-in complete', 22)
         return desktop
+      } catch (error) {
+        // brokerPost already projects broker failures; never log a stack, URL,
+        // payload or arbitrary exception from browser/transport integrations.
+        const message = error instanceof EvaBrokerError
+          ? error.message
+          : 'evaOS Agent sign-in could not be completed.'
+        rememberLog(`[eva-managed] ${stage} failed: ${message}`)
+        if (currentState().signedOut && !pendingAuth) signInFailure = message
+        throw error
       } finally {
         controller.abort()
         if (pendingAuth === attempt) pendingAuth = null
@@ -642,10 +660,10 @@ function createEvaManagedRuntime(options) {
     updateBootProgress(
       {
         phase: 'eva.sign-in-required',
-        message: 'Sign in to evaOS Agent from Settings.',
+        message: signInFailure ?? 'Sign in to evaOS Agent from Settings.',
         progress: 8,
         running: false,
-        error: null
+        error: signInFailure ?? 'Sign in to evaOS Agent from Settings.'
       },
       { allowDecrease: true }
     )
@@ -708,6 +726,7 @@ function createEvaManagedRuntime(options) {
       resumed.customerId !== previous.customerId ||
       resumed.agentId !== previous.agentId ||
       (previous.profile && resumed.profile !== previous.profile) ||
+      [...resumed.allowedProfiles].sort().join('\n') !== [...previous.allowedProfiles].sort().join('\n') ||
       Date.parse(resumed.supportExpiresAt) > Date.parse(previous.supportExpiresAt)
     ) {
       throw new EvaBrokerError('evaOS Agent rejected a changed support assignment.', 403, 'support-assignment-mismatch')
@@ -718,6 +737,7 @@ function createEvaManagedRuntime(options) {
     const payload = await postBroker(
       {
         action: 'internal_support_session_resume',
+        desktop_support_profiles_version: 1,
         support_session_id: previous.supportSessionId
       },
       { desktopSession: desktop.token }
@@ -749,6 +769,7 @@ function createEvaManagedRuntime(options) {
     const payload = await postBroker(
       {
         action: 'claim_internal_support_request',
+        desktop_support_profiles_version: 1,
         request_id: normalizedRequestId
       },
       { desktopSession: desktop.token }
@@ -1051,6 +1072,7 @@ function createEvaManagedRuntime(options) {
     // interrupted enrollment through the existing cleanup before new login.
     if (currentState().supportSignInPending) await signOut()
     invalidateAuthWork()
+    signInFailure = null
     writeState(emptyState())
     supportRevalidated = false
     const desktop = await beginSignIn()
@@ -1106,20 +1128,20 @@ function createEvaManagedRuntime(options) {
     )
   }
 
-  function bindSupportProfileValue(value, profile) {
-    if (Array.isArray(value)) return value.map(entry => bindSupportProfileValue(entry, profile))
+  function bindSupportProfileValue(value, profile, runtime) {
+    if (Array.isArray(value)) return value.map(entry => bindSupportProfileValue(entry, profile, runtime))
     if (!value || typeof value !== 'object' || Object.getPrototypeOf(value) !== Object.prototype) return value
 
     return Object.fromEntries(
       Object.entries(value).map(([key, entry]) => {
-        if (key !== 'profile') return [key, bindSupportProfileValue(entry, profile)]
+        if (key !== 'profile') return [key, bindSupportProfileValue(entry, profile, runtime)]
         let requested
         try {
           requested = normalizeEvaWsProfile(entry)
         } catch {
           throw supportProfileError()
         }
-        if (requested !== null && requested !== profile) throw supportProfileError()
+        if (requested !== null && supportProfileFor(runtime, requested) !== profile) throw supportProfileError()
         return [key, profile]
       })
     )
@@ -1131,19 +1153,47 @@ function createEvaManagedRuntime(options) {
       return { policy: undefined, profile, request }
     }
 
+    let path = request?.path
+    if (!runtime.allowedProfiles.includes('default')) {
+      const validated = assertEvaManagedApiRequestAllowed({ ...request, profile: request?.profile ?? profile }, { allowBroadProfileSelectors: false })
+      const parsed = new URL(validated.path, 'http://eva-managed.invalid')
+      if (parsed.searchParams.get('profile') === 'default') parsed.searchParams.set('profile', runtime.profile)
+      path = `${parsed.pathname}${parsed.search}`
+    }
+
     return {
       policy: { allowBroadProfileSelectors: false },
       profile,
       request: {
         ...request,
-        body: bindSupportProfileValue(request?.body, profile)
+        path,
+        body: bindSupportProfileValue(request?.body, profile, runtime)
       }
+    }
+  }
+
+  async function requestDelegatedSessionList(runtime, request, profiles, retry) {
+    const parsed = new URL(String(request.path), 'http://eva-managed.invalid')
+    const results = []
+    for (const profile of profiles) {
+      parsed.searchParams.set('profile', profile)
+      results.push(await requestApi({ ...request, profile, path: `${parsed.pathname}?${parsed.searchParams}` }, retry))
+    }
+    return {
+      sessions: results.flatMap(result => result?.sessions ?? []),
+      total: results.reduce((sum, result) => sum + (result?.total ?? result?.sessions?.length ?? 0), 0),
+      profiles_truncated: Object.assign({}, ...results.map(result => result?.profiles_truncated ?? {})),
+      errors: results.flatMap(result => result?.errors ?? [])
     }
   }
 
   async function requestDelegatedSidebar(runtime, request, retry) {
     const parsed = new URL(String(request?.path || ''), 'http://eva-managed.invalid')
     const profile = runtime.profile
+    supportProfileFor(runtime, request?.profile)
+    const recentsProfile = parsed.searchParams.get('recents_profile') || 'all'
+    const recentsProfiles = recentsProfile === 'all'
+      ? runtime.allowedProfiles : [supportProfileFor(runtime, recentsProfile)]
     const slicePath = (limitKey, defaultLimit, extras = {}) => {
       const params = new URLSearchParams({
         limit: parsed.searchParams.get(limitKey) || defaultLimit,
@@ -1167,9 +1217,9 @@ function createEvaManagedRuntime(options) {
     if (messagingExclude) messaging.set('exclude_sources', messagingExclude)
 
     const [recentsResult, cronResult, messagingResult] = await Promise.all([
-      requestApi({ ...request, method: 'GET', path: `/api/profiles/sessions?${recents.toString()}` }, retry),
-      requestApi({ ...request, method: 'GET', path: `/api/profiles/sessions?${cron.toString()}` }, retry),
-      requestApi({ ...request, method: 'GET', path: `/api/profiles/sessions?${messaging.toString()}` }, retry)
+      requestDelegatedSessionList(runtime, { ...request, method: 'GET', path: `/api/profiles/sessions?${recents}` }, recentsProfiles, retry),
+      requestDelegatedSessionList(runtime, { ...request, method: 'GET', path: `/api/profiles/sessions?${cron}` }, runtime.allowedProfiles, retry),
+      requestDelegatedSessionList(runtime, { ...request, method: 'GET', path: `/api/profiles/sessions?${messaging}` }, runtime.allowedProfiles, retry)
     ])
     const errors = [
       ...(recentsResult?.errors ?? []),
@@ -1194,6 +1244,12 @@ function createEvaManagedRuntime(options) {
     const runtime = await ensureRuntimeEnrollment()
     const supportRequest = runtime.sessionKind === 'delegated_support'
     const requestPath = new URL(String(request?.path || ''), 'http://eva-managed.invalid').pathname
+    if (supportRequest && String(request?.method || 'GET').toUpperCase() === 'GET' &&
+      requestPath === '/api/profiles/sessions' &&
+      new URL(request.path, 'http://eva-managed.invalid').searchParams.get('profile') === 'all') {
+      assertEvaManagedApiRequestAllowed({ ...request, profile: supportProfileFor(runtime, request?.profile) })
+      return requestDelegatedSessionList(runtime, request, runtime.allowedProfiles, retry)
+    }
     if (supportRequest && requestPath === '/api/profiles/sessions/sidebar') {
       return requestDelegatedSidebar(runtime, request, retry)
     }
