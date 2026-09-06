@@ -1161,6 +1161,15 @@ function createEvaManagedRuntime(options) {
   function bindSupportRequest(runtime, request) {
     const profile = supportProfileFor(runtime, request?.profile)
     if (runtime?.sessionKind !== 'delegated_support') {
+      const validated = assertEvaManagedApiRequestAllowed(profile ? { ...request, profile } : request)
+      const parsed = new URL(validated.path, 'http://eva-managed.invalid')
+      if (profile && validated.method === 'GET' && parsed.pathname === '/api/profiles/sessions' &&
+        parsed.searchParams.get('profile') === 'all') {
+        // Only delegated reads expand over a finite grant. Ordinary logins
+        // retain the concrete selector previously supplied by the renderer.
+        parsed.searchParams.set('profile', profile)
+        return { policy: undefined, profile, request: { ...request, path: `${parsed.pathname}${parsed.search}` } }
+      }
       return { policy: undefined, profile, request }
     }
 

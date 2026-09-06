@@ -2319,6 +2319,36 @@ test('managed runtime forwards unknown APIs, bodies, uploads, and Hermes profile
   assert.equal(calls[0].options.upload, upload)
 })
 
+test('ordinary managed all-profile lists retain the concrete routing profile', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-ordinary-list-scope-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeActiveEnrollment(statePath)
+  const calls = []
+  const runtime = makeManagedRuntime(statePath, {
+    fetchJson: async url => {
+      calls.push(url)
+      return { sessions: [] }
+    }
+  })
+
+  await runtime.requestApi({
+    path: '/api/profiles/sessions?limit=40&offset=0&profile=all',
+    profile: 'research'
+  })
+  assert.equal(calls.length, 1)
+  const url = new URL(calls[0])
+  assert.equal(url.pathname, '/api/profiles/sessions')
+  assert.equal(url.searchParams.get('profile'), 'research')
+  assert.equal(url.searchParams.get('limit'), '40')
+  assert.equal(url.searchParams.get('offset'), '0')
+  await assert.rejects(runtime.requestApi({
+    path: '/api/profiles/sessions?profile=all&profile=other',
+    profile: 'research'
+  }), error => error.code === 'managed-policy')
+  assert.equal(calls.length, 1)
+})
+
 test('ordinary managed request failures preserve their original error', async t => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-ordinary-error-'))
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
