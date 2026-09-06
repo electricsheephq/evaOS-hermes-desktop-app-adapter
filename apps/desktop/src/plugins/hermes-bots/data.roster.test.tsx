@@ -58,6 +58,7 @@ interface UnionAgent {
   connectionKind: string
   connectionLabel?: string
   handle: string
+  managedSource?: boolean
   profile: string
 }
 
@@ -202,6 +203,31 @@ describe('the active source annotates; other sources append', () => {
     )
 
     expect(rows.map(row => row.name)).toEqual(['default'])
+  })
+
+  it('retains native-qualified managed siblings through the real roster query', async () => {
+    // host.agents is the SDK seam; the Electron builder has its own contract
+    // test. Plugin tests must not import main-process modules.
+    const union = {
+      agents: ['support', 'sibling'].map(profile => ({
+        connectionId: 'eva-managed-runtime',
+        connectionKind: 'remote',
+        handle: profile,
+        managedSource: true,
+        profile
+      })),
+      primaryConnectionId: 'eva-managed-runtime'
+    }
+
+    const rows = await mergedRoster({ profiles: [{ name: 'support' }] }, union, union.primaryConnectionId)
+
+    expect(rows.map(row => row.name)).toEqual(['support', 'sibling'])
+    expect(rows[1]).toMatchObject({
+      remoteSource: false,
+      sourceScoped: true,
+      route: { connectionId: union.primaryConnectionId, mode: 'remote', profile: 'sibling', targetProfile: 'sibling' }
+    })
+    expect(rows[1].last_session).toBeUndefined()
   })
 
   it('renders duplicate source and local identities once', async () => {

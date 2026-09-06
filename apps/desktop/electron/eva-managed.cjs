@@ -410,6 +410,7 @@ function buildEvaDesktopAuthUrl(codeChallenge, authState, policy = EVA_MANAGED_P
   url.searchParams.set('desktop_code_challenge', challenge)
   url.searchParams.set('desktop_code_challenge_method', 'S256')
   url.searchParams.set('desktop_support_login_version', '1')
+  url.searchParams.set('desktop_support_profiles_version', '1')
   url.searchParams.set('switch_account', '1')
   url.searchParams.set('prompt', 'select_account')
   return url.toString()
@@ -621,7 +622,17 @@ function normalizeSupportEnrollment(payload, options = {}) {
     'Electric Sheep support session',
     now
   )
-  if (Date.parse(supportExpiresAt) > now + EVA_SUPPORT_MAX_DURATION_MS) {
+  // Measure the lease against the broker's immutable activation, not this
+  // Mac's clock. A small host skew must not reject an exact one-hour grant.
+  // Older persisted enrollments lack activation and keep their previous bound.
+  const supportActivatedAt = payload.activated_at == null ? null : Date.parse(payload.activated_at)
+  const leaseStart = supportActivatedAt ?? now
+  if (
+    !Number.isFinite(leaseStart) ||
+    leaseStart > now + 60_000 ||
+    Date.parse(supportExpiresAt) <= leaseStart ||
+    Date.parse(supportExpiresAt) - leaseStart > EVA_SUPPORT_MAX_DURATION_MS
+  ) {
     throw new EvaBrokerError('Electric Sheep returned an unsafe support deadline.', 403, 'invalid-support-session')
   }
 
@@ -642,6 +653,13 @@ function normalizeSupportEnrollment(payload, options = {}) {
   if (profile === null || !EVA_MANAGED_PROFILE_RE.test(profile) || profile === 'all') {
     throw new EvaBrokerError('Electric Sheep returned an invalid support profile.', 403, 'invalid-support-session')
   }
+  const allowedProfiles = payload.remote_backend?.allowed_profiles ?? [profile]
+  if (!Array.isArray(allowedProfiles) || !allowedProfiles.length ||
+    allowedProfiles.some(value => typeof value !== 'string' || !EVA_MANAGED_PROFILE_RE.test(value) || value === 'all') ||
+    new Set(allowedProfiles).size !== allowedProfiles.length || !allowedProfiles.includes(profile) ||
+    (allowedProfiles.length > 1 && !adminBypass)) {
+    throw new EvaBrokerError('Electric Sheep returned an invalid support profile scope.', 403, 'invalid-support-session')
+  }
 
   return {
     ...enrollment,
@@ -649,10 +667,12 @@ function normalizeSupportEnrollment(payload, options = {}) {
     supportSessionId,
     assignmentVersion,
     adminBypass,
+    supportActivatedAt: supportActivatedAt === null ? null : new Date(supportActivatedAt).toISOString(),
     supportExpiresAt,
     supportDeadline: supportExpiresAt,
     supportCustomerLabel,
     supportAgentLabel,
+    allowedProfiles,
     profile
   }
 }

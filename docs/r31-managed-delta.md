@@ -1,12 +1,42 @@
 # r31.1 managed-delta ledger
 
-## Pending Desktop support-picker integration
+## Desktop support-picker recovery
+
+The customer-wide admin extension advertises
+`desktop_support_profiles_version=1`. It consumes only the broker's finite,
+immutable authorized profile set: no unrestricted wildcard and no credential
+copying. Aggregate session reads are expanded inside Electron; foreground and
+filtered reads retain their exact profile. Resume rejects any changed set.
+The managed roster IPC consumes that same live grant, including agents with no
+sessions. Its qualified rows survive the Bot Mode merge even when the active
+flat backend reports only its own profile; no session pointer is invented.
+Read-only session PR scans fan out through the grant, and partial scans do not
+permanently mark missing results as complete. Legacy leaves suppress some DB
+failures, so only positively recovered PRs become permanently scanned; absent
+results remain retryable. Project-tree reads use finite exact-profile leaves and preserve the
+existing folder/Home merge, declared metadata, counts and preview semantics.
+Explicit returned session-profile mismatches fail closed; profile-less legacy
+rows are bound to their requested leaf. A profile outage is reported separately
+without hiding healthy profiles; authorization failures remain global failures.
+Already-read profile and matching project metadata survive transient read failures
+within that same lease. This in-memory cache is cleared on End, expiry, sign-out
+or a different lease, and outage errors remain in the response.
+Managers retain single-profile grants. The canonical authority and schema
+sequence are documented in the dashboard's `docs/desktop-support-sign-in.md`.
+
+Lease normalization preserves the server's activation and absolute deadline,
+instead of rejecting a valid one-hour lease when the operator clock is slightly
+behind. Failed sign-in keeps a safe stage/error and exposes the existing Sign In
+recovery surface. A signed release and fresh human login still need independent
+delivery and access evidence; these changes never reset customer conversations.
+
+### Original callback integration
 
 The managed sign-in URL advertises `desktop_support_login_version=1`. The broker
 may return an opaque support request only after possession-bound employee login;
 the native process claims it before exposing a gateway. While that claim is
 pending, ordinary enrollment is blocked. Failure clears the new login instead
-of silently opening another workspace. Existing exact-profile, one-hour expiry,
+of silently opening another workspace. Existing authorized-profile, one-hour expiry,
 renderer isolation and End behavior remain authoritative. This source change
 requires a compatible broker and signed Desktop delivery; it is not installed
 delegated-access acceptance or permission to reset a customer conversation.

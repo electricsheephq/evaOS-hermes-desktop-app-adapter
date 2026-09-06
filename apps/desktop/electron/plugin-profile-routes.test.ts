@@ -9,6 +9,7 @@ import {
   buildRegistryProfileRoutes,
   EVA_MANAGED_CONNECTION_ID,
   isLocalEnumerationFailure,
+  loadEvaManagedAgentRoster,
   localRouteFallbackProfiles,
   normalizeEvaManagedActiveRoute,
   type ProfileRouteConfig,
@@ -76,6 +77,7 @@ describe('managed plugin profile routes', () => {
           connectionKind: 'remote',
           connectionLabel: 'Assigned runtime',
           handle: 'research',
+          managedSource: true,
           profile: 'research',
           targetProfile: 'research'
         }
@@ -111,6 +113,20 @@ describe('managed plugin profile routes', () => {
         targetProfile: 'research'
       }
     ])
+  })
+
+  it('feeds the managed roster IPC from the live finite delegated grant', async () => {
+    const delegatedProfiles = vi.fn().mockResolvedValue(['support', 'sibling'])
+    const primaryProfileKey = vi.fn(() => 'ordinary')
+    const roster = () => loadEvaManagedAgentRoster({ delegatedProfiles }, primaryProfileKey)
+    const result = await roster()
+    expect(result.agents.map((row: { profile: string }) => row.profile)).toEqual(['support', 'sibling'])
+    expect(result.sources).toHaveLength(1)
+    expect(primaryProfileKey).not.toHaveBeenCalled()
+    delegatedProfiles.mockResolvedValueOnce(null)
+    expect((await roster()).agents[0].profile).toBe('ordinary')
+    delegatedProfiles.mockRejectedValueOnce(new Error('support session expired'))
+    await expect(roster()).rejects.toThrow('support session expired')
   })
 
   it('accepts only the exact managed route identity', () => {
