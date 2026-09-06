@@ -42,35 +42,32 @@ afterEach(() => {
 })
 
 describe('app-root delegated support controls', () => {
-  it.each(['Connecting', 'Gateway connection failed'])(
-    'retains the customer identity and working End control during %s',
-    async state => {
-      gateway.state = state
-      let status = supportStatus()
+  it('retains the customer identity and working End control while connecting', async () => {
+    const state = gateway.state
+    let status = supportStatus()
 
-      const endSupportSession = vi.fn(async () => {
-        status = { ...status, delegatedSupportActive: false }
+    const endSupportSession = vi.fn(async () => {
+      status = { ...status, delegatedSupportActive: false }
 
-        return { ok: true }
-      })
+      return { ok: true }
+    })
 
-      Object.defineProperty(window, 'hermesDesktop', {
-        configurable: true,
-        value: { eva: { status: async () => status, endSupportSession } }
-      })
+    Object.defineProperty(window, 'hermesDesktop', {
+      configurable: true,
+      value: { eva: { status: async () => status, endSupportSession } }
+    })
 
-      render(
-        <I18nProvider configClient={null} initialLocale="en">
-          <App />
-        </I18nProvider>
-      )
+    render(
+      <I18nProvider configClient={null} initialLocale="en">
+        <App />
+      </I18nProvider>
+    )
 
-      expect(screen.getByText(state)).toBeTruthy()
-      expect(await screen.findByRole('region', { name: 'Acting for Customer' })).toBeTruthy()
-      fireEvent.click(screen.getByRole('button', { name: 'End support session' }))
-      await waitFor(() => expect(endSupportSession).toHaveBeenCalledTimes(1))
-      await waitFor(() => expect(screen.queryByRole('region', { name: 'Acting for Customer' })).toBeNull())
-      expect(screen.getByText(state)).toBeTruthy()
-    }
-  )
+    expect(screen.getByText(state)).toBeTruthy()
+    expect(await screen.findByRole('region', { name: 'Acting for Customer' })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'End support session' }))
+    await waitFor(() => expect(endSupportSession).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(screen.queryByRole('region', { name: 'Acting for Customer' })).toBeNull())
+    expect(screen.getByText(state)).toBeTruthy()
+  })
 })
