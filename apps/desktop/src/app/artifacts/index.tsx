@@ -125,6 +125,7 @@ export function ArtifactsView({ setStatusbarItemGroup: _setStatusbarItemGroup, .
   const [filePage, setFilePage] = useState(1)
 
   const [refreshing, setRefreshing] = useState(false)
+  const [scanProgress, setScanProgress] = useState<{ completed: number; total: number } | null>(null)
   const refreshInFlightRef = useRef(false)
 
   const refreshArtifacts = useCallback(async () => {
@@ -134,13 +135,22 @@ export function ArtifactsView({ setStatusbarItemGroup: _setStatusbarItemGroup, .
 
     refreshInFlightRef.current = true
     setRefreshing(true)
+    setScanProgress(null)
 
     try {
       const sessions = (await listAllProfileSessions(30, 1)).sessions
+      setScanProgress({ completed: 0, total: sessions.length })
 
       const { artifacts: nextArtifacts, failures } = await loadArtifactsForSessions(
         sessions,
-        async session => (await getAllSessionMessages(session.id, session.profile)).messages
+        async session => (await getAllSessionMessages(session.id, session.profile)).messages,
+        progress => {
+          setScanProgress({ completed: progress.completed, total: progress.total })
+
+          if (progress.artifacts.length > 0) {
+            setArtifacts(progress.artifacts.sort((left, right) => right.timestamp - left.timestamp))
+          }
+        }
       )
 
       if (failures.length > 0) {
@@ -310,6 +320,7 @@ export function ArtifactsView({ setStatusbarItemGroup: _setStatusbarItemGroup, .
   // a useCallback; navigate is stable, so onOpenChat can be too.
   const openChat = useCallback((sessionId: string) => openSession(sessionId, navigate), [navigate])
   const cellCtx: CellCtx = useMemo(() => ({ onOpen: openArtifact, onOpenChat: openChat }), [openArtifact, openChat])
+  const indexingLabel = scanProgress ? `${a.indexing} (${scanProgress.completed}/${scanProgress.total})` : a.indexing
 
   return (
     <PageSearchShell
@@ -321,9 +332,9 @@ export function ArtifactsView({ setStatusbarItemGroup: _setStatusbarItemGroup, .
       searchHints={searchHints}
       searchPlaceholder={a.search}
       searchTrailingAction={
-        <Tip label={refreshing ? a.refreshing : a.refresh}>
+        <Tip label={refreshing ? indexingLabel : a.refresh}>
           <Button
-            aria-label={refreshing ? a.refreshing : a.refresh}
+            aria-label={refreshing ? indexingLabel : a.refresh}
             className="text-(--ui-text-tertiary) hover:bg-(--chrome-action-hover) hover:text-foreground"
             disabled={refreshing}
             onClick={() => void refreshArtifacts()}
@@ -343,7 +354,7 @@ export function ArtifactsView({ setStatusbarItemGroup: _setStatusbarItemGroup, .
       ]}
     >
       {!artifacts ? (
-        <PageLoader label={a.indexing} />
+        <PageLoader label={indexingLabel} />
       ) : visibleArtifacts.length === 0 ? (
         <div className="grid h-full place-items-center px-6 text-center">
           <div>
