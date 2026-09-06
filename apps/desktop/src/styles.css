@@ -260,6 +260,8 @@
     --z-onboarding: 1300;
     --z-onboarding-popover: 1310;
     --z-setup: 1400;
+    /* Ending delegated access must not depend on the customer's gateway boot. */
+    --z-support-session: 1450;
     --z-crash: 1500;
     --ui-bg-chrome: color-mix(
       in srgb,

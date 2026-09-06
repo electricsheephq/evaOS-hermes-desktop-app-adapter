@@ -6,9 +6,8 @@
  * proves it stays on the Electric Sheep sign-in boundary.
  */
 
-import { expect, test } from './test'
-
 import { type ManagedSignedOutFixture, setupManagedSignedOut } from './fixtures'
+import { expect, test } from './test'
 
 let fixture: ManagedSignedOutFixture | null = null
 
@@ -58,9 +57,11 @@ test.describe('managed signed-out boot', () => {
         getConnectionFor: (payload: { connectionId: string; profile: string }) => Promise<unknown>
         openSessionInTerminal: (sessionId: string) => Promise<unknown>
       }
+
       const rejection = async (request: () => Promise<unknown>) => {
         try {
           await request()
+
           return 'unexpected success'
         } catch (error) {
           return String(error)
@@ -79,5 +80,70 @@ test.describe('managed signed-out boot', () => {
     expect(errors.unenrolled).toContain('Sign in to evaOS Agent from Settings.')
     expect(errors.wrongOwner).toContain('outside the managed runtime route')
     expect(errors.terminal).toContain('Terminal access is unavailable for this managed remote agent.')
+  })
+
+  test('support End receives a real click above the managed boot failure', async () => {
+    // Supply synthetic authority and a boot failure at the real IPC/event
+    // boundary. Keep the renderer, preload, failure overlay and CSS intact.
+    await fixture!.app.evaluate(({ ipcMain }) => {
+      let active = true
+      const expiresAt = new Date(Date.now() + 30 * 60 * 1_000).toISOString()
+
+      ipcMain.removeHandler('hermes:eva:status')
+      ipcMain.handle('hermes:eva:status', () => ({
+        managed: true,
+        productName: 'evaOS Agent',
+        signedOut: false,
+        desktopSessionActive: true,
+        desktopSessionExpiresAt: expiresAt,
+        runtimeSessionActive: false,
+        runtimeSessionExpiresAt: null,
+        customerId: null,
+        agentId: null,
+        updateChannel: 'managed-beta',
+        delegatedSupportActive: active,
+        sessionKind: active ? 'delegated_support' : 'ordinary',
+        supportCustomerLabel: 'Test customer',
+        supportAgentLabel: 'Test agent',
+        supportExpiresAt: expiresAt,
+        supportDeadline: expiresAt
+      }))
+      ipcMain.removeHandler('hermes:eva:support:end')
+      ipcMain.handle('hermes:eva:support:end', () => {
+        active = false
+
+        return { ok: true }
+      })
+    })
+
+    const page = fixture!.page
+    const banner = page.getByRole('region', { name: 'Acting for Test customer' })
+
+    await expect(page.getByRole('button', { name: 'Sign in to evaOS Agent', exact: true })).toBeVisible()
+    await expect(banner).toBeVisible()
+    await fixture!.app.evaluate(({ BrowserWindow }) => {
+      for (const window of BrowserWindow.getAllWindows()) {
+        window.webContents.send('hermes:boot-progress', {
+          error: 'Synthetic customer gateway unavailable',
+          message: 'Synthetic customer gateway unavailable',
+          phase: 'eva.enroll.error',
+          progress: 100,
+          running: false,
+          fakeMode: false,
+          timestamp: Date.now()
+        })
+      }
+    })
+    await expect(page.getByRole('heading', { name: /couldn't start/ })).toBeVisible()
+    await expect(page.getByText('Synthetic customer gateway unavailable', { exact: true })).toBeVisible()
+    await test.info().attach('support-controls-over-failed-gateway', {
+      body: await page.screenshot(),
+      contentType: 'image/png'
+    })
+    // Do not force the click: it must fail if the real boot overlay covers it.
+    await banner.getByRole('button', { name: 'End support session', exact: true }).click()
+    await expect(banner).toBeHidden()
+    await expect(page.getByText('Synthetic customer gateway unavailable', { exact: true })).toBeVisible()
+    await expect(page.getByRole('heading', { name: /couldn't start/ })).toBeVisible()
   })
 })

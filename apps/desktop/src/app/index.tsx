@@ -3,4 +3,15 @@
 // the contribution registry (src/contrib) — core surfaces use the same calls
 // plugins do. Everything lives under ./contrib: the wiring (gateway boot,
 // sessions, streams) + pane surfaces, and the pane/layout registration.
-export { ContribController as default } from './contrib'
+import { DelegatedSupportBanner } from '../components/delegated-support-banner'
+
+import { ContribController } from './contrib'
+
+export default function App() {
+  return (
+    <>
+      <ContribController />
+      <DelegatedSupportBanner />
+    </>
+  )
+}
