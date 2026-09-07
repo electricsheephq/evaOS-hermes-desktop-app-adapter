@@ -1,3 +1,4 @@
+import { isManagedEvaosAgent } from '@/i18n/managed-brand'
 import type {
   AutomationBlueprint,
   CronDeliveryTarget,
@@ -7,7 +8,7 @@ import type {
   SessionInfo
 } from '@/types/hermes'
 
-import { connectionScoped, hermesApi, profileScoped, STARTUP_REQUEST_TIMEOUT_MS } from './client'
+import { connectionScoped, getApiRequestProfile, hermesApi, profileScoped, STARTUP_REQUEST_TIMEOUT_MS } from './client'
 
 // The cron trigger endpoint intentionally waits for the whole job so its
 // response reflects the persisted execution result. Agent jobs can run far
@@ -21,7 +22,12 @@ const CRON_TRIGGER_REQUEST_TIMEOUT_MS = 24 * 60 * 60 * 1000
 // Omitting the arg keeps the legacy 'all' default for non-profile callers.
 // profileScoped() still rides along for backend-process routing.
 export function getCronJobs(profile?: string): Promise<CronJob[]> {
-  const suffix = profile ? `?profile=${encodeURIComponent(profile)}` : ''
+  // Managed connections authorize one assigned profile, never an aggregate.
+  // Preserve explicit selectors so the boundary can reject a wrong owner.
+  const listProfile =
+    isManagedEvaosAgent() && (!profile || profile === 'all') ? getApiRequestProfile() || 'default' : profile
+
+  const suffix = listProfile ? `?profile=${encodeURIComponent(listProfile)}` : ''
 
   return hermesApi<CronJob[]>({
     ...profileScoped(),

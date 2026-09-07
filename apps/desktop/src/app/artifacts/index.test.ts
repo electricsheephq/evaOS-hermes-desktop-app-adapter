@@ -345,6 +345,36 @@ ${payload}
 })
 
 describe('loadArtifactsForSessions', () => {
+  it('publishes completed-session results before the next slow transcript finishes', async () => {
+    const sessions = [makeSession({ id: 'first' }), makeSession({ id: 'slow' })]
+    let finishSlow!: (messages: SessionMessage[]) => void
+
+    const slow = new Promise<SessionMessage[]>(resolve => {
+      finishSlow = resolve
+    })
+
+    const progress = vi.fn()
+
+    const load = loadArtifactsForSessions(
+      sessions,
+      async session =>
+        session.id === 'first' ? [{ content: 'https://example.com/first', role: 'assistant', timestamp: 2000 }] : slow,
+      progress
+    )
+
+    await vi.waitFor(() => expect(progress).toHaveBeenCalledTimes(1))
+    const first = progress.mock.calls[0]![0]
+    expect(first).toMatchObject({ completed: 1, total: 2 })
+    expect(first.artifacts.map((artifact: { sessionId: string }) => artifact.sessionId)).toEqual(['first'])
+
+    finishSlow([{ content: 'https://example.com/slow', role: 'assistant', timestamp: 2001 }])
+    const result = await load
+    expect(progress).toHaveBeenCalledTimes(2)
+    expect(progress.mock.calls[1]![0]).toMatchObject({ completed: 2, total: 2 })
+    expect(result.artifacts).toHaveLength(2)
+    expect(first.artifacts).toHaveLength(1)
+  })
+
   it('loads transcripts serially and continues after a session fails', async () => {
     const sessions = [
       makeSession({ id: 'session-1' }),

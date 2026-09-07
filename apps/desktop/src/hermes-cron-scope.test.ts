@@ -104,4 +104,34 @@ describe('cron helpers are profile-scoped', () => {
     void getCronJobs()
     expect(api.mock.calls.at(-1)?.[0].path).toBe('/api/cron/jobs')
   })
+
+  it('bounds managed aggregate reads to the assigned profile without rewriting explicit selectors', () => {
+    ;(window as { hermesDesktop?: unknown }).hermesDesktop = { api, eva: {} }
+    setApiRequestProfile('assigned-profile')
+    setApiRequestConnection('managed-connection')
+
+    for (const selector of [undefined, '', 'all']) {
+      void getCronJobs(selector)
+      expect(api.mock.calls.at(-1)?.[0]).toMatchObject({
+        path: '/api/cron/jobs?profile=assigned-profile',
+        profile: 'assigned-profile',
+        connectionId: 'managed-connection'
+      })
+    }
+
+    // The managed boundary must still see and reject a mismatching explicit
+    // selector. Do not quietly redirect a read intended for another owner.
+    void getCronJobs('other-profile')
+    expect(api.mock.calls.at(-1)?.[0]).toMatchObject({
+      path: '/api/cron/jobs?profile=other-profile',
+      profile: 'assigned-profile'
+    })
+  })
+
+  it('uses the primary-profile alias instead of an aggregate when managed assignment is implicit', () => {
+    ;(window as { hermesDesktop?: unknown }).hermesDesktop = { api, eva: {} }
+
+    void getCronJobs('all')
+    expect(api.mock.calls.at(-1)?.[0].path).toBe('/api/cron/jobs?profile=default')
+  })
 })

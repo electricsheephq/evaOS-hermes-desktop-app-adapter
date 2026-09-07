@@ -26,6 +26,12 @@ export interface ArtifactLoadResult {
   failures: ArtifactLoadFailure[]
 }
 
+export interface ArtifactLoadProgress {
+  completed: number
+  total: number
+  artifacts: ArtifactRecord[]
+}
+
 const MARKDOWN_IMAGE_RE = /!\[([^\]]*)\]\(([^)\s]+)\)/g
 const MARKDOWN_LINK_RE = /\[([^\]]+)\]\(([^)\s]+)\)/g
 const MEDIA_RE = /[`"']?MEDIA:\s*(`[^`\n]+`|"[^"\n]+"|'[^'\n]+'|\S+)[`"']?/g
@@ -431,7 +437,8 @@ export function collectArtifactsForSession(session: SessionInfo, messages: Sessi
 
 export async function loadArtifactsForSessions(
   sessions: SessionInfo[],
-  loadMessages: (session: SessionInfo) => Promise<SessionMessage[]>
+  loadMessages: (session: SessionInfo) => Promise<SessionMessage[]>,
+  onProgress?: (progress: ArtifactLoadProgress) => void
 ): Promise<ArtifactLoadResult> {
   const artifacts: ArtifactRecord[] = []
   const failures: ArtifactLoadFailure[] = []
@@ -439,13 +446,17 @@ export async function loadArtifactsForSessions(
   // Keep only one transcript resident at a time. Recent sessions can each be
   // tens of megabytes, so loading the whole page concurrently can exhaust both
   // the Desktop renderer and a remote dashboard backend.
-  for (const session of sessions) {
+  for (const [index, session] of sessions.entries()) {
     try {
       const messages = await loadMessages(session)
       artifacts.push(...collectArtifactsForSession(session, messages))
     } catch (error) {
       failures.push({ error, session })
     }
+
+    // Publish compact extracted records, not transcripts. A slow later read
+    // must not hide already available artifacts behind the initial spinner.
+    onProgress?.({ completed: index + 1, total: sessions.length, artifacts: [...artifacts] })
   }
 
   return { artifacts, failures }

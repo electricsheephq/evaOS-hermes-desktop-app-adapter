@@ -336,6 +336,48 @@ class TestGatewayRuntimeStatus:
         cmdline = r"hermes_home=c:\opt\data\profiles\coder hermes gateway run --replace"
         assert status._command_line_belongs_to_profile(cmdline, home) is True
 
+    @pytest.mark.parametrize("selector", [
+        "--profile coder_other", "-p coder-other",
+        "HERMES_HOME=/opt/data/profiles/coder_other",
+    ])
+    def test_profile_selector_does_not_match_prefix(self, selector):
+        assert not status._command_line_belongs_to_profile(
+            f"hermes {selector} gateway run", Path("/opt/data/profiles/coder")
+        )
+
+    @pytest.mark.parametrize("selector", ["--profile=coder", "-p=coder", '--profile "coder"'])
+    def test_profile_selector_accepts_exact_value(self, selector):
+        command = f"hermes {selector} gateway run"
+        assert status._command_line_belongs_to_profile(command, Path("/opt/data/profiles/coder"))
+        assert not status._command_line_belongs_to_profile(command, Path("/opt/data"))
+
+    def test_profile_home_with_spaces_requires_complete_value(self):
+        home = Path("/opt/data space/profiles/coder")
+        assert status._command_line_belongs_to_profile(
+            f'HERMES_HOME="{home}" hermes gateway run', home
+        )
+        assert not status._command_line_belongs_to_profile(
+            f'HERMES_HOME="{home}_other" hermes gateway run', home
+        )
+
+    @pytest.mark.parametrize("home, selector", [
+        ("/opt/data/profiles/coder", "HERMES_HOME=/opt/data/profiles/coder/"),
+        ("/opt/data space/profiles/coder", 'HERMES_HOME="/opt/data space/profiles/coder/"'),
+        ("c:/opt/data/profiles/coder", "HERMES_HOME=c:\\opt\\data\\profiles\\coder\\"),
+        ("/opt/data/profiles/coder", "HERMES_HOME=/opt/data/profiles/coder///"),
+    ])
+    def test_profile_home_accepts_equivalent_trailing_separators(self, home, selector):
+        assert status._command_line_belongs_to_profile(
+            f"{selector} hermes gateway run", Path(home)
+        )
+
+    @pytest.mark.parametrize("suffix", ["/child", "/../coder_other"])
+    def test_profile_home_rejects_paths_beyond_trailing_separators(self, suffix):
+        assert not status._command_line_belongs_to_profile(
+            f"HERMES_HOME=/opt/data/profiles/coder{suffix} hermes gateway run",
+            Path("/opt/data/profiles/coder"),
+        )
+
 
     def test_write_runtime_status_explicit_none_clears_stale_fields(self, tmp_path, monkeypatch):
         monkeypatch.setenv("HERMES_HOME", str(tmp_path))
