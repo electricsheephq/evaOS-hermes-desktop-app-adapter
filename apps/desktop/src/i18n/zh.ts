@@ -222,7 +222,37 @@ export const zh: Translations = {
     switchingTarget: '正在打开登录…',
     switchTargetFailed: '无法开始切换支持目标。请重试。',
     noPersonalAgent: '此账户没有个人智能体',
-    noPersonalAgentHint: '请使用“切换支持目标”打开客户智能体。'
+    noPersonalAgentHint: '请使用“切换支持目标”打开客户智能体。',
+    cleanupPending: '上一个支持会话仍需结束。'
+  },
+
+  supportPicker: {
+    title: '切换支持目标',
+    intro: '为客户提供支持 — 最长 1 小时',
+    policy: '您仍以本人身份登录。访问会被审计，仅限所选客户及已授权的智能体，并在一小时后结束，重新连接不会延长。',
+    loading: '正在加载已授权的客户…',
+    empty: '没有可用的已授权客户智能体。',
+    customerAccount: '客户账户',
+    chooseCustomer: '选择客户',
+    agent: '智能体',
+    chooseAgent: '选择智能体',
+    allAgents: '所有已授权的智能体（默认）',
+    consent: '我了解这是临时的、受审计的支持访问。结束后我将返回自己的工作区，且不会重置客户的对话。',
+    start: '打开所选客户智能体',
+    starting: '正在打开客户智能体…',
+    started: '已授予支持访问。正在重新加载…',
+    signInRequired: '请重新登录 Electric Sheep 以选择支持目标。如果刚登录后仍然出现此提示，说明应用内支持所需的 Electric Sheep 更新尚未部署。',
+    signIn: '登录 Electric Sheep',
+    signingIn: '请在浏览器中完成 Electric Sheep 登录…',
+    forbidden: '此账户未获授权进行委托支持。',
+    conflict: '此账户的另一个支持会话仍在进行中。请先结束它，然后重试。',
+    cleanupPending: '上一个支持会话尚未能结束。请先结束它，然后重试。',
+    endSupport: '结束支持会话',
+    endingSupport: '正在结束支持会话…',
+    loadFailed: '无法加载已授权的客户。',
+    retry: '重试',
+    tryAgain: '再试一次',
+    close: '关闭'
   },
 
   billingBlock: {

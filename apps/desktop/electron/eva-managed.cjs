@@ -72,10 +72,14 @@ const EVA_MANAGED_SAFE_BROKER_CODES = new Set([
   'client_customer_override_not_allowed',
   'client_download_override_not_allowed',
   'company_brain_denied',
+  'delegated_support_conflict',
+  'delegated_support_denied',
+  'delegated_support_forbidden',
   'eva_desktop_session_required',
   'evaos_agent_download_forbidden',
   'evaos_agent_download_unavailable',
   'feature_not_enabled',
+  'internal_membership_required',
   'invalid_client_surface',
   'invalid_eva_runtime',
   'invalid_hermes_agent_binding',
@@ -394,7 +398,19 @@ function makeAuthState(cryptoApi = crypto) {
   return String(cryptoApi.randomUUID())
 }
 
-function buildEvaDesktopAuthUrl(codeChallenge, authState, policy = EVA_MANAGED_POLICY) {
+// `desktop_support_login_version` tells the dashboard page who owns the
+// support-target choice: 1 = the page shows its picker and binds the chosen
+// target to the device code (browser picker); 2 = the page mints a PLAIN
+// session and never shows a picker, because the app picks the target itself
+// over the broker (`listSupportTargets`/`startDelegatedSupport`). The page
+// treats an unknown version as unsupported, so only these two are sendable.
+const EVA_SUPPORT_LOGIN_VERSIONS = new Set([1, 2])
+
+function buildEvaDesktopAuthUrl(codeChallenge, authState, policy = EVA_MANAGED_POLICY, options = {}) {
+  const supportLoginVersion = options?.supportLoginVersion ?? 1
+  if (!EVA_SUPPORT_LOGIN_VERSIONS.has(supportLoginVersion)) {
+    throw new Error('evaOS Agent desktop support login version is invalid.')
+  }
   const challenge = String(codeChallenge || '')
   if (!/^[A-Za-z0-9_-]{43}$/.test(challenge)) {
     throw new Error('evaOS Agent desktop code challenge is invalid.')
@@ -409,7 +425,7 @@ function buildEvaDesktopAuthUrl(codeChallenge, authState, policy = EVA_MANAGED_P
   url.searchParams.set('desktop_auth_state', String(authState))
   url.searchParams.set('desktop_code_challenge', challenge)
   url.searchParams.set('desktop_code_challenge_method', 'S256')
-  url.searchParams.set('desktop_support_login_version', '1')
+  url.searchParams.set('desktop_support_login_version', String(supportLoginVersion))
   url.searchParams.set('desktop_support_profiles_version', '1')
   url.searchParams.set('switch_account', '1')
   url.searchParams.set('prompt', 'select_account')
@@ -848,6 +864,9 @@ function publicEvaEnrollmentStatus(state, now = Date.now()) {
     delegatedSupport && !expiresSoon(delegatedSupport.supportExpiresAt, 0, now)
   )
   const presentationRuntime = delegatedSupportActive ? delegatedSupport : runtime
+  const ownedLeases = ownedSupportLeases(state, desktop)
+  const cleanupLease = ownedLeases.find(lease => lease.phase === 'cleanup') ?? null
+  const supportCleanupPending = cleanupLease !== null
   return {
     managed: true,
     productName: EVA_MANAGED_POLICY.productName,
@@ -870,12 +889,40 @@ function publicEvaEnrollmentStatus(state, now = Date.now()) {
     supportExpiresAt: delegatedSupportActive ? delegatedSupport.supportExpiresAt : null,
     supportDeadline: delegatedSupportActive ? delegatedSupport.supportDeadline : null,
     assignmentVersion: delegatedSupportActive ? delegatedSupport.assignmentVersion : null,
-    supportEndFailed: delegatedSupportActive && state?.supportEndError === true,
+    // Also raised for a cleanup-only lease whose End did not land, so the
+    // banner's End/retry control can say so.
+    supportEndFailed: state?.supportEndError === true && (delegatedSupportActive || supportCleanupPending),
     // Terminal, actionable state for an account that owns no agent of its own.
     // Suppressed while a delegated session is active: the support target IS the
     // agent then, so the prompt would be wrong.
-    missingAgentBinding: state?.missingAgentBinding === true && !delegatedSupportActive
+    missingAgentBinding: state?.missingAgentBinding === true && !delegatedSupportActive,
+    // The in-app target picker needs only a live desktop session; kept as its
+    // own field so a later gate can tighten it without a renderer change.
+    supportPickerAvailable: Boolean(desktop && !expiresSoon(desktop.expiresAt, 0, now)),
+    // Lease handle the app persisted locally: a create→claim in flight, the
+    // lease the enrollment owns, or one no longer owned (a remote end that
+    // failed or an enrollment a credential expiry erased) that End, the next
+    // sign-in and the next start retry. Another employee's handle on this
+    // install is not this account's to end, so it is not shown to it.
+    supportTargetLabel: (cleanupLease ?? ownedLeases[0])?.targetLabel ?? null,
+    supportCleanupPending
   }
+}
+
+// The handles the status may speak about: an actor-bound handle names a
+// customer assignment, so it is visible only to that authenticated account —
+// never on the signed-out screen of a shared install, where it stays on disk
+// for the owner's next sign-in. A handle with no recorded actor (written
+// before the field existed) counts as the signed-in account's, as before.
+function ownedSupportLeases(state, desktop) {
+  // Nothing is shown to an unauthenticated desktop — not even a handle
+  // recorded before actors were stamped: on a shared installation that label
+  // names another employee's support target until someone has signed in.
+  if (!desktop?.email) return []
+  const leases = Array.isArray(state?.supportLeases) ? state.supportLeases : []
+  return leases.filter(
+    lease => !lease.actorEmail || lease.actorEmail.toLowerCase() === desktop.email.toLowerCase()
+  )
 }
 
 function resolveEvaManagedDesktopProfile(response) {

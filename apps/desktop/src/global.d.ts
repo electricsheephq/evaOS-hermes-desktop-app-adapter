@@ -223,7 +223,10 @@ declare global {
         signOut: () => Promise<{ ok: boolean }>
         refresh: () => Promise<EvaManagedStatus>
         endSupportSession: () => Promise<{ ok: boolean }>
-        switchSupportTarget: () => Promise<EvaManagedStatus>
+        switchSupportTarget: (options?: EvaSwitchSupportTargetOptions) => Promise<EvaManagedStatus>
+        listSupportTargets: () => Promise<EvaSupportTargetsResult>
+        startSupport: (target: EvaSupportTarget) => Promise<EvaSupportStartResult>
+        onOpenSupportPicker: (callback: () => void) => () => void
       }
       profile: {
         get: () => Promise<DesktopActiveProfile>
@@ -595,7 +598,56 @@ export interface EvaManagedStatus {
   supportEndFailed?: boolean
   /** This account owns no agent of its own; only a support target can proceed. */
   missingAgentBinding?: boolean
+  /** A live desktop session exists, so the in-app target picker can list and start. */
+  supportPickerAvailable?: boolean
+  /** Label of a lease handle the app still holds locally (start in flight, or a remote end being retried). */
+  supportTargetLabel?: null | string
+  supportCleanupPending?: boolean
 }
+
+export interface EvaSwitchSupportTargetOptions {
+  /** Force a fresh plain sign-in even though a desktop session exists (the picker got a 401 on it). */
+  signInAgain?: boolean
+}
+
+// Broker directory rows as the main process re-shaped them: only what the
+// picker renders, only rows that can be started. Same field names as the
+// dashboard's DesktopSupportTargetPicker so the two pickers stay comparable.
+export interface EvaSupportClientProfile {
+  profile_id: string
+  display_name: string
+}
+
+export interface EvaSupportClient {
+  customer_account_id: string
+  customer_vm_id: string
+  display_name: string
+  profiles: EvaSupportClientProfile[]
+}
+
+/** Typed failure the picker renders as a state; `needs_sign_in` also covers a broker that predates the in-app picker. */
+export interface EvaSupportFlowFailure {
+  ok: false
+  /** `cleanup_pending`: a previous lease this app holds a handle for is not ended yet; End it first. */
+  reason: 'needs_sign_in' | 'forbidden' | 'conflict' | 'cleanup_pending' | 'error'
+  code: null | string
+  message: string
+}
+
+export type EvaSupportTargetsResult =
+  | { ok: true; is_admin: boolean; clients: EvaSupportClient[] }
+  | EvaSupportFlowFailure
+
+/** Exactly one of `profile_id` (one agent) or `profile_scope: 'customer'` (all authorized agents; admins only, no profile). */
+export type EvaSupportTarget = {
+  customer_account_id: string
+  customer_vm_id: string
+  acknowledged: true
+  customer_label?: string
+  agent_label?: string
+} & ({ profile_id: string; profile_scope?: never } | { profile_scope: 'customer'; profile_id?: never })
+
+export type EvaSupportStartResult = { ok: true; status: EvaManagedStatus } | EvaSupportFlowFailure
 
 export interface DesktopMarketplaceThemeFile {
   label: string

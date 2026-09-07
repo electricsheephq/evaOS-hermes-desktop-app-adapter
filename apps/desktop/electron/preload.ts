@@ -228,7 +228,23 @@ contextBridge.exposeInMainWorld('hermesDesktop', {
     signOut: () => ipcRenderer.invoke('hermes:eva:sign-out'),
     refresh: () => ipcRenderer.invoke('hermes:eva:refresh'),
     endSupportSession: () => ipcRenderer.invoke('hermes:eva:support:end'),
-    switchSupportTarget: () => ipcRenderer.invoke('hermes:eva:support:switch-target')
+    // Ensures a live desktop session for the in-app picker (a PLAIN browser
+    // sign-in when there is none, or when the picker asks for a fresh one).
+    // Never signs out and never ends a lease (sc#540).
+    switchSupportTarget: options => ipcRenderer.invoke('hermes:eva:support:switch-target', options),
+    // In-app support target picker: directory read + create→claim→launch, both
+    // over the desktop session in the main process. The renderer never sees a
+    // request id, a session token, or the broker.
+    listSupportTargets: () => ipcRenderer.invoke('hermes:eva:support:list-targets'),
+    startSupport: target => ipcRenderer.invoke('hermes:eva:support:start', target),
+    // Main → renderer: the native "Switch Support Target…" menu item asks the
+    // app root to open the picker once a session exists.
+    onOpenSupportPicker: callback => {
+      const listener = () => callback()
+      ipcRenderer.on('hermes:eva:support:open-picker', listener)
+
+      return () => ipcRenderer.removeListener('hermes:eva:support:open-picker', listener)
+    }
   },
   profile: {
     get: () => ipcRenderer.invoke('hermes:profile:get'),

@@ -212,7 +212,8 @@ export const zhHant = defineLocale({
     switchingTarget: '正在開啟登入…',
     switchTargetFailed: '無法開始切換支援目標。請再試一次。',
     noPersonalAgent: '此帳戶沒有個人代理',
-    noPersonalAgentHint: '請使用「切換支援目標」開啟客戶代理。'
+    noPersonalAgentHint: '請使用「切換支援目標」開啟客戶代理。',
+    cleanupPending: '上一個支援工作階段仍需結束。'
   },
 
   billingBlock: {

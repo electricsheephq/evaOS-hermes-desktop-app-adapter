@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 
 import type { EvaManagedStatus } from '@/global'
 import { useI18n } from '@/i18n'
+import { setSupportPickerOpen } from '@/store/support-picker'
 
 import { TITLEBAR_HEIGHT } from '../app/shell/titlebar'
 
@@ -54,7 +55,12 @@ export function DelegatedSupportBanner() {
   const supportActive = Boolean(
     status?.delegatedSupportActive && status.supportExpiresAt && status.supportCustomerLabel && status.supportAgentLabel
   )
-  const noPersonalAgent = Boolean(status?.missingAgentBinding) && !supportActive
+
+  // A lease this app still holds a handle for but no longer an enrollment (a
+  // start that failed after the server activated it, a sign-out or credential
+  // expiry whose remote end never landed): End must stay reachable for it.
+  const cleanupPending = Boolean(status?.supportCleanupPending) && !supportActive
+  const noPersonalAgent = Boolean(status?.missingAgentBinding) && !supportActive && !cleanupPending
 
   const switchTarget = async () => {
     if (switching) {
@@ -65,7 +71,10 @@ export function DelegatedSupportBanner() {
     setSwitchFailed(false)
 
     try {
+      // Resolves at once on a live desktop session; otherwise only after the
+      // plain browser sign-in lands. The picker itself is an app surface now.
       await window.hermesDesktop.eva.switchSupportTarget()
+      setSupportPickerOpen(true)
     } catch {
       // The main process already logged the bounded broker code; the operator
       // only needs to know the browser handoff did not start.
@@ -81,6 +90,49 @@ export function DelegatedSupportBanner() {
       {switching ? t.delegatedSupport.switchingTarget : t.delegatedSupport.switchTarget}
     </Button>
   )
+
+  const endSession = async () => {
+    if (ending) {
+      return
+    }
+
+    setEnding(true)
+
+    try {
+      await window.hermesDesktop.eva.endSupportSession()
+
+      refresh()
+    } finally {
+      setEnding(false)
+    }
+  }
+
+  const endButton = (
+    <Button disabled={ending || switching} onClick={() => void endSession()} size="sm" type="button" variant="destructive">
+      {ending ? t.delegatedSupport.endingSession : t.delegatedSupport.endSession}
+    </Button>
+  )
+
+  if (cleanupPending && status) {
+    return (
+      <div
+        aria-label={t.delegatedSupport.cleanupPending}
+        className="fixed inset-x-0 z-(--z-support-session) flex min-h-10 items-center justify-center gap-3 border-b border-(--ui-stroke-tertiary) bg-(--ui-bg-quaternary) px-4 py-2 text-sm text-(--ui-text-primary)"
+        role="region"
+        style={{ top: TITLEBAR_HEIGHT }}
+      >
+        <span aria-live="polite" className="sr-only" role="status">
+          {t.delegatedSupport.cleanupPending}
+        </span>
+        <span className="font-medium">{t.delegatedSupport.cleanupPending}</span>
+        {status.supportTargetLabel && <span className="text-(--ui-text-secondary)">{status.supportTargetLabel}</span>}
+        {status.supportEndFailed && <span role="status">{t.delegatedSupport.endFailed}</span>}
+        {switchFailed && <span role="status">{t.delegatedSupport.switchTargetFailed}</span>}
+        {switchButton}
+        {endButton}
+      </div>
+    )
+  }
 
   if (noPersonalAgent) {
     return (
@@ -105,22 +157,6 @@ export function DelegatedSupportBanner() {
     return null
   }
 
-  const endSession = async () => {
-    if (ending) {
-      return
-    }
-
-    setEnding(true)
-
-    try {
-      await window.hermesDesktop.eva.endSupportSession()
-
-      refresh()
-    } finally {
-      setEnding(false)
-    }
-  }
-
   return (
     <div
       aria-label={t.delegatedSupport.actingForCustomer(String(status.supportCustomerLabel))}
@@ -141,9 +177,7 @@ export function DelegatedSupportBanner() {
       {status.supportEndFailed && <span role="status">{t.delegatedSupport.endFailed}</span>}
       {switchFailed && <span role="status">{t.delegatedSupport.switchTargetFailed}</span>}
       {switchButton}
-      <Button disabled={ending || switching} onClick={() => void endSession()} size="sm" type="button" variant="destructive">
-        {ending ? t.delegatedSupport.endingSession : t.delegatedSupport.endSession}
-      </Button>
+      {endButton}
     </div>
   )
 }

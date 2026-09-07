@@ -229,7 +229,40 @@ export const en: Translations = {
     switchingTarget: 'Opening sign-in…',
     switchTargetFailed: 'Unable to start the support target switch. Try again.',
     noPersonalAgent: 'No personal agent for this account',
-    noPersonalAgentHint: 'Use Switch support target to open a customer agent.'
+    noPersonalAgentHint: 'Use Switch support target to open a customer agent.',
+    cleanupPending: 'A previous support session still needs to be ended.'
+  },
+
+  supportPicker: {
+    title: 'Switch support target',
+    intro: 'Support a customer — up to 1 hour',
+    policy:
+      'You remain signed in as yourself. Access is audited, limited to the selected customer and authorized agents, and ends after one hour without extending on reconnect.',
+    loading: 'Loading authorized customers…',
+    empty: 'No authorized customer agents are available.',
+    customerAccount: 'Customer account',
+    chooseCustomer: 'Choose a customer',
+    agent: 'Agent',
+    chooseAgent: 'Choose an agent',
+    allAgents: 'All authorized agents (default)',
+    consent:
+      'I understand this is temporary, audited support access. Ending it returns me to my workspace and does not reset the customer’s conversation.',
+    start: 'Open selected customer agent',
+    starting: 'Opening customer agent…',
+    started: 'Support access granted. Reloading…',
+    signInRequired:
+      'Sign in to Electric Sheep again to choose a support target. If this repeats right after signing in, the Electric Sheep update for in-app support is not deployed yet.',
+    signIn: 'Sign in to Electric Sheep',
+    signingIn: 'Complete the Electric Sheep sign-in in your browser…',
+    forbidden: 'This account is not authorized for delegated support.',
+    conflict: 'Another support session for this account is still active. End it, then try again.',
+    cleanupPending: 'A previous support session could not be ended yet. End it, then try again.',
+    endSupport: 'End support session',
+    endingSupport: 'Ending support session…',
+    loadFailed: 'Authorized customers could not be loaded.',
+    retry: 'Retry',
+    tryAgain: 'Try again',
+    close: 'Close'
   },
 
   billingBlock: {

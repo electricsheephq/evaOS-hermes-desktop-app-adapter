@@ -221,7 +221,8 @@ export const ja = defineLocale({
     switchingTarget: 'サインインを開いています…',
     switchTargetFailed: 'サポート対象の切り替えを開始できませんでした。もう一度お試しください。',
     noPersonalAgent: 'このアカウントには個人用エージェントがありません',
-    noPersonalAgentHint: '「サポート対象を切り替え」から顧客のエージェントを開いてください。'
+    noPersonalAgentHint: '「サポート対象を切り替え」から顧客のエージェントを開いてください。',
+    cleanupPending: '前回のサポートセッションはまだ終了していません。'
   },
 
   billingBlock: {

@@ -145,6 +145,13 @@ test('evaOS Agent auth URL carries an S256 challenge and never leaks its verifie
   assert.equal(url.searchParams.has('fresh'), false)
   assert.equal(url.searchParams.has('agent_id'), false)
   assert.equal(url.toString().includes(verifier), false)
+  // Default stays the page-side picker; the in-app picker asks for a plain
+  // session with version 2, and nothing else is sendable.
+  assert.equal(url.searchParams.get('desktop_support_login_version'), '1')
+  const plain = new URL(buildEvaDesktopAuthUrl(challenge, 'state-12345678', EVA_MANAGED_POLICY, { supportLoginVersion: 2 }))
+  assert.equal(plain.searchParams.get('desktop_support_login_version'), '2')
+  assert.equal(plain.searchParams.get('switch_account'), '1')
+  assert.throws(() => buildEvaDesktopAuthUrl(challenge, 'state-12345678', EVA_MANAGED_POLICY, { supportLoginVersion: 3 }))
 })
 
 test('broker requests identify the actual Desktop package version', async () => {
@@ -909,4 +916,39 @@ test('managed desktop profile falls back to enrolled identity only when the acti
     () => resolveEvaManagedDesktopProfileFromSources(async () => Promise.reject(missing), () => ({ agentId: 'default' })),
     error => error instanceof EvaBrokerError && error.code === 'invalid-profile-scope'
   )
+})
+
+test('broker rejections keep the delegated-support and membership codes the picker types', async () => {
+  for (const [status, code] of [
+    [409, 'delegated_support_conflict'],
+    [403, 'delegated_support_denied'],
+    [403, 'delegated_support_forbidden'],
+    [403, 'internal_membership_required']
+  ]) {
+    await assert.rejects(
+      brokerPost(
+        { action: 'create_internal_support_request' },
+        {
+          policy: {
+            brokerUrl: 'https://broker.example.invalid/runtime',
+            brokerRequestTimeoutMs: 1_000
+          },
+          fetchImpl: async () =>
+            new Response(JSON.stringify({ error: code }), {
+              status,
+              headers: { 'Content-Type': 'application/json' }
+            })
+        }
+      ),
+      error => {
+        assert.ok(error instanceof EvaBrokerError)
+        assert.equal(error.statusCode, status)
+        // Dropped to `broker-rejected` here, the picker could never type
+        // `forbidden` / `conflict` from a real broker answer.
+        assert.equal(error.code, code)
+        assert.equal(error.brokerRejected, true)
+        return true
+      }
+    )
+  }
 })
