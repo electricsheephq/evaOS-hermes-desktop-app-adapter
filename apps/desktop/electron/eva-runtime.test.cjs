@@ -2951,7 +2951,7 @@ test('the in-app picker lists the directory over the desktop session and drops r
   })
 })
 
-test('starting a support target persists the lease handle before the claim and clears it after', async t => {
+test('starting a support target persists the lease handle before the claim and keeps it beside the enrollment after', async t => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-support-start-happy-'))
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
   const statePath = path.join(directory, 'eva-enrollment.json')
@@ -2996,7 +2996,13 @@ test('starting a support target persists the lease handle before the claim and c
   assert.equal(leaseAtClaim?.request_id, SUPPORT_REQUEST_ID)
   assert.equal(leaseAtClaim?.phase, 'pending')
   assert.equal(leaseAtClaim?.target_label, 'Acme / Asuka')
-  assert.equal(persistedSupportLease(statePath), null)
+  // The handle now lives beside the enrollment, with the server's deadline, so
+  // a credential expiry that erases the enrollment cannot erase the only id.
+  const active = persistedSupportLease(statePath)
+  assert.equal(active?.support_session_id, SUPPORT_SESSION_ID)
+  assert.equal(active?.request_id, SUPPORT_REQUEST_ID)
+  assert.equal(active?.phase, 'active')
+  assert.ok(Date.parse(active?.support_expires_at) > Date.now())
   assert.equal(runtime.status().delegatedSupportActive, true)
   assert.equal(runtime.status().supportCleanupPending, false)
 })
@@ -3020,14 +3026,15 @@ test('an all-agents target carries the customer scope and never a profile', asyn
   const result = await runtime.startDelegatedSupport(supportTarget({ profile_id: '', profile_scope: 'customer' }))
 
   assert.equal(result.ok, true)
+  // Customer scope omits `profile_id` entirely rather than sending it empty.
   assert.deepEqual(bodies[0], {
     action: 'create_internal_support_request',
     customer_account_id: SUPPORT_ACCOUNT_ID,
     customer_vm_id: SUPPORT_VM_ID,
-    profile_id: '',
     profile_scope: 'customer',
     acknowledged: true
   })
+  assert.equal(Object.hasOwn(bodies[0], 'profile_id'), false)
 })
 
 test('a claim that fails after create ends the pending row with the persisted handle', async t => {
@@ -3107,7 +3114,7 @@ test('a failed end after a failed claim keeps the handle and the next start retr
     'claim_internal_support_request'
   ])
   assert.equal(secondRun[0].support_session_id, SUPPORT_SESSION_ID)
-  assert.equal(persistedSupportLease(statePath), null)
+  assert.equal(persistedSupportLease(statePath)?.phase, 'active')
   assert.equal(runtime.status().supportCleanupPending, false)
   assert.equal(runtime.status().delegatedSupportActive, true)
 })
@@ -3139,13 +3146,16 @@ test('picker calls map broker rejections to typed states instead of throwing', a
   })
   next = brokerRejection(403, 'delegated_support_forbidden')
   assert.equal((await runtime.listSupportTargets()).reason, 'forbidden')
+  // An account outside the internal membership is the same dead end.
+  next = brokerRejection(403, 'internal_membership_required')
+  assert.equal((await runtime.listSupportTargets()).reason, 'forbidden')
   next = brokerRejection(409, 'delegated_support_conflict')
   assert.equal((await runtime.startDelegatedSupport(supportTarget())).reason, 'conflict')
   next = brokerRejection(500, 'internal')
   const failure = await runtime.startDelegatedSupport(supportTarget())
   assert.equal(failure.reason, 'error')
   assert.equal(failure.message, 'Electric Sheep request failed (500). [code: internal]')
-  assert.equal(brokerCalls, 4)
+  assert.equal(brokerCalls, 5)
 
   // Local validation never reaches the broker: consent is a literal true the
   // operator gives, and the ids must already be well-formed.
@@ -3154,7 +3164,7 @@ test('picker calls map broker rejections to typed states instead of throwing', a
   assert.equal(consent.code, 'support-acknowledgement-required')
   const malformed = await runtime.startDelegatedSupport(supportTarget({ customer_vm_id: 'vm-1' }))
   assert.equal(malformed.code, 'invalid-support-target')
-  assert.equal(brokerCalls, 4)
+  assert.equal(brokerCalls, 5)
   assert.equal(runtime.status().desktopSessionActive, true)
 })
 
@@ -3267,9 +3277,11 @@ test('a start whose stranded-lease cleanup fails never creates a second request'
 
   const result = await runtime.startDelegatedSupport(supportTarget())
 
-  // Creating here would overwrite the only handle able to end 'stranded-session'.
+  // Creating here would overwrite the only handle able to end 'stranded-session';
+  // the typed state carries the End control that reaches it.
   assert.equal(result.ok, false)
-  assert.equal(result.code, 'support-end-failed')
+  assert.equal(result.reason, 'cleanup_pending')
+  assert.equal(result.code, 'support-cleanup-pending')
   assert.equal(creates, 0)
   assert.equal(persistedSupportLease(statePath).support_session_id, 'stranded-session')
 })
@@ -3368,54 +3380,80 @@ test('sign-out drops the lease handle once the revoke has ended the lease server
   assert.equal(runtime.status().supportCleanupPending, false)
 })
 
-test('a sign-in after a failed sign-out end retries the stranded lease and drops a definitive rejection', async t => {
+// The next-sign-in enrollment stub shared by the recovery tests below.
+function freshRuntimeEnrollment() {
+  return {
+    agentDisplayName: 'Asuka',
+    agentId: 'main',
+    baseUrl: 'https://hermes-customer-one.ecs.electricsheephq.com',
+    customerId: 'customer-one',
+    expiresAt: FUTURE,
+    runtime: 'hermes',
+    schemaVersion: 'evaos.hermes_desktop_enrollment.v1',
+    token: 'fresh-runtime-token'
+  }
+}
+
+test('a sign-in after a failed sign-out retries the stranded lease with the next desktop session and drops it only once the broker ends it', async t => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-signin-retries-stranded-lease-'))
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
   const statePath = path.join(directory, 'eva-enrollment.json')
-  fs.writeFileSync(
-    statePath,
-    JSON.stringify({
-      schema_version: 'evaos.eva_desktop_managed.v1',
-      signed_out: true,
-      support_lease: {
-        support_session_id: SUPPORT_SESSION_ID,
-        target_label: 'Acme / Asuka',
-        phase: 'cleanup',
-        recorded_at: new Date().toISOString()
-      }
-    })
-  )
+  writeActiveEnrollment(statePath)
   const ends = []
+  const first = makeManagedRuntime(statePath, {
+    brokerPost: async (body, options) => {
+      if (body.action === 'claim_internal_support_request') return supportEnrollment()
+      if (body.action === 'internal_support_session_end') {
+        ends.push({ id: body.support_session_id, desktopSession: options?.desktopSession })
+        throw new EvaBrokerError('evaOS Agent could not reach Electric Sheep.', null, 'transport-error')
+      }
+      throw new Error(`unexpected action ${body.action}`)
+    },
+    revokeDesktopSession: async () => false
+  })
+
+  // Claimed on desktop session A; the sign-out reaches neither the end nor the
+  // revoke, so the row is still active server-side and only the id survives.
+  await first.claimSupportRequest('request-123')
+  assert.deepEqual(await first.signOut(), { ok: true })
+  await first.close()
+  assert.deepEqual(ends, [{ id: 'support-session', desktopSession: 'desktop-token' }])
+  const tombstone = JSON.parse(fs.readFileSync(statePath, 'utf8'))
+  assert.equal(tombstone.desktop ?? null, null)
+  assert.equal(tombstone.support_lease.phase, 'cleanup')
+  assert.ok(tombstone.support_lease.support_expires_at)
+
+  // Restart, then sign in as the SAME admin: desktop session B. The broker lets
+  // the same actor end its own row from any live session, so a 403 on our own
+  // row proves neither termination nor expiry — the handle is kept and the end
+  // is retried; only `ok` drops it.
   const logs = []
   let opened
+  let endAnswer = () => {
+    throw brokerRejection(403, 'delegated_support_denied')
+  }
   const runtime = makeManagedRuntime(statePath, {
     rememberLog: line => logs.push(line),
     openExternal: async url => {
       opened = new URL(url)
     },
     pollDeviceCode: async () => ({ token: 'next-desktop-session', expiresAt: FUTURE, email: 'employee@example.invalid' }),
-    launchRuntime: async () => ({
-      agentDisplayName: 'Asuka',
-      agentId: 'main',
-      baseUrl: 'https://hermes-customer-one.ecs.electricsheephq.com',
-      customerId: 'customer-one',
-      expiresAt: FUTURE,
-      runtime: 'hermes',
-      schemaVersion: 'evaos.hermes_desktop_enrollment.v1',
-      token: 'fresh-runtime-token'
-    }),
+    launchRuntime: async () => freshRuntimeEnrollment(),
     brokerPost: async (body, options) => {
       if (body.action === 'internal_support_session_end') {
         ends.push({ id: body.support_session_id, desktopSession: options?.desktopSession })
-        // A different desktop session may not end it: settled, so it is dropped.
-        throw brokerRejection(403, 'delegated_support_denied')
+        return endAnswer()
       }
       throw new Error(`unexpected action ${body.action}`)
     }
   })
   t.after(() => runtime.close())
+  await new Promise(resolve => setImmediate(resolve))
 
+  // No credential at boot: nothing is sent and nothing is dropped.
+  assert.equal(ends.length, 1)
   assert.equal(runtime.status().supportCleanupPending, true)
+
   const signingIn = runtime.signIn()
   await new Promise(resolve => setImmediate(resolve))
   await runtime.completeCallback(
@@ -3424,11 +3462,239 @@ test('a sign-in after a failed sign-out end retries the stranded lease and drops
   await signingIn
   await new Promise(resolve => setImmediate(resolve))
 
-  assert.deepEqual(ends, [{ id: SUPPORT_SESSION_ID, desktopSession: 'next-desktop-session' }])
+  assert.deepEqual(ends[1], { id: 'support-session', desktopSession: 'next-desktop-session' })
+  assert.equal(persistedSupportLease(statePath)?.support_session_id, 'support-session')
+  assert.equal(runtime.status().supportCleanupPending, true)
+  assert.equal(runtime.status().runtimeSessionActive, true)
+  assert.equal(logs.some(line => line.includes('stranded support lease end failed; retry pending')), true)
+  assert.equal(logs.some(line => line.includes('stranded support lease dropped')), false)
+
+  // End reaches the same handle with session B; the broker's `ok` is what
+  // finally drops it.
+  endAnswer = () => ({ ok: true, status: 'ended' })
+  assert.deepEqual(await runtime.endSupportSession(), { ok: true })
+  assert.deepEqual(ends[2], { id: 'support-session', desktopSession: 'next-desktop-session' })
+  assert.equal(ends.length, 3)
+  assert.equal(persistedSupportLease(statePath), null)
+  assert.equal(runtime.status().supportCleanupPending, false)
+})
+
+test('only a broker answer that the row no longer exists drops a stranded handle', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-stranded-lease-definitive-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeActiveEnrollment(statePath)
+  const persisted = JSON.parse(fs.readFileSync(statePath, 'utf8'))
+  persisted.support_lease = {
+    support_session_id: SUPPORT_SESSION_ID,
+    target_label: 'Acme / Asuka',
+    phase: 'cleanup',
+    recorded_at: new Date().toISOString()
+  }
+  fs.writeFileSync(statePath, JSON.stringify(persisted))
+  const answers = [
+    () => {
+      throw brokerRejection(403, 'delegated_support_denied')
+    },
+    () => {
+      throw brokerRejection(409, 'delegated_support_conflict')
+    },
+    () => {
+      throw brokerRejection(404, 'delegated_support_not_found')
+    }
+  ]
+  const ends = []
+  const logs = []
+  const runtime = makeManagedRuntime(statePath, {
+    rememberLog: line => logs.push(line),
+    brokerPost: async body => {
+      if (body.action === 'internal_support_session_end') {
+        ends.push(body.support_session_id)
+        return answers.shift()()
+      }
+      throw new Error(`unexpected action ${body.action}`)
+    }
+  })
+  t.after(() => runtime.close())
+  await new Promise(resolve => setImmediate(resolve))
+
+  // 403 and 409 say nothing about whether OUR row still exists: kept, retried.
+  assert.deepEqual(ends, [SUPPORT_SESSION_ID])
+  assert.equal(persistedSupportLease(statePath)?.support_session_id, SUPPORT_SESSION_ID)
+  assert.deepEqual(await runtime.endSupportSession(), { ok: false })
+  assert.equal(runtime.status().supportEndFailed, true)
+  assert.equal(runtime.status().supportCleanupPending, true)
+  assert.equal(persistedSupportLease(statePath)?.support_session_id, SUPPORT_SESSION_ID)
+
+  // 404: the row is gone, so there is nothing left to end.
+  assert.deepEqual(await runtime.endSupportSession(), { ok: true })
+  assert.equal(ends.length, 3)
+  assert.equal(persistedSupportLease(statePath), null)
+  assert.equal(runtime.status().supportCleanupPending, false)
+  assert.equal(runtime.status().supportEndFailed, false)
+  assert.equal(logs.some(line => line.includes('stranded support lease dropped: delegated_support_not_found')), true)
+})
+
+test('End reaches a cleanup-only lease and a start refuses to create over it until the broker ends it', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-support-cleanup-only-end-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeActiveEnrollment(statePath)
+  const ends = []
+  let endOk = false
+  let isolate = false
+  let creates = 0
+  const runtime = makeManagedRuntime(statePath, {
+    // The server activates the lease inside the claim, the local launch (the
+    // renderer isolation) fails, and the compensating end fails too: the app is
+    // left holding a handle and no enrollment.
+    resetRenderer: async () => isolate,
+    brokerPost: async (body, options) => {
+      if (body.action === 'create_internal_support_request') {
+        creates += 1
+        return supportRequestCreated()
+      }
+      if (body.action === 'claim_internal_support_request') {
+        return supportEnrollment(Date.now(), { support_session_id: SUPPORT_SESSION_ID })
+      }
+      if (body.action === 'internal_support_session_end') {
+        ends.push({ id: body.support_session_id, desktopSession: options?.desktopSession })
+        if (!endOk) throw new EvaBrokerError('evaOS Agent could not reach Electric Sheep.', null, 'transport-error')
+        return { ok: true, status: 'ended' }
+      }
+      throw new Error(`unexpected action ${body.action}`)
+    }
+  })
+  t.after(() => runtime.close())
+
+  const first = await runtime.startDelegatedSupport(supportTarget())
+  assert.equal(first.ok, false)
+  assert.equal(first.code, 'support-renderer-reset-failed')
+  assert.ok(ends.length >= 1)
+  assert.equal(persistedSupportLease(statePath)?.phase, 'cleanup')
+  assert.equal(runtime.status().delegatedSupportActive, false)
+  assert.equal(runtime.status().supportCleanupPending, true)
+
+  // No second create while the first row is still owed an end.
+  const blocked = await runtime.startDelegatedSupport(supportTarget())
+  assert.equal(blocked.ok, false)
+  assert.equal(blocked.reason, 'cleanup_pending')
+  assert.equal(blocked.code, 'support-cleanup-pending')
+  assert.equal(creates, 1)
+
+  // End sends the request with the session in hand and reports the failure;
+  // nothing is dropped on a failed attempt.
+  assert.deepEqual(await runtime.endSupportSession(), { ok: false })
+  assert.deepEqual(ends.at(-1), { id: SUPPORT_SESSION_ID, desktopSession: 'desktop-token' })
+  assert.equal(runtime.status().supportEndFailed, true)
+  assert.equal(persistedSupportLease(statePath)?.support_session_id, SUPPORT_SESSION_ID)
+
+  endOk = true
+  assert.deepEqual(await runtime.endSupportSession(), { ok: true })
+  assert.deepEqual(ends.at(-1), { id: SUPPORT_SESSION_ID, desktopSession: 'desktop-token' })
+  assert.equal(persistedSupportLease(statePath), null)
+  assert.equal(runtime.status().supportCleanupPending, false)
+  assert.equal(runtime.status().supportEndFailed, false)
+
+  isolate = true
+  const started = await runtime.startDelegatedSupport(supportTarget())
+  assert.equal(started.ok, true)
+  assert.equal(creates, 2)
+})
+
+test('a desktop credential that expires during an active lease leaves a cleanup handle the next sign-in ends', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-desktop-expiry-keeps-lease-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeActiveEnrollment(statePath)
+  const ends = []
+  const first = makeManagedRuntime(statePath, {
+    brokerPost: async body => {
+      if (body.action === 'claim_internal_support_request') return supportEnrollment()
+      throw new Error(`unexpected action ${body.action}`)
+    }
+  })
+  await first.claimSupportRequest('request-123')
+  await first.close()
+
+  // The claim keeps the lease id beside the enrollment, with the server deadline.
+  const active = persistedSupportLease(statePath)
+  assert.equal(active?.support_session_id, 'support-session')
+  assert.equal(active?.phase, 'active')
+  const persisted = JSON.parse(fs.readFileSync(statePath, 'utf8'))
+  assert.equal(active?.support_expires_at, JSON.parse(persisted.delegated_support.enrollment).support_expires_at)
+
+  // The desktop credential expires while the hour-long lease is still active
+  // server-side; the next boot clears the enrollment it can no longer resume.
+  persisted.desktop.expires_at = EXPIRED
+  fs.writeFileSync(statePath, JSON.stringify(persisted))
+  let opened
+  const runtime = makeManagedRuntime(statePath, {
+    openExternal: async url => {
+      opened = new URL(url)
+    },
+    pollDeviceCode: async () => ({ token: 'next-desktop-session', expiresAt: FUTURE, email: 'employee@example.invalid' }),
+    launchRuntime: async () => freshRuntimeEnrollment(),
+    brokerPost: async (body, options) => {
+      if (body.action === 'internal_support_session_end') {
+        ends.push({ id: body.support_session_id, desktopSession: options?.desktopSession })
+        return { ok: true, status: 'ended' }
+      }
+      throw new Error(`unexpected action ${body.action}`)
+    }
+  })
+  t.after(() => runtime.close())
+  await new Promise(resolve => setImmediate(resolve))
+
+  // Losing the credential is not ending the row: the id survives as a cleanup
+  // handle, and nothing was sent without a credential to send it with.
+  assert.deepEqual(ends, [])
+  assert.equal(JSON.parse(fs.readFileSync(statePath, 'utf8')).delegated_support ?? null, null)
+  assert.equal(persistedSupportLease(statePath)?.support_session_id, 'support-session')
+  assert.equal(persistedSupportLease(statePath)?.phase, 'cleanup')
+  assert.equal(runtime.status().delegatedSupportActive, false)
+  assert.equal(runtime.status().supportCleanupPending, true)
+
+  const signingIn = runtime.signIn()
+  await new Promise(resolve => setImmediate(resolve))
+  await runtime.completeCallback(
+    `evaos-agent://auth/callback?device_code=ABCDEFGH&desktop_auth_state=${opened.searchParams.get('desktop_auth_state')}`
+  )
+  await signingIn
+  await new Promise(resolve => setImmediate(resolve))
+
+  assert.deepEqual(ends, [{ id: 'support-session', desktopSession: 'next-desktop-session' }])
   assert.equal(persistedSupportLease(statePath), null)
   assert.equal(runtime.status().supportCleanupPending, false)
   assert.equal(runtime.status().runtimeSessionActive, true)
-  assert.equal(logs.some(line => line.includes('stranded support lease dropped: delegated_support_denied')), true)
+})
+
+test('a start on a desktop credential about to expire asks for a plain sign-in before creating a lease', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-support-start-expiring-credential-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeActiveEnrollment(statePath)
+  const persisted = JSON.parse(fs.readFileSync(statePath, 'utf8'))
+  persisted.desktop.expires_at = new Date(Date.now() + 3 * 60 * 1_000).toISOString()
+  fs.writeFileSync(statePath, JSON.stringify(persisted))
+  let brokerCalls = 0
+  const runtime = makeManagedRuntime(statePath, {
+    brokerPost: async () => {
+      brokerCalls += 1
+      throw new Error('must not be called')
+    }
+  })
+  t.after(() => runtime.close())
+
+  // Three minutes of credential cannot end an hour-long lease later; the
+  // picker routes `needs_sign_in` to the plain sign-in that fixes it.
+  const result = await runtime.startDelegatedSupport(supportTarget())
+
+  assert.equal(result.ok, false)
+  assert.equal(result.reason, 'needs_sign_in')
+  assert.equal(result.code, 'desktop-session-expiring')
+  assert.equal(brokerCalls, 0)
+  assert.equal(runtime.status().desktopSessionActive, true)
 })
 
 test('boot ends a stranded lease handle left by an interrupted start', async t => {
@@ -3502,4 +3768,95 @@ test('a late callback with no pending sign-in is logged instead of dropped silen
 
   assert.equal(await runtime.completeCallback('evaos-agent://auth/callback?device_code=ABCDEFGH&desktop_auth_state=late'), false)
   assert.deepEqual(logs, ['[eva-auth] callback ignored: no-pending'])
+})
+
+test('the directory caps count startable rows, so unusable rows cannot crowd valid ones out', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-support-directory-cap-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeActiveEnrollment(statePath)
+  const runtime = makeManagedRuntime(statePath, {
+    brokerPost: async () => ({
+      ok: true,
+      is_admin: false,
+      clients: [
+        // 500 rows without a VM precede the one row an operator can start.
+        ...Array.from({ length: 500 }, (_, index) => ({
+          customer_account_id: SUPPORT_ACCOUNT_ID,
+          customer_vm_id: null,
+          display_name: `Unusable ${index}`,
+          profiles: [{ profile_id: 'main', display_name: 'A' }]
+        })),
+        {
+          customer_account_id: SUPPORT_ACCOUNT_ID,
+          customer_vm_id: SUPPORT_VM_ID,
+          display_name: 'Acme',
+          // 200 malformed profiles precede the one that can be chosen.
+          profiles: [
+            ...Array.from({ length: 200 }, (_, index) => ({ profile_id: `bad profile ${index}!`, display_name: 'x' })),
+            { profile_id: 'main', display_name: 'Asuka' }
+          ]
+        }
+      ]
+    })
+  })
+  t.after(() => runtime.close())
+
+  const result = await runtime.listSupportTargets()
+
+  assert.equal(result.ok, true)
+  assert.deepEqual(result.clients, [
+    {
+      customer_account_id: SUPPORT_ACCOUNT_ID,
+      customer_vm_id: SUPPORT_VM_ID,
+      display_name: 'Acme',
+      profiles: [{ profile_id: 'main', display_name: 'Asuka' }]
+    }
+  ])
+})
+
+test("a superseded start's late end never clears or rewrites a handle a newer start has persisted", async t => {
+  for (const endOutcome of ['ok', 'transport-error']) {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), `eva-support-late-release-${endOutcome}-`))
+    t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+    const statePath = path.join(directory, 'eva-enrollment.json')
+    writeActiveEnrollment(statePath)
+    let runtime
+    runtime = makeManagedRuntime(statePath, {
+      brokerPost: async body => {
+        if (body.action === 'create_internal_support_request') {
+          // The operator signs out while the broker is still answering, so the
+          // created row is released instead of claimed.
+          await runtime.signOut()
+          return supportRequestCreated()
+        }
+        if (body.action === 'internal_support_session_end') {
+          // Before that release lands, a newer start has already settled this
+          // row and persisted its own handle for a different one.
+          const persisted = JSON.parse(fs.readFileSync(statePath, 'utf8'))
+          persisted.support_lease = {
+            support_session_id: 'newer-session',
+            phase: 'pending',
+            recorded_at: new Date().toISOString()
+          }
+          fs.writeFileSync(statePath, JSON.stringify(persisted))
+          if (endOutcome === 'ok') return { ok: true, status: 'ended' }
+          throw new EvaBrokerError('evaOS Agent could not reach Electric Sheep.', null, 'transport-error')
+        }
+        throw new Error(`unexpected action ${body.action}`)
+      }
+    })
+    t.after(() => runtime.close())
+
+    const result = await runtime.startDelegatedSupport(supportTarget())
+
+    assert.equal(result.reason, 'needs_sign_in')
+    // The newer handle is untouched: neither cleared by the ok nor rewritten
+    // into the superseded row's cleanup state by the failure.
+    assert.deepEqual(persistedSupportLease(statePath), {
+      support_session_id: 'newer-session',
+      phase: 'pending',
+      recorded_at: persistedSupportLease(statePath).recorded_at
+    })
+  }
 })

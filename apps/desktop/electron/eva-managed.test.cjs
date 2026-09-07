@@ -917,3 +917,38 @@ test('managed desktop profile falls back to enrolled identity only when the acti
     error => error instanceof EvaBrokerError && error.code === 'invalid-profile-scope'
   )
 })
+
+test('broker rejections keep the delegated-support and membership codes the picker types', async () => {
+  for (const [status, code] of [
+    [409, 'delegated_support_conflict'],
+    [403, 'delegated_support_denied'],
+    [403, 'delegated_support_forbidden'],
+    [403, 'internal_membership_required']
+  ]) {
+    await assert.rejects(
+      brokerPost(
+        { action: 'create_internal_support_request' },
+        {
+          policy: {
+            brokerUrl: 'https://broker.example.invalid/runtime',
+            brokerRequestTimeoutMs: 1_000
+          },
+          fetchImpl: async () =>
+            new Response(JSON.stringify({ error: code }), {
+              status,
+              headers: { 'Content-Type': 'application/json' }
+            })
+        }
+      ),
+      error => {
+        assert.ok(error instanceof EvaBrokerError)
+        assert.equal(error.statusCode, status)
+        // Dropped to `broker-rejected` here, the picker could never type
+        // `forbidden` / `conflict` from a real broker answer.
+        assert.equal(error.code, code)
+        assert.equal(error.brokerRejected, true)
+        return true
+      }
+    )
+  }
+})

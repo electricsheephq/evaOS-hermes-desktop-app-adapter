@@ -72,10 +72,14 @@ const EVA_MANAGED_SAFE_BROKER_CODES = new Set([
   'client_customer_override_not_allowed',
   'client_download_override_not_allowed',
   'company_brain_denied',
+  'delegated_support_conflict',
+  'delegated_support_denied',
+  'delegated_support_forbidden',
   'eva_desktop_session_required',
   'evaos_agent_download_forbidden',
   'evaos_agent_download_unavailable',
   'feature_not_enabled',
+  'internal_membership_required',
   'invalid_client_surface',
   'invalid_eva_runtime',
   'invalid_hermes_agent_binding',
@@ -882,7 +886,10 @@ function publicEvaEnrollmentStatus(state, now = Date.now()) {
     supportExpiresAt: delegatedSupportActive ? delegatedSupport.supportExpiresAt : null,
     supportDeadline: delegatedSupportActive ? delegatedSupport.supportDeadline : null,
     assignmentVersion: delegatedSupportActive ? delegatedSupport.assignmentVersion : null,
-    supportEndFailed: delegatedSupportActive && state?.supportEndError === true,
+    // Also raised for a cleanup-only lease whose End did not land, so the
+    // banner's End/retry control can say so.
+    supportEndFailed:
+      state?.supportEndError === true && (delegatedSupportActive || state?.supportLease?.phase === 'cleanup'),
     // Terminal, actionable state for an account that owns no agent of its own.
     // Suppressed while a delegated session is active: the support target IS the
     // agent then, so the prompt would be wrong.
@@ -890,9 +897,10 @@ function publicEvaEnrollmentStatus(state, now = Date.now()) {
     // The in-app target picker needs only a live desktop session; kept as its
     // own field so a later gate can tighten it without a renderer change.
     supportPickerAvailable: Boolean(desktop && !expiresSoon(desktop.expiresAt, 0, now)),
-    // Lease handle the app persisted locally but that the enrollment does not
-    // own yet (a create→claim in flight) or no longer owns (a remote end that
-    // failed and is retried on the next sign-in/start).
+    // Lease handle the app persisted locally: a create→claim in flight, the
+    // lease the enrollment owns, or one no longer owned (a remote end that
+    // failed or an enrollment a credential expiry erased) that End, the next
+    // sign-in and the next start retry.
     supportTargetLabel: state?.supportLease?.targetLabel ?? null,
     supportCleanupPending: state?.supportLease?.phase === 'cleanup'
   }
