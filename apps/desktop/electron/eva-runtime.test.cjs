@@ -3673,6 +3673,100 @@ test('End reaches a cleanup-only lease and a start refuses to create over it unt
   assert.equal(creates, 2)
 })
 
+test('a confirmed end after a failed isolation drops the handle and the next start creates immediately', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-support-confirmed-end-settles-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeActiveEnrollment(statePath)
+  const ends = []
+  let isolate = false
+  let creates = 0
+  const runtime = makeManagedRuntime(statePath, {
+    // The server activates the lease inside the claim and the local launch
+    // fails, so the claim compensates with an end the server ACCEPTS. Every
+    // later end for that now-ended row is what production answers: 403
+    // `delegated_support_denied` — neither 404 nor 410, so not definitive.
+    resetRenderer: async () => isolate,
+    brokerPost: async (body, options) => {
+      if (body.action === 'create_internal_support_request') {
+        creates += 1
+        return supportRequestCreated()
+      }
+      if (body.action === 'claim_internal_support_request') {
+        return supportEnrollment(Date.now(), { support_session_id: SUPPORT_SESSION_ID })
+      }
+      if (body.action === 'internal_support_session_end') {
+        ends.push({ id: body.support_session_id, desktopSession: options?.desktopSession })
+        if (ends.filter(end => end.id === body.support_session_id).length > 1) {
+          throw brokerRejection(403, 'delegated_support_denied')
+        }
+        return { ok: true, status: 'ended' }
+      }
+      throw new Error(`unexpected action ${body.action}`)
+    }
+  })
+  t.after(() => runtime.close())
+
+  const first = await runtime.startDelegatedSupport(supportTarget())
+  assert.equal(first.ok, false)
+  assert.equal(first.code, 'support-renderer-reset-failed')
+  // Exactly ONE end for that row: the outer failure handler must not send the
+  // second one that would earn the 403 and strand a `cleanup` handle.
+  assert.deepEqual(ends, [{ id: SUPPORT_SESSION_ID, desktopSession: 'desktop-token' }])
+  assert.equal(persistedSupportLease(statePath), null)
+  assert.equal(runtime.status().supportCleanupPending, false)
+  assert.equal(runtime.status().delegatedSupportActive, false)
+
+  // Nothing is owed an end, so the next start creates straight away.
+  isolate = true
+  const started = await runtime.startDelegatedSupport(supportTarget())
+  assert.equal(started.ok, true)
+  assert.equal(creates, 2)
+  assert.equal(ends.length, 1)
+})
+
+test('a failed compensating end keeps the handle and leaves the outer end as the one retry', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-support-failed-compensating-end-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeActiveEnrollment(statePath)
+  const ends = []
+  let creates = 0
+  const runtime = makeManagedRuntime(statePath, {
+    resetRenderer: async () => false,
+    brokerPost: async (body, options) => {
+      if (body.action === 'create_internal_support_request') {
+        creates += 1
+        return supportRequestCreated()
+      }
+      if (body.action === 'claim_internal_support_request') {
+        return supportEnrollment(Date.now(), { support_session_id: SUPPORT_SESSION_ID })
+      }
+      if (body.action === 'internal_support_session_end') {
+        ends.push({ id: body.support_session_id, desktopSession: options?.desktopSession })
+        throw brokerRejection(503, 'delegated_support_unavailable')
+      }
+      throw new Error(`unexpected action ${body.action}`)
+    }
+  })
+  t.after(() => runtime.close())
+
+  const first = await runtime.startDelegatedSupport(supportTarget())
+  assert.equal(first.ok, false)
+  assert.equal(first.code, 'support-renderer-reset-failed')
+  // The compensating end never landed, so the row is still owed one: the outer
+  // handler's attempt is that single retry, and the handle survives it.
+  assert.equal(ends.length, 2)
+  assert.deepEqual(ends.at(-1), { id: SUPPORT_SESSION_ID, desktopSession: 'desktop-token' })
+  assert.equal(persistedSupportLease(statePath)?.support_session_id, SUPPORT_SESSION_ID)
+  assert.equal(persistedSupportLease(statePath)?.phase, 'cleanup')
+  assert.equal(runtime.status().supportCleanupPending, true)
+
+  const blocked = await runtime.startDelegatedSupport(supportTarget())
+  assert.equal(blocked.reason, 'cleanup_pending')
+  assert.equal(creates, 1)
+})
+
 test('a desktop credential that expires during an active lease leaves a cleanup handle the next sign-in ends', async t => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-desktop-expiry-keeps-lease-'))
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }))

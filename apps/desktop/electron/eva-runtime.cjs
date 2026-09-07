@@ -1159,13 +1159,25 @@ function createEvaManagedRuntime(options) {
         supportLeases: withActiveSupportLease(support, latest.desktop)
       })
     } catch (error) {
-      await requestDelegatedSupportEnd({ desktop, delegatedSupport: support }).catch(() => false)
-      if (error instanceof EvaBrokerError) throw error
-      throw new EvaBrokerError(
-        'evaOS Agent could not isolate the delegated support session.',
-        503,
-        'support-renderer-reset-failed'
-      )
+      // A CONFIRMED compensating end leaves that row ended server-side, so its
+      // handle is settled here and the rethrown error names the settled row.
+      // Without that, a caller's own failure handler ends the same row again
+      // and the broker's 403 for an already-ended row (neither 404 nor 410, so
+      // not definitive) strands the handle as `cleanup` until the absolute
+      // deadline. A FAILED end settles nothing and marks nothing: the caller's
+      // end attempt stays the retry it is today.
+      const ended = (await requestDelegatedSupportEnd({ desktop, delegatedSupport: support }).catch(() => false)) === true
+      if (ended) settleSupportLease({ supportSessionId: support.supportSessionId }, null)
+      const failure =
+        error instanceof EvaBrokerError
+          ? error
+          : new EvaBrokerError(
+              'evaOS Agent could not isolate the delegated support session.',
+              503,
+              'support-renderer-reset-failed'
+            )
+      if (ended) failure.supportLeaseSettled = support.supportSessionId
+      throw failure
     }
 
     supportRevalidated = true
@@ -1484,11 +1496,15 @@ function createEvaManagedRuntime(options) {
     } catch (error) {
       const failure = supportFlowFailure(error)
       rememberLog(`[eva-support] in-app claim failed: ${failure.code ?? 'support-claim-failed'}`)
-      await releaseCreatedSupportLease(
-        desktop.token,
-        lease,
-        '[eva-support] support request end failed after a failed claim; retry pending'
-      )
+      // The claim already ended THIS row and dropped its handle; ending it a
+      // second time only earns the 403 that would strand a fresh handle.
+      if (error?.supportLeaseSettled !== lease.supportSessionId) {
+        await releaseCreatedSupportLease(
+          desktop.token,
+          lease,
+          '[eva-support] support request end failed after a failed claim; retry pending'
+        )
+      }
       return failure
     }
   }
