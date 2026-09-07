@@ -3493,6 +3493,63 @@ test('a sign-in after a failed sign-out retries the stranded lease with the next
   assert.equal(runtime.status().supportCleanupPending, false)
 })
 
+test('a handle recorded before actors were stamped is hidden while signed out and ended by the next sign-in', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-stranded-lease-actorless-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  fs.writeFileSync(
+    statePath,
+    JSON.stringify({
+      schema_version: 'evaos.eva_desktop_managed.v1',
+      signed_out: true,
+      support_lease: {
+        support_session_id: 'legacy-session',
+        target_label: 'Acme / Asuka',
+        phase: 'cleanup',
+        recorded_at: new Date().toISOString()
+      }
+    })
+  )
+  const ends = []
+  let opened
+  const runtime = makeManagedRuntime(statePath, {
+    openExternal: async url => {
+      opened = new URL(url)
+    },
+    pollDeviceCode: async () => ({ token: 'next-desktop-session', expiresAt: FUTURE, email: 'employee@example.invalid' }),
+    launchRuntime: async () => freshRuntimeEnrollment(),
+    brokerPost: async (body, options) => {
+      if (body.action === 'internal_support_session_end') {
+        ends.push({ id: body.support_session_id, desktopSession: options?.desktopSession })
+        return { ok: true, status: 'ended' }
+      }
+      throw new Error(`unexpected action ${body.action}`)
+    }
+  })
+  t.after(() => runtime.close())
+  await new Promise(resolve => setImmediate(resolve))
+
+  // Whoever sees the signed-out screen of this installation learns nothing
+  // about the support target the handle names; the handle itself is kept.
+  assert.deepEqual(ends, [])
+  assert.equal(persistedSupportLease(statePath)?.support_session_id, 'legacy-session')
+  assert.equal(runtime.status().supportCleanupPending, false)
+  assert.equal(runtime.status().supportTargetLabel, null)
+
+  const signingIn = runtime.signIn()
+  await new Promise(resolve => setImmediate(resolve))
+  await runtime.completeCallback(
+    `evaos-agent://auth/callback?device_code=ABCDEFGH&desktop_auth_state=${opened.searchParams.get('desktop_auth_state')}`
+  )
+  await signingIn
+  await new Promise(resolve => setImmediate(resolve))
+
+  // The first account to sign in owns the pre-actor handle and ends the row.
+  assert.deepEqual(ends, [{ id: 'legacy-session', desktopSession: 'next-desktop-session' }])
+  assert.equal(persistedSupportLease(statePath), null)
+  assert.equal(runtime.status().supportCleanupPending, false)
+})
+
 test('only a broker answer that the row no longer exists drops a stranded handle', async t => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-stranded-lease-definitive-'))
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
@@ -4137,13 +4194,46 @@ test('a sign-out that lands while the forced re-sign-in ends the active session 
   assert.equal(runtime.status().signedOut, true)
 })
 
-test("a new start never evicts another employee's unexpired handle", async t => {
+test('a sign-out that lands while the forced re-sign-in prepares the browser sign-in stops it too', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-switch-signin-prep-raced-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeActiveEnrollment(statePath)
+  let opened = 0
+  let runtime
+  runtime = makeManagedRuntime(statePath, {
+    openExternal: async () => {
+      opened += 1
+    },
+    // No active support session this time: the only waits before the browser
+    // opens are the sign-in's own — renderer isolation and the callback
+    // handler. Another window signs out during the latter.
+    ensureSignInCallbackReady: async () => {
+      await runtime.signOut()
+    },
+    brokerPost: async body => {
+      throw new Error(`unexpected action ${body.action}`)
+    }
+  })
+  t.after(() => runtime.close())
+
+  await assert.rejects(
+    runtime.switchSupportTarget({ signInAgain: true }),
+    error => error instanceof EvaBrokerError && error.code === 'stale-auth'
+  )
+  assert.equal(opened, 0)
+  assert.equal(runtime.status().signedOut, true)
+})
+
+test("a new start never evicts another employee's unexpired handle, however many are held", async t => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-support-no-eviction-'))
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
   const statePath = path.join(directory, 'eva-enrollment.json')
   writeActiveEnrollment(statePath)
   const persisted = JSON.parse(fs.readFileSync(statePath, 'utf8'))
-  const foreign = Array.from({ length: 9 }, (_, index) => ({
+  // More rows than any read cap would have kept: a shared installation whose
+  // every sign-in stranded a lease within the hour.
+  const foreign = Array.from({ length: 40 }, (_, index) => ({
     support_session_id: `other-session-${index}`,
     phase: 'cleanup',
     recorded_at: new Date().toISOString(),
@@ -4151,11 +4241,16 @@ test("a new start never evicts another employee's unexpired handle", async t => 
   }))
   persisted.support_leases = foreign
   fs.writeFileSync(statePath, JSON.stringify(persisted))
+  const ends = []
   const runtime = makeManagedRuntime(statePath, {
     brokerPost: async body => {
       if (body.action === 'create_internal_support_request') return supportRequestCreated()
       if (body.action === 'claim_internal_support_request') {
         return supportEnrollment(Date.now(), { support_session_id: SUPPORT_SESSION_ID })
+      }
+      if (body.action === 'internal_support_session_end') {
+        ends.push(body.support_session_id)
+        return { ok: true, status: 'ended' }
       }
       throw new Error(`unexpected action ${body.action}`)
     }
@@ -4169,6 +4264,16 @@ test("a new start never evicts another employee's unexpired handle", async t => 
   assert.deepEqual(
     persistedSupportLeases(statePath).map(lease => lease.support_session_id),
     [...foreign.map(lease => lease.support_session_id), SUPPORT_SESSION_ID]
+  )
+
+  // The row this account created is still reachable: sign-out ends it at the
+  // broker and drops only that handle.
+  await runtime.signOut()
+
+  assert.deepEqual(ends, [SUPPORT_SESSION_ID])
+  assert.deepEqual(
+    persistedSupportLeases(statePath).map(lease => lease.support_session_id),
+    foreign.map(lease => lease.support_session_id)
   )
 })
 

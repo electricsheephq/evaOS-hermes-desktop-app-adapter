@@ -915,12 +915,14 @@ function publicEvaEnrollmentStatus(state, now = Date.now()) {
 // for the owner's next sign-in. A handle with no recorded actor (written
 // before the field existed) counts as the signed-in account's, as before.
 function ownedSupportLeases(state, desktop) {
+  // Nothing is shown to an unauthenticated desktop — not even a handle
+  // recorded before actors were stamped: on a shared installation that label
+  // names another employee's support target until someone has signed in.
+  if (!desktop?.email) return []
   const leases = Array.isArray(state?.supportLeases) ? state.supportLeases : []
-  return leases.filter(lease => {
-    if (!lease.actorEmail) return true
-    if (!desktop?.email) return false
-    return lease.actorEmail.toLowerCase() === desktop.email.toLowerCase()
-  })
+  return leases.filter(
+    lease => !lease.actorEmail || lease.actorEmail.toLowerCase() === desktop.email.toLowerCase()
+  )
 }
 
 function resolveEvaManagedDesktopProfile(response) {

@@ -55,10 +55,9 @@ const SUPPORT_LEASE_MAX_LIFETIME_MS = (60 + 2) * 60 * 1_000
 // session, so a start on a credential about to expire is refused up front.
 const SUPPORT_START_MIN_DESKTOP_LIFETIME_MS = 5 * 60 * 1_000
 // Handles are kept per row (the enrollment's own plus any stranded one), so
-// no single slot can be overwritten. A write never evicts an unexpired handle
-// — each is some row's only id — and expiry prunes the list on read; the cap
-// only guards the read against a corrupted file.
-const SUPPORT_LEASES_MAX = 32
+// no single slot can be overwritten. Neither a write nor a read ever drops an
+// unexpired handle — each is some row's only id. The list is bounded by the
+// rows' own deadlines (about an hour) and by one row per start, not by a count.
 const SUPPORT_LABEL_MAX_LENGTH = 120
 const SUPPORT_CLIENTS_MAX = 500
 const SUPPORT_PROFILES_MAX = 200
@@ -133,7 +132,6 @@ function normalizeSupportLeases(raw, now) {
     const lease = normalizeSupportLease(row, now)
     if (!lease || leases.some(known => known.supportSessionId === lease.supportSessionId)) continue
     leases.push(lease)
-    if (leases.length >= SUPPORT_LEASES_MAX) break
   }
   return leases
 }
@@ -1741,6 +1739,10 @@ function createEvaManagedRuntime(options) {
         code
       )
     }
+    // A forced re-sign-in hands over the generation it observed: a sign-out
+    // that landed during the isolation or callback-handler waits above owns the
+    // state now, and a browser sign-in must not be started over it.
+    if (signInOptions?.expectGeneration !== undefined) assertGeneration(signInOptions.expectGeneration)
     // Boot recovery exposes Sign In, not Settings sign-out. Consume the
     // interrupted enrollment through the existing cleanup before new login.
     if (currentState().supportSignInPending) await signOut()
@@ -1852,13 +1854,14 @@ function createEvaManagedRuntime(options) {
         rememberLog('[eva-managed] active support session could not be ended with the rejected credential; keeping its lease handle for cleanup')
         await clearDelegatedSupportState(currentState())
       }
-      // A sign-out from another window that landed during the end owns the
-      // state now; a browser sign-in must not overwrite that newer intent.
-      assertGeneration(auth)
     }
+    // A sign-out from another window that landed during the end — or during
+    // the sign-in's own preparation, which carries the same generation — owns
+    // the state now; a browser sign-in must not overwrite that newer intent.
+    assertGeneration(auth)
     rememberLog('[eva-managed] switching support target; requesting a plain Electric Sheep sign-in')
     try {
-      await signIn({ plainSession: true })
+      await signIn({ plainSession: true, expectGeneration: auth })
     } catch (error) {
       if (wasMissingAgentBinding && !missingAgentBinding) {
         missingAgentBinding = true
