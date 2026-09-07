@@ -100,11 +100,15 @@ function serializeSupportLease(lease) {
 }
 
 // Directory rows are broker-authored: keep only the fields the picker renders,
-// bounded, and only rows that can actually be started (a VM and ≥1 profile),
-// exactly as the dashboard picker filters them.
+// bounded, and only rows that can actually be started (assignment allowed, a VM
+// and ≥1 profile), exactly as the dashboard picker filters them. A row the
+// broker marks unassignable must never reach the operator's list.
 function normalizeSupportClients(rows) {
   const clients = []
   for (const row of Array.isArray(rows) ? rows.slice(0, SUPPORT_CLIENTS_MAX) : []) {
+    // `!== false` and not `=== true`: a broker that predates the field still
+    // lists, exactly like the dashboard's `assignment_allowed !== false`.
+    if (row?.assignment_allowed === false) continue
     const customerAccountId = normalizeSupportUuid(row?.customer_account_id)
     const customerVmId = normalizeSupportUuid(row?.customer_vm_id)
     if (!customerAccountId || !customerVmId) continue
@@ -1222,7 +1226,18 @@ function createEvaManagedRuntime(options) {
         }
       }
     }
-    await retrySupportLeaseCleanup(currentState()).catch(() => false)
+    // A stranded handle is the ONLY way to end that older lease. Creating now
+    // would overwrite it below and leave the earlier row live until the server
+    // expires it — the exact loss this persistence exists to prevent.
+    const cleaned = await retrySupportLeaseCleanup(currentState()).catch(() => false)
+    if (cleaned !== true) {
+      return {
+        ok: false,
+        reason: 'error',
+        code: 'support-end-failed',
+        message: 'A previous support session could not be ended yet. Try again in a moment.'
+      }
+    }
     state = currentState()
     if (auth !== authGeneration || !desktopSessionLive(state)) {
       return supportFlowFailure(new EvaBrokerError(SUPPORT_SIGN_IN_REQUIRED_MESSAGE, 401, 'sign-in-required'))
@@ -1244,6 +1259,19 @@ function createEvaManagedRuntime(options) {
       recordedAt: new Date(now()).toISOString()
     }
     persistSupportLease(lease)
+    // A sign-out and sign-in can land while the create is in flight. The claim
+    // would then activate, on the NEW session, a target chosen under the old
+    // one — support access the operator has since walked away from. The handle
+    // is already on disk, so end the row instead of claiming it.
+    if (auth !== authGeneration || !desktopSessionLive(currentState())) {
+      rememberLog('[eva-support] support request created under a superseded session; ending it')
+      await releaseCreatedSupportLease(
+        desktop.token,
+        lease,
+        '[eva-support] superseded support request end failed; retry pending'
+      )
+      return supportFlowFailure(new EvaBrokerError(SUPPORT_SIGN_IN_REQUIRED_MESSAGE, 401, 'sign-in-required'))
+    }
     rememberLog('[eva-support] support request created; claiming from the app')
     try {
       const status = await claimSupportRequest(created.requestId)
@@ -1252,17 +1280,27 @@ function createEvaManagedRuntime(options) {
     } catch (error) {
       const failure = supportFlowFailure(error)
       rememberLog(`[eva-support] in-app claim failed: ${failure.code ?? 'support-claim-failed'}`)
-      try {
-        await endSupportSessionRemote(desktop.token, lease.supportSessionId)
-        persistSupportLease(null)
-      } catch (endError) {
-        if (isDefinitiveSupportEndRejection(endError)) persistSupportLease(null)
-        else {
-          persistSupportLease({ ...lease, phase: 'cleanup' })
-          rememberLog('[eva-support] support request end failed after a failed claim; retry pending')
-        }
-      }
+      await releaseCreatedSupportLease(
+        desktop.token,
+        lease,
+        '[eva-support] support request end failed after a failed claim; retry pending'
+      )
       return failure
+    }
+  }
+
+  // End a row this app just created. A definitive broker answer drops the
+  // handle; anything else keeps it for `retrySupportLeaseCleanup`.
+  async function releaseCreatedSupportLease(desktopToken, lease, retryLog) {
+    try {
+      await endSupportSessionRemote(desktopToken, lease.supportSessionId)
+      persistSupportLease(null)
+    } catch (endError) {
+      if (isDefinitiveSupportEndRejection(endError)) persistSupportLease(null)
+      else {
+        persistSupportLease({ ...lease, phase: 'cleanup' })
+        rememberLog(retryLog)
+      }
     }
   }
 

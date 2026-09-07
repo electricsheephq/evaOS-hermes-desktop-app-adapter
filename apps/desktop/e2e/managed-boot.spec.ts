@@ -7,7 +7,7 @@
  */
 
 import { type ManagedSignedOutFixture, setupManagedSignedOut } from './fixtures'
-import { expect, test } from './test'
+import { allowErrorBanners, expect, test } from './test'
 
 let fixture: ManagedSignedOutFixture | null = null
 
@@ -149,9 +149,11 @@ test.describe('managed signed-out boot', () => {
 
   // adapter#91 / sc#540. An internal admin owns no agent, so `runtime_launch`
   // answers 403 `missing_hermes_agent_binding` and the app boots straight into
-  // the failure overlay. The customer/agent picker is a dashboard surface, so
-  // the only route back to it must survive that overlay — same property PR #264
-  // proved for End, exercised here through the real preload and IPC channel.
+  // the failure overlay. The only route back to the customer/agent picker must
+  // survive that overlay — same property PR #264 proved for End, exercised here
+  // through the real preload and IPC channel. The picker is now an in-app
+  // overlay rather than a dashboard surface, so the route out is the picker
+  // opening on top of the failure overlay, not the failure overlay persisting.
   test('Switch support target receives a real click over the own-workspace 403', async () => {
     const switched = await fixture!.app.evaluate(({ ipcMain }) => {
       const calls = { count: 0 }
@@ -210,6 +212,10 @@ test.describe('managed signed-out boot', () => {
       body: await page.screenshot(),
       contentType: 'image/png'
     })
+    // The mocked switch resolves without a desktop session, so the picker lists
+    // through the real handler and lands on its `needs_sign_in` state. That
+    // banner is the expected outcome here, not a regression.
+    allowErrorBanners()
     // Not forced: it must fail if the boot overlay covers the only way out.
     await banner.getByRole('button', { name: 'Switch support target…', exact: true }).click()
     await expect
@@ -219,6 +225,7 @@ test.describe('managed signed-out boot', () => {
         )
       )
       .toBe(1)
-    await expect(page.getByRole('heading', { name: /couldn't start/ })).toBeVisible()
+    // The route out of the 403: the picker opens over the failure overlay.
+    await expect(page.getByRole('dialog', { name: 'Switch support target' })).toBeVisible()
   })
 })

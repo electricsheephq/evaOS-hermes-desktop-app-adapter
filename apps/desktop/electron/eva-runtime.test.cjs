@@ -2918,7 +2918,14 @@ test('the in-app picker lists the directory over the desktop session and drops r
           },
           { customer_account_id: SUPPORT_ACCOUNT_ID, customer_vm_id: null, display_name: 'No VM', profiles: [{ profile_id: 'main', display_name: 'A' }] },
           { customer_account_id: SUPPORT_ACCOUNT_ID, customer_vm_id: SUPPORT_VM_ID, display_name: 'No profiles', profiles: [] },
-          { customer_account_id: 'not-a-uuid', customer_vm_id: SUPPORT_VM_ID, display_name: 'Bad id', profiles: [{ profile_id: 'main', display_name: 'A' }] }
+          { customer_account_id: 'not-a-uuid', customer_vm_id: SUPPORT_VM_ID, display_name: 'Bad id', profiles: [{ profile_id: 'main', display_name: 'A' }] },
+          {
+            customer_account_id: SUPPORT_ACCOUNT_ID,
+            customer_vm_id: SUPPORT_VM_ID,
+            display_name: 'Not assignable',
+            assignment_allowed: false,
+            profiles: [{ profile_id: 'main', display_name: 'A' }]
+          }
         ]
       }
     }
@@ -3230,6 +3237,76 @@ test('a switch whose active lease cannot be ended reports the end failure and ke
   assert.equal(creates, 0)
   assert.equal(runtime.status().delegatedSupportActive, true)
   assert.equal(runtime.status().supportEndFailed, true)
+})
+
+test('a start whose stranded-lease cleanup fails never creates a second request', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-support-start-stranded-cleanup-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeActiveEnrollment(statePath)
+  const persisted = JSON.parse(fs.readFileSync(statePath, 'utf8'))
+  persisted.support_lease = {
+    support_session_id: 'stranded-session',
+    target_label: 'Acme / Asuka',
+    phase: 'cleanup',
+    recorded_at: new Date().toISOString()
+  }
+  fs.writeFileSync(statePath, JSON.stringify(persisted))
+  let creates = 0
+  const runtime = makeManagedRuntime(statePath, {
+    brokerPost: async body => {
+      if (body.action === 'internal_support_session_end') throw new EvaBrokerError('unavailable', 502, 'support-end-failed')
+      if (body.action === 'create_internal_support_request') {
+        creates += 1
+        return supportRequestCreated()
+      }
+      throw new Error(`unexpected action ${body.action}`)
+    }
+  })
+  t.after(() => runtime.close())
+
+  const result = await runtime.startDelegatedSupport(supportTarget())
+
+  // Creating here would overwrite the only handle able to end 'stranded-session'.
+  assert.equal(result.ok, false)
+  assert.equal(result.code, 'support-end-failed')
+  assert.equal(creates, 0)
+  assert.equal(persistedSupportLease(statePath).support_session_id, 'stranded-session')
+})
+
+test('a sign-out that races the create ends the new request instead of claiming it', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-support-start-superseded-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeActiveEnrollment(statePath)
+  const actions = []
+  const logs = []
+  let runtime
+  runtime = makeManagedRuntime(statePath, {
+    rememberLog: line => logs.push(line),
+    brokerPost: async body => {
+      actions.push(body.action)
+      if (body.action === 'create_internal_support_request') {
+        // The operator signs out while the broker is still answering.
+        await runtime.signOut()
+        return supportRequestCreated()
+      }
+      if (body.action === 'internal_support_session_end') return { ok: true }
+      if (body.action === 'claim_internal_support_request') return supportEnrollment()
+      throw new Error(`unexpected action ${body.action}`)
+    }
+  })
+  t.after(() => runtime.close())
+
+  const result = await runtime.startDelegatedSupport(supportTarget())
+
+  assert.equal(result.ok, false)
+  assert.equal(result.reason, 'needs_sign_in')
+  // The row is ended with the handle it was persisted under, never claimed.
+  assert.equal(actions.includes('claim_internal_support_request'), false)
+  assert.equal(actions.filter(action => action === 'internal_support_session_end').length >= 1, true)
+  assert.equal(persistedSupportLease(statePath), null)
+  assert.equal(logs.some(line => line.includes('created under a superseded session')), true)
 })
 
 test('sign-out keeps the lease handle when neither the remote end nor the revoke succeeds', async t => {
