@@ -864,8 +864,9 @@ function publicEvaEnrollmentStatus(state, now = Date.now()) {
     delegatedSupport && !expiresSoon(delegatedSupport.supportExpiresAt, 0, now)
   )
   const presentationRuntime = delegatedSupportActive ? delegatedSupport : runtime
-  const ownedLease = ownedSupportLease(state, desktop)
-  const supportCleanupPending = ownedLease?.phase === 'cleanup'
+  const ownedLeases = ownedSupportLeases(state, desktop)
+  const cleanupLease = ownedLeases.find(lease => lease.phase === 'cleanup') ?? null
+  const supportCleanupPending = cleanupLease !== null
   return {
     managed: true,
     productName: EVA_MANAGED_POLICY.productName,
@@ -903,18 +904,18 @@ function publicEvaEnrollmentStatus(state, now = Date.now()) {
     // failed or an enrollment a credential expiry erased) that End, the next
     // sign-in and the next start retry. Another employee's handle on this
     // install is not this account's to end, so it is not shown to it.
-    supportTargetLabel: ownedLease?.targetLabel ?? null,
+    supportTargetLabel: (cleanupLease ?? ownedLeases[0])?.targetLabel ?? null,
     supportCleanupPending
   }
 }
 
 // A handle with no recorded actor (written before the field existed) counts as
 // the signed-in account's, exactly as before the field.
-function ownedSupportLease(state, desktop) {
-  const lease = state?.supportLease ?? null
-  if (!lease) return null
-  if (!lease.actorEmail || !desktop?.email) return lease
-  return lease.actorEmail.toLowerCase() === desktop.email.toLowerCase() ? lease : null
+function ownedSupportLeases(state, desktop) {
+  const leases = Array.isArray(state?.supportLeases) ? state.supportLeases : []
+  return leases.filter(
+    lease => !lease.actorEmail || !desktop?.email || lease.actorEmail.toLowerCase() === desktop.email.toLowerCase()
+  )
 }
 
 function resolveEvaManagedDesktopProfile(response) {

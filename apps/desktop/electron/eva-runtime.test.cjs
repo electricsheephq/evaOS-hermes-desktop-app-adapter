@@ -2771,12 +2771,18 @@ function brokerRejection(status, code) {
   return error
 }
 
-function persistedSupportLease(statePath) {
+// Raw on-disk handles: the list, or the singular pre-list key as one element.
+function persistedSupportLeases(statePath) {
   try {
-    return JSON.parse(fs.readFileSync(statePath, 'utf8')).support_lease ?? null
+    const persisted = JSON.parse(fs.readFileSync(statePath, 'utf8'))
+    return persisted.support_leases ?? (persisted.support_lease ? [persisted.support_lease] : [])
   } catch {
-    return null
+    return []
   }
+}
+
+function persistedSupportLease(statePath) {
+  return persistedSupportLeases(statePath)[0] ?? null
 }
 
 test('a plain sign-in that never reaches the browser keeps the no-personal-agent state', async t => {
@@ -3350,9 +3356,10 @@ test('sign-out keeps the lease handle when neither the remote end nor the revoke
   assert.equal(persisted.desktop ?? null, null)
   assert.equal(persisted.delegated_support ?? null, null)
   assert.deepEqual(ends, [{ id: 'support-session', desktopSession: 'desktop-token' }])
-  assert.equal(persisted.support_lease.support_session_id, 'support-session')
-  assert.equal(persisted.support_lease.phase, 'cleanup')
-  assert.equal(persisted.support_lease.target_label, 'Customer / Support agent')
+  assert.equal(persisted.support_leases.length, 1)
+  assert.equal(persisted.support_leases[0].support_session_id, 'support-session')
+  assert.equal(persisted.support_leases[0].phase, 'cleanup')
+  assert.equal(persisted.support_leases[0].target_label, 'Customer / Support agent')
   assert.equal(runtime.status().signedOut, true)
   assert.equal(runtime.status().delegatedSupportActive, false)
   assert.equal(runtime.status().supportCleanupPending, true)
@@ -3420,8 +3427,8 @@ test('a sign-in after a failed sign-out retries the stranded lease with the next
   assert.deepEqual(ends, [{ id: 'support-session', desktopSession: 'desktop-token' }])
   const tombstone = JSON.parse(fs.readFileSync(statePath, 'utf8'))
   assert.equal(tombstone.desktop ?? null, null)
-  assert.equal(tombstone.support_lease.phase, 'cleanup')
-  assert.ok(tombstone.support_lease.support_expires_at)
+  assert.equal(tombstone.support_leases[0].phase, 'cleanup')
+  assert.ok(tombstone.support_leases[0].support_expires_at)
 
   // Restart, then sign in as the SAME admin: desktop session B. The broker lets
   // the same actor end its own row from any live session, so a 403 on our own
@@ -3834,11 +3841,13 @@ test("a superseded start's late end never clears or rewrites a handle a newer st
           // Before that release lands, a newer start has already settled this
           // row and persisted its own handle for a different one.
           const persisted = JSON.parse(fs.readFileSync(statePath, 'utf8'))
-          persisted.support_lease = {
-            support_session_id: 'newer-session',
-            phase: 'pending',
-            recorded_at: new Date().toISOString()
-          }
+          persisted.support_leases = [
+            {
+              support_session_id: 'newer-session',
+              phase: 'pending',
+              recorded_at: new Date().toISOString()
+            }
+          ]
           fs.writeFileSync(statePath, JSON.stringify(persisted))
           if (endOutcome === 'ok') return { ok: true, status: 'ended' }
           throw new EvaBrokerError('evaOS Agent could not reach Electric Sheep.', null, 'transport-error')
@@ -3979,8 +3988,104 @@ test("another employee's stranded handle is neither retried with this session no
   const started = await runtime.startDelegatedSupport(supportTarget())
   assert.equal(started.ok, true)
   assert.equal(ends.length, 1)
-  assert.equal(persistedSupportLease(statePath)?.support_session_id, SUPPORT_SESSION_ID)
-  assert.equal(persistedSupportLease(statePath)?.actor_email, 'Other@example.invalid')
+  // A's handle survives beside B's own, for A's next sign-in to end.
+  assert.deepEqual(
+    persistedSupportLeases(statePath).map(lease => [lease.support_session_id, lease.phase, lease.actor_email]),
+    [
+      ['support-session', 'cleanup', 'employee@example.invalid'],
+      [SUPPORT_SESSION_ID, 'active', 'Other@example.invalid']
+    ]
+  )
+})
+
+test('sign-out ends every row this account holds a handle for and keeps only the ones the broker did not settle', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-signout-ends-every-handle-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeActiveEnrollment(statePath)
+  const persisted = JSON.parse(fs.readFileSync(statePath, 'utf8'))
+  persisted.support_lease = {
+    support_session_id: 'stranded-session',
+    target_label: 'Acme / Asuka',
+    phase: 'cleanup',
+    recorded_at: new Date().toISOString(),
+    actor_email: 'employee@example.invalid'
+  }
+  fs.writeFileSync(statePath, JSON.stringify(persisted))
+  const ends = []
+  let strandedEndOk = false
+  const runtime = makeManagedRuntime(statePath, {
+    brokerPost: async body => {
+      if (body.action === 'claim_internal_support_request') return supportEnrollment()
+      if (body.action === 'internal_support_session_end') {
+        ends.push(body.support_session_id)
+        if (body.support_session_id === 'stranded-session' && strandedEndOk) return { ok: true, status: 'ended' }
+        throw new EvaBrokerError('evaOS Agent could not reach Electric Sheep.', null, 'transport-error')
+      }
+      throw new Error(`unexpected action ${body.action}`)
+    },
+    revokeDesktopSession: async () => false
+  })
+  t.after(() => runtime.close())
+  await new Promise(resolve => setImmediate(resolve))
+  assert.deepEqual(ends, ['stranded-session'])
+
+  // A browser-flow claim lands over the stranded row: two handles, two rows.
+  await runtime.claimSupportRequest('request-123')
+  strandedEndOk = true
+  assert.deepEqual(await runtime.signOut(), { ok: true })
+
+  // Both rows were ended with the session being given up; the one the broker
+  // settled is gone, the one it did not (the enrollment's own) is kept for the
+  // next sign-in — the active grant is never the handle that gets lost.
+  assert.deepEqual(ends.slice(1).sort(), ['stranded-session', 'support-session'])
+  assert.deepEqual(
+    persistedSupportLeases(statePath).map(lease => [lease.support_session_id, lease.phase]),
+    [['support-session', 'cleanup']]
+  )
+  assert.equal(runtime.status().signedOut, true)
+  assert.equal(runtime.status().supportCleanupPending, true)
+})
+
+test('a forced plain sign-in re-homes the renderer only when it comes back as a different account', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-switch-account-change-reset-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeEnrollment(statePath)
+  let resets = 0
+  let email = 'Employee@example.invalid'
+  let opened
+  const runtime = makeManagedRuntime(statePath, {
+    resetRenderer: async () => {
+      resets += 1
+    },
+    openExternal: async url => {
+      opened = new URL(url)
+    },
+    pollDeviceCode: async () => ({ token: 'next-desktop-session', expiresAt: FUTURE, email }),
+    launchRuntime: async () => freshRuntimeEnrollment()
+  })
+  t.after(() => runtime.close())
+
+  const signInAgain = async () => {
+    const switching = runtime.switchSupportTarget({ signInAgain: true })
+    await new Promise(resolve => setImmediate(resolve))
+    await runtime.completeCallback(
+      `evaos-agent://auth/callback?device_code=ABCDEFGH&desktop_auth_state=${opened.searchParams.get('desktop_auth_state')}`
+    )
+    return switching
+  }
+
+  // Same account (case-insensitively): the picker that asked stays open.
+  await signInAgain()
+  assert.equal(resets, 0)
+  assert.equal(runtime.status().email, 'Employee@example.invalid')
+
+  // A different account: account-scoped renderer state is re-homed.
+  email = 'other@example.invalid'
+  await signInAgain()
+  assert.equal(resets, 1)
+  assert.equal(runtime.status().email, 'other@example.invalid')
 })
 
 test('a plain sign-in that loses its session mid-enrollment reports the sign-out instead of a stale success', async t => {
