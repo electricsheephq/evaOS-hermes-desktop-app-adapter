@@ -18,6 +18,7 @@ type PickerState =
   | { kind: 'signing_in' }
   | { kind: 'forbidden'; message: string }
   | { kind: 'conflict'; message: string }
+  | { kind: 'cleanup_pending'; message: string }
   | { kind: 'error'; message: string }
   | { kind: 'starting' }
   | { kind: 'started' }
@@ -32,6 +33,9 @@ function failureState(failure: EvaSupportFlowFailure): PickerState {
 
     case 'conflict':
       return { kind: 'conflict', message: failure.message }
+
+    case 'cleanup_pending':
+      return { kind: 'cleanup_pending', message: failure.message }
 
     default:
       return { kind: 'error', message: failure.message }
@@ -115,15 +119,24 @@ export function SupportTargetPickerOverlay() {
       return
     }
 
-    const target: EvaSupportTarget = {
-      customer_account_id: client.customer_account_id,
-      customer_vm_id: client.customer_vm_id,
-      profile_id: profile?.profile_id ?? '',
-      ...(allAgents ? { profile_scope: 'customer' as const } : {}),
-      acknowledged: true,
-      customer_label: client.display_name,
-      agent_label: profile?.display_name
-    }
+    // `canStart` already holds one of the two: a chosen agent, or the admin's
+    // all-agents scope, which carries no profile at all.
+    const target: EvaSupportTarget = profile
+      ? {
+          customer_account_id: client.customer_account_id,
+          customer_vm_id: client.customer_vm_id,
+          profile_id: profile.profile_id,
+          acknowledged: true,
+          customer_label: client.display_name,
+          agent_label: profile.display_name
+        }
+      : {
+          customer_account_id: client.customer_account_id,
+          customer_vm_id: client.customer_vm_id,
+          profile_scope: 'customer',
+          acknowledged: true,
+          customer_label: client.display_name
+        }
 
     setState({ kind: 'starting' })
 
@@ -212,10 +225,14 @@ export function SupportTargetPickerOverlay() {
 
       break
 
+    // Both states own the same way out: End the lease this app can still reach
+    // (the conflict path ends any local handle too), then try again.
     case 'conflict':
+
+    case 'cleanup_pending':
       body = (
         <div className="space-y-3" role="alert">
-          <p>{state.message || copy.conflict}</p>
+          <p>{state.message || (state.kind === 'conflict' ? copy.conflict : copy.cleanupPending)}</p>
           <div className="flex gap-2">
             <Button disabled={ending} onClick={() => void endSupport()} type="button" variant="destructive">
               {ending ? copy.endingSupport : copy.endSupport}

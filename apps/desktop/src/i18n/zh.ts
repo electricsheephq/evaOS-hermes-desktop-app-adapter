@@ -222,7 +222,8 @@ export const zh: Translations = {
     switchingTarget: '正在打开登录…',
     switchTargetFailed: '无法开始切换支持目标。请重试。',
     noPersonalAgent: '此账户没有个人智能体',
-    noPersonalAgentHint: '请使用“切换支持目标”打开客户智能体。'
+    noPersonalAgentHint: '请使用“切换支持目标”打开客户智能体。',
+    cleanupPending: '上一个支持会话仍需结束。'
   },
 
   supportPicker: {
@@ -245,6 +246,7 @@ export const zh: Translations = {
     signingIn: '请在浏览器中完成 Electric Sheep 登录…',
     forbidden: '此账户未获授权进行委托支持。',
     conflict: '此账户的另一个支持会话仍在进行中。请先结束它，然后重试。',
+    cleanupPending: '上一个支持会话尚未能结束。请先结束它，然后重试。',
     endSupport: '结束支持会话',
     endingSupport: '正在结束支持会话…',
     loadFailed: '无法加载已授权的客户。',

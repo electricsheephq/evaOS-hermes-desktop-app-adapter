@@ -90,6 +90,43 @@ describe('DelegatedSupportBanner', () => {
     expect(banner).toBeTruthy()
   })
 
+  it('keeps End reachable for a lease the app still holds a handle for but no longer an enrollment', async () => {
+    const status = vi.fn().mockResolvedValue({
+      ...supportStatus(),
+      delegatedSupportActive: false,
+      sessionKind: 'ordinary',
+      supportCustomerLabel: null,
+      supportAgentLabel: null,
+      supportExpiresAt: null,
+      supportCleanupPending: true,
+      supportTargetLabel: 'Acme / Asuka',
+      supportEndFailed: true
+    })
+
+    const endSupportSession = vi.fn().mockResolvedValue({ ok: true })
+    Object.defineProperty(window, 'hermesDesktop', {
+      configurable: true,
+      value: { eva: { status, endSupportSession } }
+    })
+
+    render(
+      <I18nProvider configClient={null} initialLocale="en">
+        <DelegatedSupportBanner />
+      </I18nProvider>
+    )
+
+    const banner = await screen.findByRole('region', { name: 'A previous support session still needs to be ended.' })
+    expect(banner.textContent).toMatch(/Acme \/ Asuka/)
+    expect((await screen.findByText('Unable to end support session. Try again.')).getAttribute('role')).toBe('status')
+    expect(screen.getAllByRole('button').map(button => button.textContent)).toEqual([
+      'Switch support target…',
+      'End support session'
+    ])
+
+    fireEvent.click(screen.getByRole('button', { name: 'End support session' }))
+    await waitFor(() => expect(endSupportSession).toHaveBeenCalledTimes(1))
+  })
+
   it('opens the in-app picker once the switch has a desktop session, without signing out', async () => {
     setSupportPickerOpen(false)
     const status = vi.fn().mockResolvedValue({ ...supportStatus(), delegatedSupportActive: false, missingAgentBinding: true })

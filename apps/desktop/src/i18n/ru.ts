@@ -227,7 +227,8 @@ export const ru = defineLocale({
     switchingTarget: 'Открывается вход…',
     switchTargetFailed: 'Не удалось начать смену объекта поддержки. Попробуйте снова.',
     noPersonalAgent: 'У этой учётной записи нет личного агента',
-    noPersonalAgentHint: 'Используйте «Сменить объект поддержки», чтобы открыть агента клиента.'
+    noPersonalAgentHint: 'Используйте «Сменить объект поддержки», чтобы открыть агента клиента.',
+    cleanupPending: 'Предыдущий сеанс поддержки ещё нужно завершить.'
   },
 
   billingBlock: {

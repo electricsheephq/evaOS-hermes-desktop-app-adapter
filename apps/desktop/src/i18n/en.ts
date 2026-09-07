@@ -229,7 +229,8 @@ export const en: Translations = {
     switchingTarget: 'Opening sign-in…',
     switchTargetFailed: 'Unable to start the support target switch. Try again.',
     noPersonalAgent: 'No personal agent for this account',
-    noPersonalAgentHint: 'Use Switch support target to open a customer agent.'
+    noPersonalAgentHint: 'Use Switch support target to open a customer agent.',
+    cleanupPending: 'A previous support session still needs to be ended.'
   },
 
   supportPicker: {
@@ -255,6 +256,7 @@ export const en: Translations = {
     signingIn: 'Complete the Electric Sheep sign-in in your browser…',
     forbidden: 'This account is not authorized for delegated support.',
     conflict: 'Another support session for this account is still active. End it, then try again.',
+    cleanupPending: 'A previous support session could not be ended yet. End it, then try again.',
     endSupport: 'End support session',
     endingSupport: 'Ending support session…',
     loadFailed: 'Authorized customers could not be loaded.',

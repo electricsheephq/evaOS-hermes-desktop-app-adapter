@@ -270,6 +270,7 @@ export interface Translations {
     switchTargetFailed: string
     noPersonalAgent: string
     noPersonalAgentHint: string
+    cleanupPending: string
   }
 
   // In-app support target picker (sc#540). An internal-operator surface:
@@ -294,6 +295,7 @@ export interface Translations {
     signingIn: string
     forbidden: string
     conflict: string
+    cleanupPending: string
     endSupport: string
     endingSupport: string
     loadFailed: string

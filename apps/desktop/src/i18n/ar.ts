@@ -218,7 +218,8 @@ export const ar = defineLocale({
     switchingTarget: 'جارٍ فتح تسجيل الدخول…',
     switchTargetFailed: 'تعذّر بدء تبديل هدف الدعم. حاول مرة أخرى.',
     noPersonalAgent: 'لا يوجد وكيل شخصي لهذا الحساب',
-    noPersonalAgentHint: 'استخدم «تبديل هدف الدعم» لفتح وكيل العميل.'
+    noPersonalAgentHint: 'استخدم «تبديل هدف الدعم» لفتح وكيل العميل.',
+    cleanupPending: 'لا تزال جلسة الدعم السابقة بحاجة إلى الإنهاء.'
   },
   titlebar: {
     hideSidebar: 'إخفاء الشريط الجانبي',

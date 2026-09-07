@@ -123,15 +123,16 @@ describe('SupportTargetPickerOverlay', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Open selected customer agent' }))
 
     await waitFor(() => expect(eva.startSupport).toHaveBeenCalledTimes(1))
+    // Customer scope carries no profile at all: no `profile_id`, no agent label.
     expect(eva.startSupport).toHaveBeenCalledWith({
       customer_account_id: ACCOUNT_ID,
       customer_vm_id: VM_ID,
-      profile_id: '',
       profile_scope: 'customer',
       acknowledged: true,
-      customer_label: 'Acme',
-      agent_label: undefined
+      customer_label: 'Acme'
     })
+    const [payload] = (eva.startSupport as ReturnType<typeof vi.fn>).mock.calls[0]
+    expect(Object.keys(payload as object)).not.toContain('profile_id')
   })
 
   it('renders needs_sign_in as a Sign in action that forces a fresh plain sign-in and re-lists', async () => {
@@ -175,6 +176,28 @@ describe('SupportTargetPickerOverlay', () => {
     expect((await screen.findByRole('alert')).textContent).toMatch(/Another support session is active/)
     fireEvent.click(screen.getByRole('button', { name: 'End support session' }))
     await waitFor(() => expect(eva.endSupportSession).toHaveBeenCalledTimes(1))
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy()
+
+    // A lease this app still holds a handle for blocks a new start the same way,
+    // with the same End control — the one that reaches that handle.
+    cleanup()
+
+    const pending = mountBridge({
+      startSupport: vi
+        .fn()
+        .mockResolvedValue({ ok: false, reason: 'cleanup_pending', code: 'support-cleanup-pending', message: 'A previous support session could not be ended yet. End it, then try again.' })
+    })
+
+    renderPicker()
+    setSupportPickerOpen(true)
+    const [pendingAccount, pendingAgent] = await screen.findAllByRole('combobox')
+    fireEvent.change(pendingAccount, { target: { value: ACCOUNT_ID } })
+    fireEvent.change(pendingAgent, { target: { value: 'main' } })
+    fireEvent.click(screen.getByRole('checkbox'))
+    fireEvent.click(screen.getByRole('button', { name: 'Open selected customer agent' }))
+    expect((await screen.findByRole('alert')).textContent).toMatch(/could not be ended yet/)
+    fireEvent.click(screen.getByRole('button', { name: 'End support session' }))
+    await waitFor(() => expect(pending.endSupportSession).toHaveBeenCalledTimes(1))
     expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy()
 
     cleanup()

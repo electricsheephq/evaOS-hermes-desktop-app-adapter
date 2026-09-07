@@ -628,7 +628,8 @@ export interface EvaSupportClient {
 /** Typed failure the picker renders as a state; `needs_sign_in` also covers a broker that predates the in-app picker. */
 export interface EvaSupportFlowFailure {
   ok: false
-  reason: 'needs_sign_in' | 'forbidden' | 'conflict' | 'error'
+  /** `cleanup_pending`: a previous lease this app holds a handle for is not ended yet; End it first. */
+  reason: 'needs_sign_in' | 'forbidden' | 'conflict' | 'cleanup_pending' | 'error'
   code: null | string
   message: string
 }
@@ -637,15 +638,14 @@ export type EvaSupportTargetsResult =
   | { ok: true; is_admin: boolean; clients: EvaSupportClient[] }
   | EvaSupportFlowFailure
 
-export interface EvaSupportTarget {
+/** Exactly one of `profile_id` (one agent) or `profile_scope: 'customer'` (all authorized agents; admins only, no profile). */
+export type EvaSupportTarget = {
   customer_account_id: string
   customer_vm_id: string
-  profile_id: string
-  profile_scope?: 'customer'
   acknowledged: true
   customer_label?: string
   agent_label?: string
-}
+} & ({ profile_id: string; profile_scope?: never } | { profile_scope: 'customer'; profile_id?: never })
 
 export type EvaSupportStartResult = { ok: true; status: EvaManagedStatus } | EvaSupportFlowFailure
 
