@@ -55,8 +55,10 @@ const SUPPORT_LEASE_MAX_LIFETIME_MS = (60 + 2) * 60 * 1_000
 // session, so a start on a credential about to expire is refused up front.
 const SUPPORT_START_MIN_DESKTOP_LIFETIME_MS = 5 * 60 * 1_000
 // Handles are kept per row (the enrollment's own plus any stranded one), so
-// no single slot can be overwritten; the list is bounded all the same.
-const SUPPORT_LEASES_MAX = 8
+// no single slot can be overwritten. A write never evicts an unexpired handle
+// — each is some row's only id — and expiry prunes the list on read; the cap
+// only guards the read against a corrupted file.
+const SUPPORT_LEASES_MAX = 32
 const SUPPORT_LABEL_MAX_LENGTH = 120
 const SUPPORT_CLIENTS_MAX = 500
 const SUPPORT_PROFILES_MAX = 200
@@ -141,11 +143,21 @@ function serializeSupportLeases(leases) {
 }
 
 function withSupportLease(leases, lease) {
-  return [...leases.filter(known => known.supportSessionId !== lease.supportSessionId), lease].slice(-SUPPORT_LEASES_MAX)
+  return [...leases.filter(known => known.supportSessionId !== lease.supportSessionId), lease]
 }
 
 function withoutSupportLease(leases, supportSessionId) {
   return leases.filter(known => known.supportSessionId !== supportSessionId)
+}
+
+// The pair `refresh()` treats as the renderer's home: a change of either means
+// cached sessions and projects belong to another agent.
+function runtimeIdentityOf(runtime) {
+  return runtime ? { customerId: runtime.customerId ?? null, agentId: runtime.agentId ?? null } : null
+}
+
+function sameRuntimeIdentity(a, b) {
+  return (a?.customerId ?? null) === (b?.customerId ?? null) && (a?.agentId ?? null) === (b?.agentId ?? null)
 }
 
 // A handle with no recorded actor (written before the field existed) is
@@ -396,6 +408,13 @@ function createEvaManagedRuntime(options) {
       // The account on disk even when its credential has expired: the switch
       // uses it to tell a same-account re-sign-in from a change of account.
       desktopEmail: typeof parsed.desktop?.email === 'string' && parsed.desktop.email.trim() ? parsed.desktop.email.trim() : null,
+      // Likewise the runtime the renderer was last homed on, even once expired.
+      runtimeIdentity: parsed.runtime
+        ? {
+            customerId: String(parsed.runtime.customer_id ?? '').trim() || null,
+            agentId: String(parsed.runtime.agent_id ?? '').trim() || null
+          }
+        : null,
       signedOut: parsed.signed_out === true
     }
   }
@@ -1285,7 +1304,12 @@ function createEvaManagedRuntime(options) {
     else removeSupportLease(lease.supportSessionId)
   }
 
-  let supportLeaseCleanupPromise = null
+  // The in-flight cleanup, keyed to the sign-in it ran under: a run started
+  // for one account's session is never handed to a caller signed in as another
+  // (a sign-in or sign-out bumps the generation), whose own handles it never
+  // looked at. The superseded run finishes harmlessly — its writes are
+  // id-scoped.
+  let supportLeaseCleanup = null
 
   // Ends every lease the app still holds a handle for but no enrollment: a
   // claim that never completed, a remote end that failed at sign-out, or an
@@ -1294,7 +1318,8 @@ function createEvaManagedRuntime(options) {
   // broker has settled its row one way or the other. Resolves true only when
   // nothing of this account's is left owing an end.
   function retrySupportLeaseCleanup(state = readState()) {
-    if (supportLeaseCleanupPromise) return supportLeaseCleanupPromise
+    if (supportLeaseCleanup?.generation === authGeneration) return supportLeaseCleanup.promise
+    const generation = authGeneration
     const leases = state.supportLeases ?? []
     const own = state.delegatedSupport?.supportSessionId ?? null
     const owned = leases.find(lease => lease.supportSessionId === own)
@@ -1335,9 +1360,9 @@ function createEvaManagedRuntime(options) {
       if (settled) supportEndError = null
       return settled
     })().finally(() => {
-      supportLeaseCleanupPromise = null
+      if (supportLeaseCleanup?.promise === task) supportLeaseCleanup = null
     })
-    supportLeaseCleanupPromise = task
+    supportLeaseCleanup = { generation, promise: task }
     return task
   }
 
@@ -1811,7 +1836,9 @@ function createEvaManagedRuntime(options) {
     // restored when the handoff fails.
     const wasMissingAgentBinding = missingAgentBinding
     const before = currentState()
+    const auth = authGeneration
     const previousEmail = before.desktop?.email ?? before.desktopEmail ?? null
+    const previousIdentity = runtimeIdentityOf(before.runtime) ?? before.runtimeIdentity ?? null
     if (before.delegatedSupport) {
       // The forced re-sign-in exists because the broker rejected the desktop
       // credential; the delegated enrollment that depends on it cannot be
@@ -1825,6 +1852,9 @@ function createEvaManagedRuntime(options) {
         rememberLog('[eva-managed] active support session could not be ended with the rejected credential; keeping its lease handle for cleanup')
         await clearDelegatedSupportState(currentState())
       }
+      // A sign-out from another window that landed during the end owns the
+      // state now; a browser sign-in must not overwrite that newer intent.
+      assertGeneration(auth)
     }
     rememberLog('[eva-managed] switching support target; requesting a plain Electric Sheep sign-in')
     try {
@@ -1837,12 +1867,19 @@ function createEvaManagedRuntime(options) {
       throw error
     }
     // The browser flow offers account selection, so the operator may come back
-    // as someone else: account-scoped renderer state (sessions, projects, local
-    // storage) is then re-homed exactly as the exported sign-in does. The same
-    // account keeps its state — and the picker that asked for the sign-in.
-    const nextEmail = currentState().desktop?.email ?? null
-    if (!previousEmail || !nextEmail || previousEmail.toLowerCase() !== nextEmail.toLowerCase()) {
-      rememberLog('[eva-managed] switch support target signed in as a different account; resetting the renderer')
+    // as someone else — or as the same account newly bound to another agent:
+    // account-scoped renderer state (sessions, projects, local storage) is then
+    // re-homed exactly as the exported sign-in and `refresh()` do. The same
+    // account on the same agent keeps its state — and the picker that asked.
+    const after = currentState()
+    const nextEmail = after.desktop?.email ?? null
+    if (
+      !previousEmail ||
+      !nextEmail ||
+      previousEmail.toLowerCase() !== nextEmail.toLowerCase() ||
+      !sameRuntimeIdentity(previousIdentity, runtimeIdentityOf(after.runtime))
+    ) {
+      rememberLog('[eva-managed] switch support target signed in as a different account or agent; resetting the renderer')
       await resetRenderer()
     }
     return publicEvaEnrollmentStatus({ ...currentState(), supportEndError, missingAgentBinding })

@@ -3362,9 +3362,9 @@ test('sign-out keeps the lease handle when neither the remote end nor the revoke
   assert.equal(persisted.support_leases[0].target_label, 'Customer / Support agent')
   assert.equal(runtime.status().signedOut, true)
   assert.equal(runtime.status().delegatedSupportActive, false)
-  assert.equal(runtime.status().supportCleanupPending, true)
-  // The signed-out screen of a shared install shows the generic cleanup state,
-  // never the previous employee's customer assignment.
+  // The signed-out screen of a shared install learns nothing about the previous
+  // employee's support activity: the handle waits on disk for that account.
+  assert.equal(runtime.status().supportCleanupPending, false)
   assert.equal(runtime.status().supportTargetLabel, null)
 })
 
@@ -3460,9 +3460,11 @@ test('a sign-in after a failed sign-out retries the stranded lease with the next
   t.after(() => runtime.close())
   await new Promise(resolve => setImmediate(resolve))
 
-  // No credential at boot: nothing is sent and nothing is dropped.
+  // No credential at boot: nothing is sent and nothing is dropped — and nothing
+  // about the owner's support activity is shown to whoever sees this screen.
   assert.equal(ends.length, 1)
-  assert.equal(runtime.status().supportCleanupPending, true)
+  assert.equal(persistedSupportLease(statePath)?.support_session_id, 'support-session')
+  assert.equal(runtime.status().supportCleanupPending, false)
 
   const signingIn = runtime.signIn()
   await new Promise(resolve => setImmediate(resolve))
@@ -3665,7 +3667,8 @@ test('a desktop credential that expires during an active lease leaves a cleanup 
   assert.equal(persistedSupportLease(statePath)?.support_session_id, 'support-session')
   assert.equal(persistedSupportLease(statePath)?.phase, 'cleanup')
   assert.equal(runtime.status().delegatedSupportActive, false)
-  assert.equal(runtime.status().supportCleanupPending, true)
+  // Not shown until the owner is authenticated again; the handle is on disk.
+  assert.equal(runtime.status().supportCleanupPending, false)
 
   const signingIn = runtime.signIn()
   await new Promise(resolve => setImmediate(resolve))
@@ -4049,7 +4052,7 @@ test('sign-out ends every row this account holds a handle for and keeps only the
     [['support-session', 'cleanup']]
   )
   assert.equal(runtime.status().signedOut, true)
-  assert.equal(runtime.status().supportCleanupPending, true)
+  assert.equal(runtime.status().supportCleanupPending, false)
 })
 
 test('a forced plain sign-in re-homes the renderer only when it comes back as a different account', async t => {
@@ -4059,6 +4062,7 @@ test('a forced plain sign-in re-homes the renderer only when it comes back as a 
   writeEnrollment(statePath)
   let resets = 0
   let email = 'Employee@example.invalid'
+  let agent = 'main'
   let opened
   const runtime = makeManagedRuntime(statePath, {
     resetRenderer: async () => {
@@ -4068,7 +4072,7 @@ test('a forced plain sign-in re-homes the renderer only when it comes back as a 
       opened = new URL(url)
     },
     pollDeviceCode: async () => ({ token: 'next-desktop-session', expiresAt: FUTURE, email }),
-    launchRuntime: async () => freshRuntimeEnrollment()
+    launchRuntime: async () => ({ ...freshRuntimeEnrollment(), agentId: agent, agentDisplayName: agent })
   })
   t.after(() => runtime.close())
 
@@ -4091,6 +4095,132 @@ test('a forced plain sign-in re-homes the renderer only when it comes back as a 
   await signInAgain()
   assert.equal(resets, 1)
   assert.equal(runtime.status().email, 'other@example.invalid')
+
+  // The same account, newly bound to another agent: re-homed as well, exactly
+  // as `refresh()` treats a changed customer or agent id.
+  agent = 'ops'
+  await signInAgain()
+  assert.equal(resets, 2)
+  assert.equal(runtime.status().agentId, 'ops')
+})
+
+test('a sign-out that lands while the forced re-sign-in ends the active session stops the sign-in', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-switch-signin-again-raced-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeActiveEnrollment(statePath)
+  let opened = 0
+  let runtime
+  runtime = makeManagedRuntime(statePath, {
+    openExternal: async () => {
+      opened += 1
+    },
+    brokerPost: async body => {
+      if (body.action === 'claim_internal_support_request') return supportEnrollment()
+      if (body.action === 'internal_support_session_end') {
+        // Another window signs out while the end is in flight.
+        await runtime.signOut()
+        return { ok: true, status: 'ended' }
+      }
+      throw new Error(`unexpected action ${body.action}`)
+    }
+  })
+  t.after(() => runtime.close())
+
+  await runtime.claimSupportRequest('request-123')
+  await assert.rejects(
+    runtime.switchSupportTarget({ signInAgain: true }),
+    error => error instanceof EvaBrokerError && error.code === 'stale-auth'
+  )
+  // The newer signed-out intent stands; no browser sign-in was started over it.
+  assert.equal(opened, 0)
+  assert.equal(runtime.status().signedOut, true)
+})
+
+test("a new start never evicts another employee's unexpired handle", async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-support-no-eviction-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeActiveEnrollment(statePath)
+  const persisted = JSON.parse(fs.readFileSync(statePath, 'utf8'))
+  const foreign = Array.from({ length: 9 }, (_, index) => ({
+    support_session_id: `other-session-${index}`,
+    phase: 'cleanup',
+    recorded_at: new Date().toISOString(),
+    actor_email: `other-${index}@example.invalid`
+  }))
+  persisted.support_leases = foreign
+  fs.writeFileSync(statePath, JSON.stringify(persisted))
+  const runtime = makeManagedRuntime(statePath, {
+    brokerPost: async body => {
+      if (body.action === 'create_internal_support_request') return supportRequestCreated()
+      if (body.action === 'claim_internal_support_request') {
+        return supportEnrollment(Date.now(), { support_session_id: SUPPORT_SESSION_ID })
+      }
+      throw new Error(`unexpected action ${body.action}`)
+    }
+  })
+  t.after(() => runtime.close())
+
+  const started = await runtime.startDelegatedSupport(supportTarget())
+
+  assert.equal(started.ok, true)
+  // Every other employee's handle is still there beside this account's own.
+  assert.deepEqual(
+    persistedSupportLeases(statePath).map(lease => lease.support_session_id),
+    [...foreign.map(lease => lease.support_session_id), SUPPORT_SESSION_ID]
+  )
+})
+
+test("a cleanup still running for one account is never handed to the next account's start", async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-support-cleanup-per-account-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeActiveEnrollment(statePath)
+  const persisted = JSON.parse(fs.readFileSync(statePath, 'utf8'))
+  persisted.support_lease = {
+    support_session_id: 'stranded-session',
+    phase: 'cleanup',
+    recorded_at: new Date().toISOString(),
+    actor_email: 'employee@example.invalid'
+  }
+  fs.writeFileSync(statePath, JSON.stringify(persisted))
+  let opened
+  const runtime = makeManagedRuntime(statePath, {
+    openExternal: async url => {
+      opened = new URL(url)
+    },
+    pollDeviceCode: async () => ({ token: 'other-desktop-session', expiresAt: FUTURE, email: 'other@example.invalid' }),
+    launchRuntime: async () => freshRuntimeEnrollment(),
+    brokerPost: async body => {
+      // The first account's stranded end never answers.
+      if (body.action === 'internal_support_session_end') return new Promise(() => undefined)
+      if (body.action === 'create_internal_support_request') return supportRequestCreated()
+      if (body.action === 'claim_internal_support_request') {
+        return supportEnrollment(Date.now(), { support_session_id: SUPPORT_SESSION_ID })
+      }
+      throw new Error(`unexpected action ${body.action}`)
+    }
+  })
+  t.after(() => runtime.close())
+  await new Promise(resolve => setImmediate(resolve))
+
+  // A different employee signs in while that cleanup is still hanging.
+  const signingIn = runtime.signIn()
+  await new Promise(resolve => setImmediate(resolve))
+  await runtime.completeCallback(
+    `evaos-agent://auth/callback?device_code=ABCDEFGH&desktop_auth_state=${opened.searchParams.get('desktop_auth_state')}`
+  )
+  await signingIn
+
+  // Their start neither waits on the first account's cleanup nor mistakes it
+  // for its own: it runs cleanup for the account in hand and proceeds.
+  const started = await Promise.race([
+    runtime.startDelegatedSupport(supportTarget()),
+    new Promise(resolve => setTimeout(() => resolve({ ok: false, reason: 'timed-out' }), 3_000))
+  ])
+  assert.equal(started.ok, true)
+  assert.equal(persistedSupportLeases(statePath).some(lease => lease.support_session_id === 'stranded-session'), true)
 })
 
 test('a plain sign-in that loses its session mid-enrollment reports the sign-out instead of a stale success', async t => {

@@ -904,21 +904,23 @@ function publicEvaEnrollmentStatus(state, now = Date.now()) {
     // failed or an enrollment a credential expiry erased) that End, the next
     // sign-in and the next start retry. Another employee's handle on this
     // install is not this account's to end, so it is not shown to it.
-    // The customer/agent label names an assignment: shown only to an
-    // authenticated account the handle belongs to, never on the signed-out
-    // screen of a shared install. The generic cleanup affordance still shows.
-    supportTargetLabel: desktop?.email ? (cleanupLease ?? ownedLeases[0])?.targetLabel ?? null : null,
+    supportTargetLabel: (cleanupLease ?? ownedLeases[0])?.targetLabel ?? null,
     supportCleanupPending
   }
 }
 
-// A handle with no recorded actor (written before the field existed) counts as
-// the signed-in account's, exactly as before the field.
+// The handles the status may speak about: an actor-bound handle names a
+// customer assignment, so it is visible only to that authenticated account —
+// never on the signed-out screen of a shared install, where it stays on disk
+// for the owner's next sign-in. A handle with no recorded actor (written
+// before the field existed) counts as the signed-in account's, as before.
 function ownedSupportLeases(state, desktop) {
   const leases = Array.isArray(state?.supportLeases) ? state.supportLeases : []
-  return leases.filter(
-    lease => !lease.actorEmail || !desktop?.email || lease.actorEmail.toLowerCase() === desktop.email.toLowerCase()
-  )
+  return leases.filter(lease => {
+    if (!lease.actorEmail) return true
+    if (!desktop?.email) return false
+    return lease.actorEmail.toLowerCase() === desktop.email.toLowerCase()
+  })
 }
 
 function resolveEvaManagedDesktopProfile(response) {
