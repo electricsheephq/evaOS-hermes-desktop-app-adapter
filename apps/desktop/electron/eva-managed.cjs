@@ -864,6 +864,8 @@ function publicEvaEnrollmentStatus(state, now = Date.now()) {
     delegatedSupport && !expiresSoon(delegatedSupport.supportExpiresAt, 0, now)
   )
   const presentationRuntime = delegatedSupportActive ? delegatedSupport : runtime
+  const ownedLease = ownedSupportLease(state, desktop)
+  const supportCleanupPending = ownedLease?.phase === 'cleanup'
   return {
     managed: true,
     productName: EVA_MANAGED_POLICY.productName,
@@ -888,8 +890,7 @@ function publicEvaEnrollmentStatus(state, now = Date.now()) {
     assignmentVersion: delegatedSupportActive ? delegatedSupport.assignmentVersion : null,
     // Also raised for a cleanup-only lease whose End did not land, so the
     // banner's End/retry control can say so.
-    supportEndFailed:
-      state?.supportEndError === true && (delegatedSupportActive || state?.supportLease?.phase === 'cleanup'),
+    supportEndFailed: state?.supportEndError === true && (delegatedSupportActive || supportCleanupPending),
     // Terminal, actionable state for an account that owns no agent of its own.
     // Suppressed while a delegated session is active: the support target IS the
     // agent then, so the prompt would be wrong.
@@ -900,10 +901,20 @@ function publicEvaEnrollmentStatus(state, now = Date.now()) {
     // Lease handle the app persisted locally: a create→claim in flight, the
     // lease the enrollment owns, or one no longer owned (a remote end that
     // failed or an enrollment a credential expiry erased) that End, the next
-    // sign-in and the next start retry.
-    supportTargetLabel: state?.supportLease?.targetLabel ?? null,
-    supportCleanupPending: state?.supportLease?.phase === 'cleanup'
+    // sign-in and the next start retry. Another employee's handle on this
+    // install is not this account's to end, so it is not shown to it.
+    supportTargetLabel: ownedLease?.targetLabel ?? null,
+    supportCleanupPending
   }
+}
+
+// A handle with no recorded actor (written before the field existed) counts as
+// the signed-in account's, exactly as before the field.
+function ownedSupportLease(state, desktop) {
+  const lease = state?.supportLease ?? null
+  if (!lease) return null
+  if (!lease.actorEmail || !desktop?.email) return lease
+  return lease.actorEmail.toLowerCase() === desktop.email.toLowerCase() ? lease : null
 }
 
 function resolveEvaManagedDesktopProfile(response) {

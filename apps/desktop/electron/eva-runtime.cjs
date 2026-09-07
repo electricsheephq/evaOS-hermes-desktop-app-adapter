@@ -92,13 +92,18 @@ function normalizeSupportLease(raw, now) {
   const deadline = Number.isFinite(supportExpiresAt) ? supportExpiresAt : recordedAt + SUPPORT_LEASE_MAX_LIFETIME_MS
   if (deadline <= now) return null
   const requestId = String(raw.request_id || '')
+  const actorEmail = typeof raw.actor_email === 'string' ? raw.actor_email.trim().slice(0, 320) : ''
   return {
     supportSessionId,
     requestId: SUPPORT_REQUEST_ID_RE.test(requestId) ? requestId : null,
     targetLabel: boundedSupportLabel(raw.target_label),
     phase: raw.phase,
     recordedAt: new Date(recordedAt).toISOString(),
-    supportExpiresAt: Number.isFinite(supportExpiresAt) ? new Date(supportExpiresAt).toISOString() : null
+    supportExpiresAt: Number.isFinite(supportExpiresAt) ? new Date(supportExpiresAt).toISOString() : null,
+    // The account the lease belongs to: only that actor's desktop session can
+    // end it, so a different employee signing in on the same install neither
+    // retries it (a guaranteed 403) nor is blocked or shown a banner by it.
+    actorEmail: actorEmail || null
   }
 }
 
@@ -109,8 +114,16 @@ function serializeSupportLease(lease) {
     ...(lease.targetLabel ? { target_label: lease.targetLabel } : {}),
     phase: lease.phase,
     recorded_at: lease.recordedAt,
-    ...(lease.supportExpiresAt ? { support_expires_at: lease.supportExpiresAt } : {})
+    ...(lease.supportExpiresAt ? { support_expires_at: lease.supportExpiresAt } : {}),
+    ...(lease.actorEmail ? { actor_email: lease.actorEmail } : {})
   }
+}
+
+// A handle with no recorded actor (written before the field existed) is
+// treated as the current account's, exactly as before the field.
+function supportLeaseOwnedBy(lease, desktop) {
+  if (!lease?.actorEmail || !desktop?.email) return true
+  return lease.actorEmail.toLowerCase() === desktop.email.toLowerCase()
 }
 
 // An `active` handle whose enrollment is gone — desktop credential expired or
@@ -604,7 +617,7 @@ function createEvaManagedRuntime(options) {
       runtime: state.runtime,
       delegatedSupport: null,
       rendererCleanupPending: resetRendererState,
-      supportLease: leaseEnded ? null : cleanupSupportLease(state),
+      supportLease: leaseEnded ? survivingSupportLease(state) : cleanupSupportLease(state),
       signedOut: state.signedOut
     })
     resetConnection()
@@ -1070,7 +1083,7 @@ function createEvaManagedRuntime(options) {
         desktop: latest.desktop,
         runtime: latest.runtime,
         delegatedSupport: support,
-        supportLease: activeSupportLease(support)
+        supportLease: activeSupportLease(support, latest.desktop)
       })
     } catch (error) {
       await requestDelegatedSupportEnd({ desktop, delegatedSupport: support }).catch(() => false)
@@ -1166,14 +1179,15 @@ function createEvaManagedRuntime(options) {
     return { ok: false, reason: 'error', code, message: enrollmentFailureMessage(error) }
   }
 
-  function supportLeaseFromEnrollment(support, phase = 'cleanup') {
+  function supportLeaseFromEnrollment(support, desktop, phase = 'cleanup') {
     return {
       supportSessionId: support.supportSessionId,
       requestId: null,
       targetLabel: boundedSupportLabel(`${support.supportCustomerLabel ?? ''} / ${support.supportAgentLabel ?? ''}`),
       phase,
       recordedAt: new Date(now()).toISOString(),
-      supportExpiresAt: support.supportExpiresAt
+      supportExpiresAt: support.supportExpiresAt,
+      actorEmail: desktop?.email ?? null
     }
   }
 
@@ -1181,10 +1195,15 @@ function createEvaManagedRuntime(options) {
   // handle for a DIFFERENT row (a browser-flow claim over an unfinished
   // cleanup) is kept instead: it is that row's only remaining id, while this
   // lease still has its enrollment.
-  function activeSupportLease(support) {
+  function activeSupportLease(support, desktop) {
     const existing = persistedSupportLease()
     if (existing && existing.supportSessionId !== support.supportSessionId) return existing
-    return { ...(existing ?? supportLeaseFromEnrollment(support)), phase: 'active', supportExpiresAt: support.supportExpiresAt }
+    return {
+      ...(existing ?? supportLeaseFromEnrollment(support, desktop)),
+      phase: 'active',
+      supportExpiresAt: support.supportExpiresAt,
+      actorEmail: existing?.actorEmail ?? desktop?.email ?? null
+    }
   }
 
   // The handle a cleared enrollment leaves behind: a remote end is still owed
@@ -1198,10 +1217,19 @@ function createEvaManagedRuntime(options) {
     }
     if (!support) return null
     return {
-      ...(lease ?? supportLeaseFromEnrollment(support)),
+      ...(lease ?? supportLeaseFromEnrollment(support, state.desktop)),
       phase: 'cleanup',
       supportExpiresAt: lease?.supportExpiresAt ?? support.supportExpiresAt
     }
+  }
+
+  // After a CONFIRMED end of the enrollment's own row, a handle naming a
+  // different row (a browser-flow claim over an unfinished cleanup) is still
+  // owed its end and stays; only the ended row's handle goes.
+  function survivingSupportLease(state) {
+    const lease = state.supportLease
+    if (!lease || lease.supportSessionId === state.delegatedSupport?.supportSessionId) return null
+    return lease.phase === 'cleanup' ? lease : { ...lease, phase: 'cleanup' }
   }
 
   // Rewrites the handle only while it still names `lease`: a superseded start's
@@ -1226,10 +1254,17 @@ function createEvaManagedRuntime(options) {
     if (state.delegatedSupport?.supportSessionId === lease.supportSessionId) {
       // The claim landed; the enrollment owns the lease and the handle stays
       // beside it until a confirmed end.
-      if (lease.phase !== 'active') persistSupportLease(activeSupportLease(state.delegatedSupport))
+      if (lease.phase !== 'active') persistSupportLease(activeSupportLease(state.delegatedSupport, state.desktop))
       return Promise.resolve(true)
     }
     if (!desktopSessionLive(state)) return Promise.resolve(false)
+    if (!supportLeaseOwnedBy(lease, state.desktop)) {
+      // Another employee's lease on this install: this session cannot end it
+      // (a guaranteed 403), so it is left for its owner's next sign-in and
+      // does not stand in this account's way.
+      rememberLog('[eva-support] stranded support lease belongs to another account; left for its owner')
+      return Promise.resolve(true)
+    }
     const task = (async () => {
       try {
         await endSupportSessionRemote(state.desktop.token, lease.supportSessionId)
@@ -1341,7 +1376,9 @@ function createEvaManagedRuntime(options) {
       requestId: created.requestId,
       targetLabel: target.label,
       phase: 'pending',
-      recordedAt: new Date(now()).toISOString()
+      recordedAt: new Date(now()).toISOString(),
+      supportExpiresAt: null,
+      actorEmail: desktop.email ?? null
     }
     persistSupportLease(lease)
     // A sign-out and sign-in can land while the create is in flight. The claim
@@ -1636,6 +1673,7 @@ function createEvaManagedRuntime(options) {
     writeState(emptyState())
     supportRevalidated = false
     const desktop = await beginSignIn({ plainSession })
+    const auth = authGeneration
     void retrySupportLeaseCleanup(currentState()).catch(() => false)
     if (plainSession) {
       // The picker is the next step, so an account that owns no agent of its
@@ -1644,9 +1682,14 @@ function createEvaManagedRuntime(options) {
       try {
         await ensureRuntimeEnrollment({ force: true })
       } catch (error) {
+        // Only a deferrable enrollment outcome is swallowed. A sign-out that
+        // landed meanwhile (stale-auth) or a rejected desktop session (401)
+        // leaves no session to report as signed in.
+        if (isStaleAuthError(error) || statusCodeOf(error) === 401) throw error
         const code = String(error?.code || '').match(/^[a-z][a-z0-9]*(?:[_-][a-z0-9]+)*$/)?.[0]
         rememberLog(`[eva-managed] plain sign-in complete; enrollment deferred: ${code || 'enrollment-failed'}`)
       }
+      assertGeneration(auth)
     } else {
       await ensureRuntimeEnrollment({ force: !currentState().delegatedSupport })
     }
