@@ -3989,6 +3989,82 @@ test('ending the current lease keeps a stranded handle for a different row until
   assert.equal(runtime.status().supportCleanupPending, false)
 })
 
+test('a stranded handle settled while End is in flight is not written back by the confirmed end', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-support-end-out-of-order-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeActiveEnrollment(statePath)
+  const persisted = JSON.parse(fs.readFileSync(statePath, 'utf8'))
+  persisted.support_lease = {
+    support_session_id: 'stranded-session',
+    phase: 'cleanup',
+    recorded_at: new Date().toISOString(),
+    actor_email: 'employee@example.invalid'
+  }
+  fs.writeFileSync(statePath, JSON.stringify(persisted))
+  const ends = []
+  let duringEnd = null
+  let settleStranded
+  const strandedSettled = new Promise(resolve => {
+    settleStranded = resolve
+  })
+  const runtime = makeManagedRuntime(statePath, {
+    brokerPost: async body => {
+      if (body.action === 'claim_internal_support_request') return supportEnrollment()
+      if (body.action === 'internal_support_session_end') {
+        ends.push(body.support_session_id)
+        // The boot-time end of the stranded row is still pending when End is
+        // pressed; it completes while the current row's end is in flight.
+        if (body.support_session_id === 'stranded-session') return strandedSettled
+        settleStranded({ ok: true, status: 'ended' })
+        for (let tick = 0; tick < 4; tick += 1) await new Promise(resolve => setImmediate(resolve))
+        duringEnd = persistedSupportLeases(statePath).map(lease => lease.support_session_id)
+        return { ok: true, status: 'ended' }
+      }
+      throw new Error(`unexpected action ${body.action}`)
+    }
+  })
+  t.after(() => runtime.close())
+  await new Promise(resolve => setImmediate(resolve))
+  assert.deepEqual(ends, ['stranded-session'])
+  await runtime.claimSupportRequest('request-123')
+
+  assert.deepEqual(await runtime.endSupportSession(), { ok: true })
+  await new Promise(resolve => setImmediate(resolve))
+
+  // The stranded handle was already gone while the current end was in flight;
+  // both rows are settled at the broker and neither handle comes back.
+  assert.deepEqual(duringEnd, ['support-session'])
+  assert.deepEqual(ends, ['stranded-session', 'support-session'])
+  assert.deepEqual(persistedSupportLeases(statePath), [])
+  assert.equal(runtime.status().supportCleanupPending, false)
+})
+
+test('a created row whose response carries no usable expiry still gets its handle and is claimed', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-support-create-no-expiry-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeActiveEnrollment(statePath)
+  const runtime = makeManagedRuntime(statePath, {
+    brokerPost: async body => {
+      if (body.action === 'create_internal_support_request') {
+        return { ...supportRequestCreated(), request_expires_at: 'not a date' }
+      }
+      if (body.action === 'claim_internal_support_request') {
+        return supportEnrollment(Date.now(), { support_session_id: SUPPORT_SESSION_ID })
+      }
+      throw new Error(`unexpected action ${body.action}`)
+    }
+  })
+  t.after(() => runtime.close())
+
+  // The ids name a row that already exists server-side; the expiry is not
+  // load-bearing, so the row is neither refused nor left without a handle.
+  assert.equal((await runtime.startDelegatedSupport(supportTarget())).ok, true)
+  assert.equal(persistedSupportLease(statePath)?.support_session_id, SUPPORT_SESSION_ID)
+  assert.equal(runtime.status().delegatedSupportActive, true)
+})
+
 test("another employee's stranded handle is neither retried with this session nor allowed to block it", async t => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-support-foreign-handle-'))
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }))

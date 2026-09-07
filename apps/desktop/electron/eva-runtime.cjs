@@ -246,11 +246,18 @@ function normalizeSupportTarget(input) {
 function normalizeSupportRequestCreated(payload) {
   const requestId = String(payload?.request_id ?? '').trim()
   const supportSessionId = String(payload?.support_session_id ?? '').trim()
-  const requestExpiresAt = Date.parse(String(payload?.request_expires_at || ''))
-  if (payload?.ok !== true || !SUPPORT_REQUEST_ID_RE.test(requestId) || !SUPPORT_REQUEST_ID_RE.test(supportSessionId) || !Number.isFinite(requestExpiresAt)) {
+  if (payload?.ok !== true || !SUPPORT_REQUEST_ID_RE.test(requestId) || !SUPPORT_REQUEST_ID_RE.test(supportSessionId)) {
     throw new EvaBrokerError('Electric Sheep returned an invalid support request.', 502, 'invalid-support-request')
   }
-  return { requestId, supportSessionId, requestExpiresAt: new Date(requestExpiresAt).toISOString() }
+  // Only the ids are load-bearing: they name a row that now exists server-side
+  // and must get its handle. The request expiry is informational, so a missing
+  // or malformed one never orphans that row.
+  const requestExpiresAt = Date.parse(String(payload?.request_expires_at || ''))
+  return {
+    requestId,
+    supportSessionId,
+    requestExpiresAt: Number.isFinite(requestExpiresAt) ? new Date(requestExpiresAt).toISOString() : null
+  }
 }
 
 function createEvaManagedRuntime(options) {
@@ -1547,7 +1554,10 @@ function createEvaManagedRuntime(options) {
       // stale remote completion must never restore or clear that newer state.
       return { ok: true }
     }
-    const isolated = await clearDelegatedSupportState(state, { leaseEnded: true })
+    // Cleared from the state as it is NOW, not the pre-await snapshot: a
+    // background cleanup that settled a stranded handle meanwhile must not see
+    // it written back, and a handle recorded meanwhile must not be dropped.
+    const isolated = await clearDelegatedSupportState(latest, { leaseEnded: true })
     if (!isolated) {
       supportEndError = true
       rememberLog('[eva-managed] support session ended but renderer isolation is still pending')
