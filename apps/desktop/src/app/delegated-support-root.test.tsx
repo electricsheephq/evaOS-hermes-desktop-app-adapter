@@ -70,4 +70,49 @@ describe('app-root delegated support controls', () => {
     await waitFor(() => expect(screen.queryByRole('region', { name: 'Acting for Customer' })).toBeNull())
     expect(screen.getByText(state)).toBeTruthy()
   })
+
+  // adapter#91 / sc#540: an internal admin has no agent of their own, so the
+  // ordinary enrollment is rejected 403 by design. The banner is the only
+  // surface that survives that boot, so it carries the way out.
+  it('offers Switch support target from the no-personal-agent state', async () => {
+    const status: EvaManagedStatus = { ...supportStatus(), delegatedSupportActive: false, missingAgentBinding: true }
+    const switchSupportTarget = vi.fn(async () => status)
+
+    Object.defineProperty(window, 'hermesDesktop', {
+      configurable: true,
+      value: { eva: { status: async () => status, endSupportSession: async () => ({ ok: true }), switchSupportTarget } }
+    })
+
+    render(
+      <I18nProvider configClient={null} initialLocale="en">
+        <App />
+      </I18nProvider>
+    )
+
+    expect(await screen.findByRole('region', { name: 'No personal agent for this account' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'End support session' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Switch support target…' }))
+    await waitFor(() => expect(switchSupportTarget).toHaveBeenCalledTimes(1))
+    expect(screen.getByText(gateway.state)).toBeTruthy()
+  })
+
+  it('offers Switch support target beside End during an active session', async () => {
+    const status = supportStatus()
+    const switchSupportTarget = vi.fn(async () => status)
+
+    Object.defineProperty(window, 'hermesDesktop', {
+      configurable: true,
+      value: { eva: { status: async () => status, endSupportSession: async () => ({ ok: true }), switchSupportTarget } }
+    })
+
+    render(
+      <I18nProvider configClient={null} initialLocale="en">
+        <App />
+      </I18nProvider>
+    )
+
+    await screen.findByRole('region', { name: 'Acting for Customer' })
+    fireEvent.click(screen.getByRole('button', { name: 'Switch support target…' }))
+    await waitFor(() => expect(switchSupportTarget).toHaveBeenCalledTimes(1))
+  })
 })

@@ -217,7 +217,12 @@ export const zh: Translations = {
     endSession: '结束支持会话',
     endingSession: '正在结束支持会话…',
     unavailable: '支持会话状态不可用。',
-    endFailed: '无法结束支持会话。请重试。'
+    endFailed: '无法结束支持会话。请重试。',
+    switchTarget: '切换支持目标…',
+    switchingTarget: '正在打开登录…',
+    switchTargetFailed: '无法开始切换支持目标。请重试。',
+    noPersonalAgent: '此账户没有个人智能体',
+    noPersonalAgentHint: '请使用“切换支持目标”打开客户智能体。'
   },
 
   billingBlock: {

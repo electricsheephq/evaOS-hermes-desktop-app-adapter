@@ -2639,3 +2639,188 @@ test('broker requests time out instead of leaving managed launch unresolved', as
     error => error instanceof EvaBrokerError && error.statusCode === 408 && error.code === 'timeout'
   )
 })
+
+// ── adapter#91 / sc#540 — the own-workspace 403 dead end ────────────────────
+// An internal admin owns no agent, so `runtime_launch` is rejected by design
+// forever. The installed build answered that by re-throwing the raw broker code
+// at every caller: 345 identical lines in one day and no route out.
+
+function missingAgentBindingError() {
+  return new EvaBrokerError(
+    'Electric Sheep request failed (403). [code: missing_hermes_agent_binding]',
+    403,
+    'missing_hermes_agent_binding'
+  )
+}
+
+test('an own-workspace 403 backs off, latches one terminal state, and logs one line per state change', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-missing-agent-binding-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeEnrollment(statePath)
+  let clock = Date.parse('2026-09-07T10:00:00.000Z')
+  let launches = 0
+  const logs = []
+  const runtime = makeManagedRuntime(statePath, {
+    now: () => clock,
+    rememberLog: line => logs.push(line),
+    launchRuntime: async () => {
+      launches += 1
+      throw missingAgentBindingError()
+    }
+  })
+  t.after(() => runtime.close())
+
+  const rejected = () =>
+    assert.rejects(runtime.resolveBackend(), error => error.code === 'missing_hermes_agent_binding')
+
+  await rejected()
+  assert.equal(launches, 1)
+  assert.equal(runtime.status().missingAgentBinding, false)
+
+  // Inside the current window the broker is not asked again.
+  clock += 29_000
+  await rejected()
+  assert.equal(launches, 1)
+
+  // 30s → 60s → 120s. The fourth rejection spends the budget.
+  for (const delay of [30_000, 60_000, 120_000]) {
+    clock += delay
+    await rejected()
+  }
+  assert.equal(launches, 4)
+  assert.equal(runtime.status().missingAgentBinding, true)
+
+  // Terminal: a day of polling adds no broker traffic and no new log lines, and
+  // every caller now receives the actionable message instead of the raw code.
+  clock += 24 * 60 * 60 * 1_000
+  await assert.rejects(
+    runtime.resolveBackend(),
+    error =>
+      error.statusCode === 403 &&
+      error.code === 'missing_hermes_agent_binding' &&
+      error.message === 'No personal agent for this account — use Switch support target to open a customer agent.'
+  )
+  assert.equal(launches, 4)
+  assert.equal(logs.filter(line => line.includes('no personal agent for this account')).length, 1)
+})
+
+test('a binding created while the app is running still recovers before the budget is spent', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-missing-agent-binding-recovery-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeEnrollment(statePath)
+  let clock = Date.parse('2026-09-07T10:00:00.000Z')
+  let launches = 0
+  const runtime = makeManagedRuntime(statePath, {
+    now: () => clock,
+    launchRuntime: async () => {
+      launches += 1
+      if (launches < 3) throw missingAgentBindingError()
+      return {
+        agentDisplayName: 'Asuka',
+        agentId: 'main',
+        baseUrl: 'https://hermes-customer-one.ecs.electricsheephq.com',
+        customerId: 'customer-one',
+        expiresAt: FUTURE,
+        runtime: 'hermes',
+        schemaVersion: 'evaos.hermes_desktop_enrollment.v1',
+        token: 'fresh-runtime-token'
+      }
+    }
+  })
+  t.after(() => runtime.close())
+
+  await assert.rejects(runtime.resolveBackend(), error => error.code === 'missing_hermes_agent_binding')
+  clock += 30_000
+  await assert.rejects(runtime.resolveBackend(), error => error.code === 'missing_hermes_agent_binding')
+  clock += 60_000
+
+  await runtime.resolveBackend()
+
+  assert.equal(runtime.status().agentId, 'main')
+  assert.equal(runtime.status().runtimeSessionActive, true)
+  assert.equal(launches, 3)
+  assert.equal(runtime.status().missingAgentBinding, false)
+})
+
+test('switching the support target ends the lease, revokes the session, and reopens the picker', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-switch-support-target-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeActiveEnrollment(statePath)
+  const actions = []
+  const revoked = []
+  let opened
+  const runtime = makeManagedRuntime(statePath, {
+    openExternal: async url => { opened = new URL(url) },
+    revokeDesktopSession: async token => { revoked.push(token); return true },
+    pollDeviceCode: async () => ({ token: 'switched-desktop-session', expiresAt: FUTURE, email: 'employee@example.invalid' }),
+    launchRuntime: async () => ({
+      agentDisplayName: 'Asuka',
+      agentId: 'main',
+      baseUrl: 'https://hermes-customer-one.ecs.electricsheephq.com',
+      customerId: 'customer-one',
+      expiresAt: FUTURE,
+      runtime: 'hermes',
+      schemaVersion: 'evaos.hermes_desktop_enrollment.v1',
+      token: 'switched-runtime-token'
+    }),
+    brokerPost: async body => {
+      actions.push(body.action)
+      if (body.action === 'claim_internal_support_request') return supportEnrollment()
+      if (body.action === 'internal_support_session_end') return { ok: true }
+      throw new Error(`unexpected action ${body.action}`)
+    }
+  })
+  t.after(() => runtime.close())
+
+  await runtime.claimSupportRequest('request-123')
+  assert.equal(runtime.status().delegatedSupportActive, true)
+
+  const switching = runtime.switchSupportTarget()
+  await new Promise(resolve => setImmediate(resolve))
+
+  // The lease is released through the broker before the browser handoff, so no
+  // 1 h grant is left behind to collide with the next selection.
+  assert.equal(actions.includes('internal_support_session_end'), true)
+  assert.deepEqual(revoked, ['desktop-token'])
+  assert.equal(runtime.status().delegatedSupportActive, false)
+  // The reopened URL advertises the picker capability and forces account choice
+  // rather than silently reusing the previous target.
+  assert.equal(opened.pathname, '/desktop-auth')
+  assert.equal(opened.searchParams.get('desktop_support_login_version'), '1')
+  assert.equal(opened.searchParams.get('switch_account'), '1')
+
+  await runtime.completeCallback(
+    `evaos-agent://auth/callback?device_code=ABCDEFGH&desktop_auth_state=${opened.searchParams.get('desktop_auth_state')}`
+  )
+
+  const status = await switching
+
+  assert.equal(status.email, 'employee@example.invalid')
+  assert.equal(status.delegatedSupportActive, false)
+})
+
+test('switching the support target refuses to abandon a lease the broker would not end', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-switch-support-target-end-failure-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeActiveEnrollment(statePath)
+  let opened = 0
+  const runtime = makeManagedRuntime(statePath, {
+    openExternal: async () => { opened += 1 },
+    brokerPost: async body => {
+      if (body.action === 'claim_internal_support_request') return supportEnrollment()
+      if (body.action === 'internal_support_session_end') throw new EvaBrokerError('unavailable', 502, 'support-end-failed')
+      throw new Error(`unexpected action ${body.action}`)
+    }
+  })
+  t.after(() => runtime.close())
+
+  await runtime.claimSupportRequest('request-123')
+  await assert.rejects(runtime.switchSupportTarget(), error => error.code === 'support-end-failed')
+  assert.equal(opened, 0)
+  assert.equal(runtime.status().delegatedSupportActive, true)
+  assert.equal(runtime.status().supportEndFailed, true)
+})

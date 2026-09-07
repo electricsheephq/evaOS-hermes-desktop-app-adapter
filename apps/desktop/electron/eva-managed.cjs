@@ -870,7 +870,11 @@ function publicEvaEnrollmentStatus(state, now = Date.now()) {
     supportExpiresAt: delegatedSupportActive ? delegatedSupport.supportExpiresAt : null,
     supportDeadline: delegatedSupportActive ? delegatedSupport.supportDeadline : null,
     assignmentVersion: delegatedSupportActive ? delegatedSupport.assignmentVersion : null,
-    supportEndFailed: delegatedSupportActive && state?.supportEndError === true
+    supportEndFailed: delegatedSupportActive && state?.supportEndError === true,
+    // Terminal, actionable state for an account that owns no agent of its own.
+    // Suppressed while a delegated session is active: the support target IS the
+    // agent then, so the prompt would be wrong.
+    missingAgentBinding: state?.missingAgentBinding === true && !delegatedSupportActive
   }
 }
 

@@ -146,4 +146,79 @@ test.describe('managed signed-out boot', () => {
     await expect(page.getByText('Synthetic customer gateway unavailable', { exact: true })).toBeVisible()
     await expect(page.getByRole('heading', { name: /couldn't start/ })).toBeVisible()
   })
+
+  // adapter#91 / sc#540. An internal admin owns no agent, so `runtime_launch`
+  // answers 403 `missing_hermes_agent_binding` and the app boots straight into
+  // the failure overlay. The customer/agent picker is a dashboard surface, so
+  // the only route back to it must survive that overlay — same property PR #264
+  // proved for End, exercised here through the real preload and IPC channel.
+  test('Switch support target receives a real click over the own-workspace 403', async () => {
+    const switched = await fixture!.app.evaluate(({ ipcMain }) => {
+      const calls = { count: 0 }
+
+      ipcMain.removeHandler('hermes:eva:status')
+      ipcMain.handle('hermes:eva:status', () => ({
+        managed: true,
+        productName: 'evaOS Agent',
+        signedOut: false,
+        desktopSessionActive: true,
+        desktopSessionExpiresAt: new Date(Date.now() + 60 * 60 * 1_000).toISOString(),
+        runtimeSessionActive: false,
+        runtimeSessionExpiresAt: null,
+        customerId: null,
+        agentId: null,
+        updateChannel: 'managed-beta',
+        delegatedSupportActive: false,
+        sessionKind: 'ordinary',
+        missingAgentBinding: true
+      }))
+      ipcMain.removeHandler('hermes:eva:support:switch-target')
+      ipcMain.handle('hermes:eva:support:switch-target', () => {
+        calls.count += 1
+
+        // The production handler hands off to the system browser. Resolve
+        // without opening anything so the test never leaves the app.
+        return { managed: true, productName: 'evaOS Agent', signedOut: true, missingAgentBinding: true }
+      })
+
+      Reflect.set(globalThis, '__switchSupportTargetCalls', calls)
+
+      return true
+    })
+
+    expect(switched).toBe(true)
+
+    const page = fixture!.page
+    const banner = page.getByRole('region', { name: 'No personal agent for this account' })
+
+    await expect(banner).toBeVisible()
+    await fixture!.app.evaluate(({ BrowserWindow }) => {
+      for (const window of BrowserWindow.getAllWindows()) {
+        window.webContents.send('hermes:boot-progress', {
+          error: 'No personal agent for this account',
+          message: 'No personal agent for this account',
+          phase: 'eva.enroll.error',
+          progress: 100,
+          running: false,
+          fakeMode: false,
+          timestamp: Date.now()
+        })
+      }
+    })
+    await expect(page.getByRole('heading', { name: /couldn't start/ })).toBeVisible()
+    await test.info().attach('switch-support-target-over-403', {
+      body: await page.screenshot(),
+      contentType: 'image/png'
+    })
+    // Not forced: it must fail if the boot overlay covers the only way out.
+    await banner.getByRole('button', { name: 'Switch support target…', exact: true }).click()
+    await expect
+      .poll(async () =>
+        fixture!.app.evaluate(
+          () => (Reflect.get(globalThis, '__switchSupportTargetCalls') as { count: number }).count
+        )
+      )
+      .toBe(1)
+    await expect(page.getByRole('heading', { name: /couldn't start/ })).toBeVisible()
+  })
 })

@@ -20,10 +20,17 @@ function formatRemaining(expiresAt: string | null | undefined): string {
     .padStart(2, '0')}`
 }
 
+// One app-root banner owns both support states: the live delegated session and
+// the dead end an account with no agent of its own boots into. Keeping them in
+// a single component keeps one status poller and one z-index above the boot
+// failure overlay — the property PR #264 established and that the "Switch
+// support target" entry depends on, because the 403 state IS a failed boot.
 export function DelegatedSupportBanner() {
   const { t } = useI18n()
   const [status, setStatus] = useState<EvaManagedStatus | null>(null)
   const [ending, setEnding] = useState(false)
+  const [switching, setSwitching] = useState(false)
+  const [switchFailed, setSwitchFailed] = useState(false)
 
   const refresh = useCallback(() => {
     const readStatus = window.hermesDesktop?.eva?.status
@@ -44,12 +51,57 @@ export function DelegatedSupportBanner() {
     return () => window.clearInterval(timer)
   }, [refresh])
 
-  if (
-    !status?.delegatedSupportActive ||
-    !status.supportExpiresAt ||
-    !status.supportCustomerLabel ||
-    !status.supportAgentLabel
-  ) {
+  const supportActive = Boolean(
+    status?.delegatedSupportActive && status.supportExpiresAt && status.supportCustomerLabel && status.supportAgentLabel
+  )
+  const noPersonalAgent = Boolean(status?.missingAgentBinding) && !supportActive
+
+  const switchTarget = async () => {
+    if (switching) {
+      return
+    }
+
+    setSwitching(true)
+    setSwitchFailed(false)
+
+    try {
+      await window.hermesDesktop.eva.switchSupportTarget()
+    } catch {
+      // The main process already logged the bounded broker code; the operator
+      // only needs to know the browser handoff did not start.
+      setSwitchFailed(true)
+    } finally {
+      setSwitching(false)
+      refresh()
+    }
+  }
+
+  const switchButton = (
+    <Button disabled={switching || ending} onClick={() => void switchTarget()} size="sm" type="button" variant="outline">
+      {switching ? t.delegatedSupport.switchingTarget : t.delegatedSupport.switchTarget}
+    </Button>
+  )
+
+  if (noPersonalAgent) {
+    return (
+      <div
+        aria-label={t.delegatedSupport.noPersonalAgent}
+        className="fixed inset-x-0 z-(--z-support-session) flex min-h-10 items-center justify-center gap-3 border-b border-(--ui-stroke-tertiary) bg-(--ui-bg-quaternary) px-4 py-2 text-sm text-(--ui-text-primary)"
+        role="region"
+        style={{ top: TITLEBAR_HEIGHT }}
+      >
+        <span aria-live="polite" className="sr-only" role="status">
+          {t.delegatedSupport.noPersonalAgent}
+        </span>
+        <span className="font-medium">{t.delegatedSupport.noPersonalAgent}</span>
+        <span className="text-(--ui-text-secondary)">{t.delegatedSupport.noPersonalAgentHint}</span>
+        {switchFailed && <span role="status">{t.delegatedSupport.switchTargetFailed}</span>}
+        {switchButton}
+      </div>
+    )
+  }
+
+  if (!supportActive || !status) {
     return null
   }
 
@@ -71,21 +123,25 @@ export function DelegatedSupportBanner() {
 
   return (
     <div
-      aria-label={t.delegatedSupport.actingForCustomer(status.supportCustomerLabel)}
+      aria-label={t.delegatedSupport.actingForCustomer(String(status.supportCustomerLabel))}
       className="fixed inset-x-0 z-(--z-support-session) flex min-h-10 items-center justify-center gap-3 border-b border-(--ui-stroke-tertiary) bg-(--ui-bg-quaternary) px-4 py-2 text-sm text-(--ui-text-primary)"
       role="region"
       style={{ top: TITLEBAR_HEIGHT }}
     >
       <span aria-live="polite" className="sr-only" role="status">
-        {t.delegatedSupport.actingForCustomer(status.supportCustomerLabel)}
+        {t.delegatedSupport.actingForCustomer(String(status.supportCustomerLabel))}
       </span>
-      <span className="font-medium">{t.delegatedSupport.actingForCustomer(status.supportCustomerLabel)}</span>
-      <span className="text-(--ui-text-secondary)">{t.delegatedSupport.assignedAgent(status.supportAgentLabel)}</span>
+      <span className="font-medium">{t.delegatedSupport.actingForCustomer(String(status.supportCustomerLabel))}</span>
+      <span className="text-(--ui-text-secondary)">
+        {t.delegatedSupport.assignedAgent(String(status.supportAgentLabel))}
+      </span>
       <span className="tabular-nums text-(--ui-text-secondary)">
         {t.delegatedSupport.endsIn(formatRemaining(status.supportExpiresAt))}
       </span>
       {status.supportEndFailed && <span role="status">{t.delegatedSupport.endFailed}</span>}
-      <Button disabled={ending} onClick={() => void endSession()} size="sm" type="button" variant="destructive">
+      {switchFailed && <span role="status">{t.delegatedSupport.switchTargetFailed}</span>}
+      {switchButton}
+      <Button disabled={ending || switching} onClick={() => void endSession()} size="sm" type="button" variant="destructive">
         {ending ? t.delegatedSupport.endingSession : t.delegatedSupport.endSession}
       </Button>
     </div>

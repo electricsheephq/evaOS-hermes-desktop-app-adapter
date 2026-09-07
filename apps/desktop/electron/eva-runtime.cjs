@@ -23,6 +23,18 @@ const {
 const { createEvaWsRelay, normalizeEvaWsEndpoint, normalizeEvaWsProfile } = require('./eva-ws-relay.cjs')
 
 const RUNTIME_ENROLLMENT_RETRY_DELAYS_MS = Object.freeze([2_000, 5_000, 10_000, 20_000, 30_000])
+// `missing_hermes_agent_binding` means the signed-in identity owns no agent of
+// its own. An internal admin never has one, so every ordinary `runtime_launch`
+// for that account is rejected by design and the app used to sit in it
+// silently: 345 identical 403 lines in a single day, and no surface telling the
+// operator that the only way forward is a delegated support target. Back off
+// slowly rather than latching on the first rejection (a binding CAN be created
+// while the app is running), then publish one persistent, actionable state.
+const MISSING_AGENT_BINDING_CODE = 'missing_hermes_agent_binding'
+const MISSING_AGENT_BINDING_RETRY_DELAYS_MS = Object.freeze([30_000, 60_000, 120_000, 300_000])
+const MISSING_AGENT_BINDING_MAX_ATTEMPTS = MISSING_AGENT_BINDING_RETRY_DELAYS_MS.length
+const MISSING_AGENT_BINDING_MESSAGE =
+  'No personal agent for this account — use Switch support target to open a customer agent.'
 const SUPPORT_REQUEST_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._~-]{0,127}$/
 
 function createEvaManagedRuntime(options) {
@@ -57,6 +69,7 @@ function createEvaManagedRuntime(options) {
   let runtimeEnrollmentPromise = null
   let runtimeEnrollmentPromiseForced = false
   let runtimeEnrollmentFailure = null
+  let missingAgentBinding = false
   let pendingAuth = null
   let authGeneration = 0
   let runtimeGeneration = 0
@@ -503,7 +516,61 @@ function createEvaManagedRuntime(options) {
   }
 
   function resetRuntimeEnrollmentFailure() {
+    if (missingAgentBinding) {
+      missingAgentBinding = false
+      rememberLog('[eva-managed] cleared the no-personal-agent state')
+    }
     runtimeEnrollmentFailure = null
+  }
+
+  function isMissingAgentBindingError(error) {
+    return statusCodeOf(error) === 403 && error?.code === MISSING_AGENT_BINDING_CODE
+  }
+
+  // Returns the terminal error once the backoff budget is spent, otherwise
+  // null. Only the transition is logged: the retry itself stays silent so the
+  // forensic log carries one line per state change, not one per attempt.
+  function recordMissingAgentBindingFailure(error) {
+    const attempts =
+      (runtimeEnrollmentFailure?.code === MISSING_AGENT_BINDING_CODE ? runtimeEnrollmentFailure.attempts : 0) + 1
+    const terminal = attempts >= MISSING_AGENT_BINDING_MAX_ATTEMPTS
+    const delay =
+      MISSING_AGENT_BINDING_RETRY_DELAYS_MS[Math.min(attempts - 1, MISSING_AGENT_BINDING_RETRY_DELAYS_MS.length - 1)]
+    const published = terminal
+      ? new EvaBrokerError(MISSING_AGENT_BINDING_MESSAGE, 403, MISSING_AGENT_BINDING_CODE)
+      : error
+    runtimeEnrollmentFailure = {
+      attempts,
+      code: MISSING_AGENT_BINDING_CODE,
+      error: published,
+      nextRetryAt: terminal ? Number.POSITIVE_INFINITY : now() + delay
+    }
+    if (!terminal) return null
+    if (!missingAgentBinding) {
+      missingAgentBinding = true
+      rememberLog(
+        `[eva-managed] no personal agent for this account after ${attempts} attempt(s); switch support target required [code: ${MISSING_AGENT_BINDING_CODE}]`
+      )
+    }
+    return published
+  }
+
+  // Publish the safe reason before the enrollment error is rethrown so the
+  // renderer can dismiss CONNECTING and show its recovery actions.
+  function publishEnrollmentFailure(error) {
+    const message = enrollmentFailureMessage(error)
+    try {
+      updateBootProgress({
+        error: message,
+        message,
+        phase: 'eva.enroll.error',
+        progress: 100,
+        running: false
+      })
+    } catch {
+      // Progress publication must not replace the original enrollment
+      // error or change the auth/routing result.
+    }
   }
 
   function recordRuntimeEnrollmentFailure(error) {
@@ -965,26 +1032,22 @@ function createEvaManagedRuntime(options) {
         const statusCode = statusCodeOf(error)
         if (statusCode !== 401 && !isStaleAuthError(error)) {
           assertGeneration(auth, runtime)
-          if (isRetryableEnrollmentFailure(error)) {
+          if (isMissingAgentBindingError(error)) {
+            // Not a readiness fault and not transient: this account owns no
+            // agent. Retry on a widening schedule, then latch the actionable
+            // terminal state instead of the raw broker code.
+            const terminal = recordMissingAgentBindingFailure(error)
+            if (terminal) {
+              publishEnrollmentFailure(terminal)
+              throw terminal
+            }
+          } else if (isRetryableEnrollmentFailure(error)) {
             recordRuntimeEnrollmentFailure(error)
           } else {
             // A deterministic broker/readiness rejection is terminal for this
-            // boot attempt. Publish the safe reason before rethrowing so the
-            // renderer can dismiss CONNECTING and show its recovery actions.
+            // boot attempt.
             recordTerminalRuntimeEnrollmentFailure(error)
-            const message = enrollmentFailureMessage(error)
-            try {
-              updateBootProgress({
-                error: message,
-                message,
-                phase: 'eva.enroll.error',
-                progress: 100,
-                running: false
-              })
-            } catch {
-              // Progress publication must not replace the original enrollment
-              // error or change the auth/routing result.
-            }
+            publishEnrollmentFailure(error)
           }
         }
         throw error
@@ -1114,6 +1177,30 @@ function createEvaManagedRuntime(options) {
     return { ok: true }
   }
 
+  // The customer/agent picker is a dashboard surface (`/desktop-auth`), not an
+  // app surface, so the only route back to it is a fresh browser sign-in. This
+  // releases every authority the install currently holds first: an active lease
+  // goes through the same broker end path as the End control (signOut() only
+  // ends it best-effort, and an abandoned 1 h lease is exactly what makes the
+  // next attempt fail `delegated_support_conflict`), then the desktop session
+  // is revoked so the dashboard re-prompts for an account and a target instead
+  // of silently reusing the last one.
+  async function switchSupportTarget() {
+    if (currentState().delegatedSupport) {
+      const ended = await endDelegatedSupport()
+      if (ended?.ok !== true) {
+        throw new EvaBrokerError(
+          'End the current support session before switching support target.',
+          502,
+          'support-end-failed'
+        )
+      }
+    }
+    await signOut()
+    rememberLog('[eva-managed] switching support target; reopening Electric Sheep sign-in')
+    return signIn()
+  }
+
   async function refresh() {
     const previousState = currentState()
     const previousRuntime = previousState.delegatedSupport ?? previousState.runtime
@@ -1122,7 +1209,8 @@ function createEvaManagedRuntime(options) {
     const status = publicEvaEnrollmentStatus({
       ...state,
       runtime: state.delegatedSupport ? state.runtime : runtime,
-      supportEndError
+      supportEndError,
+      missingAgentBinding
     })
     if (
       !previousRuntime ||
@@ -1651,8 +1739,9 @@ function createEvaManagedRuntime(options) {
       return status
     },
     signOut,
+    switchSupportTarget,
     refresh,
-    status: () => publicEvaEnrollmentStatus({ ...currentState(), supportEndError })
+    status: () => publicEvaEnrollmentStatus({ ...currentState(), supportEndError, missingAgentBinding })
   }
 }
 
