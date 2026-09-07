@@ -58,7 +58,12 @@ describe('DelegatedSupportBanner', () => {
     expect(banner.getAttribute('aria-live')).toBeNull()
     expect(screen.queryByRole('alert')).toBeNull()
     expect(screen.getByRole('status').textContent).toBe('Acting for Customer')
-    expect(screen.getAllByRole('button')).toHaveLength(1)
+    // Still non-dismissible: the only controls are the two support actions —
+    // no close/dismiss affordance (adapter#91 added Switch support target).
+    expect(screen.getAllByRole('button').map(button => button.textContent)).toEqual([
+      'Switch support target…',
+      'End support session'
+    ])
 
     fireEvent.click(screen.getByRole('button', { name: 'End support session' }))
     await waitFor(() => expect(endSupportSession).toHaveBeenCalledTimes(1))

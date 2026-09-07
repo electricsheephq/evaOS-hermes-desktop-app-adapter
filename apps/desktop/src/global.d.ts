@@ -223,6 +223,7 @@ declare global {
         signOut: () => Promise<{ ok: boolean }>
         refresh: () => Promise<EvaManagedStatus>
         endSupportSession: () => Promise<{ ok: boolean }>
+        switchSupportTarget: () => Promise<EvaManagedStatus>
       }
       profile: {
         get: () => Promise<DesktopActiveProfile>
@@ -592,6 +593,8 @@ export interface EvaManagedStatus {
   supportDeadline?: null | string
   assignmentVersion?: null | string
   supportEndFailed?: boolean
+  /** This account owns no agent of its own; only a support target can proceed. */
+  missingAgentBinding?: boolean
 }
 
 export interface DesktopMarketplaceThemeFile {

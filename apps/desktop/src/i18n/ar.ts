@@ -206,6 +206,20 @@ export const ar = defineLocale({
   remoteDisplayBanner: {
     message: reason => `العرض البرمجي نشط — تم اكتشاف شاشة بعيدة (${reason}). تم تعطيل تسريع GPU لمنع الوميض.`
   },
+  delegatedSupport: {
+    actingForCustomer: customer => `العمل نيابةً عن ${customer}`,
+    assignedAgent: agent => `الوكيل: ${agent}`,
+    endsIn: countdown => `ينتهي خلال ${countdown}`,
+    endSession: 'إنهاء جلسة الدعم',
+    endingSession: 'جارٍ إنهاء جلسة الدعم…',
+    unavailable: 'حالة جلسة الدعم غير متاحة.',
+    endFailed: 'تعذّر إنهاء جلسة الدعم. حاول مرة أخرى.',
+    switchTarget: 'تبديل هدف الدعم…',
+    switchingTarget: 'جارٍ فتح تسجيل الدخول…',
+    switchTargetFailed: 'تعذّر بدء تبديل هدف الدعم. حاول مرة أخرى.',
+    noPersonalAgent: 'لا يوجد وكيل شخصي لهذا الحساب',
+    noPersonalAgentHint: 'استخدم «تبديل هدف الدعم» لفتح وكيل العميل.'
+  },
   titlebar: {
     hideSidebar: 'إخفاء الشريط الجانبي',
     showSidebar: 'إظهار الشريط الجانبي',

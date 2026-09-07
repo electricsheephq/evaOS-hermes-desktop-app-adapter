@@ -209,6 +209,21 @@ export const ja = defineLocale({
       `ソフトウェアレンダリングが有効です — リモートディスプレイを検出しました（${reason}）。ちらつきを防ぐため GPU アクセラレーションは無効化されています。`
   },
 
+  delegatedSupport: {
+    actingForCustomer: customer => `${customer} の代理として操作中`,
+    assignedAgent: agent => `エージェント: ${agent}`,
+    endsIn: countdown => `終了まで ${countdown}`,
+    endSession: 'サポートセッションを終了',
+    endingSession: 'サポートセッションを終了しています…',
+    unavailable: 'サポートセッションの状態を取得できません。',
+    endFailed: 'サポートセッションを終了できませんでした。もう一度お試しください。',
+    switchTarget: 'サポート対象を切り替え…',
+    switchingTarget: 'サインインを開いています…',
+    switchTargetFailed: 'サポート対象の切り替えを開始できませんでした。もう一度お試しください。',
+    noPersonalAgent: 'このアカウントには個人用エージェントがありません',
+    noPersonalAgentHint: '「サポート対象を切り替え」から顧客のエージェントを開いてください。'
+  },
+
   billingBlock: {
     titleNous: 'Nous クレジットが不足しています',
     titleProvider: provider => `クレジット不足 — ${provider}`,

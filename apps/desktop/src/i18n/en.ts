@@ -224,7 +224,12 @@ export const en: Translations = {
     endSession: 'End support session',
     endingSession: 'Ending support session…',
     unavailable: 'Support session status is unavailable.',
-    endFailed: 'Unable to end support session. Try again.'
+    endFailed: 'Unable to end support session. Try again.',
+    switchTarget: 'Switch support target…',
+    switchingTarget: 'Opening sign-in…',
+    switchTargetFailed: 'Unable to start the support target switch. Try again.',
+    noPersonalAgent: 'No personal agent for this account',
+    noPersonalAgentHint: 'Use Switch support target to open a customer agent.'
   },
 
   billingBlock: {

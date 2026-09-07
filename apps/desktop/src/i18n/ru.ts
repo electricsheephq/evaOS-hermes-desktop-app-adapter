@@ -215,6 +215,21 @@ export const ru = defineLocale({
       `Включён программный рендеринг — обнаружен удалённый дисплей (${reason}). GPU-ускорение отключено, чтобы избежать мерцания.`
   },
 
+  delegatedSupport: {
+    actingForCustomer: customer => `Работа от имени ${customer}`,
+    assignedAgent: agent => `Агент: ${agent}`,
+    endsIn: countdown => `Завершится через ${countdown}`,
+    endSession: 'Завершить сеанс поддержки',
+    endingSession: 'Завершение сеанса поддержки…',
+    unavailable: 'Статус сеанса поддержки недоступен.',
+    endFailed: 'Не удалось завершить сеанс поддержки. Попробуйте снова.',
+    switchTarget: 'Сменить объект поддержки…',
+    switchingTarget: 'Открывается вход…',
+    switchTargetFailed: 'Не удалось начать смену объекта поддержки. Попробуйте снова.',
+    noPersonalAgent: 'У этой учётной записи нет личного агента',
+    noPersonalAgentHint: 'Используйте «Сменить объект поддержки», чтобы открыть агента клиента.'
+  },
+
   billingBlock: {
     titleNous: 'Кредиты Nous закончились',
     titleProvider: provider => `Кредиты закончились — ${provider}`,

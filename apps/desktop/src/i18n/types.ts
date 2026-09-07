@@ -265,6 +265,11 @@ export interface Translations {
     endingSession: string
     unavailable: string
     endFailed: string
+    switchTarget: string
+    switchingTarget: string
+    switchTargetFailed: string
+    noPersonalAgent: string
+    noPersonalAgentHint: string
   }
 
   billingBlock: {
