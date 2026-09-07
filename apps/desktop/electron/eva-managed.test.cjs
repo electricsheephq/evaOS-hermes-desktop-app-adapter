@@ -145,6 +145,13 @@ test('evaOS Agent auth URL carries an S256 challenge and never leaks its verifie
   assert.equal(url.searchParams.has('fresh'), false)
   assert.equal(url.searchParams.has('agent_id'), false)
   assert.equal(url.toString().includes(verifier), false)
+  // Default stays the page-side picker; the in-app picker asks for a plain
+  // session with version 2, and nothing else is sendable.
+  assert.equal(url.searchParams.get('desktop_support_login_version'), '1')
+  const plain = new URL(buildEvaDesktopAuthUrl(challenge, 'state-12345678', EVA_MANAGED_POLICY, { supportLoginVersion: 2 }))
+  assert.equal(plain.searchParams.get('desktop_support_login_version'), '2')
+  assert.equal(plain.searchParams.get('switch_account'), '1')
+  assert.throws(() => buildEvaDesktopAuthUrl(challenge, 'state-12345678', EVA_MANAGED_POLICY, { supportLoginVersion: 3 }))
 })
 
 test('broker requests identify the actual Desktop package version', async () => {

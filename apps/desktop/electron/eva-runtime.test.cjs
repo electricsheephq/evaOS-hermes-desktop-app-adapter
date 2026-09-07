@@ -2735,16 +2735,64 @@ test('a binding created while the app is running recovers on the next forced lau
   assert.equal(logs.filter(line => line.includes('cleared the no-personal-agent state')).length, 1)
 })
 
-test('a switch that never reaches the browser keeps the no-personal-agent state', async t => {
+// In-app support target picker (sc#540): the switch never signs out, the
+// picker lists and creates over the desktop session, and the lease handle is
+// on disk before the claim and preserved through every failure that can strand
+// the server-side row.
+const SUPPORT_ACCOUNT_ID = '11111111-2222-4333-8444-555555555555'
+const SUPPORT_VM_ID = '66666666-7777-4888-9999-000000000000'
+const SUPPORT_REQUEST_ID = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'
+const SUPPORT_SESSION_ID = 'ffffffff-0000-4111-8222-333333333333'
+
+function supportTarget(overrides = {}) {
+  return {
+    customer_account_id: SUPPORT_ACCOUNT_ID,
+    customer_vm_id: SUPPORT_VM_ID,
+    profile_id: 'main',
+    acknowledged: true,
+    customer_label: 'Acme',
+    agent_label: 'Asuka',
+    ...overrides
+  }
+}
+
+function supportRequestCreated() {
+  return {
+    ok: true,
+    request_id: SUPPORT_REQUEST_ID,
+    support_session_id: SUPPORT_SESSION_ID,
+    request_expires_at: new Date(Date.now() + 2 * 60 * 1_000).toISOString()
+  }
+}
+
+function brokerRejection(status, code) {
+  const error = new EvaBrokerError(`Electric Sheep request failed (${status}). [code: ${code}]`, status, code)
+  error.brokerRejected = true
+  return error
+}
+
+function persistedSupportLease(statePath) {
+  try {
+    return JSON.parse(fs.readFileSync(statePath, 'utf8')).support_lease ?? null
+  } catch {
+    return null
+  }
+}
+
+test('a plain sign-in that never reaches the browser keeps the no-personal-agent state', async t => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-switch-support-target-handoff-failure-'))
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
   const statePath = path.join(directory, 'eva-enrollment.json')
   writeEnrollment(statePath)
+  let revoked = 0
   const runtime = makeManagedRuntime(statePath, {
     openExternal: async () => {
       throw new Error('no browser')
     },
-    revokeDesktopSession: async () => true,
+    revokeDesktopSession: async () => {
+      revoked += 1
+      return true
+    },
     launchRuntime: async () => {
       throw missingAgentBindingError()
     }
@@ -2754,26 +2802,521 @@ test('a switch that never reaches the browser keeps the no-personal-agent state'
   await assert.rejects(runtime.resolveBackend(), error => error.code === 'missing_hermes_agent_binding')
   assert.equal(runtime.status().missingAgentBinding, true)
 
-  // `signOut()` inside the switch clears the latch. A handoff that never
-  // completes must not leave the operator with no banner and no route back.
-  await assert.rejects(runtime.switchSupportTarget())
+  // The picker reported the broker rejected the session it has, so a fresh
+  // plain sign-in is forced. A handoff that never completes must not leave the
+  // operator with no banner and no route back.
+  await assert.rejects(runtime.switchSupportTarget({ signInAgain: true }))
 
   assert.equal(runtime.status().missingAgentBinding, true)
   assert.equal(runtime.status().delegatedSupportActive, false)
+  assert.equal(revoked, 0)
 })
 
-test('switching the support target ends the lease, revokes the session, and reopens the picker', async t => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-switch-support-target-'))
+test('switching the support target with a live session opens no browser and keeps the lease', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-switch-support-target-live-'))
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
   const statePath = path.join(directory, 'eva-enrollment.json')
   writeActiveEnrollment(statePath)
   const actions = []
-  const revoked = []
+  let opened = 0
+  let revoked = 0
+  const runtime = makeManagedRuntime(statePath, {
+    openExternal: async () => {
+      opened += 1
+    },
+    revokeDesktopSession: async () => {
+      revoked += 1
+      return true
+    },
+    brokerPost: async body => {
+      actions.push(body.action)
+      if (body.action === 'claim_internal_support_request') return supportEnrollment()
+      throw new Error(`unexpected action ${body.action}`)
+    }
+  })
+  t.after(() => runtime.close())
+
+  await runtime.claimSupportRequest('request-123')
+  const status = await runtime.switchSupportTarget()
+
+  // No sign-out, no end, no browser: the picker runs on the session in hand and
+  // the active lease is only ended once a new target is actually chosen.
+  assert.equal(opened, 0)
+  assert.equal(revoked, 0)
+  assert.deepEqual(actions, ['claim_internal_support_request'])
+  assert.equal(status.supportPickerAvailable, true)
+  assert.equal(status.delegatedSupportActive, true)
+  assert.equal(runtime.status().delegatedSupportActive, true)
+})
+
+test('switching the support target without a session requests a plain sign-in and keeps the no-agent latch', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-switch-support-target-plain-sign-in-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  const logs = []
+  let opened
+  let revoked = 0
+  const runtime = makeManagedRuntime(statePath, {
+    rememberLog: line => logs.push(line),
+    openExternal: async url => {
+      opened = new URL(url)
+    },
+    revokeDesktopSession: async () => {
+      revoked += 1
+      return true
+    },
+    pollDeviceCode: async () => ({ token: 'plain-desktop-session', expiresAt: FUTURE, email: 'employee@example.invalid' }),
+    launchRuntime: async () => {
+      throw missingAgentBindingError()
+    }
+  })
+  t.after(() => runtime.close())
+
+  const switching = runtime.switchSupportTarget()
+  await new Promise(resolve => setImmediate(resolve))
+
+  // Version 2 asks the page for a PLAIN session: no page-side picker, one
+  // "Continue as" click. Account choice is still forced.
+  assert.equal(opened.pathname, '/desktop-auth')
+  assert.equal(opened.searchParams.get('desktop_support_login_version'), '2')
+  assert.equal(opened.searchParams.get('switch_account'), '1')
+
+  await runtime.completeCallback(
+    `evaos-agent://auth/callback?device_code=ABCDEFGH&desktop_auth_state=${opened.searchParams.get('desktop_auth_state')}`
+  )
+  const status = await switching
+
+  // The admin's own-workspace 403 is expected here and must not fail the
+  // sign-in; it re-latches the banner under the picker instead.
+  assert.equal(status.email, 'employee@example.invalid')
+  assert.equal(status.desktopSessionActive, true)
+  assert.equal(status.supportPickerAvailable, true)
+  assert.equal(status.missingAgentBinding, true)
+  assert.equal(revoked, 0)
+  assert.equal(logs.some(line => line.includes('plain sign-in complete; enrollment deferred: missing_hermes_agent_binding')), true)
+})
+
+test('the in-app picker lists the directory over the desktop session and drops rows it cannot start', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-support-list-targets-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeActiveEnrollment(statePath)
+  const calls = []
+  const runtime = makeManagedRuntime(statePath, {
+    brokerPost: async (body, options) => {
+      calls.push({ body, desktopSession: options?.desktopSession })
+      return {
+        ok: true,
+        is_admin: true,
+        clients: [
+          {
+            customer_account_id: SUPPORT_ACCOUNT_ID,
+            customer_vm_id: SUPPORT_VM_ID,
+            display_name: ' Acme  Corp ',
+            assignment_allowed: true,
+            profiles: [{ profile_id: 'main', display_name: 'Asuka' }, { profile_id: 'bad profile!', display_name: 'x' }]
+          },
+          { customer_account_id: SUPPORT_ACCOUNT_ID, customer_vm_id: null, display_name: 'No VM', profiles: [{ profile_id: 'main', display_name: 'A' }] },
+          { customer_account_id: SUPPORT_ACCOUNT_ID, customer_vm_id: SUPPORT_VM_ID, display_name: 'No profiles', profiles: [] },
+          { customer_account_id: 'not-a-uuid', customer_vm_id: SUPPORT_VM_ID, display_name: 'Bad id', profiles: [{ profile_id: 'main', display_name: 'A' }] }
+        ]
+      }
+    }
+  })
+  t.after(() => runtime.close())
+
+  const result = await runtime.listSupportTargets()
+
+  assert.deepEqual(calls, [
+    { body: { action: 'list_internal_support_clients', directory_only: true }, desktopSession: 'desktop-token' }
+  ])
+  assert.deepEqual(result, {
+    ok: true,
+    is_admin: true,
+    clients: [
+      {
+        customer_account_id: SUPPORT_ACCOUNT_ID,
+        customer_vm_id: SUPPORT_VM_ID,
+        display_name: 'Acme Corp',
+        profiles: [{ profile_id: 'main', display_name: 'Asuka' }]
+      }
+    ]
+  })
+})
+
+test('starting a support target persists the lease handle before the claim and clears it after', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-support-start-happy-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeActiveEnrollment(statePath)
+  const calls = []
+  let leaseAtClaim = null
+  const runtime = makeManagedRuntime(statePath, {
+    brokerPost: async (body, options) => {
+      calls.push({ body, desktopSession: options?.desktopSession })
+      if (body.action === 'create_internal_support_request') return supportRequestCreated()
+      if (body.action === 'claim_internal_support_request') {
+        leaseAtClaim = persistedSupportLease(statePath)
+        return supportEnrollment(Date.now(), { support_session_id: SUPPORT_SESSION_ID })
+      }
+      throw new Error(`unexpected action ${body.action}`)
+    }
+  })
+  t.after(() => runtime.close())
+
+  const result = await runtime.startDelegatedSupport(supportTarget({ profile_id: 'main', extra: 'ignored' }))
+
+  assert.equal(result.ok, true)
+  assert.equal(result.status.delegatedSupportActive, true)
+  // Same body as the dashboard picker sends, on the desktop session.
+  assert.deepEqual(calls[0], {
+    body: {
+      action: 'create_internal_support_request',
+      customer_account_id: SUPPORT_ACCOUNT_ID,
+      customer_vm_id: SUPPORT_VM_ID,
+      profile_id: 'main',
+      acknowledged: true
+    },
+    desktopSession: 'desktop-token'
+  })
+  assert.deepEqual(calls[1].body, {
+    action: 'claim_internal_support_request',
+    desktop_support_profiles_version: 1,
+    request_id: SUPPORT_REQUEST_ID
+  })
+  // The handle was on disk when the claim ran, and the enrollment owns it now.
+  assert.equal(leaseAtClaim?.support_session_id, SUPPORT_SESSION_ID)
+  assert.equal(leaseAtClaim?.request_id, SUPPORT_REQUEST_ID)
+  assert.equal(leaseAtClaim?.phase, 'pending')
+  assert.equal(leaseAtClaim?.target_label, 'Acme / Asuka')
+  assert.equal(persistedSupportLease(statePath), null)
+  assert.equal(runtime.status().delegatedSupportActive, true)
+  assert.equal(runtime.status().supportCleanupPending, false)
+})
+
+test('an all-agents target carries the customer scope and never a profile', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-support-start-all-agents-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeActiveEnrollment(statePath)
+  const bodies = []
+  const runtime = makeManagedRuntime(statePath, {
+    brokerPost: async body => {
+      bodies.push(body)
+      if (body.action === 'create_internal_support_request') return supportRequestCreated()
+      if (body.action === 'claim_internal_support_request') return supportEnrollment(Date.now(), { support_session_id: SUPPORT_SESSION_ID })
+      throw new Error(`unexpected action ${body.action}`)
+    }
+  })
+  t.after(() => runtime.close())
+
+  const result = await runtime.startDelegatedSupport(supportTarget({ profile_id: '', profile_scope: 'customer' }))
+
+  assert.equal(result.ok, true)
+  assert.deepEqual(bodies[0], {
+    action: 'create_internal_support_request',
+    customer_account_id: SUPPORT_ACCOUNT_ID,
+    customer_vm_id: SUPPORT_VM_ID,
+    profile_id: '',
+    profile_scope: 'customer',
+    acknowledged: true
+  })
+})
+
+test('a claim that fails after create ends the pending row with the persisted handle', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-support-start-claim-failure-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeActiveEnrollment(statePath)
+  const actions = []
+  const runtime = makeManagedRuntime(statePath, {
+    brokerPost: async body => {
+      actions.push(body)
+      if (body.action === 'create_internal_support_request') return supportRequestCreated()
+      if (body.action === 'claim_internal_support_request') throw brokerRejection(403, 'delegated_support_denied')
+      if (body.action === 'internal_support_session_end') return { ok: true }
+      throw new Error(`unexpected action ${body.action}`)
+    }
+  })
+  t.after(() => runtime.close())
+
+  const result = await runtime.startDelegatedSupport(supportTarget())
+
+  assert.equal(result.ok, false)
+  assert.equal(result.reason, 'forbidden')
+  assert.deepEqual(
+    actions.map(body => body.action),
+    ['create_internal_support_request', 'claim_internal_support_request', 'internal_support_session_end']
+  )
+  assert.equal(actions[2].support_session_id, SUPPORT_SESSION_ID)
+  assert.equal(persistedSupportLease(statePath), null)
+  assert.equal(runtime.status().delegatedSupportActive, false)
+  assert.equal(runtime.status().desktopSessionActive, true)
+})
+
+test('a failed end after a failed claim keeps the handle and the next start retries it first', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-support-start-cleanup-retry-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeActiveEnrollment(statePath)
+  const actions = []
+  let ends = 0
+  let claims = 0
+  const runtime = makeManagedRuntime(statePath, {
+    brokerPost: async body => {
+      actions.push(body)
+      if (body.action === 'create_internal_support_request') return supportRequestCreated()
+      if (body.action === 'claim_internal_support_request') {
+        claims += 1
+        if (claims === 1) throw brokerRejection(503, 'broker_unavailable')
+        return supportEnrollment(Date.now(), { support_session_id: SUPPORT_SESSION_ID })
+      }
+      if (body.action === 'internal_support_session_end') {
+        ends += 1
+        if (ends === 1) throw new EvaBrokerError('evaOS Agent could not reach Electric Sheep.', null, 'transport-error')
+        return { ok: true }
+      }
+      throw new Error(`unexpected action ${body.action}`)
+    }
+  })
+  t.after(() => runtime.close())
+
+  const first = await runtime.startDelegatedSupport(supportTarget())
+
+  assert.equal(first.ok, false)
+  assert.equal(first.reason, 'error')
+  assert.equal(persistedSupportLease(statePath)?.phase, 'cleanup')
+  assert.equal(runtime.status().supportCleanupPending, true)
+  assert.equal(runtime.status().supportTargetLabel, 'Acme / Asuka')
+
+  const second = await runtime.startDelegatedSupport(supportTarget())
+
+  assert.equal(second.ok, true)
+  // The stranded row is ended before a new create, with the persisted id.
+  const secondRun = actions.slice(3)
+  assert.deepEqual(secondRun.map(body => body.action), [
+    'internal_support_session_end',
+    'create_internal_support_request',
+    'claim_internal_support_request'
+  ])
+  assert.equal(secondRun[0].support_session_id, SUPPORT_SESSION_ID)
+  assert.equal(persistedSupportLease(statePath), null)
+  assert.equal(runtime.status().supportCleanupPending, false)
+  assert.equal(runtime.status().delegatedSupportActive, true)
+})
+
+test('picker calls map broker rejections to typed states instead of throwing', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-support-typed-results-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeActiveEnrollment(statePath)
+  let next = null
+  let brokerCalls = 0
+  const runtime = makeManagedRuntime(statePath, {
+    brokerPost: async () => {
+      brokerCalls += 1
+      throw next
+    }
+  })
+  t.after(() => runtime.close())
+
+  // An undeployed broker answers the desktop session with a bare 401 exactly
+  // like a dead session does; both are "sign in again".
+  next = new EvaBrokerError('Electric Sheep request failed (401).', 401, 'broker-rejected')
+  next.brokerRejected = true
+  assert.deepEqual(await runtime.listSupportTargets(), {
+    ok: false,
+    reason: 'needs_sign_in',
+    code: 'broker-rejected',
+    message: 'Sign in to Electric Sheep again to choose a support target.'
+  })
+  next = brokerRejection(403, 'delegated_support_forbidden')
+  assert.equal((await runtime.listSupportTargets()).reason, 'forbidden')
+  next = brokerRejection(409, 'delegated_support_conflict')
+  assert.equal((await runtime.startDelegatedSupport(supportTarget())).reason, 'conflict')
+  next = brokerRejection(500, 'internal')
+  const failure = await runtime.startDelegatedSupport(supportTarget())
+  assert.equal(failure.reason, 'error')
+  assert.equal(failure.message, 'Electric Sheep request failed (500). [code: internal]')
+  assert.equal(brokerCalls, 4)
+
+  // Local validation never reaches the broker: consent is a literal true the
+  // operator gives, and the ids must already be well-formed.
+  const consent = await runtime.startDelegatedSupport(supportTarget({ acknowledged: 'yes' }))
+  assert.equal(consent.reason, 'error')
+  assert.equal(consent.code, 'support-acknowledgement-required')
+  const malformed = await runtime.startDelegatedSupport(supportTarget({ customer_vm_id: 'vm-1' }))
+  assert.equal(malformed.code, 'invalid-support-target')
+  assert.equal(brokerCalls, 4)
+  assert.equal(runtime.status().desktopSessionActive, true)
+})
+
+test('picker calls without a live desktop session report needs_sign_in without a broker call', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-support-no-session-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  let brokerCalls = 0
+  const runtime = makeManagedRuntime(statePath, {
+    brokerPost: async () => {
+      brokerCalls += 1
+      throw new Error('must not be called')
+    }
+  })
+  t.after(() => runtime.close())
+
+  assert.equal((await runtime.listSupportTargets()).reason, 'needs_sign_in')
+  assert.equal((await runtime.startDelegatedSupport(supportTarget())).reason, 'needs_sign_in')
+  assert.equal(brokerCalls, 0)
+  assert.equal(runtime.status().supportPickerAvailable, false)
+})
+
+test('starting a new target ends the active lease before the create', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-support-start-over-active-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeActiveEnrollment(statePath)
+  const actions = []
+  const runtime = makeManagedRuntime(statePath, {
+    brokerPost: async body => {
+      actions.push(body)
+      if (body.action === 'claim_internal_support_request') {
+        return supportEnrollment(Date.now(), body.request_id === SUPPORT_REQUEST_ID ? { support_session_id: SUPPORT_SESSION_ID } : {})
+      }
+      if (body.action === 'create_internal_support_request') return supportRequestCreated()
+      if (body.action === 'internal_support_session_end') return { ok: true }
+      throw new Error(`unexpected action ${body.action}`)
+    }
+  })
+  t.after(() => runtime.close())
+
+  await runtime.claimSupportRequest('request-123')
+  const result = await runtime.startDelegatedSupport(supportTarget())
+
+  assert.equal(result.ok, true)
+  assert.deepEqual(actions.map(body => body.action), [
+    'claim_internal_support_request',
+    'internal_support_session_end',
+    'create_internal_support_request',
+    'claim_internal_support_request'
+  ])
+  assert.equal(actions[1].support_session_id, 'support-session')
+  assert.equal(runtime.status().delegatedSupportActive, true)
+})
+
+test('a switch whose active lease cannot be ended reports the end failure and keeps the lease', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-support-start-end-failure-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeActiveEnrollment(statePath)
+  let creates = 0
+  const runtime = makeManagedRuntime(statePath, {
+    brokerPost: async body => {
+      if (body.action === 'claim_internal_support_request') return supportEnrollment()
+      if (body.action === 'internal_support_session_end') throw new EvaBrokerError('unavailable', 502, 'support-end-failed')
+      if (body.action === 'create_internal_support_request') {
+        creates += 1
+        return supportRequestCreated()
+      }
+      throw new Error(`unexpected action ${body.action}`)
+    }
+  })
+  t.after(() => runtime.close())
+
+  await runtime.claimSupportRequest('request-123')
+  const result = await runtime.startDelegatedSupport(supportTarget())
+
+  assert.equal(result.ok, false)
+  assert.equal(result.code, 'support-end-failed')
+  assert.equal(creates, 0)
+  assert.equal(runtime.status().delegatedSupportActive, true)
+  assert.equal(runtime.status().supportEndFailed, true)
+})
+
+test('sign-out keeps the lease handle when neither the remote end nor the revoke succeeds', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-signout-keeps-lease-handle-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeActiveEnrollment(statePath)
+  const ends = []
+  const runtime = makeManagedRuntime(statePath, {
+    brokerPost: async (body, options) => {
+      if (body.action === 'claim_internal_support_request') return supportEnrollment()
+      if (body.action === 'internal_support_session_end') {
+        ends.push({ id: body.support_session_id, desktopSession: options?.desktopSession })
+        throw new EvaBrokerError('evaOS Agent could not reach Electric Sheep.', null, 'transport-error')
+      }
+      throw new Error(`unexpected action ${body.action}`)
+    },
+    revokeDesktopSession: async () => false
+  })
+  t.after(() => runtime.close())
+
+  await runtime.claimSupportRequest('request-123')
+  assert.deepEqual(await runtime.signOut(), { ok: true })
+
+  // Still signed out and locally severed, but the id that can end the row
+  // survives in the tombstone for the next sign-in to retry.
+  const persisted = JSON.parse(fs.readFileSync(statePath, 'utf8'))
+  assert.equal(persisted.signed_out, true)
+  assert.equal(persisted.desktop ?? null, null)
+  assert.equal(persisted.delegated_support ?? null, null)
+  assert.deepEqual(ends, [{ id: 'support-session', desktopSession: 'desktop-token' }])
+  assert.equal(persisted.support_lease.support_session_id, 'support-session')
+  assert.equal(persisted.support_lease.phase, 'cleanup')
+  assert.equal(persisted.support_lease.target_label, 'Customer / Support agent')
+  assert.equal(runtime.status().signedOut, true)
+  assert.equal(runtime.status().delegatedSupportActive, false)
+  assert.equal(runtime.status().supportCleanupPending, true)
+})
+
+test('sign-out drops the lease handle once the revoke has ended the lease server-side', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-signout-revoke-ends-lease-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeActiveEnrollment(statePath)
+  const runtime = makeManagedRuntime(statePath, {
+    brokerPost: async body => {
+      if (body.action === 'claim_internal_support_request') return supportEnrollment()
+      if (body.action === 'internal_support_session_end') throw new EvaBrokerError('unavailable', 503, 'broker_unavailable')
+      throw new Error(`unexpected action ${body.action}`)
+    },
+    revokeDesktopSession: async () => true
+  })
+  t.after(() => runtime.close())
+
+  await runtime.claimSupportRequest('request-123')
+  assert.deepEqual(await runtime.signOut(), { ok: true })
+
+  assert.equal(persistedSupportLease(statePath), null)
+  assert.equal(runtime.status().supportCleanupPending, false)
+})
+
+test('a sign-in after a failed sign-out end retries the stranded lease and drops a definitive rejection', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-signin-retries-stranded-lease-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  fs.writeFileSync(
+    statePath,
+    JSON.stringify({
+      schema_version: 'evaos.eva_desktop_managed.v1',
+      signed_out: true,
+      support_lease: {
+        support_session_id: SUPPORT_SESSION_ID,
+        target_label: 'Acme / Asuka',
+        phase: 'cleanup',
+        recorded_at: new Date().toISOString()
+      }
+    })
+  )
+  const ends = []
+  const logs = []
   let opened
   const runtime = makeManagedRuntime(statePath, {
-    openExternal: async url => { opened = new URL(url) },
-    revokeDesktopSession: async token => { revoked.push(token); return true },
-    pollDeviceCode: async () => ({ token: 'switched-desktop-session', expiresAt: FUTURE, email: 'employee@example.invalid' }),
+    rememberLog: line => logs.push(line),
+    openExternal: async url => {
+      opened = new URL(url)
+    },
+    pollDeviceCode: async () => ({ token: 'next-desktop-session', expiresAt: FUTURE, email: 'employee@example.invalid' }),
     launchRuntime: async () => ({
       agentDisplayName: 'Asuka',
       agentId: 'main',
@@ -2782,63 +3325,104 @@ test('switching the support target ends the lease, revokes the session, and reop
       expiresAt: FUTURE,
       runtime: 'hermes',
       schemaVersion: 'evaos.hermes_desktop_enrollment.v1',
-      token: 'switched-runtime-token'
+      token: 'fresh-runtime-token'
     }),
-    brokerPost: async body => {
-      actions.push(body.action)
-      if (body.action === 'claim_internal_support_request') return supportEnrollment()
-      if (body.action === 'internal_support_session_end') return { ok: true }
+    brokerPost: async (body, options) => {
+      if (body.action === 'internal_support_session_end') {
+        ends.push({ id: body.support_session_id, desktopSession: options?.desktopSession })
+        // A different desktop session may not end it: settled, so it is dropped.
+        throw brokerRejection(403, 'delegated_support_denied')
+      }
       throw new Error(`unexpected action ${body.action}`)
     }
   })
   t.after(() => runtime.close())
 
-  await runtime.claimSupportRequest('request-123')
-  assert.equal(runtime.status().delegatedSupportActive, true)
-
-  const switching = runtime.switchSupportTarget()
+  assert.equal(runtime.status().supportCleanupPending, true)
+  const signingIn = runtime.signIn()
   await new Promise(resolve => setImmediate(resolve))
-
-  // The lease is released through the broker before the browser handoff, so no
-  // 1 h grant is left behind to collide with the next selection.
-  assert.equal(actions.includes('internal_support_session_end'), true)
-  assert.deepEqual(revoked, ['desktop-token'])
-  assert.equal(runtime.status().delegatedSupportActive, false)
-  // The reopened URL advertises the picker capability and forces account choice
-  // rather than silently reusing the previous target.
-  assert.equal(opened.pathname, '/desktop-auth')
-  assert.equal(opened.searchParams.get('desktop_support_login_version'), '1')
-  assert.equal(opened.searchParams.get('switch_account'), '1')
-
   await runtime.completeCallback(
     `evaos-agent://auth/callback?device_code=ABCDEFGH&desktop_auth_state=${opened.searchParams.get('desktop_auth_state')}`
   )
+  await signingIn
+  await new Promise(resolve => setImmediate(resolve))
 
-  const status = await switching
-
-  assert.equal(status.email, 'employee@example.invalid')
-  assert.equal(status.delegatedSupportActive, false)
+  assert.deepEqual(ends, [{ id: SUPPORT_SESSION_ID, desktopSession: 'next-desktop-session' }])
+  assert.equal(persistedSupportLease(statePath), null)
+  assert.equal(runtime.status().supportCleanupPending, false)
+  assert.equal(runtime.status().runtimeSessionActive, true)
+  assert.equal(logs.some(line => line.includes('stranded support lease dropped: delegated_support_denied')), true)
 })
 
-test('switching the support target refuses to abandon a lease the broker would not end', async t => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-switch-support-target-end-failure-'))
+test('boot ends a stranded lease handle left by an interrupted start', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-boot-ends-stranded-lease-'))
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
   const statePath = path.join(directory, 'eva-enrollment.json')
   writeActiveEnrollment(statePath)
-  let opened = 0
+  const persisted = JSON.parse(fs.readFileSync(statePath, 'utf8'))
+  persisted.support_lease = {
+    support_session_id: SUPPORT_SESSION_ID,
+    request_id: SUPPORT_REQUEST_ID,
+    target_label: 'Acme / Asuka',
+    phase: 'pending',
+    recorded_at: new Date().toISOString()
+  }
+  fs.writeFileSync(statePath, JSON.stringify(persisted))
+  const ends = []
   const runtime = makeManagedRuntime(statePath, {
-    openExternal: async () => { opened += 1 },
     brokerPost: async body => {
-      if (body.action === 'claim_internal_support_request') return supportEnrollment()
-      if (body.action === 'internal_support_session_end') throw new EvaBrokerError('unavailable', 502, 'support-end-failed')
+      if (body.action === 'internal_support_session_end') {
+        ends.push(body.support_session_id)
+        return { ok: true }
+      }
       throw new Error(`unexpected action ${body.action}`)
     }
   })
   t.after(() => runtime.close())
 
-  await runtime.claimSupportRequest('request-123')
-  await assert.rejects(runtime.switchSupportTarget(), error => error.code === 'support-end-failed')
-  assert.equal(opened, 0)
-  assert.equal(runtime.status().delegatedSupportActive, true)
-  assert.equal(runtime.status().supportEndFailed, true)
+  await new Promise(resolve => setImmediate(resolve))
+
+  assert.deepEqual(ends, [SUPPORT_SESSION_ID])
+  assert.equal(persistedSupportLease(statePath), null)
+  assert.equal(runtime.status().desktopSessionActive, true)
+  assert.equal(runtime.status().supportCleanupPending, false)
+})
+
+test('a stale lease handle is dropped on read instead of retried for the life of the install', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-stale-lease-handle-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeActiveEnrollment(statePath)
+  const persisted = JSON.parse(fs.readFileSync(statePath, 'utf8'))
+  persisted.support_lease = {
+    support_session_id: SUPPORT_SESSION_ID,
+    phase: 'cleanup',
+    recorded_at: new Date(Date.now() - 3 * 60 * 60 * 1_000).toISOString()
+  }
+  fs.writeFileSync(statePath, JSON.stringify(persisted))
+  let ends = 0
+  const runtime = makeManagedRuntime(statePath, {
+    brokerPost: async () => {
+      ends += 1
+      throw new Error('must not be called')
+    }
+  })
+  t.after(() => runtime.close())
+
+  await new Promise(resolve => setImmediate(resolve))
+
+  assert.equal(ends, 0)
+  assert.equal(runtime.status().supportCleanupPending, false)
+})
+
+test('a late callback with no pending sign-in is logged instead of dropped silently', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-late-callback-log-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  const logs = []
+  const runtime = makeManagedRuntime(statePath, { rememberLog: line => logs.push(line) })
+  t.after(() => runtime.close())
+
+  assert.equal(await runtime.completeCallback('evaos-agent://auth/callback?device_code=ABCDEFGH&desktop_auth_state=late'), false)
+  assert.deepEqual(logs, ['[eva-auth] callback ignored: no-pending'])
 })

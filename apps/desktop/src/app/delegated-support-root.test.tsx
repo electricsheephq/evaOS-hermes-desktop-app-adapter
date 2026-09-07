@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import type { EvaManagedStatus } from '@/global'
 import { I18nProvider } from '@/i18n'
+import { setSupportPickerOpen } from '@/store/support-picker'
 
 import App from './index'
 
@@ -39,6 +40,9 @@ function supportStatus(): EvaManagedStatus {
 afterEach(() => {
   cleanup()
   vi.restoreAllMocks()
+  // The picker's open state is a renderer store; a test that opened it must
+  // not leave the modal over the next test's banner.
+  setSupportPickerOpen(false)
 })
 
 describe('app-root delegated support controls', () => {
@@ -74,13 +78,16 @@ describe('app-root delegated support controls', () => {
   // adapter#91 / sc#540: an internal admin has no agent of their own, so the
   // ordinary enrollment is rejected 403 by design. The banner is the only
   // surface that survives that boot, so it carries the way out.
-  it('offers Switch support target from the no-personal-agent state', async () => {
+  it('offers Switch support target from the no-personal-agent state and opens the in-app picker', async () => {
     const status: EvaManagedStatus = { ...supportStatus(), delegatedSupportActive: false, missingAgentBinding: true }
-    const switchSupportTarget = vi.fn(async () => status)
+    const switchSupportTarget = vi.fn(async () => ({ ...status, supportPickerAvailable: true }))
+    const listSupportTargets = vi.fn(async () => ({ ok: true as const, is_admin: false, clients: [] }))
 
     Object.defineProperty(window, 'hermesDesktop', {
       configurable: true,
-      value: { eva: { status: async () => status, endSupportSession: async () => ({ ok: true }), switchSupportTarget } }
+      value: {
+        eva: { status: async () => status, endSupportSession: async () => ({ ok: true }), switchSupportTarget, listSupportTargets }
+      }
     })
 
     render(
@@ -91,8 +98,14 @@ describe('app-root delegated support controls', () => {
 
     expect(await screen.findByRole('region', { name: 'No personal agent for this account' })).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'End support session' })).toBeNull()
+    expect(screen.queryByRole('dialog')).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: 'Switch support target…' }))
     await waitFor(() => expect(switchSupportTarget).toHaveBeenCalledTimes(1))
+    // sc#540: the picker is an app surface over whatever the root shows — the
+    // 403 boot failure included — and it lists over the session the switch
+    // just guaranteed.
+    expect(await screen.findByRole('dialog', { name: 'Switch support target' })).toBeTruthy()
+    await waitFor(() => expect(listSupportTargets).toHaveBeenCalledTimes(1))
     expect(screen.getByText(gateway.state)).toBeTruthy()
   })
 
