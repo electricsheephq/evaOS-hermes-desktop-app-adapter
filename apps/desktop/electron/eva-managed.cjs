@@ -394,7 +394,19 @@ function makeAuthState(cryptoApi = crypto) {
   return String(cryptoApi.randomUUID())
 }
 
-function buildEvaDesktopAuthUrl(codeChallenge, authState, policy = EVA_MANAGED_POLICY) {
+// `desktop_support_login_version` tells the dashboard page who owns the
+// support-target choice: 1 = the page shows its picker and binds the chosen
+// target to the device code (browser picker); 2 = the page mints a PLAIN
+// session and never shows a picker, because the app picks the target itself
+// over the broker (`listSupportTargets`/`startDelegatedSupport`). The page
+// treats an unknown version as unsupported, so only these two are sendable.
+const EVA_SUPPORT_LOGIN_VERSIONS = new Set([1, 2])
+
+function buildEvaDesktopAuthUrl(codeChallenge, authState, policy = EVA_MANAGED_POLICY, options = {}) {
+  const supportLoginVersion = options?.supportLoginVersion ?? 1
+  if (!EVA_SUPPORT_LOGIN_VERSIONS.has(supportLoginVersion)) {
+    throw new Error('evaOS Agent desktop support login version is invalid.')
+  }
   const challenge = String(codeChallenge || '')
   if (!/^[A-Za-z0-9_-]{43}$/.test(challenge)) {
     throw new Error('evaOS Agent desktop code challenge is invalid.')
@@ -409,7 +421,7 @@ function buildEvaDesktopAuthUrl(codeChallenge, authState, policy = EVA_MANAGED_P
   url.searchParams.set('desktop_auth_state', String(authState))
   url.searchParams.set('desktop_code_challenge', challenge)
   url.searchParams.set('desktop_code_challenge_method', 'S256')
-  url.searchParams.set('desktop_support_login_version', '1')
+  url.searchParams.set('desktop_support_login_version', String(supportLoginVersion))
   url.searchParams.set('desktop_support_profiles_version', '1')
   url.searchParams.set('switch_account', '1')
   url.searchParams.set('prompt', 'select_account')
@@ -874,7 +886,15 @@ function publicEvaEnrollmentStatus(state, now = Date.now()) {
     // Terminal, actionable state for an account that owns no agent of its own.
     // Suppressed while a delegated session is active: the support target IS the
     // agent then, so the prompt would be wrong.
-    missingAgentBinding: state?.missingAgentBinding === true && !delegatedSupportActive
+    missingAgentBinding: state?.missingAgentBinding === true && !delegatedSupportActive,
+    // The in-app target picker needs only a live desktop session; kept as its
+    // own field so a later gate can tighten it without a renderer change.
+    supportPickerAvailable: Boolean(desktop && !expiresSoon(desktop.expiresAt, 0, now)),
+    // Lease handle the app persisted locally but that the enrollment does not
+    // own yet (a create→claim in flight) or no longer owns (a remote end that
+    // failed and is retried on the next sign-in/start).
+    supportTargetLabel: state?.supportLease?.targetLabel ?? null,
+    supportCleanupPending: state?.supportLease?.phase === 'cleanup'
   }
 }
 

@@ -6978,12 +6978,23 @@ function buildApplicationMenu() {
   const switchSupportTargetItem = {
     label: 'Switch Support Target…',
     click: () => {
-      void evaManagedRuntime.switchSupportTarget().catch(error => {
-        // Bounded machine code only — broker prose may carry account, customer
-        // or route detail.
-        const code = String(error?.code || '').match(/^[a-z][a-z0-9]*(?:[_-][a-z0-9]+)*$/)?.[0]
-        rememberLog(`[eva-support] switch support target rejected: ${code || 'switch-target-failed'}`)
-      })
+      // The picker itself lives in the renderer (sc#540). The runtime only
+      // guarantees a desktop session first — a plain browser sign-in when there
+      // is none — then the app root is asked to open the picker over whatever
+      // it is showing, boot failure included.
+      void evaManagedRuntime
+        .switchSupportTarget()
+        .then(() => {
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send('hermes:eva:support:open-picker')
+          }
+        })
+        .catch(error => {
+          // Bounded machine code only — broker prose may carry account, customer
+          // or route detail.
+          const code = String(error?.code || '').match(/^[a-z][a-z0-9]*(?:[_-][a-z0-9]+)*$/)?.[0]
+          rememberLog(`[eva-support] switch support target rejected: ${code || 'switch-target-failed'}`)
+        })
     }
   }
 
@@ -16504,7 +16515,14 @@ ipcMain.handle('hermes:eva:sign-in', async () => evaManagedRuntime.signIn())
 ipcMain.handle('hermes:eva:sign-out', async () => evaManagedRuntime.signOut())
 ipcMain.handle('hermes:eva:refresh', async () => evaManagedRuntime.refresh())
 ipcMain.handle('hermes:eva:support:end', async () => evaManagedRuntime.endSupportSession())
-ipcMain.handle('hermes:eva:support:switch-target', async () => evaManagedRuntime.switchSupportTarget())
+ipcMain.handle('hermes:eva:support:switch-target', async (_event, options) =>
+  evaManagedRuntime.switchSupportTarget(options)
+)
+// Both return typed results (`{ ok, reason, message }`) rather than throwing, so
+// a broker rejection reaches the picker as a state and never as an IPC error
+// string carrying the "Error invoking remote method" wrapper.
+ipcMain.handle('hermes:eva:support:list-targets', async () => evaManagedRuntime.listSupportTargets())
+ipcMain.handle('hermes:eva:support:start', async (_event, target) => evaManagedRuntime.startDelegatedSupport(target))
 
 ipcMain.handle('hermes:profile:get', async () => {
   if (!EVA_MANAGED_BUILD) {

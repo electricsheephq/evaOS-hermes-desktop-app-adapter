@@ -36,6 +36,137 @@ const MISSING_AGENT_BINDING_CODE = 'missing_hermes_agent_binding'
 const MISSING_AGENT_BINDING_MESSAGE =
   'No personal agent for this account — use Switch support target to open a customer agent.'
 const SUPPORT_REQUEST_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._~-]{0,127}$/
+// Mirrors the broker's own normalizers (internal-support.ts UUID_RE /
+// PROFILE_ID_RE) so a target the renderer hands over is rejected here, before
+// it becomes a broker round-trip.
+const SUPPORT_UUID_RE = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i
+const SUPPORT_PROFILE_ID_RE = /^[A-Za-z0-9_-]{1,120}$/
+const SUPPORT_LEASE_PHASES = new Set(['pending', 'cleanup'])
+// A delegated lease lives at most one hour server-side. A locally persisted
+// handle older than this cannot name anything still endable, so it is dropped
+// on read rather than retried on every sign-in for the life of the install.
+const SUPPORT_LEASE_RECORD_TTL_MS = 2 * 60 * 60 * 1_000
+const SUPPORT_LABEL_MAX_LENGTH = 120
+const SUPPORT_CLIENTS_MAX = 500
+const SUPPORT_PROFILES_MAX = 200
+const SUPPORT_SIGN_IN_REQUIRED_MESSAGE = 'Sign in to Electric Sheep again to choose a support target.'
+
+function boundedSupportLabel(value) {
+  const label = Array.from(String(value ?? ''))
+    .map(character => {
+      const codePoint = character.codePointAt(0)
+      return codePoint === undefined || codePoint <= 0x1f || codePoint === 0x7f ? ' ' : character
+    })
+    .join('')
+    .replace(/\s+/g, ' ')
+    .trim()
+  return label ? label.slice(0, SUPPORT_LABEL_MAX_LENGTH) : null
+}
+
+function normalizeSupportUuid(value) {
+  const normalized = String(value ?? '').trim().toLowerCase()
+  return SUPPORT_UUID_RE.test(normalized) ? normalized : null
+}
+
+// The lease handle the app persists next to the enrollment: written BEFORE the
+// claim so a crash or a failed claim still leaves something that can end the
+// server-side row, and kept after a failed remote end so the next sign-in or
+// start retries it. Never carries a credential.
+function normalizeSupportLease(raw, now) {
+  if (!raw || typeof raw !== 'object') return null
+  const supportSessionId = String(raw.support_session_id ?? '').trim()
+  if (!SUPPORT_REQUEST_ID_RE.test(supportSessionId)) return null
+  const recordedAt = Date.parse(String(raw.recorded_at || ''))
+  if (!supportSessionId || !SUPPORT_LEASE_PHASES.has(raw.phase) || !Number.isFinite(recordedAt)) return null
+  if (recordedAt + SUPPORT_LEASE_RECORD_TTL_MS <= now) return null
+  const requestId = String(raw.request_id || '')
+  return {
+    supportSessionId,
+    requestId: SUPPORT_REQUEST_ID_RE.test(requestId) ? requestId : null,
+    targetLabel: boundedSupportLabel(raw.target_label),
+    phase: raw.phase,
+    recordedAt: new Date(recordedAt).toISOString()
+  }
+}
+
+function serializeSupportLease(lease) {
+  return {
+    support_session_id: lease.supportSessionId,
+    ...(lease.requestId ? { request_id: lease.requestId } : {}),
+    ...(lease.targetLabel ? { target_label: lease.targetLabel } : {}),
+    phase: lease.phase,
+    recorded_at: lease.recordedAt
+  }
+}
+
+// Directory rows are broker-authored: keep only the fields the picker renders,
+// bounded, and only rows that can actually be started (a VM and ≥1 profile),
+// exactly as the dashboard picker filters them.
+function normalizeSupportClients(rows) {
+  const clients = []
+  for (const row of Array.isArray(rows) ? rows.slice(0, SUPPORT_CLIENTS_MAX) : []) {
+    const customerAccountId = normalizeSupportUuid(row?.customer_account_id)
+    const customerVmId = normalizeSupportUuid(row?.customer_vm_id)
+    if (!customerAccountId || !customerVmId) continue
+    const profiles = []
+    for (const profile of Array.isArray(row.profiles) ? row.profiles.slice(0, SUPPORT_PROFILES_MAX) : []) {
+      const profileId = String(profile?.profile_id ?? '').trim()
+      if (!SUPPORT_PROFILE_ID_RE.test(profileId)) continue
+      profiles.push({ profile_id: profileId, display_name: boundedSupportLabel(profile.display_name) ?? profileId })
+    }
+    if (!profiles.length) continue
+    clients.push({
+      customer_account_id: customerAccountId,
+      customer_vm_id: customerVmId,
+      display_name: boundedSupportLabel(row.display_name) ?? customerAccountId,
+      profiles
+    })
+  }
+  return clients
+}
+
+// The renderer's choice, validated into the exact body the dashboard picker
+// sends on `create_internal_support_request`. `acknowledged` is a required
+// literal true: the server refuses anything else and the app never asserts
+// consent on the operator's behalf.
+function normalizeSupportTarget(input) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    throw new EvaBrokerError('evaOS Agent received an invalid support target.', 400, 'invalid-support-target')
+  }
+  const customerAccountId = normalizeSupportUuid(input.customer_account_id)
+  const customerVmId = normalizeSupportUuid(input.customer_vm_id)
+  const allAgents = input.profile_scope === 'customer'
+  const rawProfileId = String(input.profile_id ?? '').trim()
+  const profileId = !allAgents && SUPPORT_PROFILE_ID_RE.test(rawProfileId) ? rawProfileId : null
+  if (!customerAccountId || !customerVmId || (!allAgents && !profileId)) {
+    throw new EvaBrokerError('evaOS Agent received an invalid support target.', 400, 'invalid-support-target')
+  }
+  if (input.acknowledged !== true) {
+    throw new EvaBrokerError('Support acknowledgement is required.', 400, 'support-acknowledgement-required')
+  }
+  const customerLabel = boundedSupportLabel(input.customer_label) ?? customerAccountId
+  const agentLabel = allAgents ? 'All authorized agents' : boundedSupportLabel(input.agent_label) ?? profileId
+  return {
+    body: {
+      customer_account_id: customerAccountId,
+      customer_vm_id: customerVmId,
+      profile_id: profileId ?? '',
+      ...(allAgents ? { profile_scope: 'customer' } : {}),
+      acknowledged: true
+    },
+    label: boundedSupportLabel(`${customerLabel} / ${agentLabel}`)
+  }
+}
+
+function normalizeSupportRequestCreated(payload) {
+  const requestId = String(payload?.request_id ?? '').trim()
+  const supportSessionId = String(payload?.support_session_id ?? '').trim()
+  const requestExpiresAt = Date.parse(String(payload?.request_expires_at || ''))
+  if (payload?.ok !== true || !SUPPORT_REQUEST_ID_RE.test(requestId) || !SUPPORT_REQUEST_ID_RE.test(supportSessionId) || !Number.isFinite(requestExpiresAt)) {
+    throw new EvaBrokerError('Electric Sheep returned an invalid support request.', 502, 'invalid-support-request')
+  }
+  return { requestId, supportSessionId, requestExpiresAt: new Date(requestExpiresAt).toISOString() }
+}
 
 function createEvaManagedRuntime(options) {
   if (
@@ -183,7 +314,22 @@ function createEvaManagedRuntime(options) {
       desktopCredentialUnreadable,
       supportSignInPending: parsed.support_sign_in_pending === true,
       rendererCleanupPending: parsed.renderer_cleanup_pending === true,
+      supportLease: normalizeSupportLease(parsed.support_lease, now()),
       signedOut: parsed.signed_out === true
+    }
+  }
+
+  // The lease handle outlives every other field, including the credential it
+  // was created under, so it is read straight from disk: a caller that does not
+  // name `supportLease` (most writes) carries it through unchanged, and only an
+  // explicit `null` clears it.
+  function persistedSupportLease() {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(statePath, 'utf8'))
+      if (!parsed || parsed.schema_version !== EVA_MANAGED_POLICY.schemaVersion) return null
+      return normalizeSupportLease(parsed.support_lease, now())
+    } catch {
+      return null
     }
   }
 
@@ -202,15 +348,17 @@ function createEvaManagedRuntime(options) {
   }
 
   function writeState(state) {
+    const supportLease = state?.supportLease === undefined ? persistedSupportLease() : state.supportLease
     if (!state?.desktop) {
-      if (!state?.signedOut && !state?.rendererCleanupPending) {
+      if (!state?.signedOut && !state?.rendererCleanupPending && !supportLease) {
         fs.rmSync(statePath, { force: true })
         return
       }
       atomicWrite({
         schema_version: EVA_MANAGED_POLICY.schemaVersion,
         signed_out: state?.signedOut === true,
-        ...(state.rendererCleanupPending ? { renderer_cleanup_pending: true } : {})
+        ...(state?.rendererCleanupPending ? { renderer_cleanup_pending: true } : {}),
+        ...(supportLease ? { support_lease: serializeSupportLease(supportLease) } : {})
       })
       return
     }
@@ -220,6 +368,7 @@ function createEvaManagedRuntime(options) {
       signed_out: false,
       ...(state.supportSignInPending ? { support_sign_in_pending: true } : {}),
       ...(state.rendererCleanupPending ? { renderer_cleanup_pending: true } : {}),
+      ...(supportLease ? { support_lease: serializeSupportLease(supportLease) } : {}),
       desktop: {
         token: options.encryptSecret(state.desktop.token),
         expires_at: state.desktop.expiresAt,
@@ -289,6 +438,28 @@ function createEvaManagedRuntime(options) {
     }
     delete persisted.renderer_cleanup_pending
     atomicWrite(persisted)
+  }
+
+  // Rewrites only the lease handle; every other persisted field is re-read so
+  // a concurrent enrollment write is never clobbered with a stale copy.
+  function persistSupportLease(lease) {
+    const latest = readState()
+    if (latest.desktopCredentialUnreadable) {
+      // Same tombstone discipline as the renderer-cleanup flag: never rewrite
+      // an encrypted enrollment through a state whose token could not be read.
+      let persisted
+      try {
+        persisted = JSON.parse(fs.readFileSync(statePath, 'utf8'))
+      } catch {
+        return
+      }
+      if (!persisted || persisted.schema_version !== EVA_MANAGED_POLICY.schemaVersion) return
+      if (lease) persisted.support_lease = serializeSupportLease(lease)
+      else delete persisted.support_lease
+      atomicWrite(persisted)
+      return
+    }
+    writeState({ ...latest, supportLease: lease })
   }
 
   function clearSupportExpiryTimer() {
@@ -613,9 +784,10 @@ function createEvaManagedRuntime(options) {
     }
   }
 
-  async function beginSignIn() {
+  async function beginSignIn(signInOptions = {}) {
     if (signInPromise) return signInPromise
 
+    const supportLoginVersion = signInOptions.plainSession === true ? 2 : 1
     const generation = authGeneration
     const task = (async () => {
       let stage = 'browser-sign-in'
@@ -650,7 +822,7 @@ function createEvaManagedRuntime(options) {
       pendingAuth = attempt
       try {
         await advanceBootProgress('eva.sign-in', 'Complete evaOS Agent sign-in in your browser', 14)
-        await options.openExternal(buildEvaDesktopAuthUrl(codeChallenge, authState))
+        await options.openExternal(buildEvaDesktopAuthUrl(codeChallenge, authState, EVA_MANAGED_POLICY, { supportLoginVersion }))
         let callbackTimer
         try {
           callbackTimer = setTimeout(() => {
@@ -889,6 +1061,20 @@ function createEvaManagedRuntime(options) {
     )
   }
 
+  async function endSupportSessionRemote(desktopToken, supportSessionId) {
+    const result = await postBroker(
+      {
+        action: 'internal_support_session_end',
+        support_session_id: supportSessionId
+      },
+      { desktopSession: desktopToken }
+    )
+    if (result?.ok !== true) {
+      throw new EvaBrokerError('Electric Sheep could not end the support session.', 502, 'support-end-failed')
+    }
+    return true
+  }
+
   async function requestDelegatedSupportEnd(state) {
     const support = state.delegatedSupport
     const desktop = state.desktop
@@ -896,17 +1082,188 @@ function createEvaManagedRuntime(options) {
     if (!desktop || expiresSoon(desktop.expiresAt, 0, now())) {
       throw new EvaBrokerError('Electric Sheep desktop session expired.', 401, 'session-expired')
     }
-    const result = await postBroker(
-      {
-        action: 'internal_support_session_end',
-        support_session_id: support.supportSessionId
-      },
-      { desktopSession: desktop.token }
-    )
-    if (result?.ok !== true) {
-      throw new EvaBrokerError('Electric Sheep could not end the support session.', 502, 'support-end-failed')
+    return endSupportSessionRemote(desktop.token, support.supportSessionId)
+  }
+
+  function desktopSessionLive(state) {
+    return Boolean(state?.desktop && !expiresSoon(state.desktop.expiresAt, 0, now()))
+  }
+
+  // The broker answered about the lease itself: it is gone, was never ours to
+  // end from this session, or the id is malformed. Retrying cannot change any
+  // of those, so the local handle is dropped. A dead desktop session (401), a
+  // broker outage or a transport failure keep it for the next attempt.
+  function isDefinitiveSupportEndRejection(error) {
+    if (error?.brokerRejected !== true) return false
+    const statusCode = statusCodeOf(error)
+    return statusCode === 400 || statusCode === 403 || statusCode === 404 || statusCode === 409 || statusCode === 410
+  }
+
+  // Broker outcomes the picker renders as states rather than as a thrown IPC
+  // error. 401 is deliberately "sign in again" AND "update required": until the
+  // broker accepts the desktop session for these actions it answers 401 too,
+  // and the operator's only move is the same in both cases.
+  function supportFlowFailure(error) {
+    const statusCode = statusCodeOf(error)
+    const code = String(error?.code || '').match(/^[a-z][a-z0-9]*(?:[_-][a-z0-9]+)*$/)?.[0] ?? null
+    if (statusCode === 401) {
+      return { ok: false, reason: 'needs_sign_in', code, message: SUPPORT_SIGN_IN_REQUIRED_MESSAGE }
     }
-    return true
+    if (statusCode === 403 && (code === 'delegated_support_forbidden' || code === 'delegated_support_denied')) {
+      return { ok: false, reason: 'forbidden', code, message: 'This account is not authorized for delegated support.' }
+    }
+    if (statusCode === 409 && code === 'delegated_support_conflict') {
+      return {
+        ok: false,
+        reason: 'conflict',
+        code,
+        message: 'Another support session for this account is still active. End it, then try again.'
+      }
+    }
+    return { ok: false, reason: 'error', code, message: enrollmentFailureMessage(error) }
+  }
+
+  function supportLeaseFromEnrollment(support) {
+    return {
+      supportSessionId: support.supportSessionId,
+      requestId: null,
+      targetLabel: boundedSupportLabel(`${support.supportCustomerLabel ?? ''} / ${support.supportAgentLabel ?? ''}`),
+      phase: 'cleanup',
+      recordedAt: new Date(now()).toISOString()
+    }
+  }
+
+  let supportLeaseCleanupPromise = null
+
+  // Ends a lease the app still holds a handle for but no enrollment: a claim
+  // that never completed, or a remote end that failed at sign-out. Runs at
+  // boot, after each sign-in and before each start, and only ever removes the
+  // handle once the broker has settled the row one way or the other.
+  function retrySupportLeaseCleanup(state = readState()) {
+    if (supportLeaseCleanupPromise) return supportLeaseCleanupPromise
+    const lease = state.supportLease
+    if (!lease) return Promise.resolve(true)
+    if (state.delegatedSupport?.supportSessionId === lease.supportSessionId) {
+      // The claim landed; the enrollment owns the handle from here on.
+      persistSupportLease(null)
+      return Promise.resolve(true)
+    }
+    if (!desktopSessionLive(state)) return Promise.resolve(false)
+    const task = (async () => {
+      try {
+        await endSupportSessionRemote(state.desktop.token, lease.supportSessionId)
+        persistSupportLease(null)
+        rememberLog('[eva-support] stranded support lease ended')
+        return true
+      } catch (error) {
+        if (isDefinitiveSupportEndRejection(error)) {
+          persistSupportLease(null)
+          rememberLog(`[eva-support] stranded support lease dropped: ${supportFlowFailure(error).code ?? 'broker-rejected'}`)
+          return true
+        }
+        if (lease.phase !== 'cleanup') persistSupportLease({ ...lease, phase: 'cleanup' })
+        rememberLog('[eva-support] stranded support lease end failed; retry pending')
+        return false
+      }
+    })().finally(() => {
+      supportLeaseCleanupPromise = null
+    })
+    supportLeaseCleanupPromise = task
+    return task
+  }
+
+  async function listSupportTargets() {
+    const state = currentState()
+    if (!desktopSessionLive(state)) {
+      return supportFlowFailure(new EvaBrokerError(SUPPORT_SIGN_IN_REQUIRED_MESSAGE, 401, 'sign-in-required'))
+    }
+    void retrySupportLeaseCleanup(state).catch(() => false)
+    let payload
+    try {
+      payload = await postBroker(
+        { action: 'list_internal_support_clients', directory_only: true },
+        { desktopSession: state.desktop.token }
+      )
+    } catch (error) {
+      return supportFlowFailure(error)
+    }
+    if (payload?.ok !== true || !Array.isArray(payload.clients)) {
+      return { ok: false, reason: 'error', code: 'invalid-support-directory', message: 'Electric Sheep returned an invalid customer directory.' }
+    }
+    return { ok: true, is_admin: payload.is_admin === true, clients: normalizeSupportClients(payload.clients) }
+  }
+
+  // create → persist handle → claim → launch. The handle is on disk before the
+  // claim so nothing after (b) can strand the server-side row without a way to
+  // end it; a failure after create ends the row with that handle, and a failed
+  // end keeps the handle for `retrySupportLeaseCleanup`.
+  async function startDelegatedSupport(input) {
+    let target
+    try {
+      target = normalizeSupportTarget(input)
+    } catch (error) {
+      return supportFlowFailure(error)
+    }
+    let state = currentState()
+    if (!desktopSessionLive(state)) {
+      return supportFlowFailure(new EvaBrokerError(SUPPORT_SIGN_IN_REQUIRED_MESSAGE, 401, 'sign-in-required'))
+    }
+    const auth = authGeneration
+    if (state.delegatedSupport) {
+      // The same broker end path as the End control: an abandoned 1 h lease is
+      // exactly what makes the next create fail `delegated_support_conflict`.
+      const ended = await endDelegatedSupport()
+      if (ended?.ok !== true) {
+        return {
+          ok: false,
+          reason: 'error',
+          code: 'support-end-failed',
+          message: 'End the current support session before switching support target.'
+        }
+      }
+    }
+    await retrySupportLeaseCleanup(currentState()).catch(() => false)
+    state = currentState()
+    if (auth !== authGeneration || !desktopSessionLive(state)) {
+      return supportFlowFailure(new EvaBrokerError(SUPPORT_SIGN_IN_REQUIRED_MESSAGE, 401, 'sign-in-required'))
+    }
+    const desktop = state.desktop
+    let created
+    try {
+      created = normalizeSupportRequestCreated(
+        await postBroker({ action: 'create_internal_support_request', ...target.body }, { desktopSession: desktop.token })
+      )
+    } catch (error) {
+      return supportFlowFailure(error)
+    }
+    const lease = {
+      supportSessionId: created.supportSessionId,
+      requestId: created.requestId,
+      targetLabel: target.label,
+      phase: 'pending',
+      recordedAt: new Date(now()).toISOString()
+    }
+    persistSupportLease(lease)
+    rememberLog('[eva-support] support request created; claiming from the app')
+    try {
+      const status = await claimSupportRequest(created.requestId)
+      persistSupportLease(null)
+      return { ok: true, status }
+    } catch (error) {
+      const failure = supportFlowFailure(error)
+      rememberLog(`[eva-support] in-app claim failed: ${failure.code ?? 'support-claim-failed'}`)
+      try {
+        await endSupportSessionRemote(desktop.token, lease.supportSessionId)
+        persistSupportLease(null)
+      } catch (endError) {
+        if (isDefinitiveSupportEndRejection(endError)) persistSupportLease(null)
+        else {
+          persistSupportLease({ ...lease, phase: 'cleanup' })
+          rememberLog('[eva-support] support request end failed after a failed claim; retry pending')
+        }
+      }
+      return failure
+    }
   }
 
   async function endDelegatedSupport() {
@@ -1092,7 +1449,12 @@ function createEvaManagedRuntime(options) {
 
   async function completeCallback(rawUrl) {
     const pending = pendingAuth
-    if (!pending) return false
+    if (!pending) {
+      // A late deep link (browser finished after the 180 s window, or after a
+      // sign-out) used to vanish without a trace; main.ts logs only throws.
+      rememberLog('[eva-auth] callback ignored: no-pending')
+      return false
+    }
     const callback = parseEvaDesktopAuthCallback(rawUrl, pending.authState)
     if (pendingAuth !== pending)
       throw new EvaBrokerError('evaOS Agent ignored a stale sign-in callback.', 409, 'stale-auth')
@@ -1106,7 +1468,8 @@ function createEvaManagedRuntime(options) {
     return true
   }
 
-  async function signIn() {
+  async function signIn(signInOptions = {}) {
+    const plainSession = signInOptions?.plainSession === true
     await requireRendererIsolation()
     if (currentState().delegatedSupport) {
       throw new EvaBrokerError('End the current support session before signing in again.', 409, 'support-session-active')
@@ -1136,61 +1499,84 @@ function createEvaManagedRuntime(options) {
     signInFailure = null
     writeState(emptyState())
     supportRevalidated = false
-    const desktop = await beginSignIn()
-    await ensureRuntimeEnrollment({ force: !currentState().delegatedSupport })
+    const desktop = await beginSignIn({ plainSession })
+    void retrySupportLeaseCleanup(currentState()).catch(() => false)
+    if (plainSession) {
+      // The picker is the next step, so an account that owns no agent of its
+      // own (the ordinary 403 for an internal admin) must not fail the sign-in;
+      // the latch it sets keeps the banner and its Switch entry in place.
+      try {
+        await ensureRuntimeEnrollment({ force: true })
+      } catch (error) {
+        const code = String(error?.code || '').match(/^[a-z][a-z0-9]*(?:[_-][a-z0-9]+)*$/)?.[0]
+        rememberLog(`[eva-managed] plain sign-in complete; enrollment deferred: ${code || 'enrollment-failed'}`)
+      }
+    } else {
+      await ensureRuntimeEnrollment({ force: !currentState().delegatedSupport })
+    }
     resetConnection()
     return publicEvaEnrollmentStatus({ desktop, runtime: currentState().runtime, delegatedSupport: currentState().delegatedSupport ?? null })
   }
 
+  // The local wipe stays first so the renderer that reboots during the reset
+  // can never resume the lease being ended, but the lease HANDLE moves into the
+  // tombstone before either remote call: a remote end and a revoke that both
+  // fail (offline, broker timeout) no longer lose the only id that can end the
+  // row. The handle is cleared once the broker settles it or the revoke (which
+  // ends bound leases server-side) succeeds, and retried on the next sign-in.
   async function signOut() {
     const state = currentState()
     invalidateAuthWork()
+    const auth = authGeneration
     signInFailure = null
     clearSupportExpiryTimer()
     supportEndError = null
     rendererResetPending = true
-    writeState({ ...emptyState(true), rendererCleanupPending: true })
+    const lease = state.delegatedSupport
+      ? supportLeaseFromEnrollment(state.delegatedSupport)
+      : state.supportLease ? { ...state.supportLease, phase: 'cleanup' } : null
+    writeState({ ...emptyState(true), rendererCleanupPending: true, supportLease: lease })
     resetConnection()
     wsRelay?.disconnectAll()
     const rendererReset = requestRendererReset()
-    if (state.delegatedSupport) {
-      const ended = await requestDelegatedSupportEnd(state).catch(() => false)
-      if (!ended) rememberLog('[eva-managed] support session remote end failed after local sign-out')
+    let released = !lease
+    if (lease && state.desktop) {
+      released = await endSupportSessionRemote(state.desktop.token, lease.supportSessionId)
+        .then(() => true)
+        .catch(error => isDefinitiveSupportEndRejection(error))
+      if (!released) rememberLog('[eva-managed] support session remote end failed after local sign-out; keeping the lease handle')
     }
-    if (state.desktop) await revokeDesktopSession(state.desktop.token).catch(() => false)
+    let revoked = false
+    if (state.desktop) revoked = await revokeDesktopSession(state.desktop.token).catch(() => false)
+    if (lease && (released || revoked) && auth === authGeneration && persistedSupportLease()?.supportSessionId === lease.supportSessionId) {
+      persistSupportLease(null)
+    }
     await rendererReset
     return { ok: true }
   }
 
-  // The customer/agent picker is a dashboard surface (`/desktop-auth`), not an
-  // app surface, so the only route back to it is a fresh browser sign-in. This
-  // releases every authority the install currently holds first: an active lease
-  // goes through the same broker end path as the End control (signOut() only
-  // ends it best-effort, and an abandoned 1 h lease is exactly what makes the
-  // next attempt fail `delegated_support_conflict`), then the desktop session
-  // is revoked so the dashboard re-prompts for an account and a target instead
-  // of silently reusing the last one.
-  async function switchSupportTarget() {
-    if (currentState().delegatedSupport) {
-      const ended = await endDelegatedSupport()
-      if (ended?.ok !== true) {
-        throw new EvaBrokerError(
-          'End the current support session before switching support target.',
-          502,
-          'support-end-failed'
-        )
-      }
+  // The target picker is an app surface now (`listSupportTargets` +
+  // `startDelegatedSupport` over the desktop session), so switching never signs
+  // out: a live desktop session is already everything the picker needs, and an
+  // active lease is ended by `startDelegatedSupport` only once a new target is
+  // actually chosen. With no live session (or when the picker reports the
+  // broker rejected the one it has) the browser is opened for a PLAIN sign-in
+  // — one-click "Continue as", no page-side picker — and the caller opens the
+  // picker once this resolves.
+  async function switchSupportTarget(switchOptions = {}) {
+    const signInAgain = switchOptions?.signInAgain === true
+    if (!signInAgain && desktopSessionLive(currentState())) {
+      return publicEvaEnrollmentStatus({ ...currentState(), supportEndError, missingAgentBinding })
     }
-    // `signOut()` clears the no-personal-agent latch through
+    // `signIn()` clears the no-personal-agent latch through
     // `invalidateAuthWork()`. That is right once the operator has landed on a
     // new target, but a cancelled browser or an expired device code must not
     // leave the app with no banner and no route back, so the recovery state is
     // restored when the handoff fails.
     const wasMissingAgentBinding = missingAgentBinding
-    await signOut()
-    rememberLog('[eva-managed] switching support target; reopening Electric Sheep sign-in')
+    rememberLog('[eva-managed] switching support target; requesting a plain Electric Sheep sign-in')
     try {
-      return await signIn()
+      await signIn({ plainSession: true })
     } catch (error) {
       if (wasMissingAgentBinding && !missingAgentBinding) {
         missingAgentBinding = true
@@ -1198,6 +1584,7 @@ function createEvaManagedRuntime(options) {
       }
       throw error
     }
+    return publicEvaEnrollmentStatus({ ...currentState(), supportEndError, missingAgentBinding })
   }
 
   async function refresh() {
@@ -1707,6 +2094,9 @@ function createEvaManagedRuntime(options) {
   } else {
     clearSupportExpiryTimer()
   }
+  // A handle left by a crash mid-start or a sign-out that could not reach the
+  // broker: end it now if the credential is readable, else on the next sign-in.
+  if (initialState.supportLease) void retrySupportLeaseCleanup(initialState).catch(() => false)
 
   return {
     delegatedProfiles: async () => {
@@ -1718,6 +2108,8 @@ function createEvaManagedRuntime(options) {
     completeCallback,
     endSupportSession: endDelegatedSupport,
     flushPendingRendererReset,
+    listSupportTargets,
+    startDelegatedSupport,
     freshWsUrl: async (input = {}) => {
       const request = typeof input === 'string' ? { profile: input } : input
       const runtime = await ensureRuntimeEnrollment()
