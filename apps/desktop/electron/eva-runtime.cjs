@@ -1456,6 +1456,15 @@ function createEvaManagedRuntime(options) {
       return supportFlowFailure(new EvaBrokerError(SUPPORT_SIGN_IN_REQUIRED_MESSAGE, 401, 'sign-in-required'))
     }
     const desktop = state.desktop
+    // `normalizeDesktopSession` accepts a session the broker returned without an
+    // email, and a handle with no actor counts as EVERY signed-in account's
+    // (`supportLeaseOwnedBy`). Creating support access from such a session would
+    // write a fresh unscoped handle that the next employee on a shared install
+    // retries with their own credential, earning the non-definitive 403 that
+    // blocks their own start until the lease expires. No identity, no lease.
+    if (!desktop.email) {
+      return supportFlowFailure(new EvaBrokerError(SUPPORT_SIGN_IN_REQUIRED_MESSAGE, 401, 'sign-in-required'))
+    }
     let created
     try {
       created = normalizeSupportRequestCreated(

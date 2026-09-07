@@ -3673,6 +3673,33 @@ test('End reaches a cleanup-only lease and a start refuses to create over it unt
   assert.equal(creates, 2)
 })
 
+test('a desktop session the broker returned without an email never creates an unscoped lease', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-support-no-actor-identity-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeActiveEnrollment(statePath)
+  const persisted = JSON.parse(fs.readFileSync(statePath, 'utf8'))
+  delete persisted.desktop.email
+  fs.writeFileSync(statePath, JSON.stringify(persisted))
+  const actions = []
+  const runtime = makeManagedRuntime(statePath, {
+    brokerPost: async body => {
+      actions.push(body.action)
+      throw new Error(`unexpected action ${body.action}`)
+    }
+  })
+  t.after(() => runtime.close())
+
+  // Nothing is created, so nothing needs a handle: the operator signs in again
+  // and gets a session that owns what it starts.
+  const start = await runtime.startDelegatedSupport(supportTarget())
+  assert.equal(start.ok, false)
+  assert.equal(start.reason, 'needs_sign_in')
+  assert.equal(start.code, 'sign-in-required')
+  assert.deepEqual(actions, [])
+  assert.equal(persistedSupportLease(statePath), null)
+})
+
 test('a confirmed end after a failed isolation drops the handle and the next start creates immediately', async t => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-support-confirmed-end-settles-'))
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
