@@ -96,6 +96,40 @@ describe('app-root delegated support controls', () => {
     expect(screen.getByText(gateway.state)).toBeTruthy()
   })
 
+  // A cancelled browser or an expired device code leaves the main process
+  // signed out but still without a personal agent, so the banner must survive
+  // the failure and keep offering the way out.
+  it('keeps the no-personal-agent banner and names the failure when the switch never starts', async () => {
+    const status: EvaManagedStatus = { ...supportStatus(), delegatedSupportActive: false, missingAgentBinding: true }
+
+    const switchSupportTarget = vi.fn(async () => {
+      throw new Error('no browser')
+    })
+
+    Object.defineProperty(window, 'hermesDesktop', {
+      configurable: true,
+      value: { eva: { status: async () => status, endSupportSession: async () => ({ ok: true }), switchSupportTarget } }
+    })
+
+    render(
+      <I18nProvider configClient={null} initialLocale="en">
+        <App />
+      </I18nProvider>
+    )
+
+    await screen.findByRole('region', { name: 'No personal agent for this account' })
+    fireEvent.click(screen.getByRole('button', { name: 'Switch support target…' }))
+    await waitFor(() => expect(switchSupportTarget).toHaveBeenCalledTimes(1))
+
+    expect(await screen.findByText('Unable to start the support target switch. Try again.')).toBeTruthy()
+    expect(screen.getByRole('region', { name: 'No personal agent for this account' })).toBeTruthy()
+
+    const retry = screen.getByRole('button', { name: 'Switch support target…' })
+    await waitFor(() => expect(retry.hasAttribute('disabled')).toBe(false))
+    fireEvent.click(retry)
+    await waitFor(() => expect(switchSupportTarget).toHaveBeenCalledTimes(2))
+  })
+
   it('offers Switch support target beside End during an active session', async () => {
     const status = supportStatus()
     const switchSupportTarget = vi.fn(async () => status)

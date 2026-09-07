@@ -200,6 +200,21 @@ export const zhHant = defineLocale({
     message: reason => `軟體繪圖已啟用 — 偵測到遠端顯示（${reason}）。為防止畫面閃爍，已停用 GPU 加速。`
   },
 
+  delegatedSupport: {
+    actingForCustomer: customer => `正在代表 ${customer}`,
+    assignedAgent: agent => `代理：${agent}`,
+    endsIn: countdown => `${countdown} 後結束`,
+    endSession: '結束支援工作階段',
+    endingSession: '正在結束支援工作階段…',
+    unavailable: '無法取得支援工作階段狀態。',
+    endFailed: '無法結束支援工作階段。請再試一次。',
+    switchTarget: '切換支援目標…',
+    switchingTarget: '正在開啟登入…',
+    switchTargetFailed: '無法開始切換支援目標。請再試一次。',
+    noPersonalAgent: '此帳戶沒有個人代理',
+    noPersonalAgentHint: '請使用「切換支援目標」開啟客戶代理。'
+  },
+
   billingBlock: {
     titleNous: 'Nous 額度已用盡',
     titleProvider: provider => `額度已用盡 — ${provider}`,

@@ -387,6 +387,7 @@ import { createBootstrapCoordinator, sshConfigFingerprint } from './ssh-bootstra
 import { collectSshConfigHosts, parseSshGOutput } from './ssh-config'
 import { createSshProbeConnection, pickLocalPort, redactSecrets, SshConnection } from './ssh-connection'
 import { createStreamThrottle } from './stream-throttle'
+import { supportTargetMenuPlacement } from './support-target-menu'
 import { registerTerminalIpc } from './terminal-ipc'
 import { nativeOverlayWidth as computeNativeOverlayWidth, macTitleBarOverlayHeight } from './titlebar-overlay-width'
 import {
@@ -6971,7 +6972,9 @@ function buildApplicationMenu() {
   // Second entry to the delegated-support picker, alongside the app-root
   // banner. The menu keeps working when the renderer is parked on a boot
   // failure or an enrollment the broker will never grant, which is exactly the
-  // state an internal admin with no agent of their own boots into.
+  // state an internal admin with no agent of their own boots into. macOS puts
+  // it in the application menu; Windows and Linux have none, so it goes in the
+  // File menu there (`supportTargetMenuPlacement`).
   const switchSupportTargetItem = {
     label: 'Switch Support Target…',
     click: () => {
@@ -6984,6 +6987,11 @@ function buildApplicationMenu() {
     }
   }
 
+  const supportTargetMenu = supportTargetMenuPlacement(switchSupportTargetItem, {
+    isMac: IS_MAC,
+    managed: EVA_MANAGED_BUILD
+  })
+
   if (IS_MAC) {
     template.push({
       label: APP_NAME,
@@ -6991,7 +6999,7 @@ function buildApplicationMenu() {
         { label: `About ${APP_NAME}`, click: () => showAboutPanelFresh() },
         checkForUpdatesItem,
         { type: 'separator' },
-        ...(EVA_MANAGED_BUILD ? [switchSupportTargetItem, { type: 'separator' }] : []),
+        ...supportTargetMenu.appMenu,
         { role: 'services' },
         { type: 'separator' },
         { role: 'hide' },
@@ -7015,6 +7023,7 @@ function buildApplicationMenu() {
       // flow through the renderer.
       { click: () => sendOpenFolderRequested(), label: 'Open Folder…' },
       { type: 'separator' },
+      ...supportTargetMenu.fileMenu,
       IS_MAC
         ? {
             // NO accelerator: on macOS a registered ⌘W is consumed by the OS

@@ -2653,7 +2653,7 @@ function missingAgentBindingError() {
   )
 }
 
-test('an own-workspace 403 backs off, latches one terminal state, and logs one line per state change', async t => {
+test('the first own-workspace 403 latches one terminal state and logs one line per state change', async t => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-missing-agent-binding-'))
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
   const statePath = path.join(directory, 'eva-enrollment.json')
@@ -2671,29 +2671,8 @@ test('an own-workspace 403 backs off, latches one terminal state, and logs one l
   })
   t.after(() => runtime.close())
 
-  const rejected = () =>
-    assert.rejects(runtime.resolveBackend(), error => error.code === 'missing_hermes_agent_binding')
-
-  await rejected()
-  assert.equal(launches, 1)
-  assert.equal(runtime.status().missingAgentBinding, false)
-
-  // Inside the current window the broker is not asked again.
-  clock += 29_000
-  await rejected()
-  assert.equal(launches, 1)
-
-  // 30s → 60s → 120s. The fourth rejection spends the budget.
-  for (const delay of [30_000, 60_000, 120_000]) {
-    clock += delay
-    await rejected()
-  }
-  assert.equal(launches, 4)
-  assert.equal(runtime.status().missingAgentBinding, true)
-
-  // Terminal: a day of polling adds no broker traffic and no new log lines, and
-  // every caller now receives the actionable message instead of the raw code.
-  clock += 24 * 60 * 60 * 1_000
+  // A missing capability, not a transient failure: the very first rejection
+  // publishes the actionable message and the state the banner renders from.
   await assert.rejects(
     runtime.resolveBackend(),
     error =>
@@ -2701,22 +2680,34 @@ test('an own-workspace 403 backs off, latches one terminal state, and logs one l
       error.code === 'missing_hermes_agent_binding' &&
       error.message === 'No personal agent for this account — use Switch support target to open a customer agent.'
   )
-  assert.equal(launches, 4)
+  assert.equal(launches, 1)
+  assert.equal(runtime.status().missingAgentBinding, true)
+
+  // Terminal: a day of polling adds no broker traffic and no new log lines, and
+  // every caller receives the actionable message instead of the raw code.
+  clock += 24 * 60 * 60 * 1_000
+  await assert.rejects(
+    runtime.resolveBackend(),
+    error =>
+      error.code === 'missing_hermes_agent_binding' &&
+      error.message === 'No personal agent for this account — use Switch support target to open a customer agent.'
+  )
+  assert.equal(launches, 1)
   assert.equal(logs.filter(line => line.includes('no personal agent for this account')).length, 1)
 })
 
-test('a binding created while the app is running still recovers before the budget is spent', async t => {
+test('a binding created while the app is running recovers on the next forced launch', async t => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-missing-agent-binding-recovery-'))
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
   const statePath = path.join(directory, 'eva-enrollment.json')
   writeEnrollment(statePath)
-  let clock = Date.parse('2026-09-07T10:00:00.000Z')
   let launches = 0
+  const logs = []
   const runtime = makeManagedRuntime(statePath, {
-    now: () => clock,
+    rememberLog: line => logs.push(line),
     launchRuntime: async () => {
       launches += 1
-      if (launches < 3) throw missingAgentBindingError()
+      if (launches < 2) throw missingAgentBindingError()
       return {
         agentDisplayName: 'Asuka',
         agentId: 'main',
@@ -2732,16 +2723,43 @@ test('a binding created while the app is running still recovers before the budge
   t.after(() => runtime.close())
 
   await assert.rejects(runtime.resolveBackend(), error => error.code === 'missing_hermes_agent_binding')
-  clock += 30_000
-  await assert.rejects(runtime.resolveBackend(), error => error.code === 'missing_hermes_agent_binding')
-  clock += 60_000
+  assert.equal(runtime.status().missingAgentBinding, true)
 
-  await runtime.resolveBackend()
+  // The operator action the banner and the boot overlay both drive: a forced
+  // re-enrollment. The latch is not sticky against a binding that now exists.
+  await runtime.refresh()
 
   assert.equal(runtime.status().agentId, 'main')
   assert.equal(runtime.status().runtimeSessionActive, true)
-  assert.equal(launches, 3)
   assert.equal(runtime.status().missingAgentBinding, false)
+  assert.equal(logs.filter(line => line.includes('cleared the no-personal-agent state')).length, 1)
+})
+
+test('a switch that never reaches the browser keeps the no-personal-agent state', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-switch-support-target-handoff-failure-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeEnrollment(statePath)
+  const runtime = makeManagedRuntime(statePath, {
+    openExternal: async () => {
+      throw new Error('no browser')
+    },
+    revokeDesktopSession: async () => true,
+    launchRuntime: async () => {
+      throw missingAgentBindingError()
+    }
+  })
+  t.after(() => runtime.close())
+
+  await assert.rejects(runtime.resolveBackend(), error => error.code === 'missing_hermes_agent_binding')
+  assert.equal(runtime.status().missingAgentBinding, true)
+
+  // `signOut()` inside the switch clears the latch. A handoff that never
+  // completes must not leave the operator with no banner and no route back.
+  await assert.rejects(runtime.switchSupportTarget())
+
+  assert.equal(runtime.status().missingAgentBinding, true)
+  assert.equal(runtime.status().delegatedSupportActive, false)
 })
 
 test('switching the support target ends the lease, revokes the session, and reopens the picker', async t => {
