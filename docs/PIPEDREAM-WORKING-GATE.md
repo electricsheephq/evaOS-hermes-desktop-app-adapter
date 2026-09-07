@@ -44,15 +44,37 @@ the standing regression tripwire. Red here with Layers 0–1 green = per-profile
 ## Layer 3 — real-workflow evidence (the only source of customer-facing claims)
 - David/jane: `evaos-provisioning-customer-scripts scripts/eval/fixtures/dorman-workflow-matrix.v1.yaml` (14 cells; provenance
   `evaos-provisioning-customer-scripts docs/eval-provenance/jane-dorman-workflows.md`, mined from 935 real turns). Runner:
-  `cd /root/evaos-eval/scripts && python3 eval/run_customer_matrix.py --fixture <filled fixture> \
-   --allowlist <allowlist> --output-dir /var/lib/evaos/eval/<name>` (filled fixtures live on-box
-  only, never committed).
+  `cd /root/evaos-eval/staging/<run-id>/scripts && python3 eval/run_customer_matrix.py \
+   --fixture <filled fixture> --allowlist <allowlist> \
+   --output-dir /var/lib/evaos/eval/<suite>/<run-id>/evidence` (filled fixtures live on-box only,
+  never committed).
 - Eric/Chris: `evaos-provisioning-customer-scripts scripts/eval/fixtures/wilder-workflow-matrix.v1.yaml` (16 cells; provenance
   `evaos-provisioning-customer-scripts docs/eval-provenance/eric-wilder-workflows.md`, mined from 10,890 OpenClaw transcripts).
 Baseline for comparison: jane 2026-08-12 06:39Z = 5P/3F/6INC (writes OFF), preserved in
 session-notes 2026-08-13 real-workflow-evals + published on support-control#546.
 Red here with Layers 0–2 green = AGENT behavior, not plumbing — grade against the 3 axes
 (artifact correctness · sequencing · honest failure), never "fix" by weakening a cell.
+
+### Protected evidence contract
+
+- `/root/evaos-eval/staging/<run-id>` is disposable staging. It may hold the task-local runner,
+  fixture, allowlist, and raw process streams while the run is active.
+- `/var/lib/evaos/eval/<suite>/<run-id>/evidence` is persistent evidence. Retain eval JSON,
+  redacted stdout/stderr, and a SHA-256 manifest there. Delete raw process streams after the
+  redacted copies and manifest are complete.
+- Session cleanup removes only the eval session rows. Routine task cleanup removes only the
+  exact staging directory. It must not remove persistent evidence. Evidence removal is a later,
+  separate exact-target action, after the protected local copy and aggregate receipt are accepted.
+- `tool_errors` is the bounded diagnostic source: each entry keeps the tool, category, exposed or
+  inferred HTTP/PostgREST code, bounded redacted message, truncation state, and SHA-256 of the
+  full redacted message. Logs may contain only a shorter preview.
+- Read both sides of the run window: eval evidence plus `agent.log`, `errors.log`, and the serving
+  unit journal. In a shared multiplex process, a requested profile's activity may be written to
+  the launch/default profile's log directory. Correlate by session and time; absence from the
+  requested profile's directory is not proof that the turn did not run.
+- Evidence and shareable receipts must not contain raw secrets, addresses, identifiers, prompts,
+  transcripts, configs, or provider payloads. Loopback evidence diagnoses only the named runtime
+  path; it does not prove ordinary chat behavior, workflow parity, or customer readiness.
 
 ## Layer 4 — the human surface
 One real end-user turn (Telegram, the actual profile) exercising a connector. This is what
