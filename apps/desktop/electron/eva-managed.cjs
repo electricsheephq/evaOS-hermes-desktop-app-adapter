@@ -904,7 +904,10 @@ function publicEvaEnrollmentStatus(state, now = Date.now()) {
     // failed or an enrollment a credential expiry erased) that End, the next
     // sign-in and the next start retry. Another employee's handle on this
     // install is not this account's to end, so it is not shown to it.
-    supportTargetLabel: (cleanupLease ?? ownedLeases[0])?.targetLabel ?? null,
+    // The customer/agent label names an assignment: shown only to an
+    // authenticated account the handle belongs to, never on the signed-out
+    // screen of a shared install. The generic cleanup affordance still shows.
+    supportTargetLabel: desktop?.email ? (cleanupLease ?? ownedLeases[0])?.targetLabel ?? null : null,
     supportCleanupPending
   }
 }

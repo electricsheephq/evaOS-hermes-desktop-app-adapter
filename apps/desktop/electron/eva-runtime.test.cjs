@@ -3363,6 +3363,9 @@ test('sign-out keeps the lease handle when neither the remote end nor the revoke
   assert.equal(runtime.status().signedOut, true)
   assert.equal(runtime.status().delegatedSupportActive, false)
   assert.equal(runtime.status().supportCleanupPending, true)
+  // The signed-out screen of a shared install shows the generic cleanup state,
+  // never the previous employee's customer assignment.
+  assert.equal(runtime.status().supportTargetLabel, null)
 })
 
 test('sign-out drops the lease handle once the revoke has ended the lease server-side', async t => {
@@ -3472,6 +3475,8 @@ test('a sign-in after a failed sign-out retries the stranded lease with the next
   assert.deepEqual(ends[1], { id: 'support-session', desktopSession: 'next-desktop-session' })
   assert.equal(persistedSupportLease(statePath)?.support_session_id, 'support-session')
   assert.equal(runtime.status().supportCleanupPending, true)
+  // Signed in as the owner again, the assignment label is shown once more.
+  assert.equal(runtime.status().supportTargetLabel, 'Customer / Support agent')
   assert.equal(runtime.status().runtimeSessionActive, true)
   assert.equal(logs.some(line => line.includes('stranded support lease end failed; retry pending')), true)
   assert.equal(logs.some(line => line.includes('stranded support lease dropped')), false)
