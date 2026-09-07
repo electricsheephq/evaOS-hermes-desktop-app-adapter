@@ -4,6 +4,7 @@
 // plugins do. Everything lives under ./contrib: the wiring (gateway boot,
 // sessions, streams) + pane surfaces, and the pane/layout registration.
 import { DelegatedSupportBanner } from '../components/delegated-support-banner'
+import { SupportTargetPickerOverlay } from '../components/support-target-picker'
 
 import { ContribController } from './contrib'
 
@@ -12,6 +13,7 @@ export default function App() {
     <>
       <ContribController />
       <DelegatedSupportBanner />
+      <SupportTargetPickerOverlay />
     </>
   )
 }

@@ -272,6 +272,36 @@ export interface Translations {
     noPersonalAgentHint: string
   }
 
+  // In-app support target picker (sc#540). An internal-operator surface:
+  // partial locales fall back to English through defineLocale().
+  supportPicker: {
+    title: string
+    intro: string
+    policy: string
+    loading: string
+    empty: string
+    customerAccount: string
+    chooseCustomer: string
+    agent: string
+    chooseAgent: string
+    allAgents: string
+    consent: string
+    start: string
+    starting: string
+    started: string
+    signInRequired: string
+    signIn: string
+    signingIn: string
+    forbidden: string
+    conflict: string
+    endSupport: string
+    endingSupport: string
+    loadFailed: string
+    retry: string
+    tryAgain: string
+    close: string
+  }
+
   billingBlock: {
     titleNous: string
     titleProvider: (provider: string) => string

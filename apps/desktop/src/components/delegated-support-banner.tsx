@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 
 import type { EvaManagedStatus } from '@/global'
 import { useI18n } from '@/i18n'
+import { setSupportPickerOpen } from '@/store/support-picker'
 
 import { TITLEBAR_HEIGHT } from '../app/shell/titlebar'
 
@@ -65,7 +66,10 @@ export function DelegatedSupportBanner() {
     setSwitchFailed(false)
 
     try {
+      // Resolves at once on a live desktop session; otherwise only after the
+      // plain browser sign-in lands. The picker itself is an app surface now.
       await window.hermesDesktop.eva.switchSupportTarget()
+      setSupportPickerOpen(true)
     } catch {
       // The main process already logged the bounded broker code; the operator
       // only needs to know the browser handoff did not start.

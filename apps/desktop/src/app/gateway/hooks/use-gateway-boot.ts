@@ -9,6 +9,7 @@ import { translateNow } from '@/i18n'
 import { isManagedEvaosAgent } from '@/i18n/managed-brand'
 import { desktopDefaultCwd } from '@/lib/desktop-fs'
 import { decideLivenessForceClose, LIVENESS_REPROBE_DELAY_MS } from '@/lib/gateway-liveness-policy'
+import { stripIpcErrorPrefix } from '@/lib/ipc-error'
 import { reconnectBackoffDelayMs } from '@/lib/reconnect-backoff'
 import { BACKEND_BOOT_WAIT_TIMEOUT_MS, RECONNECT_ATTEMPT_TIMEOUT_MS, withTimeout } from '@/lib/with-timeout'
 import {
@@ -1117,7 +1118,7 @@ export function useGatewayBoot({
         bootRetryAttempt = 0
       } catch (err) {
         if (!cancelled) {
-          const message = err instanceof Error ? err.message : String(err)
+          const message = stripIpcErrorPrefix(err instanceof Error ? err.message : String(err))
 
           const managedSignInRequired =
             isManagedEvaosAgent() && message.includes('Sign in to evaOS Agent from Settings')
