@@ -1812,6 +1812,20 @@ function createEvaManagedRuntime(options) {
     const wasMissingAgentBinding = missingAgentBinding
     const before = currentState()
     const previousEmail = before.desktop?.email ?? before.desktopEmail ?? null
+    if (before.delegatedSupport) {
+      // The forced re-sign-in exists because the broker rejected the desktop
+      // credential; the delegated enrollment that depends on it cannot be
+      // resumed either, and `signIn()` refuses while it exists. End the lease
+      // with the credential in hand if the broker still takes it; otherwise
+      // tear the enrollment down locally and keep its handle in cleanup, so the
+      // fresh session ends the row (same actor, any live session).
+      rememberLog('[eva-managed] switching support target with an active support session; ending it first')
+      const ended = await endDelegatedSupport()
+      if (ended?.ok !== true && currentState().delegatedSupport) {
+        rememberLog('[eva-managed] active support session could not be ended with the rejected credential; keeping its lease handle for cleanup')
+        await clearDelegatedSupportState(currentState())
+      }
+    }
     rememberLog('[eva-managed] switching support target; requesting a plain Electric Sheep sign-in')
     try {
       await signIn({ plainSession: true })

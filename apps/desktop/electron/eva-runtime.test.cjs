@@ -4118,3 +4118,55 @@ test('a plain sign-in that loses its session mid-enrollment reports the sign-out
   assert.equal(runtime.status().desktopSessionActive, false)
   assert.equal(runtime.status().supportPickerAvailable, false)
 })
+
+test('a forced re-sign-in during an active support session whose credential the broker rejects keeps the lease handle and ends it with the new session', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-switch-signin-again-active-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeActiveEnrollment(statePath)
+  const ends = []
+  let opened
+  const runtime = makeManagedRuntime(statePath, {
+    openExternal: async url => {
+      opened = new URL(url)
+    },
+    pollDeviceCode: async () => ({ token: 'next-desktop-session', expiresAt: FUTURE, email: 'employee@example.invalid' }),
+    launchRuntime: async () => freshRuntimeEnrollment(),
+    brokerPost: async (body, options) => {
+      if (body.action === 'claim_internal_support_request') return supportEnrollment()
+      if (body.action === 'internal_support_session_end') {
+        ends.push({ id: body.support_session_id, desktopSession: options?.desktopSession })
+        // The broker has invalidated the first desktop session: its end is
+        // refused exactly like the directory listing that sent the operator
+        // to the picker's Sign in action.
+        if (options?.desktopSession === 'desktop-token') throw brokerRejection(401, 'eva_desktop_session_required')
+        return { ok: true, status: 'ended' }
+      }
+      throw new Error(`unexpected action ${body.action}`)
+    }
+  })
+  t.after(() => runtime.close())
+
+  await runtime.claimSupportRequest('request-123')
+  assert.equal(runtime.status().delegatedSupportActive, true)
+
+  const switching = runtime.switchSupportTarget({ signInAgain: true })
+  await new Promise(resolve => setImmediate(resolve))
+  await runtime.completeCallback(
+    `evaos-agent://auth/callback?device_code=ABCDEFGH&desktop_auth_state=${opened.searchParams.get('desktop_auth_state')}`
+  )
+  const status = await switching
+  await new Promise(resolve => setImmediate(resolve))
+
+  // The sign-in was not refused; the row was ended with the NEW session once
+  // the old credential could not, and the handle went only on the broker's ok.
+  assert.deepEqual(ends, [
+    { id: 'support-session', desktopSession: 'desktop-token' },
+    { id: 'support-session', desktopSession: 'next-desktop-session' }
+  ])
+  assert.equal(status.delegatedSupportActive, false)
+  assert.equal(status.desktopSessionActive, true)
+  assert.equal(runtime.status().runtimeSessionActive, true)
+  assert.equal(persistedSupportLease(statePath), null)
+  assert.equal(runtime.status().supportCleanupPending, false)
+})
