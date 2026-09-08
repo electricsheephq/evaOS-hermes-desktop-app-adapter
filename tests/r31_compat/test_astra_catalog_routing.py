@@ -25,7 +25,10 @@ def test_account_catalog_retains_astra_without_synthesizing_entitlement():
         {"slug": "synthetic-hidden", "visibility": "hidden"},
     ]
     models = _finalize_codex_models(_ranked_slugs(entries))
-    assert models == ["gpt-6-astra"]
+    assert models == ["gpt-6-astra", "gpt-6-astra-900k"]
+    # The suffix selects a context window, not another account entitlement.
+    from agent.model_metadata import strip_codex_context_variant_suffix
+    assert {strip_codex_context_variant_suffix(model) for model in models} == {"gpt-6-astra"}
     assert "gpt-6-astra" not in _finalize_codex_models([])
 
 

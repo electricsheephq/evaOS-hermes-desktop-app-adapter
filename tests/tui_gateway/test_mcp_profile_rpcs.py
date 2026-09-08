@@ -206,8 +206,8 @@ def test_status_includes_named_profile_runtime_in_multiplex(hermes_root):
     with mcp_tool._lock:
         saved_servers = dict(mcp_tool._servers)
         saved_scopes = dict(mcp_tool._server_scope_keys)
-        mcp_tool._servers["shared"] = work_server  # type: ignore[assignment]
-        mcp_tool._server_scope_keys["shared"] = work_scope
+        mcp_tool._servers[(work_scope, "shared")] = work_server  # type: ignore[assignment]
+        mcp_tool._server_scope_keys[(work_scope, "shared")] = work_scope
 
     set_multiplex_active(True)
     try:

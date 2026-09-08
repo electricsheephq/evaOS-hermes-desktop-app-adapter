@@ -238,7 +238,7 @@ def _run_runtime_phase(
         "HERMES_BUNDLED_PLUGINS": str(hermes_home / "_empty-bundled-plugins"),
     }
     completed = subprocess.run(
-        [sys.executable, str(driver), phase, str(hermes_home)],
+        [sys.executable, "-B", str(driver), phase, str(hermes_home)],
         cwd=runtime_root,
         env=env,
         check=False,
