@@ -1,5 +1,6 @@
 # Unreleased
 
+- es.6: Adds the adapter#265 serve-side cron ticker gate consumed by pcs#812 for messaging-off managed profiles.
 - es.5: Sign out from the recovery screen; per-profile outages shown instead of an empty workspace.
 
 # evaOS Agent 2026.9.5-es.1 — candidate
