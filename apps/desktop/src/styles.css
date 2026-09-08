@@ -260,6 +260,8 @@
     --z-onboarding: 1300;
     --z-onboarding-popover: 1310;
     --z-setup: 1400;
+    /* Settings stays reachable while a boot-recovery surface owns setup. */
+    --z-setup-route: 1420;
     /* Ending delegated access must not depend on the customer's gateway boot. */
     --z-support-session: 1450;
     --z-crash: 1500;

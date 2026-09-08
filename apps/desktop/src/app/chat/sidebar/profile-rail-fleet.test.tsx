@@ -47,6 +47,7 @@ vi.mock('@/i18n', () => ({
         importProfile: 'Import profile…',
         manageProfiles: 'Manage profiles…',
         newProfile: 'New profile',
+        profileUnavailable: (name: string) => `${name} unavailable`,
         remoteOverride: {
           badge: (host: string) => `Runs on ${host}`,
           menuItem: 'Connect to a remote host…'
@@ -70,6 +71,7 @@ vi.mock('@/store/profile', () => ({
   $activeGatewayProfile: atom('default'),
   $profileColors: atom({}),
   $profileCreateRequest: atom(0),
+  $profileErrors: atom([]),
   $profileOrder: atom([]),
   $profiles: atom([{ is_default: true, name: 'default' }]),
   $profileScope: atom('default'),
@@ -123,7 +125,8 @@ const connectionsRegistry = connectionsStore.$connectionsRegistry as ReturnType<
   typeof atom<DesktopConnectionsRegistry | null>
 >
 
-const { $profiles, $profileScope } = await import('@/store/profile')
+const { $profileErrors, $profiles, $profileScope } = await import('@/store/profile')
+const profileErrors = $profileErrors as ReturnType<typeof atom<Array<{ profile: string; error: string }>>>
 const profiles = $profiles as ReturnType<typeof atom<Array<{ is_default: boolean; name: string }>>>
 const profileScope = $profileScope as ReturnType<typeof atom<string>>
 const { _resetFleetRosterForTests } = await import('@/store/fleet-roster')
@@ -209,6 +212,7 @@ afterEach(() => {
   activeConnectionId.set(null)
   profileScope.set('default')
   profiles.set([{ is_default: true, name: 'default' }])
+  profileErrors.set([])
   delete (window as { hermesDesktop?: unknown }).hermesDesktop
 })
 
@@ -220,6 +224,18 @@ describe('ProfileRail fleet mode', () => {
     expect(screen.queryByRole('group', { name: /^Profiles on/ })).toBeNull()
     expect(container.querySelector('[data-slot="profile-rail-divider"]')).toBeNull()
     expect(screen.getByRole('button', { name: 'Manage gateways…' })).toBeTruthy()
+  })
+
+  it('shows a compact notice for each unavailable profile', async () => {
+    profileErrors.set([
+      { profile: 'support', error: 'Profile temporarily unavailable.' },
+      { profile: 'sibling', error: 'Profile temporarily unavailable.' }
+    ])
+
+    await renderFleet()
+
+    expect(screen.getByText('support unavailable')).toBeTruthy()
+    expect(screen.getByText('sibling unavailable')).toBeTruthy()
   })
 
   it('lays every other gateway on the strip as an at-rest group, in switcher order', async () => {

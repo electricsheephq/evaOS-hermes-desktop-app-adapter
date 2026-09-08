@@ -993,10 +993,13 @@ test('admin profile discovery reads every granted agent even without sessions', 
   const scoped = await runtime.requestApi({ path: '/api/profiles?profile=quiet', profile: 'quiet' })
   assert.deepEqual(scoped.profiles.map(row => row.name), ['quiet'])
   wrongProfile = true
-  await assert.rejects(runtime.requestApi({ path: '/api/profiles' }), error => error.code === 'support-profile-mismatch')
+  const mismatched = await runtime.requestApi({ path: '/api/profiles' })
+  assert.deepEqual(mismatched.profiles.map(row => row.name), ['support', 'quiet'])
+  assert.deepEqual(mismatched.errors.map(error => error.profile), ['support', 'quiet'])
+  assert.equal(JSON.stringify(mismatched).includes('outside'), false)
 })
 
-test('admin project tree merges granted profiles and rejects mismatched session rows', async t => {
+test('admin project tree merges granted profiles and discards mismatched session rows per leaf', async t => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-support-tree-'))
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
   const statePath = path.join(directory, 'state.json')
@@ -1042,7 +1045,11 @@ test('admin project tree merges granted profiles and rejects mismatched session 
   const sessions = await runtime.requestApi({ path: '/api/profiles/sessions?profile=all' })
   assert.deepEqual(sessions.sessions.map(row => row.profile), ['sibling', 'support'])
   wrongProfile = true
-  for (const path of ['/api/profiles/projects/tree', '/api/profiles/sessions?profile=all', '/api/profiles/sessions/sidebar']) {
+  const mismatchedTree = await runtime.requestApi({ path: '/api/profiles/projects/tree' })
+  assert.equal(mismatchedTree.projects.length, 0)
+  assert.deepEqual(mismatchedTree.errors.map(error => error.profile), ['support', 'sibling'])
+  assert.equal(JSON.stringify(mismatchedTree).includes('outside'), false)
+  for (const path of ['/api/profiles/sessions?profile=all', '/api/profiles/sessions/sidebar']) {
     await assert.rejects(runtime.requestApi({ path }), error => error.code === 'support-profile-mismatch')
   }
 })
@@ -1123,6 +1130,11 @@ test('admin aggregate reads isolate unavailable profiles but reject authorizatio
       assert.ok(result.errors.some(entry => entry.profile === 'support'))
       assert.equal(JSON.stringify(result).includes('synthetic private'), false)
     }
+    failure = Object.assign(new Error('403: {"detail":"profile is not authorized"}'), { statusCode: 403 })
+    const refusedLeaf = await runtime.requestApi({ path: requestPath })
+    assert.equal((refusedLeaf.profiles ?? refusedLeaf.projects ?? refusedLeaf.sessions ?? refusedLeaf.recents.sessions).length, 1)
+    assert.ok(refusedLeaf.errors.some(entry => entry.profile === 'support'))
+
     failure = new EvaBrokerError('authorization revoked', 403, 'forbidden')
     await assert.rejects(runtime.requestApi({ path: requestPath }), error => error.statusCode === 403)
   }

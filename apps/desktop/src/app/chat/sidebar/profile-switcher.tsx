@@ -24,6 +24,7 @@ import { useNavigate } from 'react-router'
 
 import type { ProfileScope } from '@/api/client'
 import { CodeEditor } from '@/components/chat/code-editor'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Codicon } from '@/components/ui/codicon'
 import { ColorSwatches } from '@/components/ui/color-swatches'
@@ -48,7 +49,7 @@ import { getProfileSoul, updateProfileSoul } from '@/hermes'
 import { useI18n } from '@/i18n'
 import { sortConnectionsForDisplay } from '@/lib/connection-display'
 import { triggerHaptic } from '@/lib/haptics'
-import { Loader2 } from '@/lib/icons'
+import { AlertTriangle, Loader2 } from '@/lib/icons'
 import { PROFILE_SWATCHES, profileColorSoft, resolveProfileColor } from '@/lib/profile-color'
 import {
   REORDER_DRAG_TRANSITION_CSS,
@@ -69,6 +70,7 @@ import {
   $activeGatewayProfile,
   $profileColors,
   $profileCreateRequest,
+  $profileErrors,
   $profileOrder,
   $profiles,
   $profileScope,
@@ -149,6 +151,7 @@ export function ProfileRail() {
   const { t } = useI18n()
   const p = t.profiles
   const profiles = useStore($profiles)
+  const profileErrors = useStore($profileErrors)
   const scope = useStore($profileScope)
   const gatewayProfile = useStore($activeGatewayProfile)
   const order = useStore($profileOrder)
@@ -404,6 +407,13 @@ export function ProfileRail() {
       data-tour="profile-rail"
       role="group"
     >
+      {profileErrors.map(error => (
+        <Badge key={error.profile} size="xs" variant="warn">
+          <AlertTriangle />
+          {p.profileUnavailable(error.profile)}
+        </Badge>
+      ))}
+
       {/* Fleet: every gateway carries its own home square inside its group, so
           the pinned pill is purely the "all profiles on this gateway" toggle. */}
       {fleet && (

@@ -56,6 +56,7 @@ export const $activeProfile = atom<string>('default')
 // Cached profile list for the picker. Refreshed lazily; the dropdown also
 // re-fetches on open so a profile created elsewhere shows up.
 export const $profiles = atom<ProfileInfo[]>([])
+export const $profileErrors = atom<Array<{ profile: string; error: string }>>([])
 
 export function setActiveProfile(name: string): void {
   $activeProfile.set(name || 'default')
@@ -98,10 +99,13 @@ export function refreshProfiles(): Promise<ProfileInfo[]> {
 
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
       try {
-        const { profiles } = await getProfiles()
+        const { errors = [], profiles } = await getProfiles()
 
         if (epoch === profileListEpoch) {
-          $profiles.set(profiles)
+          batch(() => {
+            $profiles.set(profiles)
+            $profileErrors.set(errors)
+          })
         }
 
         return profiles

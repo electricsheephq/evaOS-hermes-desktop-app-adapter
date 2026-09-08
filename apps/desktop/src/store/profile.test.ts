@@ -36,6 +36,7 @@ vi.mock('@/store/starmap', () => ({ resetStarmapGraph }))
 
 const {
   $activeGatewayProfile,
+  $profileErrors,
   $profiles,
   ensureGatewayProfile,
   invalidateProfileListFetches,
@@ -76,6 +77,7 @@ beforeEach(() => {
   $activeGatewayProfile.set('default')
   $connection.set(localConn())
   $profiles.set([])
+  $profileErrors.set([])
   vi.stubGlobal('window', { hermesDesktop: { getConnection } })
   vi.mocked(invalidateProfileScopedQueries).mockClear()
   resetStarmapGraph.mockClear()
@@ -243,6 +245,18 @@ describe('refreshProfiles shared rail list (#49289)', () => {
     await refreshProfiles()
 
     expect($profiles.get().map(profile => profile.name)).toEqual(['default'])
+  })
+
+  it('publishes per-profile outages alongside the partial profile list', async () => {
+    vi.mocked(getProfiles).mockResolvedValueOnce({
+      profiles: [profile('default', true)],
+      errors: [{ profile: 'support', error: 'Profile temporarily unavailable.' }]
+    })
+
+    await refreshProfiles()
+
+    expect($profiles.get().map(profile => profile.name)).toEqual(['default'])
+    expect($profileErrors.get()).toEqual([{ profile: 'support', error: 'Profile temporarily unavailable.' }])
   })
 
   it('recovers from transient failures and writes the returned profile list (#70679)', async () => {

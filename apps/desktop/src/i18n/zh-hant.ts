@@ -1633,6 +1633,7 @@ export const zhHant = defineLocale({
     failedExport: '匯出設定檔失敗',
     allProfiles: '全部設定檔',
     showAllProfiles: '顯示全部設定檔',
+    profileUnavailable: name => `${name} 無法使用`,
     switchToProfile: name => `切換至 ${name}`,
     switchToConnection: name => `切換至 ${name}`,
     switchConnectionFailed: name => `無法連線至 ${name}`,

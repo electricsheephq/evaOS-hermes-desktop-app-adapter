@@ -1,3 +1,7 @@
+# Unreleased
+
+- es.5: Sign out from the recovery screen; per-profile outages shown instead of an empty workspace.
+
 # evaOS Agent 2026.9.5-es.1 — candidate
 
 This paired update brings the Mac app and managed Hermes runtime onto the same

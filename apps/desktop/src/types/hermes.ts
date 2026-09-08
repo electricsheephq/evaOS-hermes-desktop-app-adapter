@@ -1036,6 +1036,7 @@ export interface ProfileSoul {
 
 export interface ProfilesResponse {
   profiles: ProfileInfo[]
+  errors?: Array<{ profile: string; error: string }>
 }
 
 export interface SkillInfo {
