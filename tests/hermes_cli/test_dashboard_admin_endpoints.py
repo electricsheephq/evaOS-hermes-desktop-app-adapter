@@ -1065,7 +1065,7 @@ def test_desktop_lifespan_reaps_orphan_gateways_on_startup(
     # Keep the lifespan cheap: don't re-import the gateway module or spin up the
     # real cron scheduler thread.
     monkeypatch.setattr(ws, "_warm_gateway_module", lambda: None)
-    monkeypatch.setattr(ws, "_start_desktop_cron_ticker", lambda *_args: None)
+    monkeypatch.setattr(ws, "_start_serve_cron_ticker", lambda *_args: None)
     # web_server imports the reaper lazily from hermes_cli.gateway, so patch it
     # on that module.
     import hermes_cli.gateway as g
@@ -1094,7 +1094,7 @@ def test_desktop_lifespan_terminates_managed_gateway_restart(monkeypatch):
 
     monkeypatch.setenv("HERMES_DESKTOP", "1")
     monkeypatch.setattr(ws, "_warm_gateway_module", lambda: None)
-    monkeypatch.setattr(ws, "_start_desktop_cron_ticker", lambda *_args: None)
+    monkeypatch.setattr(ws, "_start_serve_cron_ticker", lambda *_args: None)
     monkeypatch.setitem(_web_server_gateway._ACTION_PROCS, "gateway-restart", _FakeRunningProc())
 
     client, _header = _client()
