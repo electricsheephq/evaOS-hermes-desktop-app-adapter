@@ -262,6 +262,13 @@
     --z-setup: 1400;
     /* Settings stays reachable while a boot-recovery surface owns setup. */
     --z-setup-route: 1420;
+    --z-setup-route-modal-backdrop: 1422;
+    --z-setup-route-modal: 1424;
+    --z-setup-route-modal-popover: 1426;
+    --z-setup-route-over-modal: 1430;
+    --z-setup-route-over-modal-content: 1432;
+    --z-setup-route-switcher-backdrop: 1434;
+    --z-setup-route-switcher: 1436;
     /* Ending delegated access must not depend on the customer's gateway boot. */
     --z-support-session: 1450;
     --z-crash: 1500;
@@ -795,6 +802,18 @@
     background: var(--ui-selection-background);
     color: inherit;
   }
+}
+
+/* Settings is body-portaled above boot recovery. Its own body-portaled dialogs,
+   menus, tooltips, and switchers must follow it without overtaking support. */
+body:has(.settings-overlay) {
+  --z-modal-backdrop: var(--z-setup-route-modal-backdrop);
+  --z-modal: var(--z-setup-route-modal);
+  --z-modal-popover: var(--z-setup-route-modal-popover);
+  --z-over-modal: var(--z-setup-route-over-modal);
+  --z-over-modal-content: var(--z-setup-route-over-modal-content);
+  --z-switcher-backdrop: var(--z-setup-route-switcher-backdrop);
+  --z-switcher: var(--z-setup-route-switcher);
 }
 
 .dither {

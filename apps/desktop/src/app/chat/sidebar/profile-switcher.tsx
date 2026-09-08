@@ -407,12 +407,16 @@ export function ProfileRail() {
       data-tour="profile-rail"
       role="group"
     >
-      {profileErrors.map(error => (
-        <Badge key={error.profile} size="xs" variant="warn">
-          <AlertTriangle />
-          {p.profileUnavailable(error.profile)}
-        </Badge>
-      ))}
+      {profileErrors.length > 0 && (
+        <div className="flex min-w-0 max-w-48 shrink gap-1 overflow-x-auto">
+          {profileErrors.map(error => (
+            <Badge key={error.profile} className="shrink-0" size="xs" variant="warn">
+              <AlertTriangle />
+              {p.profileUnavailable(error.profile)}
+            </Badge>
+          ))}
+        </div>
+      )}
 
       {/* Fleet: every gateway carries its own home square inside its group, so
           the pinned pill is purely the "all profiles on this gateway" toggle. */}

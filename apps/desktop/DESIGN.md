@@ -239,7 +239,8 @@ Sizes: `default`, `xs`, `overlay` (titlebar glyph counts).
   (toasts, tooltips, command surfaces) and `--z-over-modal-content`,
   `--z-switcher-backdrop` / `--z-switcher`, then the boot chain
   `--z-connecting` → `--z-onboarding` → `--z-setup` → `--z-setup-route`
-  (Settings remains reachable over setup/recovery) → `--z-support-session`
+  (Settings remains reachable over setup/recovery, with its body-portaled UI on
+  the adjacent `--z-setup-route-*` rungs) → `--z-support-session`
   (delegated identity/countdown/End stays usable when the gateway fails) → `--z-crash`. Plain
   `z-10`/`z-20` are still right for stacking *within* one component.
 

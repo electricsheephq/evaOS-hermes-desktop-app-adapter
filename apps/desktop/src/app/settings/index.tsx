@@ -449,7 +449,7 @@ export function SettingsView({ onClose, onConfigSaved, onMainModelChanged }: Set
       closeLabel={t.settings.closeSettings}
       edgeBadge={searchPill}
       onClose={onClose}
-      surfaceClassName="z-(--z-setup-route)"
+      surfaceClassName="settings-overlay z-(--z-setup-route)"
     >
       <OverlaySplitLayout>
         <OverlayNav footer={navFooter} groups={navGroups} />
