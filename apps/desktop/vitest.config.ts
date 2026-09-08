@@ -28,6 +28,7 @@ const electronNative: TestProjectConfiguration = {
     // test:managed (or their named repro command), not Vitest suites.
     exclude: [
       'scripts/run-short-session-hang-repro.test.mjs',
+      'scripts/tasks-scroll.test.mjs',
       'scripts/notarize.test.mjs',
       'scripts/sign-mac.test.mjs',
       'scripts/verify-managed-update-release.test.mjs'

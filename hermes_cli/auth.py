@@ -1241,12 +1241,14 @@ def write_credential_pool(
     removed_ids: Optional[Iterable[str]] = None,
     target_path: Optional[Path] = None,
     base_entries: Optional[Iterable[Dict[str, Any]]] = None,
+    status_cleared_ids: Optional[Iterable[str]] = None,
 ) -> Path:
     """Persist one provider's credential pool under auth.json.
 
     Final disk-boundary sanitizer for borrowed credentials (callers may pass raw dicts). Entries on
     disk but missing from *entries* (added concurrently) are merged back unless in *removed_ids*.
     Managed shared callers may provide the pre-mutation ``base_entries`` for a three-way merge.
+    Explicit status resets bypass cooldown recency without bypassing shared-store concurrency.
     """
     removed = {rid for rid in (removed_ids or ()) if rid}
     active_path = _auth_file_path()
@@ -1266,9 +1268,10 @@ def write_credential_pool(
         existing_list = existing_list if isinstance(existing_list, list) else []
         existing_by_id = _entry_ids(existing_list)
         new_ids = set(_entry_ids(sanitized))
+        status_cleared = {cid for cid in (status_cleared_ids or ()) if cid}
         if base_entries is None:
             merged: List[Dict[str, Any]] = [
-                _merge_disk_cooldown_state(e, existing_by_id.get(e.get("id")), provider_id)
+                _merge_disk_cooldown_state(e, None if e.get("id") in status_cleared else existing_by_id.get(e.get("id")), provider_id)
                 if isinstance(e, dict) else e
                 for e in sanitized
             ]
@@ -1320,7 +1323,8 @@ def write_credential_pool(
                             candidate.pop(key, None)
                         else:
                             candidate[key] = incoming_value
-                    candidate = _merge_disk_cooldown_state(candidate, disk_entry, provider_id)
+                    if entry_id not in status_cleared:
+                        candidate = _merge_disk_cooldown_state(candidate, disk_entry, provider_id)
                 merged.append(sanitize_borrowed_credential_payload(candidate, provider_id))
         for disk_entry in existing_list:
             disk_id = disk_entry.get("id") if isinstance(disk_entry, dict) else None

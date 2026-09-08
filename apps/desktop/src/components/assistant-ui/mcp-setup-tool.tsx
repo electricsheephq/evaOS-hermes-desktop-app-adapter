@@ -12,11 +12,8 @@ import { Codicon } from '@/components/ui/codicon'
 import { Input } from '@/components/ui/input'
 import {
   addMcpServer,
-  authMcpServer,
-  cancelMcpOAuthFlow,
   getActionStatus,
   getMcpCatalog,
-  getMcpOAuthFlow,
   installMcpCatalogEntry,
   type McpCatalogEntry,
   type ProfileScope,
@@ -314,11 +311,8 @@ function McpSetupPending({ args }: ToolCallMessagePartProps) {
       if (action === 'authorize') {
         const flow = await completeMcpDesktopOAuth({
           serverName: server,
-          start: name => authMcpServer(name, scope),
-          status: flowId => getMcpOAuthFlow(flowId, scope),
-          cancelled: () => cancelRef.current,
-          cancel: flowId => cancelMcpOAuthFlow(flowId, scope),
-          openExternal: url => window.hermesDesktop.openExternal(url)
+          profile: scope,
+          cancelled: () => cancelRef.current
         })
 
         triggerHaptic('submit')
@@ -361,11 +355,8 @@ function McpSetupPending({ args }: ToolCallMessagePartProps) {
         try {
           flow = await completeMcpDesktopOAuth({
             serverName: known.name,
-            start: name => authMcpServer(name, scope),
-            status: flowId => getMcpOAuthFlow(flowId, scope),
-            cancelled: () => cancelRef.current,
-            cancel: flowId => cancelMcpOAuthFlow(flowId, scope),
-            openExternal: url => window.hermesDesktop.openExternal(url)
+            profile: scope,
+            cancelled: () => cancelRef.current
           })
         } catch (error) {
           await removeMcpServer(known.name, scope).catch(() => {

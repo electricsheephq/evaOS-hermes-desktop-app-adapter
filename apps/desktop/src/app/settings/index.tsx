@@ -38,6 +38,7 @@ import { bindingsFor } from '@/store/keybinds'
 import { $localModelsEnabled } from '@/store/local-models-flag'
 import { notifyError } from '@/store/notifications'
 import { $desktopOnboarding } from '@/store/onboarding'
+import { $settingsScopeProfile } from '@/store/settings-scope'
 
 import { useRouteEnumParam } from '../hooks/use-route-enum-param'
 import { OverlayIconButton } from '../overlays/overlay-chrome'
@@ -78,6 +79,7 @@ const SETTINGS_VIEWS: readonly SettingsViewId[] = [
 const MANAGED_SETTINGS_VIEWS = SETTINGS_VIEWS.filter(view => isManagedSettingsViewVisible(view, true))
 
 export function SettingsView({ onClose, onConfigSaved, onMainModelChanged }: SettingsPageProps) {
+  const scopeProfile = useStore($settingsScopeProfile)
   const { t } = useI18n()
   const managedEva = isManagedEvaosAgent()
   const navigate = useNavigate()
@@ -433,6 +435,7 @@ export function SettingsView({ onClose, onConfigSaved, onMainModelChanged }: Set
       />
     ) : activeView === 'providers' ? (
       <ProvidersSettings
+        key={scopeProfile}
         onClose={onClose}
         onConfigSaved={onConfigSaved}
         onMainModelChanged={onMainModelChanged}

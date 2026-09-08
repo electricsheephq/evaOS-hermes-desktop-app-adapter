@@ -54,6 +54,8 @@ export {
   sortProviders
 } from './providers'
 
+import { requestGatewayForProfile } from '@/store/gateway'
+
 interface DesktopOnboardingOverlayProps {
   enabled: boolean
   onCompleted?: () => void
@@ -209,18 +211,20 @@ function DesktopProviderOnboardingOverlay({
   const { t } = useI18n()
   const onboarding = useStore($desktopOnboarding)
   const boot = useStore($desktopBoot)
-  const ctxRef = useRef<OnboardingContext>({ requestGateway, onCompleted, profile })
-  ctxRef.current = { requestGateway, onCompleted, profile }
+  const onCompletedRef = useRef(onCompleted)
+  onCompletedRef.current = onCompleted
+  const targetProfile = onboarding.targetProfile ?? profile
 
+  // Async flows retain the initiating route even after the overlay closes.
   const ctx = useMemo<OnboardingContext>(
     () => ({
-      requestGateway: (...args) => ctxRef.current.requestGateway(...args),
-      onCompleted: () => ctxRef.current.onCompleted?.(),
-      get profile() {
-        return ctxRef.current.profile
-      }
+      profile: targetProfile,
+      requestGateway: onboarding.targetProfile
+        ? (method, params) => requestGatewayForProfile(targetProfile, method, params)
+        : requestGateway,
+      onCompleted: () => onCompletedRef.current?.()
     }),
-    []
+    [onboarding.targetProfile, targetProfile, requestGateway]
   )
 
   // Cinematic exit on "Begin": dissolve the panel + overlay (revealing the chat

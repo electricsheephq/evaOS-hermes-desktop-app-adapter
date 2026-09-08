@@ -48,31 +48,17 @@ export function saveMcpServers(
   })
 }
 
-/** Start an MCP OAuth flow and return the authorization URL. */
-export function authMcpServer(name: string, profile?: ProfileScope): Promise<McpOAuthFlow> {
-  return window.hermesDesktop.api<McpOAuthFlow>({
-    ...capabilityScoped(profile),
-    path: `/api/mcp/servers/${encodeURIComponent(name)}/auth`,
-    method: 'POST',
-    timeoutMs: 60_000
-  })
-}
+/** Capture the source before the first await. Every OAuth RPC, including
+ *  cleanup after a foreground switch, belongs to this (connection, profile).
+ *  Import the store lazily: it consumes the API barrel during initialization. */
+export function mcpOAuthRpc(scope?: ProfileScope) {
+  const { connectionId = null, profile = 'default' } = capabilityScoped(scope)
 
-export function getMcpOAuthFlow(flowId: string, profile?: ProfileScope): Promise<McpOAuthFlow> {
-  return window.hermesDesktop.api<McpOAuthFlow>({
-    ...capabilityScoped(profile),
-    path: `/api/mcp/oauth/flows/${encodeURIComponent(flowId)}`
-  })
-}
+  return async <T>(action: 'start' | 'poll' | 'callback' | 'cancel', params: Record<string, unknown>): Promise<T> => {
+    const { requestGatewayForAgent } = await import('@/store/gateway')
 
-/** Cancel an in-flight MCP OAuth flow server-side, freeing the per-server
- *  "already in progress" slot so a retry doesn't 409. */
-export function cancelMcpOAuthFlow(flowId: string, profile?: ProfileScope): Promise<{ ok: boolean; status: string }> {
-  return window.hermesDesktop.api<{ ok: boolean; status: string }>({
-    ...capabilityScoped(profile),
-    path: `/api/mcp/oauth/flows/${encodeURIComponent(flowId)}`,
-    method: 'DELETE'
-  })
+    return requestGatewayForAgent<T>(connectionId, profile, `mcp.servers.oauth.${action}`, params, 60_000)
+  }
 }
 
 // ---------------------------------------------------------------------------

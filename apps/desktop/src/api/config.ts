@@ -198,16 +198,19 @@ export function deleteCustomEndpoint(id: string): Promise<CustomEndpointsRespons
   })
 }
 
-export function listOAuthProviders(): Promise<OAuthProvidersResponse> {
+export function listOAuthProviders(profile?: null | string): Promise<OAuthProvidersResponse> {
   return hermesApi<OAuthProvidersResponse>({
-    ...profileScoped(),
+    ...profileScoped(profile),
     path: '/api/providers/oauth'
   })
 }
 
-export function disconnectOAuthProvider(providerId: string): Promise<{ ok: boolean; provider: string }> {
+export function disconnectOAuthProvider(
+  providerId: string,
+  profile?: null | string
+): Promise<{ ok: boolean; provider: string }> {
   return hermesApi<{ ok: boolean; provider: string }>({
-    ...profileScoped(),
+    ...profileScoped(profile),
     path: `/api/providers/oauth/${encodeURIComponent(providerId)}`,
     method: 'DELETE'
   })
@@ -228,7 +231,7 @@ export function submitOAuthCode(
   code: string,
   profile?: ProfileScope
 ): Promise<OAuthSubmitResponse> {
-  return window.hermesDesktop.api<OAuthSubmitResponse>({
+  return hermesApi<OAuthSubmitResponse>({
     ...capabilityScoped(profile),
     path: `/api/providers/oauth/${encodeURIComponent(providerId)}/submit`,
     method: 'POST',
@@ -248,7 +251,7 @@ export function pollOAuthSession(
 }
 
 export function cancelOAuthSession(sessionId: string, profile?: ProfileScope): Promise<{ ok: boolean }> {
-  return window.hermesDesktop.api<{ ok: boolean }>({
+  return hermesApi<{ ok: boolean }>({
     ...capabilityScoped(profile),
     path: `/api/providers/oauth/sessions/${encodeURIComponent(sessionId)}`,
     method: 'DELETE'
