@@ -168,7 +168,7 @@ def _run_child(root: Path, script: str, *, home: Path, **variables: str) -> dict
     for key, value in variables.items():
         env[key] = value
     completed = subprocess.run(
-        [sys.executable, "-c", script],
+        [sys.executable, "-B", "-c", script],
         cwd=root,
         env=env,
         capture_output=True,
@@ -353,7 +353,8 @@ def test_config39_to40_ttl_boundary_preserves_unmanaged_values(tmp_path: Path, c
         home=home,
         R31_CONFIG_MODE=f"{case}:migrate",
     )
-    assert migrated["version"] == 40
+    from hermes_cli.config import DEFAULT_CONFIG
+    assert migrated["version"] == DEFAULT_CONFIG["_config_version"]
     if case == "managed_default":
         assert migrated["ttl_hours_raw"] is None
         assert migrated["ttl_hours"] == pytest.approx(1 / 3)

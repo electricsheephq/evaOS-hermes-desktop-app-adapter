@@ -15,7 +15,7 @@ import { isManagedEvaosAgent, managedProviderDisplayValue } from '@/i18n/managed
 import { Search } from '@/lib/icons'
 import { modelOptionsQueryKey, requestModelOptions } from '@/lib/model-options'
 import { displayModelName, modelDisplayParts } from '@/lib/model-status-label'
-import { normalize } from '@/lib/text'
+import { foldIncludes, normalize } from '@/lib/text'
 import {
   $visibleModels,
   collapseModelFamilies,
@@ -81,10 +81,7 @@ export function ModelVisibilityDialog({
   const q = normalize(search)
 
   const matches = (provider: ModelOptionProvider, model: string) =>
-    !q ||
-    `${model} ${managedProviderDisplayValue(provider.slug, provider.name, managedEva)} ${provider.slug} ${displayModelName(model)}`
-      .toLowerCase()
-      .includes(q)
+    !q || foldIncludes(`${model} ${managedProviderDisplayValue(provider.slug, provider.name, managedEva)} ${provider.slug} ${displayModelName(model)}`, q)
 
   return (
     <Dialog onOpenChange={onOpenChange} open={open}>
@@ -137,7 +134,7 @@ export function ModelVisibilityDialog({
                       type="button"
                     >
                       <span className="min-w-0 truncate">
-                        <HighlightMatches
+                        <HighlightMatches foldSeparators
                           query={search}
                           text={managedProviderDisplayValue(provider.slug, provider.name, managedEva)}
                         />
@@ -164,7 +161,7 @@ export function ModelVisibilityDialog({
                           key={key}
                         >
                           <span className="min-w-0 flex-1 truncate">
-                            <HighlightMatches query={search} text={name} />
+                            <HighlightMatches foldSeparators query={search} text={name} />
                             {tag ? <span className="text-(--ui-text-tertiary)"> {tag}</span> : null}
                           </span>
                           <Switch

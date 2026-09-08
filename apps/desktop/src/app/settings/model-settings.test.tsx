@@ -450,7 +450,7 @@ describe('ModelSettings MoA preset editor', () => {
         aggregator: { provider: 'openrouter', model: 'anthropic/claude-opus-4.8' },
         reference_temperature: 0,
         aggregator_temperature: 0,
-        max_tokens: 4096,
+
         enabled: true
       }
     },
@@ -461,7 +461,7 @@ describe('ModelSettings MoA preset editor', () => {
     aggregator: { provider: 'openrouter', model: 'anthropic/claude-opus-4.8' },
     reference_temperature: 0,
     aggregator_temperature: 0,
-    max_tokens: 4096,
+
     enabled: true
   })
 

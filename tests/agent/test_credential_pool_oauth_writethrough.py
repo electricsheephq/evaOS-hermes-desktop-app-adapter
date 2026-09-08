@@ -505,8 +505,9 @@ def test_managed_codex_pools_share_the_source_refresh_lock(monkeypatch, tmp_path
             return persisted
         return current
 
-    def persist_to_shared(pool, *, removed_ids=None):
+    def persist_to_shared(pool, *, removed_ids=None, status_cleared_ids=None):
         del removed_ids
+        assert status_cleared_ids == [pool._entries[0].id]
         with shared_guard:
             shared_entry["value"] = pool._entries[0]
 

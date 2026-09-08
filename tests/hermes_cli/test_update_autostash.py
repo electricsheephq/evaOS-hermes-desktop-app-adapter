@@ -1056,6 +1056,9 @@ def test_reject_does_not_claim_cleanup_when_git_state_is_unknown(
     monkeypatch, tmp_path, capsys
 ):
     """Cleanup failures must not be reported as a restored clean tree."""
+    # Keep this intentionally non-repository fixture from finding the parent
+    # checkout when pytest temporary files live beneath the source tree.
+    monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path.parent))
     from hermes_cli import update_cmd
     import hermes_cli.update_cmd_stash as update_cmd_stash
 
