@@ -125,7 +125,7 @@ describe('ProvidersSettings', () => {
     expect(screen.getByRole('button', { name: 'Remove ChatGPT or Codex Subscription' })).toBeTruthy()
 
     fireEvent.click(screen.getByRole('button', { name: 'Reauthenticate' }))
-    expect(startManualProviderOAuth).toHaveBeenCalledWith('openai-codex')
+    expect(startManualProviderOAuth).toHaveBeenCalledWith('openai-codex', undefined)
 
     fireEvent.click(screen.getByRole('button', { name: 'Connect another provider' }))
     expect(await screen.findByText('MiniMax')).toBeTruthy()
