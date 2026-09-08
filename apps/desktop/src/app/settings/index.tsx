@@ -32,10 +32,12 @@ import { typeToFocusChar } from '@/lib/keybinds/composer-focus-keys'
 import { isManagedSettingsViewVisible } from '@/lib/managed-ui-policy'
 import { cn } from '@/lib/utils'
 import { $commandPaletteOpen, openCommandPalettePage } from '@/store/command-palette'
+import { $desktopBoot } from '@/store/boot'
 import { confirm } from '@/store/confirm'
 import { bindingsFor } from '@/store/keybinds'
 import { $localModelsEnabled } from '@/store/local-models-flag'
 import { notifyError } from '@/store/notifications'
+import { $desktopOnboarding } from '@/store/onboarding'
 
 import { useRouteEnumParam } from '../hooks/use-route-enum-param'
 import { OverlayIconButton } from '../overlays/overlay-chrome'
@@ -80,6 +82,10 @@ export function SettingsView({ onClose, onConfigSaved, onMainModelChanged }: Set
   const managedEva = isManagedEvaosAgent()
   const navigate = useNavigate()
   const { hash, pathname, search } = useLocation()
+  const boot = useStore($desktopBoot)
+  const onboarding = useStore($desktopOnboarding)
+  const bootRecoveryVisible =
+    Boolean(boot.error) && !boot.running && (onboarding.flow.status === 'idle' || onboarding.flow.status === 'error')
 
   // MCP moved out of Settings into Capabilities (/skills?tab=mcp). Keep old
   // `/settings?tab=mcp` deep links working — `useRouteEnumParam` would silently
@@ -449,7 +455,7 @@ export function SettingsView({ onClose, onConfigSaved, onMainModelChanged }: Set
       closeLabel={t.settings.closeSettings}
       edgeBadge={searchPill}
       onClose={onClose}
-      surfaceClassName="settings-overlay z-(--z-setup-route)"
+      surfaceClassName={bootRecoveryVisible ? 'settings-overlay-elevated z-(--z-setup-route)' : undefined}
     >
       <OverlaySplitLayout>
         <OverlayNav footer={navFooter} groups={navGroups} />

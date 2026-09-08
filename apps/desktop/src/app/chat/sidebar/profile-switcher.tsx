@@ -276,7 +276,11 @@ export function ProfileRail() {
     order
   )
 
-  const multiProfile = profiles.length > 1
+  const profileCount = new Set([
+    ...profiles.map(profile => normalizeProfileKey(profile.name)),
+    ...profileErrors.map(error => normalizeProfileKey(error.profile))
+  ]).size
+  const multiProfile = profileCount > 1
 
   // distance constraint: a small drag reorders, a tap still selects the profile.
   const sensors = useSensors(

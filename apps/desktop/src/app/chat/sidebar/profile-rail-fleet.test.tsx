@@ -125,7 +125,8 @@ const connectionsRegistry = connectionsStore.$connectionsRegistry as ReturnType<
   typeof atom<DesktopConnectionsRegistry | null>
 >
 
-const { $profileErrors, $profiles, $profileScope } = await import('@/store/profile')
+const { $activeGatewayProfile, $profileErrors, $profiles, $profileScope } = await import('@/store/profile')
+const activeGatewayProfile = $activeGatewayProfile as ReturnType<typeof atom<string>>
 const profileErrors = $profileErrors as ReturnType<typeof atom<Array<{ profile: string; error: string }>>>
 const profiles = $profiles as ReturnType<typeof atom<Array<{ is_default: boolean; name: string }>>>
 const profileScope = $profileScope as ReturnType<typeof atom<string>>
@@ -210,6 +211,7 @@ afterEach(() => {
   hasMultipleConnections.set(false)
   connectionsRegistry.set(null)
   activeConnectionId.set(null)
+  activeGatewayProfile.set('default')
   profileScope.set('default')
   profiles.set([{ is_default: true, name: 'default' }])
   profileErrors.set([])
@@ -236,6 +238,18 @@ describe('ProfileRail fleet mode', () => {
 
     expect(screen.getByText('support unavailable')).toBeTruthy()
     expect(screen.getByText('sibling unavailable')).toBeTruthy()
+  })
+
+  it('keeps the sole healthy sibling selectable when the active profile is unavailable', async () => {
+    activeGatewayProfile.set('support')
+    profiles.set([{ is_default: false, name: 'sibling' }])
+    profileErrors.set([{ profile: 'support', error: 'Profile temporarily unavailable.' }])
+
+    await renderFleet()
+    fireEvent.click(screen.getByRole('button', { name: 'sibling' }))
+
+    expect(selectProfile).toHaveBeenCalledWith('sibling')
+    expect(screen.getByText('support unavailable')).toBeTruthy()
   })
 
   it('lays every other gateway on the strip as an at-rest group, in switcher order', async () => {
