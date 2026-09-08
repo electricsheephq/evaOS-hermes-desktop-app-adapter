@@ -107,8 +107,10 @@ def test_single_profile_keeps_legacy_path(monkeypatch, _providers, tmp_path):
     assert builtin.start_kwargs == {"interval": 9}
 
 
-def test_enumeration_failure_fails_open(monkeypatch, _providers):
-    """The active profile's jobs keep firing even if profile listing breaks."""
+def test_enumeration_failure_preserves_desktop_fallback_but_env_only_fails_closed(
+    monkeypatch, _providers
+):
+    """Desktop keeps firing, while env-only serve avoids an ungated owner."""
     _sp, builtin = _providers
     import hermes_cli.profiles as profiles_mod
 
@@ -120,6 +122,13 @@ def test_enumeration_failure_fails_open(monkeypatch, _providers):
     ws._start_desktop_cron_ticker(threading.Event(), interval=11)
 
     assert builtin.start_kwargs == {"interval": 11}
+
+    builtin.start_kwargs = None
+    monkeypatch.delenv("HERMES_DESKTOP", raising=False)
+    monkeypatch.setenv("HERMES_CRON_TICKER", "1")
+    ws._start_serve_cron_ticker(threading.Event(), interval=11)
+
+    assert builtin.start_kwargs is None
 
 
 def test_external_provider_never_gets_profile_homes(monkeypatch, tmp_path):

@@ -128,6 +128,9 @@ def _start_serve_cron_ticker(stop_event: "threading.Event", interval: int = 60) 
                         [name for name, _home in profile_homes],
                     )
         except Exception:
+            if env_var_enabled("HERMES_CRON_TICKER") and os.getenv("HERMES_DESKTOP") != "1":
+                _log.exception("Serve cron: profile enumeration failed; env-only ticker disabled")
+                return
             # Fail open to the single-store ticker so the active profile keeps firing.
             _log.exception("Serve cron: profile enumeration failed; ticking active profile only")
 
