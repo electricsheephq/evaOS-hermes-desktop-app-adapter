@@ -2,6 +2,8 @@
 
 Status: accepted design; implementation and release proof pending.
 
+Cadence and between-pin patch rules: see [upstream-sync-cadence.md](upstream-sync-cadence.md).
+
 Work graph: [r31.1 epic #252](https://github.com/electricsheephq/evaOS-hermes-desktop-app-adapter/issues/252), milestone 12. Supersedes moving-main execution instructions for this release, not the previous release's evidence.
 
 ## Decision
