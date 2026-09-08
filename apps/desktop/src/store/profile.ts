@@ -76,6 +76,7 @@ let profileListEpoch = 0
 
 export function invalidateProfileListFetches(): void {
   profileListEpoch += 1
+  $profileErrors.set([])
   // Detach the single-flight slot too: a caller arriving AFTER a backend
   // switch must start a fresh fetch against the new backend, not ride the
   // previous backend's in-flight retry chain.
@@ -115,6 +116,9 @@ export function refreshProfiles(): Promise<ProfileInfo[]> {
           // silent catch in refreshActiveProfile() hid global-remote timing
           // races (#70679). A stranded epoch stops retrying against the past.
           console.error(`[profiles] refreshProfiles failed after ${attempt + 1} attempt(s):`, error)
+          if (epoch === profileListEpoch) {
+            $profileErrors.set([])
+          }
 
           throw error
         }

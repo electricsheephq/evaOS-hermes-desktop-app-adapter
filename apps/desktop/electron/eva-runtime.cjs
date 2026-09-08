@@ -2005,7 +2005,7 @@ function createEvaManagedRuntime(options) {
     }
   }
 
-  async function readDelegatedProfile(request, retry, errors) {
+  async function readDelegatedProfile(request, retry, errors, refusedProfiles) {
     try {
       return await requestApi(request, retry)
     } catch (error) {
@@ -2024,6 +2024,7 @@ function createEvaManagedRuntime(options) {
         }
       }
       if (!refusedProfile && status !== null && status < 500) throw error
+      if (refusedProfile) refusedProfiles?.add(request.profile)
       errors.push({ profile: request.profile, error: 'Profile temporarily unavailable.' })
       return null
     }
@@ -2089,13 +2090,16 @@ function createEvaManagedRuntime(options) {
   async function requestDelegatedProfiles(runtime, request, retry) {
     const profiles = []
     const errors = []
+    const refusedProfiles = new Set()
     const guard = startSupportRequestGuard(runtime)
     const cache = supportReadCache(runtime).profiles
     try {
       for (const profile of runtime.allowedProfiles) {
         assertSupportRequestCurrent(guard)
-        const result = await readDelegatedProfile({ ...request, profile, path: `/api/profiles?profile=${encodeURIComponent(profile)}` }, retry, errors)
+        const result = await readDelegatedProfile({ ...request, profile, path: `/api/profiles?profile=${encodeURIComponent(profile)}` }, retry, errors, refusedProfiles)
         assertSupportRequestCurrent(guard)
+        const refused = refusedProfiles.has(profile)
+        if (refused) cache.delete(profile)
         let freshRows = result?.profiles ?? []
         const mismatched = freshRows.some(row => row.name !== profile)
         if (mismatched) {
@@ -2105,7 +2109,7 @@ function createEvaManagedRuntime(options) {
         // The exact managed route suppresses metadata failures as an empty
         // successful response; it cannot delete a member of this live grant.
         if (result && !mismatched && !freshRows.length) errors.push({ profile, error: 'Profile temporarily unavailable.' })
-        const rows = freshRows.length ? freshRows : cache.get(profile) ?? []
+        const rows = freshRows.length ? freshRows : refused ? [] : cache.get(profile) ?? []
         if (freshRows.length) cache.set(profile, structuredClone(rows))
         profiles.push(...structuredClone(rows))
       }
@@ -2124,6 +2128,7 @@ function createEvaManagedRuntime(options) {
     const projects = new Map()
     const scopedIds = new Set()
     const errors = []
+    const refusedProfiles = new Set()
     const guard = startSupportRequestGuard(runtime)
     const cache = supportReadCache(runtime).projects
     // Match hermes_cli.web_routers.profiles._merge_profile_tree: folders/Home
@@ -2148,8 +2153,10 @@ function createEvaManagedRuntime(options) {
       for (const profile of runtime.allowedProfiles) {
         assertSupportRequestCurrent(guard)
         parsed.searchParams.set('profile', profile)
-        const fresh = await readDelegatedProfile({ ...request, profile, path: `${parsed.pathname}?${parsed.searchParams}` }, retry, errors)
+        const fresh = await readDelegatedProfile({ ...request, profile, path: `${parsed.pathname}?${parsed.searchParams}` }, retry, errors, refusedProfiles)
         assertSupportRequestCurrent(guard)
+        const refused = refusedProfiles.has(profile)
+        if (refused) cache.delete(profile)
         let boundFresh = fresh
         try {
           if (fresh) {
@@ -2171,7 +2178,7 @@ function createEvaManagedRuntime(options) {
         // matching view, while the errors array still reports the outage.
         const cached = cache.get(profile)
         const failed = !boundFresh || fresh?.errors?.length
-        const result = failed && cached?.previewLimit === previewLimit ? structuredClone(cached.result) : boundFresh
+        const result = !refused && failed && cached?.previewLimit === previewLimit ? structuredClone(cached.result) : boundFresh
         for (const id of result?.scoped_session_ids ?? []) scopedIds.add(id)
         errors.push(...(fresh?.errors ?? []))
         for (let project of result?.projects ?? []) {

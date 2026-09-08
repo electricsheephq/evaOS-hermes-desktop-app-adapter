@@ -240,6 +240,7 @@ describe('refreshProfiles shared rail list (#49289)', () => {
 
   it('removes a deleted profile from the shared $profiles cache after Manage Profiles refreshes', async () => {
     $profiles.set([profile('default', true), profile('test1')])
+    $profileErrors.set([{ profile: 'test1', error: 'stale outage' }])
     vi.mocked(getProfiles).mockResolvedValueOnce({ profiles: [profile('default', true)] })
 
     await refreshProfiles()
@@ -308,6 +309,7 @@ describe('refreshProfiles shared rail list (#49289)', () => {
 
     expect(vi.mocked(getProfiles)).toHaveBeenCalledTimes(3)
     expect($profiles.get().map(profile => profile.name)).toEqual(['default', 'test1'])
+    expect($profileErrors.get()).toEqual([])
   })
 })
 
@@ -323,7 +325,9 @@ describe('stale profile-list fetches across a backend switch (#85731)', () => {
     const oldFetch = refreshProfiles() // in flight against backend A
 
     // Connection apply → soft re-home strands in-flight fetches...
+    $profileErrors.set([{ profile: 'old-gateway', error: 'stale outage' }])
     invalidateProfileListFetches()
+    expect($profileErrors.get()).toEqual([])
 
     // ...and the new backend's list arrives.
     vi.mocked(getProfiles).mockResolvedValueOnce({

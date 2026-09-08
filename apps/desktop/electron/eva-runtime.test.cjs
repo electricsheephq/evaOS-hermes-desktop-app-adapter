@@ -1157,6 +1157,9 @@ test('admin discovery retains last-good rows on transport and reported failures 
       const parsed = new URL(url)
       const profile = parsed.searchParams.get('profile')
       if (unavailable && profile === 'sibling') {
+        if (unavailable === 'refused') {
+          throw Object.assign(new Error('403: {"detail":"profile is not authorized"}'), { statusCode: 403 })
+        }
         if (unavailable === 'reported') return parsed.pathname === '/api/profiles'
           ? { profiles: [] }
           : { projects: [], scoped_session_ids: [], errors: [{ profile, error: 'Profile database unavailable.' }] }
@@ -1183,6 +1186,14 @@ test('admin discovery retains last-good rows on transport and reported failures 
       assert.ok(partial.errors.some(error => error.profile === 'sibling'))
       assert.equal(JSON.stringify(partial).includes('private upstream detail'), false)
     }
+  }
+  unavailable = 'refused'
+  for (const path of paths) {
+    const partial = await runtime.requestApi({ path })
+    const rows = partial.profiles ?? partial.projects
+    assert.equal(rows.length, 1)
+    assert.equal(rows[0].display_name ?? rows[0].name, 'support-2')
+    assert.ok(partial.errors.some(error => error.profile === 'sibling'))
   }
   assert.deepEqual(await runtime.endSupportSession(), { ok: true })
   payload = { ...payload, support_session_id: 'next-support-session' }
