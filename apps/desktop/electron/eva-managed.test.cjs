@@ -880,6 +880,37 @@ test('managed desktop profile uses only the backend-authoritative current proces
   }
 })
 
+test('managed desktop profile accepts a profile literally named default only when the session asked for it', () => {
+  // A flat managed box (david-poku/default) answers `default` for a real
+  // per-customer profile; the unscoped/shared process answers it too. The
+  // profile this session asked for separates them.
+  assert.equal(
+    resolveEvaManagedDesktopProfile({ current: 'default' }, { expectedProfileId: 'default' }),
+    'default'
+  )
+  assert.equal(
+    resolveEvaManagedDesktopProfile({ current: 'jarvis' }, { expectedProfileId: 'jarvis' }),
+    'jarvis'
+  )
+  // Any answer other than the profile we asked for is another agent's gateway.
+  for (const [response, options] of [
+    [{ current: 'default' }, { expectedProfileId: 'jarvis' }],
+    [{ current: 'jarvis' }, { expectedProfileId: 'default' }],
+    [{ current: 'default' }, { expectedProfileId: '   ' }],
+    [{ current: 'default' }, { expectedProfileId: null }],
+    [{ current: '../main' }, { expectedProfileId: '../main' }]
+  ]) {
+    assert.throws(
+      () => resolveEvaManagedDesktopProfile(response, options),
+      error => error instanceof EvaBrokerError && error.code === 'invalid-profile-scope'
+    )
+  }
+  assert.equal(
+    resolveEvaManagedDesktopProfile({ current: 'default' }, { expectedProfileId: ' default ' }),
+    'default'
+  )
+})
+
 test('managed desktop profile falls back to enrolled identity only when the active endpoint is absent', async () => {
   const missing = Object.assign(new Error('404: missing'), { statusCode: 404 })
   assert.equal(
@@ -914,6 +945,33 @@ test('managed desktop profile falls back to enrolled identity only when the acti
   )
   await assert.rejects(
     () => resolveEvaManagedDesktopProfileFromSources(async () => Promise.reject(missing), () => ({ agentId: 'default' })),
+    error => error instanceof EvaBrokerError && error.code === 'invalid-profile-scope'
+  )
+  // The expectation rides through both legs: the live endpoint and the 404
+  // fallback onto the enrolled agent.
+  assert.equal(
+    await resolveEvaManagedDesktopProfileFromSources(
+      async () => ({ current: 'default' }),
+      () => ({ agentId: 'default' }),
+      { expectedProfileId: 'default' }
+    ),
+    'default'
+  )
+  assert.equal(
+    await resolveEvaManagedDesktopProfileFromSources(
+      async () => Promise.reject(missing),
+      () => ({ agentId: 'default' }),
+      { expectedProfileId: 'default' }
+    ),
+    'default'
+  )
+  await assert.rejects(
+    () =>
+      resolveEvaManagedDesktopProfileFromSources(
+        async () => ({ current: 'default' }),
+        () => ({ agentId: 'jarvis' }),
+        { expectedProfileId: 'jarvis' }
+      ),
     error => error instanceof EvaBrokerError && error.code === 'invalid-profile-scope'
   )
 })

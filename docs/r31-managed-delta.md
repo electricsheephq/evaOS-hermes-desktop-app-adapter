@@ -41,6 +41,20 @@ renderer isolation and End behavior remain authoritative. This source change
 requires a compatible broker and signed Desktop delivery; it is not installed
 delegated-access acceptance or permission to reset a customer conversation.
 
+### A managed profile literally named `default`
+
+`resolveEvaManagedDesktopProfile` rejected every gateway answer of `default`,
+which on a flat managed box is the real name of a per-customer profile
+(`david-poku/default`) rather than the unscoped shared process. The check now
+compares `current` against the profile this session itself asked the gateway
+for: a support lease's granted profile, else the enrollment's own agent. With no
+expectation, `default` still fails closed, and any answer that is not the
+requested profile fails closed as well. The main process logs one `[boot]` line
+naming `invalid-profile-scope` and the reported profile id, so a renderer-side
+boot rejection is no longer invisible in the desktop log. This is source
+behavior with focused test receipts; it is not installed delegated-access
+acceptance on a customer box.
+
 This ledger maps retained behavior into pinned upstream modules. It supplements the actual Git diff, never substitutes for it. Preserve [the previous 8.27 ledger](desktop-v2026.8.27-managed-delta.md) unchanged.
 
 ## Identities

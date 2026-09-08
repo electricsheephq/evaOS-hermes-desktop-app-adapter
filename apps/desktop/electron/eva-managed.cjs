@@ -925,23 +925,37 @@ function ownedSupportLeases(state, desktop) {
   )
 }
 
-function resolveEvaManagedDesktopProfile(response) {
+// `default` is the gateway's answer for an unscoped/shared process that was
+// never bound to a profile — and, on a flat managed box, the literal name of a
+// real per-customer profile (david-poku/default). The two are told apart by
+// what THIS session asked the gateway for: a support lease's granted profile,
+// else the enrollment's own agent. With no expectation to compare against,
+// `default` still throws, so the unscoped-process protection is unchanged.
+// A `current` that is not the profile we asked for throws as well: that
+// gateway belongs to another agent, which is exactly what this guard exists
+// to catch.
+function resolveEvaManagedDesktopProfile(response, options = {}) {
   const current = typeof response?.current === 'string' ? response.current.trim() : ''
-  if (current === 'default' || !/^[a-z0-9][a-z0-9_-]{0,63}$/.test(current)) {
-    throw new EvaBrokerError('evaOS Agent could not verify its assigned profile.', 502, 'invalid-profile-scope')
+  const expected = typeof options.expectedProfileId === 'string' ? options.expectedProfileId.trim() : ''
+  if (!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(current) || (expected ? current !== expected : current === 'default')) {
+    const error = new EvaBrokerError('evaOS Agent could not verify its assigned profile.', 502, 'invalid-profile-scope')
+    // Carried for the main process's one log line only: a profile id, bounded
+    // because an unmatched `current` is whatever the gateway said.
+    error.reportedProfile = current.slice(0, 64)
+    throw error
   }
   return current
 }
 
-async function resolveEvaManagedDesktopProfileFromSources(readActiveProfile, readEnrollmentStatus) {
+async function resolveEvaManagedDesktopProfileFromSources(readActiveProfile, readEnrollmentStatus, options = {}) {
   try {
-    return resolveEvaManagedDesktopProfile(await readActiveProfile())
+    return resolveEvaManagedDesktopProfile(await readActiveProfile(), options)
   } catch (error) {
     if (Number(error?.statusCode) !== 404) {
       throw error
     }
 
-    return resolveEvaManagedDesktopProfile({ current: readEnrollmentStatus()?.agentId })
+    return resolveEvaManagedDesktopProfile({ current: readEnrollmentStatus()?.agentId }, options)
   }
 }
 
