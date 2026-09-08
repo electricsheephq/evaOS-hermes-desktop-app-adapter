@@ -628,7 +628,8 @@ export function clearAllSessionControl(): void {
   }
 
   $sessionControlBySession.set({})
-  versions.clear()
+  // Keep generations monotonic if this backend/session returns after a switch.
+  // Resetting them lets an old response share the first new request's token.
   eventVersions.clear()
 }
 

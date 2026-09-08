@@ -387,6 +387,24 @@ describe('session-control store', () => {
     expect($sessionControlBySession.get()).toEqual({})
   })
 
+  it('rejects an old read when a gateway switch returns to the same session id', async () => {
+    const oldRead = deferred<unknown>()
+    const newRead = deferred<unknown>()
+    useGateway(vi.fn(() => oldRead.promise))
+    const oldRequest = refreshSessionControl('returning-session')
+
+    clearAllSessionControl()
+    useGateway(vi.fn(() => newRead.promise))
+    const newRequest = refreshSessionControl('returning-session')
+    oldRead.resolve({ control: { ...FULL_SNAPSHOT, revision: 'stale-before-switch' } })
+    await oldRequest
+    expect($sessionControlBySession.get()['returning-session']!.snapshot).toBeNull()
+
+    newRead.resolve({ control: { ...FULL_SNAPSHOT, revision: 'current-after-switch' } })
+    await newRequest
+    expect($sessionControlBySession.get()['returning-session']!.snapshot!.revision).toBe('current-after-switch')
+  })
+
   it('does not let a late read repopulate a cleared session', async () => {
     const slow = deferred<unknown>()
     useGateway(vi.fn(() => slow.promise))
