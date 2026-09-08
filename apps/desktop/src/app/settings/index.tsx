@@ -31,8 +31,8 @@ import { isEditableTarget } from '@/lib/keybinds/combo'
 import { typeToFocusChar } from '@/lib/keybinds/composer-focus-keys'
 import { isManagedSettingsViewVisible } from '@/lib/managed-ui-policy'
 import { cn } from '@/lib/utils'
-import { $commandPaletteOpen, openCommandPalettePage } from '@/store/command-palette'
 import { $desktopBoot } from '@/store/boot'
+import { $commandPaletteOpen, openCommandPalettePage } from '@/store/command-palette'
 import { confirm } from '@/store/confirm'
 import { bindingsFor } from '@/store/keybinds'
 import { $localModelsEnabled } from '@/store/local-models-flag'
@@ -84,6 +84,7 @@ export function SettingsView({ onClose, onConfigSaved, onMainModelChanged }: Set
   const { hash, pathname, search } = useLocation()
   const boot = useStore($desktopBoot)
   const onboarding = useStore($desktopOnboarding)
+
   const bootRecoveryVisible =
     Boolean(boot.error) && !boot.running && (onboarding.flow.status === 'idle' || onboarding.flow.status === 'error')
 

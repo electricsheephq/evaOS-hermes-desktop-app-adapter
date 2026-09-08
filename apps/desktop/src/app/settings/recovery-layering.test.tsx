@@ -6,8 +6,8 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import {
   $desktopOnboarding,
   clearPendingProviderOAuth,
-  startManualProviderOAuth,
-  type DesktopOnboardingState
+  type DesktopOnboardingState,
+  startManualProviderOAuth
 } from '@/store/onboarding'
 
 const idleOnboarding: DesktopOnboardingState = {
