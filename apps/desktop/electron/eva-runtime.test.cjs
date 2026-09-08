@@ -1042,7 +1042,7 @@ test('admin project tree merges granted profiles and rejects mismatched session 
   const sessions = await runtime.requestApi({ path: '/api/profiles/sessions?profile=all' })
   assert.deepEqual(sessions.sessions.map(row => row.profile), ['sibling', 'support'])
   wrongProfile = true
-  for (const path of ['/api/profiles/projects/tree', '/api/profiles/sessions?profile=all', '/api/profiles/sessions/sidebar']) {
+  for (const path of ['/api/profiles/projects/tree?preview_limit=1', '/api/profiles/sessions?profile=all', '/api/profiles/sessions/sidebar']) {
     await assert.rejects(runtime.requestApi({ path }), error => error.code === 'support-profile-mismatch')
   }
 })
@@ -1123,6 +1123,11 @@ test('admin aggregate reads isolate unavailable profiles but reject authorizatio
       assert.ok(result.errors.some(entry => entry.profile === 'support'))
       assert.equal(JSON.stringify(result).includes('synthetic private'), false)
     }
+    failure = Object.assign(new Error('403: {"detail":"profile is not authorized"}'), { statusCode: 403 })
+    const refusedLeaf = await runtime.requestApi({ path: requestPath })
+    assert.equal((refusedLeaf.profiles ?? refusedLeaf.projects ?? refusedLeaf.sessions ?? refusedLeaf.recents.sessions).length, 1)
+    assert.ok(refusedLeaf.errors.some(entry => entry.profile === 'support' && entry.code === 'support-profile-refused'))
+
     failure = new EvaBrokerError('authorization revoked', 403, 'forbidden')
     await assert.rejects(runtime.requestApi({ path: requestPath }), error => error.statusCode === 403)
   }
@@ -1145,15 +1150,20 @@ test('admin discovery retains last-good rows on transport and reported failures 
       const parsed = new URL(url)
       const profile = parsed.searchParams.get('profile')
       if (unavailable && profile === 'sibling') {
+        if (unavailable === 'refused') {
+          throw Object.assign(new Error('403: {"detail":"profile is not authorized"}'), { statusCode: 403 })
+        }
         if (unavailable === 'reported') return parsed.pathname === '/api/profiles'
           ? { profiles: [] }
           : { projects: [], scoped_session_ids: [], errors: [{ profile, error: 'Profile database unavailable.' }] }
         throw new EvaBrokerError('private upstream detail', 503, 'unavailable')
       }
-      return parsed.pathname === '/api/profiles'
-        ? { profiles: [{ name: profile, display_name: `${profile}-${revision}` }] }
-        : { projects: [{ id: profile, name: `${profile}-${revision}`, sessionCount: 1,
-          repos: [{ id: 'repo', groups: [{ id: 'lane', sessions: [{ id: profile, profile }] }] }] }] }
+      if (parsed.pathname === '/api/profiles') {
+        return { profiles: [{ name: profile, display_name: `${profile}-${revision}` }] }
+      }
+      const project = { id: profile, name: `${profile}-${revision}`, sessionCount: 1,
+        repos: [{ id: 'repo', groups: [{ id: 'lane', sessions: [{ id: profile, profile }] }] }] }
+      return { projects: profile === 'sibling' ? [project, structuredClone(project)] : [project] }
     }
   })
   t.after(() => runtime.close())
@@ -1168,9 +1178,18 @@ test('admin discovery retains last-good rows on transport and reported failures 
       const rows = partial.profiles ?? partial.projects
       assert.equal(rows.length, 2)
       assert.deepEqual(rows.map(row => row.display_name ?? row.name), ['support-2', 'sibling-1'])
+      if (path.includes('projects/tree')) assert.equal(rows.find(row => row.id === 'sibling')?.sessionCount, 2)
       assert.ok(partial.errors.some(error => error.profile === 'sibling'))
       assert.equal(JSON.stringify(partial).includes('private upstream detail'), false)
     }
+  }
+  unavailable = 'refused'
+  for (const path of paths) {
+    const partial = await runtime.requestApi({ path })
+    const rows = partial.profiles ?? partial.projects
+    assert.equal(rows.length, 1)
+    assert.equal(rows[0].display_name ?? rows[0].name, 'support-2')
+    assert.ok(partial.errors.some(error => error.profile === 'sibling'))
   }
   assert.deepEqual(await runtime.endSupportSession(), { ok: true })
   payload = { ...payload, support_session_id: 'next-support-session' }

@@ -27,6 +27,8 @@ interface OverlayViewProps {
   edgeBadge?: ReactNode
   headerContent?: ReactNode
   rootClassName?: string
+  /** Optional app-wide elevation override for the full-screen surface. */
+  surfaceClassName?: string
   /** Controls rendered on the close button's row, to its left. They ride the
    *  titlebar strip, so keep them titlebar-sized and quiet. */
   titlebarActions?: ReactNode
@@ -40,6 +42,7 @@ export function OverlayView({
   edgeBadge,
   headerContent,
   rootClassName,
+  surfaceClassName,
   titlebarActions
 }: OverlayViewProps) {
   const closeOverlay = () => {
@@ -74,7 +77,8 @@ export function OverlayView({
   return (
     <div
       className={cn(
-        'fixed inset-0 z-50 bg-black/22 backdrop-blur-[0.125rem]',
+        'fixed inset-0 bg-black/22 backdrop-blur-[0.125rem]',
+        surfaceClassName ?? 'z-50',
         // Equidistant inset on every side. The top value is driven by the
         // titlebar height so the card clears the OS traffic-lights vertically;
         // since the card top already sits below them, the left needs no extra

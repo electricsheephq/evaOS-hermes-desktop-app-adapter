@@ -248,6 +248,8 @@
        only for surfaces that float over the app. */
     --z-modal-backdrop: 120;
     --z-modal: 130;
+    /* Shared body-portaled popovers keep their historical effective rung. */
+    --z-popover: 50;
     /* A select/dropdown/popover opened from inside a modal, portaled to body. */
     --z-modal-popover: 140;
     /* Must clear any open modal: toasts, tooltips, command-surface backdrops. */
@@ -260,6 +262,16 @@
     --z-onboarding: 1300;
     --z-onboarding-popover: 1310;
     --z-setup: 1400;
+    /* Settings stays reachable while a boot-recovery surface owns setup. */
+    --z-setup-route: 1420;
+    --z-setup-route-modal-backdrop: 1422;
+    --z-setup-route-modal: 1424;
+    --z-setup-route-modal-popover: 1426;
+    --z-setup-route-over-modal: 1430;
+    --z-setup-route-over-modal-content: 1432;
+    --z-setup-route-switcher-backdrop: 1434;
+    --z-setup-route-switcher: 1436;
+    --z-setup-route-onboarding: 1440;
     /* Ending delegated access must not depend on the customer's gateway boot. */
     --z-support-session: 1450;
     --z-crash: 1500;
@@ -793,6 +805,22 @@
     background: var(--ui-selection-background);
     color: inherit;
   }
+}
+
+/* Settings is elevated only above boot recovery. Its body-portaled dialogs,
+   menus, tooltips, switchers, and manual onboarding must follow it without
+   overtaking support. Normal Settings keeps the historical layer values. */
+body:has(.settings-overlay-elevated) {
+  --z-modal-backdrop: var(--z-setup-route-modal-backdrop);
+  --z-modal: var(--z-setup-route-modal);
+  --z-modal-popover: var(--z-setup-route-modal-popover);
+  --z-popover: var(--z-setup-route-modal-popover);
+  --z-over-modal: var(--z-setup-route-over-modal);
+  --z-over-modal-content: var(--z-setup-route-over-modal-content);
+  --z-switcher-backdrop: var(--z-setup-route-switcher-backdrop);
+  --z-switcher: var(--z-setup-route-switcher);
+  --z-onboarding: var(--z-setup-route-onboarding);
+  --z-onboarding-popover: calc(var(--z-setup-route-onboarding) + 1);
 }
 
 .dither {
@@ -2971,7 +2999,8 @@ button[data-slot='aui_msg-reactions'] svg {
    Widgets on the shared shell (components/chat/widget-shell.ts →
    `--ui-widget-surface-background`) and any chat-surface card are matched on
    their class, so new ones inherit this without touching the list. */
-[data-hud-shell] [data-slot='composer-bounds']
+[data-hud-shell]
+  [data-slot='composer-bounds']
   :is(
     [data-slot='clarify-inline'],
     [data-slot='tool-block'],

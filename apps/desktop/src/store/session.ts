@@ -656,6 +656,16 @@ function sessionListIdentity(session: Pick<SessionInfo, 'id' | 'profile'>): stri
   return `${sidebarProfileKey(session)}::${session.id}`
 }
 
+type ProfileReadError = { profile?: string; error?: string; code?: string }
+const SUPPORT_PROFILE_REFUSED = 'support-profile-refused'
+
+export function dropRefusedProfileSessions(sessions: SessionInfo[], errors: ProfileReadError[] | undefined | null): SessionInfo[] {
+  const refused = errors?.filter(error => error.code === SUPPORT_PROFILE_REFUSED)
+    .map(error => (error.profile ?? '').trim() || 'default')
+
+  return refused?.length ? sessions.filter(session => !refused.includes(sidebarProfileKey(session))) : sessions
+}
+
 /**
  * Re-attach previous rows for profiles whose sidebar slice failed this refresh.
  *
@@ -669,17 +679,21 @@ function sessionListIdentity(session: Pick<SessionInfo, 'id' | 'profile'>): stri
 export function carryForwardFailedProfileSessions(
   previous: SessionInfo[],
   incoming: SessionInfo[],
-  errors: Array<{ profile?: string; error?: string }> | undefined | null
+  errors: ProfileReadError[] | undefined | null
 ): SessionInfo[] {
-  if (!errors?.length || previous.length === 0) {
+  const authorizedPrevious = dropRefusedProfileSessions(previous, errors)
+
+  if (!errors?.length || authorizedPrevious.length === 0) {
     return incoming
   }
 
-  const failed = new Set(errors.map(error => (error.profile ?? '').trim() || 'default'))
+  const failed = new Set(
+    errors.filter(error => error.code !== SUPPORT_PROFILE_REFUSED).map(error => (error.profile ?? '').trim() || 'default')
+  )
   const incomingIds = new Set(incoming.map(sessionListIdentity))
   const carried: SessionInfo[] = []
 
-  for (const session of previous) {
+  for (const session of authorizedPrevious) {
     if (!failed.has(sidebarProfileKey(session)) || incomingIds.has(sessionListIdentity(session))) {
       continue
     }

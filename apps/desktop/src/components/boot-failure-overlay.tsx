@@ -29,7 +29,7 @@ const GatewaySettings = lazy(() =>
   import('@/app/settings/gateway-settings').then(module => ({ default: module.GatewaySettings }))
 )
 
-type BusyAction = 'local' | 'repair' | 'retry' | 'signin' | null
+type BusyAction = 'local' | 'repair' | 'retry' | 'signin' | 'signout' | null
 type RecoveryView = 'connect' | 'recovery'
 
 export async function completeManagedSignIn(signIn: () => Promise<unknown>, reload: () => void): Promise<void> {
@@ -182,6 +182,18 @@ export function BootFailureOverlay() {
     }
   }
 
+  const signOutManaged = async () => {
+    setBusy('signout')
+
+    try {
+      await window.hermesDesktop.eva.signOut()
+    } catch (err) {
+      notifyError(err, t.settings.gateway.signOutFailed)
+    } finally {
+      setBusy(null)
+    }
+  }
+
   const repair = async () => {
     setBusy('repair')
     await window.hermesDesktop?.repairBootstrap?.().catch(() => undefined)
@@ -322,6 +334,13 @@ export function BootFailureOverlay() {
         icon: <LogIn />,
         variant: 'secondary',
         busy: 'signin'
+      },
+      {
+        key: 'signout',
+        label: t.settings.gateway.managed.signOut,
+        onClick: () => void signOutManaged(),
+        variant: 'ghost',
+        busy: 'signout'
       }
     ]
     hint = copy.managedAssignmentHint

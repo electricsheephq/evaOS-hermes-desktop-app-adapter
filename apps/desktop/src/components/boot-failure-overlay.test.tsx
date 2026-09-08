@@ -124,6 +124,30 @@ describe('BootFailureOverlay', () => {
     }
   })
 
+  it('signs out through the managed IPC from the recovery card', async () => {
+    const original = window.hermesDesktop
+    const signOut = vi.fn().mockResolvedValue({ ok: true })
+
+    Object.defineProperty(window, 'hermesDesktop', {
+      configurable: true,
+      value: { eva: { signIn: vi.fn(), signOut } },
+      writable: true
+    })
+
+    try {
+      render(<BootFailureOverlay />)
+      fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
+
+      await waitFor(() => expect(signOut).toHaveBeenCalledOnce())
+    } finally {
+      Object.defineProperty(window, 'hermesDesktop', {
+        configurable: true,
+        value: original,
+        writable: true
+      })
+    }
+  })
+
   it('swaps to the in-place gateway settings view (no route nav) and back', async () => {
     render(<BootFailureOverlay />)
 

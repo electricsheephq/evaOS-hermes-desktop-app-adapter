@@ -1433,6 +1433,7 @@ export const ar = defineLocale({
     failedExport: 'فشل تصدير الملف الشخصي',
     allProfiles: 'كل الملفات الشخصية',
     showAllProfiles: 'إظهار كل الملفات الشخصية',
+    profileUnavailable: name => `${name} غير متاح`,
     switchToProfile: name => `التبديل إلى ${name}`,
     switchToConnection: name => `التبديل إلى ${name}`,
     switchConnectionFailed: name => `تعذّر الاتصال بـ ${name}`,

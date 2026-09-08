@@ -251,6 +251,33 @@ describe('refreshSessions identity + loading hygiene', () => {
     expect($messagingTruncated.get()).toBe(true)
   })
 
+  it('purges stale session slices for an explicitly refused profile', async () => {
+    const refused = { code: 'support-profile-refused', error: 'Profile temporarily unavailable.', profile: 'support' }
+
+    setSessions([row('support-recent', { profile: 'support' }), row('sibling-old', { profile: 'sibling' })])
+    setCronSessions([row('support-cron', { profile: 'support', source: 'cron' })])
+    setMessagingSessions([row('support-message', { profile: 'support', source: 'telegram' })])
+    listSidebarSessions.mockResolvedValue({
+      cron: { errors: [refused], sessions: [] },
+      errors: [refused],
+      messaging: { errors: [refused], sessions: [] },
+      recents: {
+        errors: [refused],
+        sessions: [row('sibling-fresh', { profile: 'sibling' })]
+      }
+    })
+
+    const { result } = renderHook(() => useSessionListActions({ profileScope: 'all' }))
+
+    await act(async () => {
+      await result.current.refreshSessions()
+    })
+
+    expect($sessions.get().map(s => `${s.profile}:${s.id}`)).toEqual(['sibling:sibling-fresh'])
+    expect($cronSessions.get()).toEqual([])
+    expect($messagingSessions.get()).toEqual([])
+  })
+
   it('still accepts a genuine empty recents page when the backend reported no errors', async () => {
     listSidebarSessions.mockResolvedValue(sidebar({ sessions: [row('a')] }))
     const { result } = renderHook(() => useSessionListActions({ profileScope: 'default' }))

@@ -2099,6 +2099,7 @@ export const ru = defineLocale({
     failedExport: 'Не удалось экспортировать профиль',
     allProfiles: 'Все профили',
     showAllProfiles: 'Показать все профили',
+    profileUnavailable: name => `${name} недоступен`,
     switchToProfile: name => `Переключиться на ${name}`,
     switchToConnection: name => `Переключиться на ${name}`,
     switchConnectionFailed: name => `Не удалось подключиться к ${name}`,

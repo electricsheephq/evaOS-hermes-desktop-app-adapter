@@ -24,6 +24,7 @@ import { useNavigate } from 'react-router'
 
 import type { ProfileScope } from '@/api/client'
 import { CodeEditor } from '@/components/chat/code-editor'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Codicon } from '@/components/ui/codicon'
 import { ColorSwatches } from '@/components/ui/color-swatches'
@@ -48,7 +49,7 @@ import { getProfileSoul, updateProfileSoul } from '@/hermes'
 import { useI18n } from '@/i18n'
 import { sortConnectionsForDisplay } from '@/lib/connection-display'
 import { triggerHaptic } from '@/lib/haptics'
-import { Loader2 } from '@/lib/icons'
+import { AlertTriangle, Loader2 } from '@/lib/icons'
 import { PROFILE_SWATCHES, profileColorSoft, resolveProfileColor } from '@/lib/profile-color'
 import {
   REORDER_DRAG_TRANSITION_CSS,
@@ -69,6 +70,7 @@ import {
   $activeGatewayProfile,
   $profileColors,
   $profileCreateRequest,
+  $profileErrors,
   $profileOrder,
   $profiles,
   $profileScope,
@@ -149,6 +151,7 @@ export function ProfileRail() {
   const { t } = useI18n()
   const p = t.profiles
   const profiles = useStore($profiles)
+  const profileErrors = useStore($profileErrors)
   const scope = useStore($profileScope)
   const gatewayProfile = useStore($activeGatewayProfile)
   const order = useStore($profileOrder)
@@ -273,7 +276,11 @@ export function ProfileRail() {
     order
   )
 
-  const multiProfile = profiles.length > 1
+  const profileCount = new Set([
+    ...profiles.map(profile => normalizeProfileKey(profile.name)),
+    ...profileErrors.map(error => normalizeProfileKey(error.profile))
+  ]).size
+  const multiProfile = profileCount > 1
 
   // distance constraint: a small drag reorders, a tap still selects the profile.
   const sensors = useSensors(
@@ -404,6 +411,17 @@ export function ProfileRail() {
       data-tour="profile-rail"
       role="group"
     >
+      {profileErrors.length > 0 && (
+        <div className="flex min-w-0 max-w-48 shrink gap-1 overflow-x-auto">
+          {profileErrors.map(error => (
+            <Badge className="shrink-0" key={error.profile} size="xs" variant="warn">
+              <AlertTriangle />
+              {p.profileUnavailable(error.profile)}
+            </Badge>
+          ))}
+        </div>
+      )}
+
       {/* Fleet: every gateway carries its own home square inside its group, so
           the pinned pill is purely the "all profiles on this gateway" toggle. */}
       {fleet && (

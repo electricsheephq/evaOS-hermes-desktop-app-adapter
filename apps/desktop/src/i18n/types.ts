@@ -1791,6 +1791,7 @@ export interface Translations {
     failedExport: string
     allProfiles: string
     showAllProfiles: string
+    profileUnavailable: (name: string) => string
     switchToProfile: (name: string) => string
     switchToConnection: (name: string) => string
     switchConnectionFailed: (name: string) => string

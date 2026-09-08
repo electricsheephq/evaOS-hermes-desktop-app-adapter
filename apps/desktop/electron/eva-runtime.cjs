@@ -2005,15 +2005,28 @@ function createEvaManagedRuntime(options) {
     }
   }
 
-  async function readDelegatedProfile(request, retry, errors) {
+  async function readDelegatedProfile(request, retry, errors, refusedProfiles) {
     try {
       return await requestApi(request, retry)
     } catch (error) {
       const status = statusCodeOf(error)
       // A route outage is local to this profile. Authorization, policy and
       // lease failures still invalidate the aggregate rather than hiding them.
-      if (status !== null && status < 500) throw error
-      errors.push({ profile: request.profile, error: 'Profile temporarily unavailable.' })
+      // The one exception is the gateway's exact per-leaf refusal: another
+      // granted profile can still be read safely, so expose this leaf as down.
+      let refusedProfile = false
+      if (status === 403) {
+        const match = /^\s*403:\s*(\{.*\})\s*$/.exec(String(error?.message || ''))
+        try {
+          refusedProfile = JSON.parse(match?.[1] ?? 'null')?.detail === 'profile is not authorized'
+        } catch {
+          refusedProfile = false
+        }
+      }
+      if (!refusedProfile && status !== null && status < 500) throw error
+      if (refusedProfile) refusedProfiles?.add(request.profile)
+      errors.push({ profile: request.profile, error: 'Profile temporarily unavailable.',
+        ...(refusedProfile ? { code: 'support-profile-refused' } : {}) })
       return null
     }
   }
@@ -2078,13 +2091,16 @@ function createEvaManagedRuntime(options) {
   async function requestDelegatedProfiles(runtime, request, retry) {
     const profiles = []
     const errors = []
+    const refusedProfiles = new Set()
     const guard = startSupportRequestGuard(runtime)
     const cache = supportReadCache(runtime).profiles
     try {
       for (const profile of runtime.allowedProfiles) {
         assertSupportRequestCurrent(guard)
-        const result = await readDelegatedProfile({ ...request, profile, path: `/api/profiles?profile=${encodeURIComponent(profile)}` }, retry, errors)
+        const result = await readDelegatedProfile({ ...request, profile, path: `/api/profiles?profile=${encodeURIComponent(profile)}` }, retry, errors, refusedProfiles)
         assertSupportRequestCurrent(guard)
+        const refused = refusedProfiles.has(profile)
+        if (refused) cache.delete(profile)
         const freshRows = result?.profiles ?? []
         for (const row of freshRows) {
           if (row.name !== profile) throw supportProfileError()
@@ -2092,7 +2108,7 @@ function createEvaManagedRuntime(options) {
         // The exact managed route suppresses metadata failures as an empty
         // successful response; it cannot delete a member of this live grant.
         if (result && !freshRows.length) errors.push({ profile, error: 'Profile temporarily unavailable.' })
-        const rows = freshRows.length ? freshRows : cache.get(profile) ?? []
+        const rows = freshRows.length ? freshRows : refused ? [] : cache.get(profile) ?? []
         if (freshRows.length) cache.set(profile, structuredClone(rows))
         profiles.push(...structuredClone(rows))
       }
@@ -2111,6 +2127,7 @@ function createEvaManagedRuntime(options) {
     const projects = new Map()
     const scopedIds = new Set()
     const errors = []
+    const refusedProfiles = new Set()
     const guard = startSupportRequestGuard(runtime)
     const cache = supportReadCache(runtime).projects
     // Match hermes_cli.web_routers.profiles._merge_profile_tree: folders/Home
@@ -2135,20 +2152,29 @@ function createEvaManagedRuntime(options) {
       for (const profile of runtime.allowedProfiles) {
         assertSupportRequestCurrent(guard)
         parsed.searchParams.set('profile', profile)
-        const fresh = await readDelegatedProfile({ ...request, profile, path: `${parsed.pathname}?${parsed.searchParams}` }, retry, errors)
+        const fresh = await readDelegatedProfile({ ...request, profile, path: `${parsed.pathname}?${parsed.searchParams}` }, retry, errors, refusedProfiles)
         assertSupportRequestCurrent(guard)
+        const refused = refusedProfiles.has(profile)
+        if (refused) cache.delete(profile)
+        let boundFresh = fresh
+        if (fresh) {
+          const bind = row => ({ ...bindSupportSession(row, profile), is_default_profile: profile === 'default' })
+          boundFresh = { ...fresh, projects: (fresh.projects ?? []).map(raw => ({
+            ...raw,
+            previewSessions: (raw.previewSessions ?? []).map(bind),
+            repos: (raw.repos ?? []).map(repo => ({ ...repo,
+              groups: (repo.groups ?? []).map(group => ({ ...group, sessions: (group.sessions ?? []).map(bind) }))
+            }))
+          })) }
+        }
         // A failed read is not authoritative deletion. Keep this lease's last
         // matching view, while the errors array still reports the outage.
         const cached = cache.get(profile)
-        const failed = !fresh || fresh.errors?.length
-        const result = failed && cached?.previewLimit === previewLimit ? structuredClone(cached.result) : fresh
+        const failed = !boundFresh || fresh?.errors?.length
+        const result = !refused && failed && cached?.previewLimit === previewLimit ? structuredClone(cached.result) : boundFresh
         for (const id of result?.scoped_session_ids ?? []) scopedIds.add(id)
         errors.push(...(fresh?.errors ?? []))
-        for (const raw of result?.projects ?? []) {
-          const bind = row => ({ ...bindSupportSession(row, profile), is_default_profile: profile === 'default' })
-          let project = { ...raw, previewSessions: (raw.previewSessions ?? []).map(bind),
-            repos: (raw.repos ?? []).map(repo => ({ ...repo,
-              groups: (repo.groups ?? []).map(group => ({ ...group, sessions: (group.sessions ?? []).map(bind) })) })) }
+        for (let project of structuredClone(result?.projects ?? [])) {
           const key = project.path || project.id
           let existing = projects.get(key)
           if (!existing) {
@@ -2167,7 +2193,7 @@ function createEvaManagedRuntime(options) {
           existing.previewSessions = [...existing.previewSessions, ...project.previewSessions]
             .sort((a, b) => recency(b) - recency(a)).slice(0, previewLimit)
         }
-        if (fresh && !fresh.errors?.length) cache.set(profile, { previewLimit, result: structuredClone(fresh) })
+        if (boundFresh && !fresh.errors?.length) cache.set(profile, { previewLimit, result: structuredClone(boundFresh) })
       }
       return { projects: [...projects.values()].sort((a, b) => (b.lastActive || 0) - (a.lastActive || 0)),
         active_id: null, scoped_session_ids: [...scopedIds], errors }
