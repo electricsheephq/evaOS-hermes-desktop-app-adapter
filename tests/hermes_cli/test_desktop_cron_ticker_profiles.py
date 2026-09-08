@@ -164,6 +164,7 @@ def _capture_builtin_multiplex(monkeypatch):
     return captured
 
 
+@pytest.mark.linux_only
 def test_cron_ticker_env_uses_one_flat_managed_profile(monkeypatch, flat_managed_profile):
     monkeypatch.delenv("HERMES_DESKTOP", raising=False)
     monkeypatch.setenv("HERMES_CRON_TICKER", "1")
@@ -176,6 +177,7 @@ def test_cron_ticker_env_uses_one_flat_managed_profile(monkeypatch, flat_managed
     assert callable(captured["profile_gate"])
 
 
+@pytest.mark.linux_only
 def test_one_profile_gate_rejects_held_gateway_lock(monkeypatch, flat_managed_profile):
     monkeypatch.setenv("HERMES_CRON_TICKER", "yes")
     captured = _capture_builtin_multiplex(monkeypatch)
