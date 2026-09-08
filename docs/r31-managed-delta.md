@@ -41,6 +41,38 @@ renderer isolation and End behavior remain authoritative. This source change
 requires a compatible broker and signed Desktop delivery; it is not installed
 delegated-access acceptance or permission to reset a customer conversation.
 
+### A managed profile literally named `default`
+
+`resolveEvaManagedDesktopProfile` rejected every gateway answer of `default`,
+which on a flat managed box is the real name of a per-customer profile
+(`david-poku/default`) rather than the unscoped shared process. The check now
+compares `current` against the profile this session itself asked the gateway
+for: a support lease's granted profile, else the enrollment's own agent. With no
+expectation, `default` still fails closed, and any answer that is not the
+requested profile fails closed as well. The main process logs one `[boot]` line
+naming `invalid-profile-scope` and the reported profile id, so a renderer-side
+boot rejection is no longer invisible in the desktop log. This is source
+behavior with focused test receipts; it is not installed delegated-access
+acceptance on a customer box.
+
+The route answers `{active, current}` on both its managed and its unmanaged
+branch, so a `default` body proves no managed binding by itself; the
+broker-minted customer-scoped base URL and session token that route the request
+remain the isolation boundary, and this check is the consistency layer on top
+of it. A `default` profile now carries the evidence a named profile already
+carried, no more. Requiring an authoritative managed-binding signal needs that
+field on the gateway route first, across the deployed fleet.
+
+The retained 404 compatibility leg, for a gateway too old to serve that route,
+now names the profile the same way. The public enrollment status reports no
+agent id at all for the whole of a delegated support session, so reading
+`current` from it rejected every profile a support lease was granted; it falls
+back to the requested profile instead. That leg checks the gateway against
+nothing — there is no answer to check — and the request's broker-minted,
+customer-scoped base URL and session token remain its only isolation boundary,
+as they were before the route existed. With nothing naming a profile it still
+fails closed.
+
 This ledger maps retained behavior into pinned upstream modules. It supplements the actual Git diff, never substitutes for it. Preserve [the previous 8.27 ledger](desktop-v2026.8.27-managed-delta.md) unchanged.
 
 ## Identities

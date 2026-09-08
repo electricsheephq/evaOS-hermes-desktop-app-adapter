@@ -16529,12 +16529,28 @@ ipcMain.handle('hermes:profile:get', async () => {
     return { profile: readActiveDesktopProfile() }
   }
 
-  const profile = await resolveEvaManagedDesktopProfileFromSources(
-    () => evaManagedRuntime.requestApi({ path: '/api/profiles/active', method: 'GET' }),
-    () => evaManagedRuntime.status()
-  )
+  // Renderer-side boot failures only reach a nanostore, so a rejected profile
+  // scope was invisible in the desktop log. Log it here, where the main process
+  // owns the logger. Profile ids are names, never secrets.
+  try {
+    const profile = await resolveEvaManagedDesktopProfileFromSources(
+      () => evaManagedRuntime.requestApi({ path: '/api/profiles/active', method: 'GET' }),
+      () => evaManagedRuntime.status(),
+      () => evaManagedRuntime.assignedProfileId()
+    )
 
-  return { profile }
+    return { profile }
+  } catch (error) {
+    if (error?.code === 'invalid-profile-scope') {
+      rememberLog(
+        `[boot] managed profile check failed: invalid-profile-scope; gateway reported ${JSON.stringify(
+          String(error?.reportedProfile ?? '')
+        )}`
+      )
+    }
+
+    throw error
+  }
 })
 // Persistence-only sibling of hermes:profile:set: records the profile the
 // Desktop should boot into next launch WITHOUT tearing down the backend or

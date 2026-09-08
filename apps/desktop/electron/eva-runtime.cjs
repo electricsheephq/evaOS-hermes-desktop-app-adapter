@@ -2435,6 +2435,13 @@ function createEvaManagedRuntime(options) {
   if (initialState.supportLeases?.length) void retrySupportLeaseCleanup(initialState).catch(() => false)
 
   return {
+    // The profile THIS session asked the gateway for, so a `/api/profiles/active`
+    // answer can be checked against it: a support lease's granted profile (the
+    // one `bindSupportRequest` routes to), else this enrollment's own agent.
+    assignedProfileId: async () => {
+      const runtime = await ensureRuntimeEnrollment()
+      return (runtime.sessionKind === 'delegated_support' ? runtime.profile : runtime.agentId) ?? null
+    },
     delegatedProfiles: async () => {
       const runtime = await ensureRuntimeEnrollment()
       return runtime.sessionKind === 'delegated_support' ? [...runtime.allowedProfiles] : null

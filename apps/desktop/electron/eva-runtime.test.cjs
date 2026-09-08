@@ -937,6 +937,28 @@ test('admin session pages merge recency before the global pinned-aware window', 
   assert.deepEqual(requests.slice(-2).map(url => [url.searchParams.get('limit'), url.searchParams.get('offset')]), [['3', '0'], ['3', '0']])
 })
 
+test('the assigned profile id names the profile this session asked the gateway for', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-assigned-profile-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'state.json')
+  writeActiveEnrollment(statePath)
+  const ordinary = makeManagedRuntime(statePath)
+  t.after(() => ordinary.close())
+  // An ordinary login expects its own enrolled agent.
+  assert.equal(await ordinary.assignedProfileId(), 'main')
+
+  const supportPath = path.join(directory, 'support-state.json')
+  writeActiveEnrollment(supportPath)
+  // A flat managed box's profile is literally named `default`; the lease's
+  // granted profile is what the app asks for, so it is the expectation.
+  const payload = supportEnrollment(Date.now(), { profile: 'default' })
+  payload.remote_backend.allowed_profiles = ['default']
+  const support = makeManagedRuntime(supportPath, { brokerPost: async () => payload })
+  t.after(() => support.close())
+  await support.claimSupportRequest('assigned-profile-request')
+  assert.equal(await support.assignedProfileId(), 'default')
+})
+
 test('admin profile discovery reads every granted agent even without sessions', async t => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-support-profiles-'))
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }))

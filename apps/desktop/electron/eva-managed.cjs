@@ -925,24 +925,71 @@ function ownedSupportLeases(state, desktop) {
   )
 }
 
-function resolveEvaManagedDesktopProfile(response) {
+// `default` is the gateway's answer for an unscoped/shared process that was
+// never bound to a profile — and, on a flat managed box, the literal name of a
+// real per-customer profile (david-poku/default). The two are told apart by
+// what THIS session asked the gateway for: a support lease's granted profile,
+// else the enrollment's own agent. With no expectation to compare against,
+// `default` still throws, so the unscoped-process protection is unchanged.
+// A `current` that is not the profile we asked for throws as well: that
+// gateway belongs to another agent, which is exactly what this guard exists
+// to catch.
+// What this cannot prove: `GET /api/profiles/active` answers `{active, current}`
+// and nothing else on both its managed and its unmanaged branch, so a body of
+// `default` carries no proof of managed binding. The request's own binding —
+// the broker-minted, customer-scoped `base_url` and session token that routed
+// it — is what holds the isolation boundary; this is the consistency check on
+// top of it, and it gives a `default` profile exactly the evidence a named one
+// already had. An authoritative managed-binding field on that route would let
+// this tighten further.
+function resolveEvaManagedDesktopProfile(response, options = {}) {
   const current = typeof response?.current === 'string' ? response.current.trim() : ''
-  if (current === 'default' || !/^[a-z0-9][a-z0-9_-]{0,63}$/.test(current)) {
-    throw new EvaBrokerError('evaOS Agent could not verify its assigned profile.', 502, 'invalid-profile-scope')
+  const expected = typeof options.expectedProfileId === 'string' ? options.expectedProfileId.trim() : ''
+  if (!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(current) || (expected ? current !== expected : current === 'default')) {
+    const error = new EvaBrokerError('evaOS Agent could not verify its assigned profile.', 502, 'invalid-profile-scope')
+    // Carried for the main process's one log line only: a profile id, bounded
+    // because an unmatched `current` is whatever the gateway said.
+    error.reportedProfile = current.slice(0, 64)
+    throw error
   }
   return current
 }
 
-async function resolveEvaManagedDesktopProfileFromSources(readActiveProfile, readEnrollmentStatus) {
+async function resolveEvaManagedDesktopProfileFromSources(readActiveProfile, readEnrollmentStatus, readExpectedProfileId) {
+  let response
+  let activeProfileEndpointMissing = false
   try {
-    return resolveEvaManagedDesktopProfile(await readActiveProfile())
+    response = await readActiveProfile()
   } catch (error) {
     if (Number(error?.statusCode) !== 404) {
       throw error
     }
 
-    return resolveEvaManagedDesktopProfile({ current: readEnrollmentStatus()?.agentId })
+    activeProfileEndpointMissing = true
+    response = { current: readEnrollmentStatus()?.agentId }
   }
+
+  // Read the expectation only after the read that answered: a 401 inside the
+  // request re-enrolls and retries, and the answer belongs to the enrollment
+  // that served it, not to the one this call started with.
+  const expectedProfileId = typeof readExpectedProfileId === 'function' ? await readExpectedProfileId() : null
+
+  // The public status reports `agentId: null` for the whole of a delegated
+  // support session (`publicEvaEnrollmentStatus`), so on a gateway old enough
+  // to lack `/api/profiles/active` it names no profile at all, and this
+  // compatibility leg would reject the lease's own profile. Fall back to the
+  // same server-authoritative id the expectation is read from: the lease's
+  // granted profile, else the enrollment's own agent. That leg asserts nothing
+  // about the gateway — there is no answer to compare against — and the
+  // broker-minted, customer-scoped base URL and session token that routed the
+  // request stay its only isolation boundary, exactly as they were before the
+  // endpoint existed. With no expectation either, `current` stays empty and
+  // the resolver throws.
+  if (activeProfileEndpointMissing && !response.current) {
+    response = { current: expectedProfileId }
+  }
+
+  return resolveEvaManagedDesktopProfile(response, { expectedProfileId })
 }
 
 module.exports = {
