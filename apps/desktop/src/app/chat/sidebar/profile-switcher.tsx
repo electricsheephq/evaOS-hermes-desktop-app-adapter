@@ -410,7 +410,7 @@ export function ProfileRail() {
       {profileErrors.length > 0 && (
         <div className="flex min-w-0 max-w-48 shrink gap-1 overflow-x-auto">
           {profileErrors.map(error => (
-            <Badge key={error.profile} className="shrink-0" size="xs" variant="warn">
+            <Badge className="shrink-0" key={error.profile} size="xs" variant="warn">
               <AlertTriangle />
               {p.profileUnavailable(error.profile)}
             </Badge>

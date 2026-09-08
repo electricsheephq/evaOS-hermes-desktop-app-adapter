@@ -184,6 +184,7 @@ export function BootFailureOverlay() {
 
   const signOutManaged = async () => {
     setBusy('signout')
+
     try {
       await window.hermesDesktop.eva.signOut()
     } catch (err) {
