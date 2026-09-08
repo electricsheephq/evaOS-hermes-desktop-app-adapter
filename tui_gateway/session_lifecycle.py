@@ -498,7 +498,14 @@ def _rebind_live_transport(sid: str, session: dict, transport: Transport) -> Non
     session["transport"] = transport
     # Every transport that showed this session (pop-outs resume the same sid); on disconnect the last
     # viewer becomes the transport instead of the drop sentinel.
-    session.setdefault("viewers", {})[transport] = time.time()
+    viewers = session.setdefault("viewers", {})
+    prior_viewer = viewers.get(transport)
+    viewers[transport] = (
+        {**prior_viewer, "attached_at": time.time()}
+        if isinstance(prior_viewer, dict) else
+        {"attached_at": time.time(), "source": _session_source(session),
+         "desktop_ui_protocol": session.get("desktop_ui_protocol")}
+    )
     # See #83716.
     if transport is not _detached_ws_transport:
         _cancel_ws_orphan_reap(sid)  # the client is back — a pending ws-orphan reap must not fire
