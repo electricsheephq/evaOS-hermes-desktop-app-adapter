@@ -1126,7 +1126,7 @@ test('admin aggregate reads isolate unavailable profiles but reject authorizatio
     failure = Object.assign(new Error('403: {"detail":"profile is not authorized"}'), { statusCode: 403 })
     const refusedLeaf = await runtime.requestApi({ path: requestPath })
     assert.equal((refusedLeaf.profiles ?? refusedLeaf.projects ?? refusedLeaf.sessions ?? refusedLeaf.recents.sessions).length, 1)
-    assert.ok(refusedLeaf.errors.some(entry => entry.profile === 'support'))
+    assert.ok(refusedLeaf.errors.some(entry => entry.profile === 'support' && entry.code === 'support-profile-refused'))
 
     failure = new EvaBrokerError('authorization revoked', 403, 'forbidden')
     await assert.rejects(runtime.requestApi({ path: requestPath }), error => error.statusCode === 403)

@@ -25,6 +25,7 @@ import {
   $sessions,
   carryForwardFailedProfileSessions,
   CRON_SECTION_LIMIT,
+  dropRefusedProfileSessions,
   keepFailedProfileMeta,
   mergeSessionPage,
   MESSAGING_SECTION_LIMIT,
@@ -210,7 +211,7 @@ export function useSessionListActions({ profileScope }: UseSessionListActionsArg
       setMessagingSessions(prev => [
         ...prev.filter(s => !inPlatform(s)),
         ...mergeSessionPage(
-          prev.filter(inPlatform),
+          dropRefusedProfileSessions(prev.filter(inPlatform), result.errors),
           carryForwardFailedProfileSessions(prev.filter(inPlatform), incoming, result.errors),
           sessionsToKeep()
         )
@@ -292,6 +293,7 @@ export function useSessionListActions({ profileScope }: UseSessionListActionsArg
           gatewayActivationEpoch() === activationEpoch
         ) {
           const recents = result.recents
+          const recentsErrors = recents.errors ?? result.errors
 
           // Drop rows the user just deleted/archived: a refresh can race an
           // in-flight mutation and the backend page still carries the doomed row.
@@ -302,11 +304,12 @@ export function useSessionListActions({ profileScope }: UseSessionListActionsArg
           // identity, or every sidebar memo keyed on $sessions recomputes and the
           // whole list re-renders once per turn/broadcast for nothing.
           setSessions(prev => {
+            const previous = dropRefusedProfileSessions(prev, recentsErrors)
             const incoming = dropTombstoned(
-              carryForwardFailedProfileSessions(prev, recents.sessions ?? [], recents.errors ?? result.errors)
+              carryForwardFailedProfileSessions(previous, recents.sessions ?? [], recentsErrors)
             )
 
-            const next = mergeSessionPage(prev, incoming, sessionsToKeep())
+            const next = mergeSessionPage(previous, incoming, sessionsToKeep())
 
             return sameCronSignature(prev, next) ? prev : next
           })
@@ -315,7 +318,6 @@ export function useSessionListActions({ profileScope }: UseSessionListActionsArg
           // top of the rows it already read (the old exact totals ran a COUNT(*)
           // per profile DB on every refresh). Reference-stable when unchanged so
           // the sidebar's group memos don't recompute per refresh.
-          const recentsErrors = recents.errors ?? result.errors
           setSessionProfilesTruncated(prev => {
             const next = keepFailedProfileMeta(prev, recents.profiles_truncated ?? {}, recentsErrors)
             const prevKeys = Object.keys(prev)

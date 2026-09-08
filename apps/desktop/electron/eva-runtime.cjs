@@ -2025,7 +2025,8 @@ function createEvaManagedRuntime(options) {
       }
       if (!refusedProfile && status !== null && status < 500) throw error
       if (refusedProfile) refusedProfiles?.add(request.profile)
-      errors.push({ profile: request.profile, error: 'Profile temporarily unavailable.' })
+      errors.push({ profile: request.profile, error: 'Profile temporarily unavailable.',
+        ...(refusedProfile ? { code: 'support-profile-refused' } : {}) })
       return null
     }
   }
