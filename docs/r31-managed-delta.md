@@ -63,6 +63,16 @@ of it. A `default` profile now carries the evidence a named profile already
 carried, no more. Requiring an authoritative managed-binding signal needs that
 field on the gateway route first, across the deployed fleet.
 
+The retained 404 compatibility leg, for a gateway too old to serve that route,
+now names the profile the same way. The public enrollment status reports no
+agent id at all for the whole of a delegated support session, so reading
+`current` from it rejected every profile a support lease was granted; it falls
+back to the requested profile instead. That leg checks the gateway against
+nothing — there is no answer to check — and the request's broker-minted,
+customer-scoped base URL and session token remain its only isolation boundary,
+as they were before the route existed. With nothing naming a profile it still
+fails closed.
+
 This ledger maps retained behavior into pinned upstream modules. It supplements the actual Git diff, never substitutes for it. Preserve [the previous 8.27 ledger](desktop-v2026.8.27-managed-delta.md) unchanged.
 
 ## Identities

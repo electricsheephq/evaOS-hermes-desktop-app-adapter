@@ -957,6 +957,7 @@ function resolveEvaManagedDesktopProfile(response, options = {}) {
 
 async function resolveEvaManagedDesktopProfileFromSources(readActiveProfile, readEnrollmentStatus, readExpectedProfileId) {
   let response
+  let activeProfileEndpointMissing = false
   try {
     response = await readActiveProfile()
   } catch (error) {
@@ -964,6 +965,7 @@ async function resolveEvaManagedDesktopProfileFromSources(readActiveProfile, rea
       throw error
     }
 
+    activeProfileEndpointMissing = true
     response = { current: readEnrollmentStatus()?.agentId }
   }
 
@@ -971,6 +973,22 @@ async function resolveEvaManagedDesktopProfileFromSources(readActiveProfile, rea
   // request re-enrolls and retries, and the answer belongs to the enrollment
   // that served it, not to the one this call started with.
   const expectedProfileId = typeof readExpectedProfileId === 'function' ? await readExpectedProfileId() : null
+
+  // The public status reports `agentId: null` for the whole of a delegated
+  // support session (`publicEvaEnrollmentStatus`), so on a gateway old enough
+  // to lack `/api/profiles/active` it names no profile at all, and this
+  // compatibility leg would reject the lease's own profile. Fall back to the
+  // same server-authoritative id the expectation is read from: the lease's
+  // granted profile, else the enrollment's own agent. That leg asserts nothing
+  // about the gateway — there is no answer to compare against — and the
+  // broker-minted, customer-scoped base URL and session token that routed the
+  // request stay its only isolation boundary, exactly as they were before the
+  // endpoint existed. With no expectation either, `current` stays empty and
+  // the resolver throws.
+  if (activeProfileEndpointMissing && !response.current) {
+    response = { current: expectedProfileId }
+  }
+
   return resolveEvaManagedDesktopProfile(response, { expectedProfileId })
 }
 

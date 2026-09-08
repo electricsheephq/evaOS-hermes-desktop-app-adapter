@@ -957,6 +957,8 @@ test('managed desktop profile falls back to enrolled identity only when the acti
     ),
     'default'
   )
+  // The ordinary, non-delegated shape: the public status names the
+  // enrollment's own agent, which on a flat managed box is `default`.
   assert.equal(
     await resolveEvaManagedDesktopProfileFromSources(
       async () => Promise.reject(missing),
@@ -965,6 +967,38 @@ test('managed desktop profile falls back to enrolled identity only when the acti
     ),
     'default'
   )
+  // The delegated shape: the public status reports `agentId: null` for the
+  // whole of a support session, so the 404 leg has to fall back to the
+  // lease's own granted profile or it rejects every profile it is given.
+  assert.equal(
+    await resolveEvaManagedDesktopProfileFromSources(
+      async () => Promise.reject(missing),
+      () => ({ agentId: null }),
+      async () => 'default'
+    ),
+    'default'
+  )
+  assert.equal(
+    await resolveEvaManagedDesktopProfileFromSources(
+      async () => Promise.reject(missing),
+      () => ({ agentId: null }),
+      async () => 'jarvis'
+    ),
+    'jarvis'
+  )
+  // With neither an answer nor an expectation there is nothing to name the
+  // profile, and the leg still fails closed.
+  for (const readExpectedProfileId of [undefined, async () => null, async () => '   ']) {
+    await assert.rejects(
+      () =>
+        resolveEvaManagedDesktopProfileFromSources(
+          async () => Promise.reject(missing),
+          () => ({ agentId: null }),
+          readExpectedProfileId
+        ),
+      error => error instanceof EvaBrokerError && error.code === 'invalid-profile-scope'
+    )
+  }
   await assert.rejects(
     () =>
       resolveEvaManagedDesktopProfileFromSources(
