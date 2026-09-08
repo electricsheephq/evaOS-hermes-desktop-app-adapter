@@ -51,18 +51,14 @@ class CredentialPoolAdminMixin:
             return len(stale)
 
     def remove_index(self, index: int) -> Optional[PooledCredential]:
-        from agent.credential_pool import persist_pool_entries
-
         with self._lock:
+            if self._profile_shadow_path is not None:
+                raise PermissionError("managed shared credentials cannot be removed from a profile")
             if index < 1 or index > len(self._entries):
                 return None
             removed = self._entries.pop(index - 1)
             self._entries = [replace(e, priority=p) for p, e in enumerate(self._entries)]
-            persist_pool_entries(
-                self.provider,
-                [entry.to_dict() for entry in self._entries],
-                removed_ids=[removed.id],
-            )
+            self._persist(removed_ids=[removed.id])
             if self._current_id == removed.id:
                 self._current_id = None
             return removed
@@ -111,12 +107,49 @@ class CredentialPoolAdminMixin:
             return None, None, f'No credential matching "{raw}".'
 
     def add_entry(self, entry: PooledCredential) -> PooledCredential:
-        from agent.credential_pool import _next_priority, write_credential_pool
+        from agent.credential_pool import (
+            PooledCredential, _next_priority, write_credential_pool,
+            _auth_store_lock, _load_auth_store,
+        )
 
         with self._lock:
             entry = replace(entry, priority=_next_priority(self._entries))
             self._entries.append(entry)
             borrowed_ids = getattr(self, "_borrowed_root_ids", None)
+            if self._profile_shadow_path is not None:
+                shadow_path = self._profile_shadow_path
+                entry = replace(entry, priority=0)
+                write_credential_pool(
+                    self.provider,
+                    [entry.to_dict()],
+                    target_path=shadow_path,
+                )
+                with _auth_store_lock(target_path=shadow_path):
+                    persisted_store = _load_auth_store(shadow_path)
+                persisted_pool = persisted_store.get("credential_pool")
+                persisted_raw = (
+                    persisted_pool.get(self.provider)
+                    if isinstance(persisted_pool, dict) else None
+                )
+                self._entries = sorted(
+                    [
+                        PooledCredential.from_dict(self.provider, payload)
+                        for payload in (persisted_raw or [])
+                        if isinstance(payload, dict)
+                    ],
+                    key=lambda item: item.priority,
+                )
+                self._auth_source_path = shadow_path
+                self._profile_shadow_path = None
+                self._shared_persistence_base = None
+                if self._current_id and not any(
+                    candidate.id == self._current_id for candidate in self._entries
+                ):
+                    self._current_id = None
+                return next(
+                    (candidate for candidate in self._entries if candidate.id == entry.id),
+                    entry,
+                )
             if borrowed_ids:
                 # ``hermes -p <profile> auth add <single-use provider>``: the
                 # profile claims its OWN credential. Persist only profile-owned
