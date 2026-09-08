@@ -532,6 +532,33 @@ def test_managed_profile_cannot_remove_shared_pool_or_resurrect_root_removal(
     assert [entry.id for entry in stale_pool.entries()] == ["shared-b"]
 
 
+def test_managed_profile_cannot_reorder_shared_credentials(profile_env, monkeypatch):
+    from agent.credential_pool import load_pool
+
+    shared = profile_env["global"] / "shared-auth" / "auth.json"
+    shared.parent.mkdir()
+    initial = [_pool_entry(id="shared-a", priority=0), _pool_entry(id="shared-b", priority=1)]
+    _write(shared, _make_auth_store(pool={"openrouter": initial}))
+    _write(profile_env["profile"] / "auth.json", _make_auth_store(pool={}))
+    monkeypatch.setenv("HERMES_SHARED_AUTH_FILE", str(shared))
+    pool = load_pool("openrouter")
+    before = shared.read_bytes()
+
+    with pytest.raises(PermissionError, match="managed shared credentials cannot be reordered"):
+        pool.move_entry("shared-b", 0)
+
+    assert shared.read_bytes() == before
+    assert [entry.id for entry in pool.entries()] == ["shared-a", "shared-b"]
+
+    # A profile-owned override still permits priority edits without changing siblings.
+    local = profile_env["profile"] / "auth.json"
+    _write(local, _make_auth_store(pool={"openrouter": initial}))
+    own_pool = load_pool("openrouter")
+    assert own_pool.move_entry("shared-b", 0).priority == 0
+    assert [entry.id for entry in load_pool("openrouter").entries()] == ["shared-b", "shared-a"]
+    assert shared.read_bytes() == before
+
+
 def test_managed_shared_pool_sanitizes_disk_only_borrowed_secrets(profile_env, monkeypatch):
     from hermes_cli.auth import write_credential_pool
     shared = profile_env["global"] / "shared-auth" / "auth.json"

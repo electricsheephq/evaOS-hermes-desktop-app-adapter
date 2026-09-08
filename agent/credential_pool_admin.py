@@ -68,6 +68,8 @@ class CredentialPoolAdminMixin:
         from agent.credential_pool import _normalize_pool_priorities
 
         with self._lock:
+            if self._profile_shadow_path is not None:
+                raise PermissionError("managed shared credentials cannot be reordered from a profile")
             entry = self._find(lambda e: e.id == credential_id)
             if entry is None:
                 return None
