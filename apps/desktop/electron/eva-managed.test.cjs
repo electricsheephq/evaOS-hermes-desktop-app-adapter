@@ -953,7 +953,7 @@ test('managed desktop profile falls back to enrolled identity only when the acti
     await resolveEvaManagedDesktopProfileFromSources(
       async () => ({ current: 'default' }),
       () => ({ agentId: 'default' }),
-      { expectedProfileId: 'default' }
+      async () => 'default'
     ),
     'default'
   )
@@ -961,7 +961,7 @@ test('managed desktop profile falls back to enrolled identity only when the acti
     await resolveEvaManagedDesktopProfileFromSources(
       async () => Promise.reject(missing),
       () => ({ agentId: 'default' }),
-      { expectedProfileId: 'default' }
+      async () => 'default'
     ),
     'default'
   )
@@ -970,10 +970,29 @@ test('managed desktop profile falls back to enrolled identity only when the acti
       resolveEvaManagedDesktopProfileFromSources(
         async () => ({ current: 'default' }),
         () => ({ agentId: 'jarvis' }),
-        { expectedProfileId: 'jarvis' }
+        async () => 'jarvis'
       ),
     error => error instanceof EvaBrokerError && error.code === 'invalid-profile-scope'
   )
+
+  // The expectation is read after the answering request, so a 401 that
+  // re-enrolls mid-request is compared against the enrollment that served it.
+  const order = []
+  assert.equal(
+    await resolveEvaManagedDesktopProfileFromSources(
+      async () => {
+        order.push('read')
+        return { current: 'reassigned' }
+      },
+      () => ({ agentId: 'reassigned' }),
+      async () => {
+        order.push('expected')
+        return 'reassigned'
+      }
+    ),
+    'reassigned'
+  )
+  assert.deepEqual(order, ['read', 'expected'])
 })
 
 test('broker rejections keep the delegated-support and membership codes the picker types', async () => {

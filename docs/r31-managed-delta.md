@@ -55,6 +55,14 @@ boot rejection is no longer invisible in the desktop log. This is source
 behavior with focused test receipts; it is not installed delegated-access
 acceptance on a customer box.
 
+The route answers `{active, current}` on both its managed and its unmanaged
+branch, so a `default` body proves no managed binding by itself; the
+broker-minted customer-scoped base URL and session token that route the request
+remain the isolation boundary, and this check is the consistency layer on top
+of it. A `default` profile now carries the evidence a named profile already
+carried, no more. Requiring an authoritative managed-binding signal needs that
+field on the gateway route first, across the deployed fleet.
+
 This ledger maps retained behavior into pinned upstream modules. It supplements the actual Git diff, never substitutes for it. Preserve [the previous 8.27 ledger](desktop-v2026.8.27-managed-delta.md) unchanged.
 
 ## Identities

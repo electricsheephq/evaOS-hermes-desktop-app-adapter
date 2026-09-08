@@ -16536,7 +16536,7 @@ ipcMain.handle('hermes:profile:get', async () => {
     const profile = await resolveEvaManagedDesktopProfileFromSources(
       () => evaManagedRuntime.requestApi({ path: '/api/profiles/active', method: 'GET' }),
       () => evaManagedRuntime.status(),
-      { expectedProfileId: await evaManagedRuntime.assignedProfileId() }
+      () => evaManagedRuntime.assignedProfileId()
     )
 
     return { profile }

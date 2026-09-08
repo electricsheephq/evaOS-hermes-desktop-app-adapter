@@ -934,6 +934,14 @@ function ownedSupportLeases(state, desktop) {
 // A `current` that is not the profile we asked for throws as well: that
 // gateway belongs to another agent, which is exactly what this guard exists
 // to catch.
+// What this cannot prove: `GET /api/profiles/active` answers `{active, current}`
+// and nothing else on both its managed and its unmanaged branch, so a body of
+// `default` carries no proof of managed binding. The request's own binding —
+// the broker-minted, customer-scoped `base_url` and session token that routed
+// it — is what holds the isolation boundary; this is the consistency check on
+// top of it, and it gives a `default` profile exactly the evidence a named one
+// already had. An authoritative managed-binding field on that route would let
+// this tighten further.
 function resolveEvaManagedDesktopProfile(response, options = {}) {
   const current = typeof response?.current === 'string' ? response.current.trim() : ''
   const expected = typeof options.expectedProfileId === 'string' ? options.expectedProfileId.trim() : ''
@@ -947,16 +955,23 @@ function resolveEvaManagedDesktopProfile(response, options = {}) {
   return current
 }
 
-async function resolveEvaManagedDesktopProfileFromSources(readActiveProfile, readEnrollmentStatus, options = {}) {
+async function resolveEvaManagedDesktopProfileFromSources(readActiveProfile, readEnrollmentStatus, readExpectedProfileId) {
+  let response
   try {
-    return resolveEvaManagedDesktopProfile(await readActiveProfile(), options)
+    response = await readActiveProfile()
   } catch (error) {
     if (Number(error?.statusCode) !== 404) {
       throw error
     }
 
-    return resolveEvaManagedDesktopProfile({ current: readEnrollmentStatus()?.agentId }, options)
+    response = { current: readEnrollmentStatus()?.agentId }
   }
+
+  // Read the expectation only after the read that answered: a 401 inside the
+  // request re-enrolls and retries, and the answer belongs to the enrollment
+  // that served it, not to the one this call started with.
+  const expectedProfileId = typeof readExpectedProfileId === 'function' ? await readExpectedProfileId() : null
+  return resolveEvaManagedDesktopProfile(response, { expectedProfileId })
 }
 
 module.exports = {
