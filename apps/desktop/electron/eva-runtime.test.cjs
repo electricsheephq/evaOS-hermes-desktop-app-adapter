@@ -993,13 +993,10 @@ test('admin profile discovery reads every granted agent even without sessions', 
   const scoped = await runtime.requestApi({ path: '/api/profiles?profile=quiet', profile: 'quiet' })
   assert.deepEqual(scoped.profiles.map(row => row.name), ['quiet'])
   wrongProfile = true
-  const mismatched = await runtime.requestApi({ path: '/api/profiles' })
-  assert.deepEqual(mismatched.profiles.map(row => row.name), ['support', 'quiet'])
-  assert.deepEqual(mismatched.errors.map(error => error.profile), ['support', 'quiet'])
-  assert.equal(JSON.stringify(mismatched).includes('outside'), false)
+  await assert.rejects(runtime.requestApi({ path: '/api/profiles' }), error => error.code === 'support-profile-mismatch')
 })
 
-test('admin project tree merges granted profiles and discards mismatched session rows per leaf', async t => {
+test('admin project tree merges granted profiles and rejects mismatched session rows', async t => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-support-tree-'))
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
   const statePath = path.join(directory, 'state.json')
@@ -1045,11 +1042,7 @@ test('admin project tree merges granted profiles and discards mismatched session
   const sessions = await runtime.requestApi({ path: '/api/profiles/sessions?profile=all' })
   assert.deepEqual(sessions.sessions.map(row => row.profile), ['sibling', 'support'])
   wrongProfile = true
-  const mismatchedTree = await runtime.requestApi({ path: '/api/profiles/projects/tree' })
-  assert.equal(mismatchedTree.projects.length, 0)
-  assert.deepEqual(mismatchedTree.errors.map(error => error.profile), ['support', 'sibling'])
-  assert.equal(JSON.stringify(mismatchedTree).includes('outside'), false)
-  for (const path of ['/api/profiles/sessions?profile=all', '/api/profiles/sessions/sidebar']) {
+  for (const path of ['/api/profiles/projects/tree?preview_limit=1', '/api/profiles/sessions?profile=all', '/api/profiles/sessions/sidebar']) {
     await assert.rejects(runtime.requestApi({ path }), error => error.code === 'support-profile-mismatch')
   }
 })
@@ -1165,10 +1158,12 @@ test('admin discovery retains last-good rows on transport and reported failures 
           : { projects: [], scoped_session_ids: [], errors: [{ profile, error: 'Profile database unavailable.' }] }
         throw new EvaBrokerError('private upstream detail', 503, 'unavailable')
       }
-      return parsed.pathname === '/api/profiles'
-        ? { profiles: [{ name: profile, display_name: `${profile}-${revision}` }] }
-        : { projects: [{ id: profile, name: `${profile}-${revision}`, sessionCount: 1,
-          repos: [{ id: 'repo', groups: [{ id: 'lane', sessions: [{ id: profile, profile }] }] }] }] }
+      if (parsed.pathname === '/api/profiles') {
+        return { profiles: [{ name: profile, display_name: `${profile}-${revision}` }] }
+      }
+      const project = { id: profile, name: `${profile}-${revision}`, sessionCount: 1,
+        repos: [{ id: 'repo', groups: [{ id: 'lane', sessions: [{ id: profile, profile }] }] }] }
+      return { projects: profile === 'sibling' ? [project, structuredClone(project)] : [project] }
     }
   })
   t.after(() => runtime.close())
@@ -1183,6 +1178,7 @@ test('admin discovery retains last-good rows on transport and reported failures 
       const rows = partial.profiles ?? partial.projects
       assert.equal(rows.length, 2)
       assert.deepEqual(rows.map(row => row.display_name ?? row.name), ['support-2', 'sibling-1'])
+      if (path.includes('projects/tree')) assert.equal(rows.find(row => row.id === 'sibling')?.sessionCount, 2)
       assert.ok(partial.errors.some(error => error.profile === 'sibling'))
       assert.equal(JSON.stringify(partial).includes('private upstream detail'), false)
     }

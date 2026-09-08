@@ -58,6 +58,7 @@ beforeEach(() => {
   document.body.style.setProperty('--z-setup-route', '10')
   document.body.style.setProperty('--z-popover', '20')
   document.body.style.setProperty('--z-onboarding', '30')
+  document.body.style.setProperty('--z-onboarding-popover', '40')
 
   const style = document.createElement('style')
   style.dataset.testid = 'layer-utilities'
@@ -75,6 +76,7 @@ afterEach(() => {
   document.body.style.removeProperty('--z-setup-route')
   document.body.style.removeProperty('--z-popover')
   document.body.style.removeProperty('--z-onboarding')
+  document.body.style.removeProperty('--z-onboarding-popover')
   clearPendingProviderOAuth()
   $desktopOnboarding.set(idleOnboarding)
 })
@@ -99,6 +101,8 @@ describe('Settings recovery layering', () => {
 
       expect(onboarding).toBeTruthy()
       expect(resolvedZIndex(onboarding as Element)).toBeGreaterThan(resolvedZIndex(screen.getByTestId('settings')))
+      expect(Number(getComputedStyle(document.body).getPropertyValue('--z-onboarding-popover')))
+        .toBeGreaterThan(resolvedZIndex(onboarding as Element))
     })
   })
 

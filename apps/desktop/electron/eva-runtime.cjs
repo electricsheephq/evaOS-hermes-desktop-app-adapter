@@ -2100,15 +2100,13 @@ function createEvaManagedRuntime(options) {
         assertSupportRequestCurrent(guard)
         const refused = refusedProfiles.has(profile)
         if (refused) cache.delete(profile)
-        let freshRows = result?.profiles ?? []
-        const mismatched = freshRows.some(row => row.name !== profile)
-        if (mismatched) {
-          errors.push({ profile, error: 'Profile temporarily unavailable.' })
-          freshRows = []
+        const freshRows = result?.profiles ?? []
+        for (const row of freshRows) {
+          if (row.name !== profile) throw supportProfileError()
         }
         // The exact managed route suppresses metadata failures as an empty
         // successful response; it cannot delete a member of this live grant.
-        if (result && !mismatched && !freshRows.length) errors.push({ profile, error: 'Profile temporarily unavailable.' })
+        if (result && !freshRows.length) errors.push({ profile, error: 'Profile temporarily unavailable.' })
         const rows = freshRows.length ? freshRows : refused ? [] : cache.get(profile) ?? []
         if (freshRows.length) cache.set(profile, structuredClone(rows))
         profiles.push(...structuredClone(rows))
@@ -2158,21 +2156,15 @@ function createEvaManagedRuntime(options) {
         const refused = refusedProfiles.has(profile)
         if (refused) cache.delete(profile)
         let boundFresh = fresh
-        try {
-          if (fresh) {
-            const bind = row => ({ ...bindSupportSession(row, profile), is_default_profile: profile === 'default' })
-            boundFresh = { ...fresh, projects: (fresh.projects ?? []).map(raw => ({
-              ...raw,
-              previewSessions: (raw.previewSessions ?? []).map(bind),
-              repos: (raw.repos ?? []).map(repo => ({ ...repo,
-                groups: (repo.groups ?? []).map(group => ({ ...group, sessions: (group.sessions ?? []).map(bind) }))
-              }))
-            })) }
-          }
-        } catch (error) {
-          if (error?.code !== 'support-profile-mismatch') throw error
-          errors.push({ profile, error: 'Profile temporarily unavailable.' })
-          boundFresh = null
+        if (fresh) {
+          const bind = row => ({ ...bindSupportSession(row, profile), is_default_profile: profile === 'default' })
+          boundFresh = { ...fresh, projects: (fresh.projects ?? []).map(raw => ({
+            ...raw,
+            previewSessions: (raw.previewSessions ?? []).map(bind),
+            repos: (raw.repos ?? []).map(repo => ({ ...repo,
+              groups: (repo.groups ?? []).map(group => ({ ...group, sessions: (group.sessions ?? []).map(bind) }))
+            }))
+          })) }
         }
         // A failed read is not authoritative deletion. Keep this lease's last
         // matching view, while the errors array still reports the outage.
@@ -2181,7 +2173,7 @@ function createEvaManagedRuntime(options) {
         const result = !refused && failed && cached?.previewLimit === previewLimit ? structuredClone(cached.result) : boundFresh
         for (const id of result?.scoped_session_ids ?? []) scopedIds.add(id)
         errors.push(...(fresh?.errors ?? []))
-        for (let project of result?.projects ?? []) {
+        for (let project of structuredClone(result?.projects ?? [])) {
           const key = project.path || project.id
           let existing = projects.get(key)
           if (!existing) {

@@ -820,6 +820,7 @@ body:has(.settings-overlay-elevated) {
   --z-switcher-backdrop: var(--z-setup-route-switcher-backdrop);
   --z-switcher: var(--z-setup-route-switcher);
   --z-onboarding: var(--z-setup-route-onboarding);
+  --z-onboarding-popover: calc(var(--z-setup-route-onboarding) + 1);
 }
 
 .dither {
