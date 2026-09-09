@@ -43,6 +43,7 @@ import {
   setYoloActive
 } from '@/store/session'
 import { $sessionStates } from '@/store/session-states'
+import { runGatewayRestart } from '@/store/system-actions'
 import {
   applyWakeStartResult,
   applyWakeStatus,
@@ -503,6 +504,9 @@ export function useSlashCommand(deps: SlashCommandDeps) {
         },
         branch: async () => {
           await branchCurrentSession()
+        },
+        restart: async () => {
+          await runGatewayRestart()
         },
         // Desktop owns the active turn, while the historical slash worker
         // only stops background terminal processes. Interrupt the exact chat

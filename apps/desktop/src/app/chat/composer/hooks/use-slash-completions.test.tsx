@@ -157,6 +157,16 @@ describe('useSlashCompletions', () => {
     expect(commandsOf(await completions(api, 'research'))).toEqual(['/research-paper-writing', '/research'])
   })
 
+  it('prefix-completes desktop-only action commands missing from the backend catalog', async () => {
+    const request = vi.fn().mockImplementation((method: string) =>
+      Promise.resolve(method === 'commands.catalog' ? CATALOG : { items: [] })
+    )
+
+    const api = harness({ request } as unknown as HermesGateway)
+
+    expect(commandsOf(await completions(api, 'rest'))).toEqual(['/restart'])
+  })
+
   it('keeps a registry command in Commands even when the desktop table has no row', async () => {
     const request = vi.fn().mockImplementation((method: string) =>
       Promise.resolve(
@@ -179,7 +189,7 @@ describe('useSlashCompletions', () => {
       (items.find(item => (item.metadata as { command?: string })?.command === command)?.metadata as { group?: string })
         ?.group
 
-    expect(commandsOf(items)).toEqual(['/refine', '/compress', '/docx'])
+    expect(commandsOf(items)).toEqual(['/refine', '/compress', '/restart', '/docx'])
     expect(groupOf('/refine')).toBe('Commands')
     expect(groupOf('/compress')).toBe('Commands')
     expect(groupOf('/docx')).toBe('Skills')

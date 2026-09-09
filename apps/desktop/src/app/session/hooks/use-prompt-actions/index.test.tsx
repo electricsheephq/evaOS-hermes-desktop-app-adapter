@@ -4,7 +4,7 @@ import type { MutableRefObject } from 'react'
 import { useEffect, useRef } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { getSession } from '@/hermes'
+import { getActionStatus, getSession, restartGateway } from '@/hermes'
 import { textPart } from '@/lib/chat-messages'
 import { createClientSessionState } from '@/lib/chat-runtime'
 import { $composerAttachments, $composerDraft, type ComposerAttachment, setComposerDraft } from '@/store/composer'
@@ -44,9 +44,11 @@ beforeEach(() => {
 })
 
 vi.mock('@/hermes', () => ({
+  getActionStatus: vi.fn(),
   getProfiles: vi.fn(async () => ({ profiles: [] })),
   getSession: vi.fn(),
   PROMPT_SUBMIT_REQUEST_TIMEOUT_MS: 1_800_000,
+  restartGateway: vi.fn(),
   setApiRequestProfile: vi.fn(),
   transcribeAudio: vi.fn()
 }))
@@ -569,6 +571,41 @@ describe('usePromptActions slash session targeting', () => {
 
     expect(createBackendSessionForSend).not.toHaveBeenCalled()
     expect(calls).not.toContain('slash.exec')
+  })
+})
+
+describe('usePromptActions /restart', () => {
+  afterEach(() => {
+    cleanup()
+    vi.useRealTimers()
+    vi.restoreAllMocks()
+  })
+
+  it('calls the shared restartGateway API once', async () => {
+    vi.useFakeTimers()
+    vi.mocked(restartGateway).mockResolvedValue({ name: 'gateway-restart', pid: 123 } as never)
+    vi.mocked(getActionStatus).mockResolvedValue({
+      exit_code: 0,
+      lines: [],
+      name: 'gateway-restart',
+      pid: 123,
+      running: false
+    } as never)
+    const requestGateway = vi.fn(async () => ({}) as never)
+
+    let handle: HarnessHandle | null = null
+    await actRender(
+      <Harness onReady={h => (handle = h)} refreshSessions={async () => undefined} requestGateway={requestGateway} />
+    )
+
+    const submitted = handle!.submitTextRaw('/restart')
+    await act(async () => {
+      await vi.runAllTimersAsync()
+      await submitted
+    })
+
+    expect(restartGateway).toHaveBeenCalledOnce()
+    expect(requestGateway).not.toHaveBeenCalledWith('slash.exec', expect.anything())
   })
 })
 
