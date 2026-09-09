@@ -321,18 +321,46 @@ describe('desktop slash command curation', () => {
       skill_count: 2
     })
 
-    expect(filtered.categories).toEqual([
+    expect(filtered.categories?.slice(0, 2)).toEqual([
       { name: 'Session', pairs: [['/new', 'Start a new desktop chat']] },
       { name: 'User commands', pairs: [['/ship-it', 'Run release checklist']] }
     ])
-    expect(filtered.pairs).toEqual([
-      ['/new', 'Start a new desktop chat'],
-      ['/ship-it', 'Run release checklist']
+    expect(filtered.categories?.find(section => section.name === 'Commands')?.pairs).toContainEqual([
+      '/restart',
+      'Restart the Hermes gateway (reconnects the desktop)'
     ])
+    expect(filtered.pairs).toEqual(
+      expect.arrayContaining([
+        ['/new', 'Start a new desktop chat'],
+        ['/ship-it', 'Run release checklist']
+      ])
+    )
+    expect(filtered.pairs?.map(([command]) => command)).not.toContain('/model')
     // skill_count is recomputed from the filtered output (only /ship-it is an
     // extension command — /new is a built-in) so the /help footer matches what
     // the user actually sees rather than echoing the unfiltered backend total.
     expect(filtered.skill_count).toBe(1)
+  })
+
+  it('adds desktop-only action commands to suggestions without duplicating catalog rows', () => {
+    const withoutRestart = filterDesktopCommandsCatalog({
+      categories: [{ name: 'Session', pairs: [['/new', 'Start a new session']] }],
+      pairs: [['/new', 'Start a new session']]
+    })
+    const commands = withoutRestart.categories?.find(section => section.name === 'Commands')?.pairs ?? []
+
+    expect(commands.filter(([command]) => command === '/restart')).toEqual([
+      ['/restart', 'Restart the Hermes gateway (reconnects the desktop)']
+    ])
+    expect(withoutRestart.pairs?.filter(([command]) => command === '/restart')).toHaveLength(1)
+
+    const withRestart = filterDesktopCommandsCatalog({
+      categories: [{ name: 'Commands', pairs: [['/restart', 'Restart the gateway']] }],
+      pairs: [['/restart', 'Restart the gateway']]
+    })
+
+    expect(withRestart.categories?.[0]?.pairs.filter(([command]) => command === '/restart')).toHaveLength(1)
+    expect(withRestart.pairs?.filter(([command]) => command === '/restart')).toHaveLength(1)
   })
 
   it('recomputes skill_count to reflect only extensions surfaced on desktop', () => {
@@ -346,7 +374,10 @@ describe('desktop slash command curation', () => {
       skill_count: 12
     })
 
-    expect(filtered.pairs?.map(([cmd]) => cmd)).toEqual(['/new', '/gif-search', '/ship-it'])
+    expect(filtered.pairs?.map(([cmd]) => cmd)).toEqual(
+      expect.arrayContaining(['/new', '/gif-search', '/ship-it', '/restart'])
+    )
+    expect(filtered.pairs?.map(([cmd]) => cmd)).not.toContain('/clear')
     expect(filtered.skill_count).toBe(2)
   })
 

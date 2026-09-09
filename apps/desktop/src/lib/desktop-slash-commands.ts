@@ -670,6 +670,17 @@ export function rankSkillCommands<T extends { text: string }>(
 export function filterDesktopCommandsCatalog(catalog: CommandsCatalogLike): CommandsCatalogLike {
   rememberDesktopCommandsCatalog(catalog)
 
+  const actionPairs = DESKTOP_COMMAND_SPECS.flatMap(spec =>
+    spec.surface.kind === 'action' && !spec.hidden && spec.description
+      ? ([[spec.name, spec.description]] as [string, string][])
+      : []
+  )
+  const appendMissingActions = (rows: [string, string][]): [string, string][] => {
+    const present = new Set(rows.map(([command]) => canonicalDesktopSlashCommand(command)))
+
+    return [...rows, ...actionPairs.filter(([command]) => !present.has(canonicalDesktopSlashCommand(command)))]
+  }
+
   const categories = catalog.categories
     ?.map(section => ({
       ...section,
@@ -679,9 +690,27 @@ export function filterDesktopCommandsCatalog(catalog: CommandsCatalogLike): Comm
     }))
     .filter(section => section.pairs.length > 0)
 
-  const pairs = catalog.pairs
-    ?.filter(([command]) => isDesktopSlashSuggestion(command))
-    .map(([command, description]) => [command, desktopSlashDescription(command, description)] as [string, string])
+  if (categories) {
+    const categorized = new Set(
+      categories.flatMap(section => section.pairs.map(([command]) => canonicalDesktopSlashCommand(command)))
+    )
+    const missingActions = actionPairs.filter(([command]) => !categorized.has(canonicalDesktopSlashCommand(command)))
+    const commandsSection = categories.find(section => section.name === 'Commands')
+
+    if (missingActions.length > 0) {
+      if (commandsSection) {
+        commandsSection.pairs.push(...missingActions)
+      } else {
+        categories.push({ name: 'Commands', pairs: missingActions })
+      }
+    }
+  }
+
+  const pairs = appendMissingActions(
+    (catalog.pairs ?? [])
+      .filter(([command]) => isDesktopSlashSuggestion(command))
+      .map(([command, description]) => [command, desktopSlashDescription(command, description)] as [string, string])
+  )
 
   // Recount skill commands from the filtered output so /help's footer reflects
   // what the user actually sees. Backend's skill_count includes commands the
@@ -712,7 +741,7 @@ export function filterDesktopCommandsCatalog(catalog: CommandsCatalogLike): Comm
   return {
     ...catalog,
     ...(categories ? { categories } : {}),
-    ...(pairs ? { pairs } : {}),
+    pairs,
     ...(hasSkillCount ? { skill_count: skillCount } : {})
   }
 }
