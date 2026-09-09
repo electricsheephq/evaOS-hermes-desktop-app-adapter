@@ -186,6 +186,13 @@ describe('desktop slash command curation', () => {
     expect(desktopSlashUnavailableMessage('/stop')).toBeNull()
   })
 
+  it('routes /restart through a desktop action instead of the unavailable list', () => {
+    expect(resolveDesktopCommand('/restart')?.surface).toEqual({ kind: 'action', action: 'restart' })
+    expect(isDesktopSlashSuggestion('/restart')).toBe(true)
+    expect(isDesktopSlashCommand('/restart')).toBe(true)
+    expect(desktopSlashUnavailableMessage('/restart')).toBeNull()
+  })
+
   it('treats /browser as an executable action command (local-gateway connect)', () => {
     // /browser used to be terminal-only; it now resolves to a desktop action
     // handler that routes browser.manage RPC when the gateway is local.

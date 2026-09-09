@@ -64,6 +64,7 @@ export type DesktopActionId =
   | 'new'
   | 'pet'
   | 'profile'
+  | 'restart'
   | 'skin'
   | 'stop'
   | 'title'
@@ -200,6 +201,11 @@ const DESKTOP_COMMAND_SPECS: readonly DesktopCommandSpec[] = [
   },
   { name: '/profile', description: 'Switch the active Hermes profile', surface: action('profile') },
   {
+    name: '/restart',
+    description: 'Restart the Hermes gateway (reconnects the desktop)',
+    surface: action('restart')
+  },
+  {
     name: '/skin',
     description: 'Switch desktop theme or cycle to the next one',
     surface: action('skin'),
@@ -305,7 +311,6 @@ const NO_DESKTOP_SURFACE: Record<DesktopUnavailableReason, readonly string[]> = 
     '/quit',
     '/redraw',
     '/reload',
-    '/restart',
     '/sb',
     '/set-home',
     '/sethome',
