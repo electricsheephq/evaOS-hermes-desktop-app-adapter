@@ -5,7 +5,9 @@ import { useCallback, useEffect } from 'react'
 import type { HermesGateway } from '@/hermes'
 import { sessionTitle } from '@/lib/chat-runtime'
 import {
+  canonicalDesktopSlashCommand,
   type CommandsCatalogLike,
+  desktopActionCommandPairs,
   desktopSkinSlashCompletions,
   desktopSlashDescription,
   type DesktopThemeCommandOption,
@@ -242,7 +244,17 @@ export function useSlashCompletions(options: {
           return { items: decorated, query }
         }
 
-        const items = [...decorated].sort(
+        const present = new Set(decorated.map(item => canonicalDesktopSlashCommand(item.text)))
+
+        const desktopActions: CompletionEntry[] = desktopActionCommandPairs()
+          .filter(
+            ([command]) =>
+              command.toLowerCase().startsWith(text.toLowerCase()) &&
+              !present.has(canonicalDesktopSlashCommand(command))
+          )
+          .map(([command, meta]) => ({ text: command, display: command, group: 'Commands', meta }))
+
+        const items = [...decorated, ...desktopActions].sort(
           (a, b) => groupOrder.indexOf(a.group ?? '') - groupOrder.indexOf(b.group ?? '')
         )
 

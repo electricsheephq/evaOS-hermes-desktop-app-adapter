@@ -667,14 +667,19 @@ export function rankSkillCommands<T extends { text: string }>(
   return kept.sort((a, b) => usageOf(b) - usageOf(a) || a.text.localeCompare(b.text))
 }
 
-export function filterDesktopCommandsCatalog(catalog: CommandsCatalogLike): CommandsCatalogLike {
-  rememberDesktopCommandsCatalog(catalog)
-
-  const actionPairs = DESKTOP_COMMAND_SPECS.flatMap(spec =>
+export function desktopActionCommandPairs(): [string, string][] {
+  return DESKTOP_COMMAND_SPECS.flatMap(spec =>
     spec.surface.kind === 'action' && !spec.hidden && spec.description
       ? ([[spec.name, spec.description]] as [string, string][])
       : []
   )
+}
+
+export function filterDesktopCommandsCatalog(catalog: CommandsCatalogLike): CommandsCatalogLike {
+  rememberDesktopCommandsCatalog(catalog)
+
+  const actionPairs = desktopActionCommandPairs()
+
   const appendMissingActions = (rows: [string, string][]): [string, string][] => {
     const present = new Set(rows.map(([command]) => canonicalDesktopSlashCommand(command)))
 
@@ -694,6 +699,7 @@ export function filterDesktopCommandsCatalog(catalog: CommandsCatalogLike): Comm
     const categorized = new Set(
       categories.flatMap(section => section.pairs.map(([command]) => canonicalDesktopSlashCommand(command)))
     )
+
     const missingActions = actionPairs.filter(([command]) => !categorized.has(canonicalDesktopSlashCommand(command)))
     const commandsSection = categories.find(section => section.name === 'Commands')
 

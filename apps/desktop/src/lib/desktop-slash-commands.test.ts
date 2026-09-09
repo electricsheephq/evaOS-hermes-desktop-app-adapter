@@ -347,6 +347,7 @@ describe('desktop slash command curation', () => {
       categories: [{ name: 'Session', pairs: [['/new', 'Start a new session']] }],
       pairs: [['/new', 'Start a new session']]
     })
+
     const commands = withoutRestart.categories?.find(section => section.name === 'Commands')?.pairs ?? []
 
     expect(commands.filter(([command]) => command === '/restart')).toEqual([
