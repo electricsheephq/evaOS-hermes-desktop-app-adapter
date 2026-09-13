@@ -20,7 +20,6 @@ if TYPE_CHECKING:  # pragma: no cover
     from tools.mcp_tool import MCPServerTask
 
 logger = logging.getLogger("tools.mcp_tool")
-
 _UTILITY_ORIGIN_PREFIX = "generated utility "
 # Utility tool key -> handler factory; each takes (server_name, tool_timeout).
 _UTILITY_HANDLER_FACTORIES = {
@@ -246,6 +245,7 @@ def _register_candidates(name: str, candidates: List[_Candidate], *, check_fn: C
     from tools.registry import registry
     toolset_name = f"mcp-{name}"
     registered: List[str] = []
+    scope_value = scope()
     for c in candidates:
         existing_toolset = registry.get_toolset_for_tool(c.registry_name)
         if existing_toolset and existing_toolset != toolset_name:  # foreign owner: skip, preserve it
@@ -262,7 +262,7 @@ def _register_candidates(name: str, candidates: List[_Candidate], *, check_fn: C
             continue
         registry.register(
             name=c.registry_name, toolset=toolset_name, schema=c.schema, handler=c.handler, check_fn=check_fn,
-            is_async=False, description=c.schema.get("description") or "", scope=scope())
+            is_async=False, description=c.schema.get("description") or "", scope=scope_value)
         if registry.get_toolset_for_tool(c.registry_name) == toolset_name:
             _track_mcp_tool_server(c.registry_name, name, registration_home)
             registered.append(c.registry_name)

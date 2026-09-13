@@ -392,7 +392,7 @@ def register_mcp_servers(servers: Dict[str, dict]) -> List[str]:
     servers = _config._filter_suspicious_mcp_servers(servers)
     if not servers:
         logger.debug("No explicit MCP servers provided")
-        return []
+        return _registration._existing_tool_names() if _core._mcp_registry_scope() is not None else []
     new_servers = _select_new_servers(servers)
     if not new_servers:
         return _registration._existing_tool_names()
@@ -501,7 +501,7 @@ def get_mcp_status(configured: Optional[Dict[str, dict]] = None, *, include_runt
             # Runtime state belongs to the profile that adopted it; under a multiplexer only that
             # profile's view may show it, and ``include_runtime=False`` hides the launch profile's
             # servers from a status read scoped to a different profile.
-            return include_runtime and _core._server_scope_keys.get(name, None) == current_scope
+            return include_runtime and _core._server_visible_in_scope(name, current_scope)
 
         active_servers = {n: s for n, s in _core._servers.items() if visible(n)}
         connecting = {n for n in _core._server_connecting if visible(n)}

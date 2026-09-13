@@ -59,7 +59,8 @@ beforeEach(() => {
     requested: false,
     firstRunSkipped: false,
     manual: false,
-    localEndpoint: false
+    localEndpoint: false,
+    freeTierReady: false
   })
   failBoot()
 })

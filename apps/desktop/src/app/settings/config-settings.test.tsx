@@ -118,7 +118,7 @@ describe('ConfigSettings autosave', () => {
         await vi.advanceTimersByTimeAsync(700)
       })
 
-      await waitFor(() => expect(saveHermesConfig).toHaveBeenCalledTimes(1))
+      await vi.waitFor(() => expect(saveHermesConfig).toHaveBeenCalledTimes(1))
       expect(saveHermesConfig.mock.calls[0][0]).toEqual({ checkpoints: { enabled: true } })
 
       // Revert: flip it back to its original value and let autosave fire again.
@@ -127,7 +127,7 @@ describe('ConfigSettings autosave', () => {
         await vi.advanceTimersByTimeAsync(700)
       })
 
-      await waitFor(() => expect(saveHermesConfig).toHaveBeenCalledTimes(2))
+      await vi.waitFor(() => expect(saveHermesConfig).toHaveBeenCalledTimes(2))
       // Must still explicitly send the reverted value — diffing against the
       // never-advanced page-load baseline would produce an empty patch here
       // (the field is back to its original value) and leave disk stuck at

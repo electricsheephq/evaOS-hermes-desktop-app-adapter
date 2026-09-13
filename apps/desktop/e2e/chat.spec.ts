@@ -14,9 +14,9 @@ import {
   IS_MANAGED_EVAOS_AGENT,
   type MockBackendFixture,
   setupMockBackend,
-  waitForAppReady,
+  waitForAppReady
 } from './fixtures'
-import { BLOCKING_CLARIFY_QUESTION, BLOCKING_CLARIFY_TRIGGER } from './mock-server'
+import { BLOCKING_CLARIFY_QUESTION, BLOCKING_CLARIFY_TRIGGER } from '../../../tests-js/scripts/mock-server'
 import { expectVisualSnapshot } from './visual-snapshot'
 
 test.skip(
