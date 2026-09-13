@@ -177,6 +177,7 @@ const {
   assertEvaManagedLocalTerminalAllowed,
   buildEvaAccountRendererResetScript,
   EVA_MANAGED_POLICY,
+  resolveEvaManagedConnectionFor,
   resolveEvaManagedDesktopProfileFromSources
 } = require('./eva-managed.cjs')
 const { createEvaMediaGrantCodec } = require('./eva-media-grant.cjs')
@@ -15226,11 +15227,18 @@ ipcMain.handle('hermes:connection:for', async (_event, payload) => {
   const { connectionId, profile, priority } = payload && typeof payload === 'object' ? (payload as any) : ({} as any)
 
   if (EVA_MANAGED_BUILD) {
-    const id = assertEvaManagedConnectionId(connectionId)
-    const profileKey = profile && String(profile).trim() ? String(profile).trim() : primaryProfileKey()
-    const connection = await backendDialClaims.run(backendScopeKey(id, profileKey), () => ensureBackend(profile))
-
-    return { ...connection, connectionId: id, registryScoped: true }
+    return resolveEvaManagedConnectionFor(
+      { connectionId, profile, priority },
+      {
+        applySpawnPriority,
+        assertConnectionId: assertEvaManagedConnectionId,
+        backendScopeKey,
+        ensureBackend,
+        primaryProfileKey,
+        runDialClaim: (scopeKey, dial) => backendDialClaims.run(scopeKey, dial),
+        spawnPriorityFrom
+      }
+    )
   }
 
   const registry = readDesktopConnectionsRegistry()

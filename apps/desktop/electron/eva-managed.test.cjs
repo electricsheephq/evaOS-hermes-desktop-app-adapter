@@ -23,11 +23,57 @@ const {
   parseEvaDesktopAuthCallback,
   pollEvaDeviceCode,
   publicEvaEnrollmentStatus,
+  resolveEvaManagedConnectionFor,
   resolveEvaManagedDesktopProfile,
   resolveEvaManagedDesktopProfileFromSources
 } = require('./eva-managed.cjs')
 
 const FUTURE = '2099-07-19T12:00:00.000Z'
+
+test('managed connection-for brackets a foreground backend dial with its priority mark', async () => {
+  const calls = []
+  const connection = await resolveEvaManagedConnectionFor(
+    { connectionId: 'eva-managed', profile: 'assigned-profile', priority: 'foreground' },
+    {
+      applySpawnPriority: (scopeKey, priority) => {
+        calls.push(['apply', scopeKey, priority])
+        return () => calls.push(['clear', scopeKey])
+      },
+      assertConnectionId: connectionId => {
+        calls.push(['assert', connectionId])
+        return connectionId
+      },
+      backendScopeKey: (connectionId, profile) => `${connectionId}:${profile}`,
+      ensureBackend: async (profile, options) => {
+        calls.push(['ensure', profile, options.spawnPriority])
+        return { wsUrl: 'wss://managed.invalid/ws' }
+      },
+      primaryProfileKey: () => 'default',
+      runDialClaim: async (scopeKey, dial) => {
+        calls.push(['claim', scopeKey])
+        return dial()
+      },
+      spawnPriorityFrom: priority => {
+        calls.push(['compute', priority])
+        return priority === 'foreground' ? 'foreground' : 'background'
+      }
+    }
+  )
+
+  assert.deepEqual(calls, [
+    ['assert', 'eva-managed'],
+    ['compute', 'foreground'],
+    ['apply', 'eva-managed:assigned-profile', 'foreground'],
+    ['claim', 'eva-managed:assigned-profile'],
+    ['ensure', 'assigned-profile', 'foreground'],
+    ['clear', 'eva-managed:assigned-profile']
+  ])
+  assert.deepEqual(connection, {
+    connectionId: 'eva-managed',
+    registryScoped: true,
+    wsUrl: 'wss://managed.invalid/ws'
+  })
+})
 
 test('managed policy is remote-only, account-neutral, and has no Nous endpoint', () => {
   const serialized = JSON.stringify(EVA_MANAGED_POLICY)

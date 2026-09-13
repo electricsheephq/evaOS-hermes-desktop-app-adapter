@@ -992,6 +992,26 @@ async function resolveEvaManagedDesktopProfileFromSources(readActiveProfile, rea
   return resolveEvaManagedDesktopProfile(response, { expectedProfileId })
 }
 
+// Main-process globals stay injected so this managed branch is executable in
+// the Node contract suite without importing Electron's side-effectful entrypoint.
+// It mirrors the registry path's priority lifetime: compute once, mark before
+// joining the claim, pass the same value to the backend, and always clear.
+async function resolveEvaManagedConnectionFor(payload, deps) {
+  const { connectionId, profile, priority } = payload && typeof payload === 'object' ? payload : {}
+  const id = deps.assertConnectionId(connectionId)
+  const profileKey = profile && String(profile).trim() ? String(profile).trim() : deps.primaryProfileKey()
+  const spawnPriority = deps.spawnPriorityFrom(priority)
+  const scopeKey = deps.backendScopeKey(id, profileKey)
+  const clearSpawnPriority = deps.applySpawnPriority(scopeKey, spawnPriority)
+
+  try {
+    const connection = await deps.runDialClaim(scopeKey, () => deps.ensureBackend(profile, { spawnPriority }))
+    return { ...connection, connectionId: id, registryScoped: true }
+  } finally {
+    clearSpawnPriority()
+  }
+}
+
 module.exports = {
   EVA_MANAGED_POLICY,
   EvaBrokerError,
@@ -1016,6 +1036,7 @@ module.exports = {
   parseEvaDesktopAuthCallback,
   pollEvaDeviceCode,
   publicEvaEnrollmentStatus,
+  resolveEvaManagedConnectionFor,
   resolveEvaManagedDesktopProfile,
   resolveEvaManagedDesktopProfileFromSources,
   revokeEvaDesktopSession
