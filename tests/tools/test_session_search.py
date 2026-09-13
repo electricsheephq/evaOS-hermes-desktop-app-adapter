@@ -779,12 +779,12 @@ class TestManagedCrossProfileBoundary:
 
     def test_bare_id_does_not_scan_sibling_databases(self, db, monkeypatch):
         self._seed_shared_profiles(db)
-        from tools import session_search_tool
+        from hermes_cli import profiles as profiles_mod
 
-        def unexpected_scan(_session_id):
+        def unexpected_scan():
             raise AssertionError("agent-facing lookup must not scan profile databases")
 
-        monkeypatch.setattr(session_search_tool, "_locate_session_db", unexpected_scan)
+        monkeypatch.setattr(profiles_mod, "list_profiles", unexpected_scan)
         result = json.loads(
             session_search(
                 session_id="jarvis_session",
