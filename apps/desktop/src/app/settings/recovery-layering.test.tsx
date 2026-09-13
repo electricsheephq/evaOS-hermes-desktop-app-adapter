@@ -14,6 +14,7 @@ const idleOnboarding: DesktopOnboardingState = {
   configured: true,
   firstRunSkipped: false,
   flow: { status: 'idle' },
+  freeTierReady: false,
   localEndpoint: false,
   manual: false,
   mode: 'oauth',

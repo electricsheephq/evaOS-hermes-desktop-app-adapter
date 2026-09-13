@@ -5513,13 +5513,6 @@ function multipartBody(upload) {
   return { body, contentType: `multipart/form-data; boundary=${boundary}` }
 }
 
-function httpStatusError(statusCode, detail) {
-  const error = new Error(`${statusCode}: ${detail}`) as Error & { statusCode: number }
-  error.statusCode = statusCode
-
-  return error
-}
-
 function fetchJson(url, token, options: any = {}) {
   // Retry policy lives in api-transport.ts: idempotent verbs retry on any
   // transient transport error; POST/PUT/DELETE only when the request provably
@@ -5588,7 +5581,7 @@ function fetchJson(url, token, options: any = {}) {
               const text = Buffer.concat(chunks).toString('utf8')
 
               if ((res.statusCode || 500) >= 400) {
-                rejectOnce(httpStatusError(res.statusCode || 500, text || res.statusMessage))
+                rejectOnce(httpStatusError(res.statusCode, text, res.statusMessage))
 
                 return
               }
