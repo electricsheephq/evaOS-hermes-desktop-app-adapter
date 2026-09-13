@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useStatusSnapshot } from '@/app/shell/hooks/use-status-snapshot'
 import { getStatus } from '@/hermes'
 import { $setupReadyTick } from '@/store/live-sync'
+import type * as LiveSyncModule from '@/store/live-sync'
 
 import { handleLifecycleEvent } from './lifecycle'
 import type { GatewayEventContext } from './types'
@@ -14,7 +15,7 @@ const sourceIsolationMocks = vi.hoisted(() => ({
 }))
 
 vi.mock('@/store/live-sync', async importOriginal => ({
-  ...(await importOriginal<typeof import('@/store/live-sync')>()),
+  ...(await importOriginal<typeof LiveSyncModule>()),
   setChangeEventsAvailable: sourceIsolationMocks.setChangeEventsAvailable
 }))
 vi.mock('@/themes/backend-sync', () => ({ ingestBackendSkin: sourceIsolationMocks.ingestBackendSkin }))
