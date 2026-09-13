@@ -411,8 +411,10 @@ class TestBootstrapIsTheOneCreator:
     def test_concurrent_bootstrap_waiter_never_blocks_or_duplicates_owner(self, portal, monkeypatch):
         fb = self._fresh()
         entered = threading.Event()
+        waiter_entered = threading.Event()
         release = threading.Event()
         inventory_calls = 0
+        original_wait = fb._done.wait
 
         def slow_inventory():
             nonlocal inventory_calls
@@ -422,14 +424,20 @@ class TestBootstrapIsTheOneCreator:
                 assert release.wait(1)
             return False
 
+        def observed_wait(timeout=None):
+            waiter_entered.set()
+            return original_wait(timeout)
+
         monkeypatch.setattr(fb, "_inventory_other_providers", slow_inventory)
-        monkeypatch.setattr(fb, "SETUP_READY_WAIT_SECONDS", 0.05)
+        monkeypatch.setattr(fb, "SETUP_READY_WAIT_SECONDS", 1.0)
+        monkeypatch.setattr(fb._done, "wait", observed_wait)
         records = []
         first = threading.Thread(target=lambda: records.append(fb.run_bootstrap(announce=False)))
         second = threading.Thread(target=lambda: records.append(fb.run_bootstrap(announce=False)))
         first.start()
         assert entered.wait(1)
         second.start()
+        assert waiter_entered.wait(1)
         release.set()
         first.join(1)
         second.join(1)
