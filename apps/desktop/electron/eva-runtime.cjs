@@ -706,11 +706,7 @@ function createEvaManagedRuntime(options) {
       // named default when that profile is explicitly in the grant.
       if (requested === 'default' && !runtime.allowedProfiles.includes('default')) requested = null
       if (requested !== null && !runtime.allowedProfiles.includes(requested)) {
-        throw new EvaBrokerError(
-          'evaOS Agent rejected a profile outside the support assignment.',
-          403,
-          'support-profile-mismatch'
-        )
+        throw supportProfileError()
       }
       return requested ?? runtime.profile ?? null
     }
@@ -776,6 +772,12 @@ function createEvaManagedRuntime(options) {
       })
     }
     return wsRelay
+  }
+
+  function supportProfileBinder(runtime) {
+    return runtime?.sessionKind === 'delegated_support'
+      ? requestedProfile => supportProfileFor(runtime, requestedProfile)
+      : null
   }
 
   function clearRuntimeEnrollment() {
@@ -1709,6 +1711,7 @@ function createEvaManagedRuntime(options) {
       profile = supportProfileFor(runtime, requestedProfile)
       await options.waitForHermes(runtime.baseUrl, runtime.token)
     }
+    const profileBinder = supportProfileBinder(runtime)
     const connection = {
       authMode: 'token',
       // Keep the renderer's connection key opaque while delegated support is
@@ -1723,7 +1726,8 @@ function createEvaManagedRuntime(options) {
       wsUrl: await getWsRelay().mintTicket({
         generation: runtimeSessionGeneration,
         path: '/api/ws',
-        profile
+        profile,
+        ...(profileBinder ? { profileBinder } : {})
       })
     }
     return profile ? { ...connection, profile } : connection
@@ -2466,7 +2470,10 @@ function createEvaManagedRuntime(options) {
     // one `bindSupportRequest` routes to), else this enrollment's own agent.
     assignedProfileId: async () => {
       const runtime = await ensureRuntimeEnrollment()
-      return (runtime.sessionKind === 'delegated_support' ? runtime.profile : runtime.agentId) ?? null
+      const source = runtime.sessionKind === 'delegated_support' ? 'delegated-support-grant' : 'enrollment-agent'
+      const profile = (runtime.sessionKind === 'delegated_support' ? runtime.profile : runtime.agentId) ?? null
+      rememberLog(`[eva-managed] assigned profile source=${source} value=${JSON.stringify(profile)}`)
+      return profile
     },
     delegatedProfiles: async () => {
       const runtime = await ensureRuntimeEnrollment()
@@ -2483,10 +2490,12 @@ function createEvaManagedRuntime(options) {
       const request = typeof input === 'string' ? { profile: input } : input
       const runtime = await ensureRuntimeEnrollment()
       const profile = supportProfileFor(runtime, request.profile)
+      const profileBinder = supportProfileBinder(runtime)
       return getWsRelay().mintTicket({
         generation: runtimeSessionGeneration,
         path: normalizeEvaWsEndpoint(request.path).path,
-        profile
+        profile,
+        ...(profileBinder ? { profileBinder } : {})
       })
     },
     requestApi,

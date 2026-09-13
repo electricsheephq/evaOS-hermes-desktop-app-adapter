@@ -91,6 +91,33 @@ function clientFrame(payload, { fin = true, mask = Buffer.from([0x12, 0x34, 0x56
   return Buffer.concat([Buffer.from([(fin ? 0x80 : 0) | opcode]), length, mask, masked])
 }
 
+function decodedClientPayloads(input) {
+  const payloads = []
+  let offset = 0
+
+  while (offset < input.length) {
+    const second = input[offset + 1]
+    const lengthCode = second & 0x7f
+    let headerLength = 2
+    let payloadLength = lengthCode
+    if (lengthCode === 126) {
+      payloadLength = input.readUInt16BE(offset + 2)
+      headerLength += 2
+    } else if (lengthCode === 127) {
+      payloadLength = Number(input.readBigUInt64BE(offset + 2))
+      headerLength += 8
+    }
+    const mask = input.subarray(offset + headerLength, offset + headerLength + 4)
+    headerLength += 4
+    const payload = Buffer.from(input.subarray(offset + headerLength, offset + headerLength + payloadLength))
+    for (let index = 0; index < payload.length; index += 1) payload[index] ^= mask[index % 4]
+    payloads.push(JSON.parse(payload.toString('utf8')))
+    offset += headerLength + payloadLength
+  }
+
+  return payloads
+}
+
 async function waitForTunnel(upstream, minimumLength) {
   for (let attempt = 0; attempt < 40 && upstream.tunneled().length < minimumLength; attempt += 1) {
     await new Promise(resolve => setTimeout(resolve, 5))
@@ -482,6 +509,55 @@ test('relay passes an unknown future gateway RPC frame through unchanged', async
   await waitForTunnel(upstream, futureFrame.length)
   assert.deepEqual(upstream.tunneled(), futureFrame)
   result.socket.destroy()
+})
+
+test('delegated support clamps each outbound RPC profile and drops policy failures', async t => {
+  const upstream = fakeUpstream()
+  await upstream.start()
+  const profileBinder = requested => {
+    if (requested === 'default') return 'main'
+    const error = new Error('profile refused')
+    error.code = 'support-profile-mismatch'
+    throw error
+  }
+  const relay = createEvaWsRelay({
+    connectUpstream: () => upstream.connect(),
+    getUpstream: async () => ({ baseUrl: BASE_URL, token: 'runtime-secret' })
+  })
+  t.after(async () => {
+    await relay.close()
+    await upstream.stop()
+  })
+
+  const allowed = await upgrade(await relay.mintTicket({ profile: 'main', profileBinder }))
+  assert.match(allowed.response, /^HTTP\/1\.1 101/)
+  allowed.socket.write(
+    Buffer.concat([
+      clientFrame(JSON.stringify({ id: 1, jsonrpc: '2.0', method: 'projects.list', params: { profile: 'default' } })),
+      clientFrame(
+        JSON.stringify({ id: 2, jsonrpc: '2.0', method: 'session.create', params: { profile: 'default', title: 'New' } })
+      )
+    ])
+  )
+  await waitForTunnel(upstream, 1)
+  const forwarded = decodedClientPayloads(upstream.tunneled())
+  assert.deepEqual(
+    forwarded.map(frame => [frame.method, frame.params.profile]),
+    [
+      ['projects.list', 'main'],
+      ['session.create', 'main']
+    ]
+  )
+  allowed.socket.destroy()
+
+  const beforeRejected = upstream.tunneled().length
+  const rejected = await upgrade(await relay.mintTicket({ profile: 'main', profileBinder }))
+  assert.match(rejected.response, /^HTTP\/1\.1 101/)
+  rejected.socket.write(
+    clientFrame(JSON.stringify({ id: 3, jsonrpc: '2.0', method: 'projects.list', params: { profile: 'outside' } }))
+  )
+  await waitForClose(rejected.socket)
+  assert.equal(upstream.tunneled().length, beforeRejected)
 })
 
 test('relay preserves fragmented binary and allowed text while denying a fragmented blocked RPC', async t => {

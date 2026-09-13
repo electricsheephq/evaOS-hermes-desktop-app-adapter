@@ -396,6 +396,27 @@ async function advanceBackoff() {
 }
 
 describe('useGatewayBoot remote reconnect loop (real hook, fake socket)', () => {
+  it('adopts a delegated-support profile before the first managed connection request', async () => {
+    const calls: string[] = []
+    const desktop = fakeDesktop()
+    desktop.profile.get = vi.fn(async () => {
+      calls.push('profile:granted')
+      return { profile: 'granted-profile' }
+    })
+    desktop.getConnection = vi.fn(async profile => {
+      calls.push(`connection:${profile ?? 'unset'}`)
+      return { ...primaryConn, profile: profile ?? 'default' }
+    })
+
+    ;(window as unknown as { hermesDesktop: unknown }).hermesDesktop = { ...desktop, eva: {} }
+
+    render(<Harness />)
+    await flushAsync()
+
+    expect(calls.slice(0, 2)).toEqual(['profile:granted', 'connection:granted-profile'])
+    expect($activeGatewayProfile.get()).toBe('granted-profile')
+  })
+
   it('adopts the backend-authoritative managed profile before session refresh', async () => {
     const desktop = fakeDesktop()
     desktop.profile.get = vi.fn(async () => ({ profile: 'assigned-profile' }))

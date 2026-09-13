@@ -547,27 +547,30 @@ export function useGatewayBoot({
     // session id against the wrong backend — the HUD then falls back to the
     // default profile's last session (#82285). The override wins over the
     // stored preference; absent, behavior is unchanged.
-    async function adoptPrimaryProfile(shouldPublish: () => boolean = () => true): Promise<boolean> {
+    async function adoptPrimaryProfile(shouldPublish: () => boolean = () => true): Promise<null | string> {
       const override = windowProfileOverride()
+      let adoptedProfile: null | string = null
 
       try {
         const profileKey = override ?? (await desktop.profile?.get?.())?.profile ?? ''
 
         if (!shouldPublish()) {
-          return false
+          return null
         }
 
         const key = normalizeProfileKey(profileKey)
+        adoptedProfile = key
         sourceProfile = key
         $activeGatewayProfile.set(key)
         setPrimaryGateway(gateway, key)
         void ensureGatewayForProfile(key)
       } catch (error) {
         if (!shouldPublish()) {
-          return false
+          return null
         }
 
         const fallback = normalizeProfileKey(override)
+        adoptedProfile = fallback
         sourceProfile = fallback
         $activeGatewayProfile.set(fallback)
 
@@ -585,7 +588,7 @@ export function useGatewayBoot({
         }
       }
 
-      return true
+      return adoptedProfile
     }
 
     // Seed the working dir from the backend default on a fresh view (nothing
@@ -1048,6 +1051,14 @@ export function useGatewayBoot({
 
     async function boot() {
       try {
+        // A managed connection is assigned to one authoritative profile. Adopt
+        // that grant before asking main to dial so the first RPC window cannot
+        // inherit the renderer store's default profile.
+        const managedProfile = isManagedEvaosAgent() ? await adoptPrimaryProfile() : null
+        if (isManagedEvaosAgent() && (!managedProfile || cancelled)) {
+          return
+        }
+
         // A profile-pinned helper window (the HUD) dials its target profile's
         // backend directly — ensureBackend spawns/reuses it from the pool.
         // Everything else keeps dialing the primary.
@@ -1056,7 +1067,7 @@ export function useGatewayBoot({
         // rides out a full backend cold spawn, so it gets the shared 45s
         // backend-boot budget, not the 20s reconnect budget.
         const conn = await withTimeout(
-          desktop.getConnection(windowProfileOverride() ?? undefined),
+          desktop.getConnection(windowProfileOverride() ?? managedProfile ?? undefined),
           isManagedEvaosAgent() ? MANAGED_INITIAL_CONNECTION_DEADLINE_MS : BACKEND_BOOT_WAIT_TIMEOUT_MS,
           isManagedEvaosAgent()
             ? translateNow('boot.errors.gatewayConnectionLost')
@@ -1064,13 +1075,6 @@ export function useGatewayBoot({
         )
 
         if (cancelled) {
-          return
-        }
-
-        // Resolve the backend-authoritative managed profile before opening the
-        // socket. Events can arrive immediately after the handshake; adopting
-        // afterwards would tag them with a stale renderer profile.
-        if (isManagedEvaosAgent() && (!(await adoptPrimaryProfile()) || cancelled)) {
           return
         }
 

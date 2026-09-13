@@ -387,9 +387,10 @@ function createGatewayRpcInspector({ onBlocked, onMethod }) {
 // Parse renderer frames incrementally and forward their raw bytes while
 // inspecting gateway JSON-RPC text. The last payload byte of a completed text
 // message is withheld until inspection finishes. A blocked method therefore
-// never becomes a complete upstream WebSocket message, while allowed large
-// frames never need to be copied into one giant Electron buffer.
-function createClientFrameGuard({ onFrame, onReject }) {
+// never becomes a complete upstream WebSocket message. Delegated-support text
+// is instead retained within the same message bound so its profile can be
+// clamped before any bytes reach upstream.
+function createClientFrameGuard({ onFrame, onReject, transformTextMessage }) {
   const PRELUDE_MAX_BYTES = 64 * 1024
   let header = Buffer.alloc(0)
   let frame = null
@@ -399,6 +400,7 @@ function createClientFrameGuard({ onFrame, onReject }) {
   let methodSeen = false
   let prelude = []
   let preludeBytes = 0
+  let textPayload = []
   let rejected = false
 
   const reject = event => {
@@ -431,6 +433,18 @@ function createClientFrameGuard({ onFrame, onReject }) {
     fragmentedOpcode = null
     messageBytes = 0
     if (rejected) return false
+    if (transformTextMessage) {
+      try {
+        onFrame(transformTextMessage(Buffer.concat(textPayload)))
+      } catch (error) {
+        const code = String(error?.code || error?.name || 'unknown').replace(/[^A-Za-z0-9._-]/g, '')
+        textPayload = []
+        return reject(`client_profile_denied code=${code || 'unknown'}`)
+      }
+      textPayload = []
+      methodSeen = false
+      return true
+    }
     flushPrelude()
     if (tail?.length) onFrame(tail)
     methodSeen = false
@@ -471,6 +485,7 @@ function createClientFrameGuard({ onFrame, onReject }) {
       methodSeen = false
       prelude = []
       preludeBytes = 0
+      textPayload = []
       inspector = createGatewayRpcInspector({
         onBlocked: () => reject('client_rpc_denied'),
         onMethod: () => {
@@ -506,14 +521,15 @@ function createClientFrameGuard({ onFrame, onReject }) {
     // non-empty frames are safe to stream because the payload remains
     // incomplete until finishTextMessage releases its held tail byte.
     if (!(inspectText && fin && payloadLength === 0)) {
-      if (inspectText) forwardInspected(rawHeader)
-      else onFrame(rawHeader)
+      if (inspectText) {
+        if (!transformTextMessage) forwardInspected(rawHeader)
+      } else onFrame(rawHeader)
     }
     if (payloadLength === 0) {
       frame = null
       if (inspectText && fin) {
         if (!finishTextMessage()) return false
-        onFrame(rawHeader)
+        if (!transformTextMessage) onFrame(rawHeader)
       } else if (fin && opcode === 0x0) {
         fragmentedOpcode = null
         messageBytes = 0
@@ -564,9 +580,10 @@ function createClientFrameGuard({ onFrame, onReject }) {
           decoded[index] ^= frame.mask[(frame.maskOffset + index) % 4]
         }
         inspector?.push(decoded)
+        if (transformTextMessage) textPayload.push(decoded)
       }
       if (rejected) return false
-      if (forwarded.length) {
+      if (forwarded.length && !(frame.inspectText && transformTextMessage)) {
         if (frame.inspectText) forwardInspected(forwarded)
         else onFrame(forwarded)
       }
@@ -590,6 +607,59 @@ function createClientFrameGuard({ onFrame, onReject }) {
 
     return !rejected
   }
+}
+
+function clampGatewayRpcProfile(payload, profileBinder) {
+  let parsed
+  try {
+    parsed = JSON.parse(Buffer.from(payload).toString('utf8'))
+  } catch {
+    return Buffer.from(payload)
+  }
+
+  let changed = false
+  const clamp = rpc => {
+    if (!rpc || typeof rpc !== 'object' || Array.isArray(rpc)) return
+    const params = rpc.params
+    if (
+      !params ||
+      typeof params !== 'object' ||
+      Array.isArray(params) ||
+      !Object.prototype.hasOwnProperty.call(params, 'profile')
+    ) {
+      return
+    }
+    const profile = profileBinder(params.profile)
+    if (profile !== params.profile) {
+      params.profile = profile
+      changed = true
+    }
+  }
+
+  if (Array.isArray(parsed)) parsed.forEach(clamp)
+  else clamp(parsed)
+  return changed ? Buffer.from(JSON.stringify(parsed)) : Buffer.from(payload)
+}
+
+function buildMaskedClientTextFrame(payload, mask) {
+  const body = Buffer.from(payload)
+  let header
+  if (body.length < 126) {
+    header = Buffer.from([0x81, 0x80 | body.length])
+  } else if (body.length <= 0xffff) {
+    header = Buffer.alloc(4)
+    header[0] = 0x81
+    header[1] = 0xfe
+    header.writeUInt16BE(body.length, 2)
+  } else {
+    header = Buffer.alloc(10)
+    header[0] = 0x81
+    header[1] = 0xff
+    header.writeBigUInt64BE(BigInt(body.length), 2)
+  }
+  const masked = Buffer.from(body)
+  for (let index = 0; index < masked.length; index += 1) masked[index] ^= mask[index % 4]
+  return Buffer.concat([header, mask, masked])
 }
 
 function policyCloseFrame() {
@@ -835,7 +905,15 @@ function createEvaWsRelay(options) {
               })
             }
           },
-          onReject: rejectClientFrame
+          onReject: rejectClientFrame,
+          transformTextMessage:
+            typeof grant.profileBinder === 'function'
+              ? payload =>
+                  buildMaskedClientTextFrame(
+                    clampGatewayRpcProfile(payload, grant.profileBinder),
+                    randomBytes(4)
+                  )
+              : null
         })
         if (head?.length) inspectClientFrames(head)
         if (!rejected) clientSocket.on('data', inspectClientFrames)
@@ -893,7 +971,8 @@ function createEvaWsRelay(options) {
       endpoint,
       expiresAt: now() + TICKET_TTL_MS,
       generation,
-      profile
+      profile,
+      profileBinder: typeof input.profileBinder === 'function' ? input.profileBinder : null
     })
     const localUrl = new URL(`ws://127.0.0.1:${address.port}${endpoint.path}`)
     localUrl.searchParams.append('ticket', ticket)
