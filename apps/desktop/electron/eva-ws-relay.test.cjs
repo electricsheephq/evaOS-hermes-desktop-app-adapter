@@ -531,6 +531,10 @@ test('delegated support clamps each outbound RPC profile and drops policy failur
 
   const allowed = await upgrade(await relay.mintTicket({ profile: 'main', profileBinder }))
   assert.match(allowed.response, /^HTTP\/1\.1 101/)
+  const expectedForwarded = [
+    { id: 1, jsonrpc: '2.0', method: 'projects.list', params: { profile: 'main' } },
+    { id: 2, jsonrpc: '2.0', method: 'session.create', params: { profile: 'main', title: 'New' } }
+  ]
   allowed.socket.write(
     Buffer.concat([
       clientFrame(JSON.stringify({ id: 1, jsonrpc: '2.0', method: 'projects.list', params: { profile: 'default' } })),
@@ -539,15 +543,13 @@ test('delegated support clamps each outbound RPC profile and drops policy failur
       )
     ])
   )
-  await waitForTunnel(upstream, 1)
-  const forwarded = decodedClientPayloads(upstream.tunneled())
-  assert.deepEqual(
-    forwarded.map(frame => [frame.method, frame.params.profile]),
-    [
-      ['projects.list', 'main'],
-      ['session.create', 'main']
-    ]
+  const expectedLength = expectedForwarded.reduce(
+    (length, frame) => length + clientFrame(JSON.stringify(frame)).length,
+    0
   )
+  await waitForTunnel(upstream, expectedLength)
+  const forwarded = decodedClientPayloads(upstream.tunneled())
+  assert.deepEqual(forwarded, expectedForwarded)
   allowed.socket.destroy()
 
   const beforeRejected = upstream.tunneled().length
