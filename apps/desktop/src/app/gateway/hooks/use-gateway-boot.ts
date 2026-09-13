@@ -54,8 +54,10 @@ import { notify, notifyError } from '@/store/notifications'
 import { loadPoolLimits } from '@/store/pool-limits'
 import {
   $activeGatewayProfile,
+  adoptActiveGatewayProfile,
   normalizeProfileKey,
   refreshActiveProfile,
+  setActiveGatewayProfile,
   touchActiveGatewayBackend
 } from '@/store/profile'
 import {
@@ -552,16 +554,18 @@ export function useGatewayBoot({
       let adoptedProfile: null | string = null
 
       try {
-        const profileKey = override ?? (await desktop.profile?.get?.())?.profile ?? ''
+        const profileRecord = await desktop.profile?.get?.()
+        const profileKey = override ?? profileRecord?.profile ?? ''
+        const source = override ? 'window-profile-override' : (profileRecord?.source ?? 'desktop-profile')
 
         if (!shouldPublish()) {
           return null
         }
 
-        const key = normalizeProfileKey(profileKey)
+        const key = adoptActiveGatewayProfile(profileKey, source === 'delegated-support-grant')
         adoptedProfile = key
         sourceProfile = key
-        $activeGatewayProfile.set(key)
+        console.info(`[gateway-profile-adoption] source=${source} value=${JSON.stringify(key)}`)
         setPrimaryGateway(gateway, key)
         void ensureGatewayForProfile(key)
       } catch (error) {
@@ -572,7 +576,7 @@ export function useGatewayBoot({
         const fallback = normalizeProfileKey(override)
         adoptedProfile = fallback
         sourceProfile = fallback
-        $activeGatewayProfile.set(fallback)
+        adoptActiveGatewayProfile(fallback, false)
 
         // A managed build must never keep using the previous renderer profile
         // when the authoritative assignment cannot be read. Tear down the
@@ -818,7 +822,7 @@ export function useGatewayBoot({
         const key = normalizeProfileKey(profile)
 
         if (normalizeProfileKey($activeGatewayProfile.get()) !== key) {
-          $activeGatewayProfile.set(key)
+          setActiveGatewayProfile(key)
         }
       },
       onEvent: event => {
@@ -826,7 +830,7 @@ export function useGatewayBoot({
         callbacksRef.current.handleGatewayEvent(event)
       },
       onActiveConnectionInvalidated: (fallbackProfile, invalidationEpoch) => {
-        $activeGatewayProfile.set(fallbackProfile)
+        setActiveGatewayProfile(fallbackProfile)
         // Bounded like every other getConnection() call in this file (#93454):
         // an eviction fallback (idle reap, connection removal, profile delete)
         // must not latch the profile atom to a connection that never resolves
@@ -1055,6 +1059,7 @@ export function useGatewayBoot({
         // that grant before asking main to dial so the first RPC window cannot
         // inherit the renderer store's default profile.
         const managedProfile = isManagedEvaosAgent() ? await adoptPrimaryProfile() : null
+
         if (isManagedEvaosAgent() && (!managedProfile || cancelled)) {
           return
         }
@@ -1221,7 +1226,7 @@ export function useGatewayBoot({
       }
 
       const profile = survivor?.profile ?? $activeGatewayProfile.get()
-      $activeGatewayProfile.set(profile)
+      setActiveGatewayProfile(profile)
       void ensureGatewayForProfile(profile)
 
       // Mirror the current (already-open) socket state into the composer so the

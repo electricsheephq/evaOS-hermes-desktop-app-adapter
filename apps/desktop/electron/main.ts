@@ -16684,13 +16684,18 @@ ipcMain.handle('hermes:profile:get', async () => {
   // scope was invisible in the desktop log. Log it here, where the main process
   // owns the logger. Profile ids are names, never secrets.
   try {
+    const managedStatus = evaManagedRuntime.status()
+
     const profile = await resolveEvaManagedDesktopProfileFromSources(
       () => evaManagedRuntime.requestApi({ path: '/api/profiles/active', method: 'GET' }),
-      () => evaManagedRuntime.status(),
+      () => managedStatus,
       () => evaManagedRuntime.assignedProfileId()
     )
 
-    return { profile }
+    return {
+      profile,
+      source: managedStatus.delegatedSupportActive ? 'delegated-support-grant' : 'enrollment-agent'
+    }
   } catch (error) {
     if (error?.code === 'invalid-profile-scope') {
       rememberLog(

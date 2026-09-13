@@ -2,7 +2,7 @@ import { act, cleanup, render } from '@testing-library/react'
 import { MemoryRouter, useLocation, useNavigate } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import type { DesktopConnectionsRegistry } from '@/global'
+import type { DesktopActiveProfile, DesktopConnectionsRegistry } from '@/global'
 import { createClientSessionState } from '@/lib/chat-runtime'
 import { $desktopBoot, applyDesktopBootProgress } from '@/store/boot'
 import {
@@ -29,7 +29,12 @@ import {
   recoverActiveSourceAfterFailedGatewaySwitch
 } from '@/store/gateway-switch'
 import { notifyError } from '@/store/notifications'
-import { $activeGatewayProfile, $profiles, ensureGatewayProfile } from '@/store/profile'
+import {
+  $activeGatewayProfile,
+  $profiles,
+  adoptActiveGatewayProfile,
+  ensureGatewayProfile
+} from '@/store/profile'
 import {
   $activeSessionId,
   $awaitingResponse,
@@ -255,7 +260,7 @@ function fakeDesktop() {
     revalidateConnection: vi.fn(async () => ({ ok: true, rebuilt: false })),
     onWindowStateChanged: vi.fn(() => () => undefined),
     touchBackend: vi.fn(async () => undefined),
-    profile: { get: vi.fn(async () => ({ profile: 'default' })) }
+    profile: { get: vi.fn(async (): Promise<DesktopActiveProfile> => ({ profile: 'default' })) }
   }
 }
 
@@ -314,7 +319,7 @@ beforeEach(() => {
   }
 
   closeSecondaryGateways()
-  $activeGatewayProfile.set('default')
+  adoptActiveGatewayProfile('default', false)
   $connection.set(null)
   $profiles.set([])
   $sessionTiles.set([])
@@ -329,7 +334,7 @@ beforeEach(() => {
   vi.mocked(notifyError).mockReset()
   ;(globalThis as { WebSocket: unknown }).WebSocket = FakeWebSocket
   ;(window as { hermesDesktop?: unknown }).hermesDesktop = fakeDesktop()
-  $activeGatewayProfile.set('default')
+  adoptActiveGatewayProfile('default', false)
   $gatewayState.set('idle')
   $busy.set(false)
   $awaitingResponse.set(false)
@@ -361,7 +366,7 @@ afterEach(() => {
   }
 
   closeSecondaryGateways()
-  $activeGatewayProfile.set('default')
+  adoptActiveGatewayProfile('default', false)
   $connection.set(null)
   $profiles.set([])
   $sessionTiles.set([])
@@ -398,23 +403,53 @@ async function advanceBackoff() {
 describe('useGatewayBoot remote reconnect loop (real hook, fake socket)', () => {
   it('adopts a delegated-support profile before the first managed connection request', async () => {
     const calls: string[] = []
+    const rememberLog = vi.spyOn(console, 'info').mockImplementation(() => undefined)
     const desktop = fakeDesktop()
     desktop.profile.get = vi.fn(async () => {
       calls.push('profile:granted')
-      return { profile: 'granted-profile' }
+
+      return { profile: 'granted-profile', source: 'delegated-support-grant' as const }
     })
+
     desktop.getConnection = vi.fn(async profile => {
       calls.push(`connection:${profile ?? 'unset'}`)
+
       return { ...primaryConn, profile: profile ?? 'default' }
     })
 
     ;(window as unknown as { hermesDesktop: unknown }).hermesDesktop = { ...desktop, eva: {} }
 
-    render(<Harness />)
+    const mounted = render(<Harness />)
     await flushAsync()
 
     expect(calls.slice(0, 2)).toEqual(['profile:granted', 'connection:granted-profile'])
     expect($activeGatewayProfile.get()).toBe('granted-profile')
+    expect(rememberLog).toHaveBeenCalledWith(
+      '[gateway-profile-adoption] source=delegated-support-grant value="granted-profile"'
+    )
+    expect(rememberLog).toHaveBeenCalledTimes(1)
+
+    await ensureGatewayProfile('profile-store-writer')
+    expect($activeGatewayProfile.get()).toBe('granted-profile')
+
+    await act(async () => {
+      const registryMirror = ensureGatewayForProfile('registry-mirror-profile')
+      await vi.advanceTimersByTimeAsync(0)
+      await registryMirror
+    })
+
+    expect($activeGatewayProfile.get()).toBe('granted-profile')
+
+    mounted.unmount()
+    takeGatewaySurvivor()?.gateway.close()
+    closeSecondaryGateways()
+    adoptActiveGatewayProfile('default', false)
+    render(<Harness />)
+    await flushAsync()
+
+    expect($activeGatewayProfile.get()).toBe('granted-profile')
+    expect(rememberLog).toHaveBeenCalledTimes(2)
+    rememberLog.mockRestore()
   })
 
   it('adopts the backend-authoritative managed profile before session refresh', async () => {

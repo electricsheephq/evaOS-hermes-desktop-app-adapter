@@ -30,8 +30,11 @@ interface WindowLike {
   webContents: WebContentsLike
 }
 
+const REMEMBERED_RENDERER_DIAGNOSTIC_PREFIX = '[gateway-profile-adoption]'
+
 /** Normalize Electron's two `console-message` signatures into one line, or
- *  null for non-error levels. Canonical (Electron 36+): `(event, details)`;
+ *  null for non-error levels except the one bounded boot diagnostic persisted
+ *  through rememberLog. Canonical (Electron 36+): `(event, details)`;
  *  deprecated positional: `(event, level, message, line, sourceId)`.
  *  `level` is numeric 0..3, where 3 === error. */
 export function formatRendererConsoleLine(
@@ -46,13 +49,16 @@ export function formatRendererConsoleLine(
 
   const level = details ? details.level : detailsOrLevel
 
-  if (level !== 3) {
-    return null
-  }
-
   const text = details ? details.message : message
   const src = details ? details.sourceUrl : sourceId
   const lineNo = details ? details.lineNumber : line
+
+  const rememberedDiagnostic =
+    level === 1 && typeof text === 'string' && text.startsWith(REMEMBERED_RENDERER_DIAGNOSTIC_PREFIX)
+
+  if (level !== 3 && !rememberedDiagnostic) {
+    return null
+  }
 
   return `[renderer console:${label}] ${String(text)} (${String(src)}:${String(lineNo)})`
 }

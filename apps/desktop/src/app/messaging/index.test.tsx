@@ -81,6 +81,7 @@ afterEach(() => {
   } else {
     delete desktopWindow.hermesDesktop
   }
+
   window.open = initialWindowOpen
 })
 

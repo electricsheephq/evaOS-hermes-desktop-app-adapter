@@ -2470,10 +2470,8 @@ function createEvaManagedRuntime(options) {
     // one `bindSupportRequest` routes to), else this enrollment's own agent.
     assignedProfileId: async () => {
       const runtime = await ensureRuntimeEnrollment()
-      const source = runtime.sessionKind === 'delegated_support' ? 'delegated-support-grant' : 'enrollment-agent'
-      const profile = (runtime.sessionKind === 'delegated_support' ? runtime.profile : runtime.agentId) ?? null
-      rememberLog(`[eva-managed] assigned profile source=${source} value=${JSON.stringify(profile)}`)
-      return profile
+
+      return (runtime.sessionKind === 'delegated_support' ? runtime.profile : runtime.agentId) ?? null
     },
     delegatedProfiles: async () => {
       const runtime = await ensureRuntimeEnrollment()

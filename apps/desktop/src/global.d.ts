@@ -897,6 +897,9 @@ export interface DesktopActiveProfile {
   // The desktop's stored profile preference, or null when unset (legacy launch
   // that defers to the sticky active_profile / default).
   profile: string | null
+  // Managed builds name which authority supplied the profile so the renderer
+  // can lock delegated-support mounts to the broker grant.
+  source?: 'delegated-support-grant' | 'enrollment-agent'
 }
 
 export interface DesktopConnectionConfig {

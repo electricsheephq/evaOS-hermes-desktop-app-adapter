@@ -259,6 +259,30 @@ export async function switchProfile(name: string): Promise<void> {
 // leave this naming a profile the active socket no longer serves (#89206).
 export const $activeGatewayProfile = atom<string>('default')
 
+// A delegated-support mount is scoped to the profile granted by the broker.
+// Only useGatewayBoot's authoritative adoption may move the renderer atom
+// while that mount is active; profile/registry activation paths must not
+// publish a different route before the renderer is reset.
+let delegatedSupportGatewayProfile: null | string = null
+
+export function adoptActiveGatewayProfile(profile: string, delegatedSupport: boolean): string {
+  const target = normalizeProfileKey(profile)
+  delegatedSupportGatewayProfile = delegatedSupport ? target : null
+  $activeGatewayProfile.set(target)
+
+  return target
+}
+
+export function setActiveGatewayProfile(profile: string): boolean {
+  if (delegatedSupportGatewayProfile !== null) {
+    return false
+  }
+
+  $activeGatewayProfile.set(normalizeProfileKey(profile))
+
+  return true
+}
+
 // Profile for the NEXT new chat (chosen via the new-chat picker). null = primary
 // / default, so single-profile users are unaffected.
 export const $newChatProfile = atom<string | null>(null)
@@ -513,6 +537,10 @@ export async function ensureGatewayProfile(profile: string | null | undefined): 
 
   const target = normalizeProfileKey(profile)
 
+  if (delegatedSupportGatewayProfile !== null) {
+    return
+  }
+
   if (normalizeProfileKey($activeGatewayProfile.get()) === target && $gateway.get()?.connectionState === 'open') {
     return
   }
@@ -551,7 +579,7 @@ export async function ensureGatewayProfile(profile: string | null | undefined): 
         clearComposerSelectionOwner()
       }
 
-      $activeGatewayProfile.set(target)
+      setActiveGatewayProfile(target)
     })
   })()
 
@@ -684,6 +712,10 @@ export async function ensureGatewayAgent(
   const target = normalizeProfileKey(profile)
   const connection = (connectionId ?? '').trim() || null
 
+  if (delegatedSupportGatewayProfile !== null) {
+    return
+  }
+
   if (!connection) {
     return ensureGatewayProfile(target)
   }
@@ -745,7 +777,7 @@ export async function ensureGatewayAgent(
       // best-effort descriptor lookup failed. Publish it before the profile
       // atom wakes forced model reseeds or a picker can persist a selection.
       setComposerSelectionOwner(connection, target)
-      $activeGatewayProfile.set(target)
+      setActiveGatewayProfile(target)
     })
   })()
 

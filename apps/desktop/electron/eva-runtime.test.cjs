@@ -959,12 +959,11 @@ test('the assigned profile id names the profile this session asked the gateway f
   assert.equal(await support.assignedProfileId(), 'default')
 })
 
-test('delegated support tickets carry the canonical profile binder and log their assigned source once', async t => {
+test('delegated support tickets carry the canonical profile binder', async t => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-support-profile-binder-'))
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
   const statePath = path.join(directory, 'state.json')
   writeActiveEnrollment(statePath)
-  const logs = []
   let ticketInput = null
   const payload = supportEnrollment(Date.now(), { profile: 'main' })
   payload.remote_backend.allowed_profiles = ['main']
@@ -977,15 +976,12 @@ test('delegated support tickets carry the canonical profile binder and log their
       },
       disconnectAll: () => undefined,
       close: async () => undefined
-    }),
-    rememberLog: line => logs.push(line)
+    })
   })
   t.after(() => runtime.close())
 
   await runtime.claimSupportRequest('profile-binder-request')
-  const logCount = logs.length
   assert.equal(await runtime.assignedProfileId(), 'main')
-  assert.deepEqual(logs.slice(logCount), ['[eva-managed] assigned profile source=delegated-support-grant value="main"'])
 
   await runtime.freshWsUrl({ profile: 'default' })
   assert.equal(ticketInput.profile, 'main')

@@ -24,6 +24,17 @@ describe('formatRendererConsoleLine', () => {
     expect(formatRendererConsoleLine('main', { level: 1, message: 'x', sourceUrl: 's', lineNumber: 1 })).toBeNull()
     expect(formatRendererConsoleLine('main', 2, 'warn', 1, 's')).toBeNull()
   })
+
+  it('persists only the bounded renderer profile-adoption diagnostic at info level', () => {
+    const line = formatRendererConsoleLine('main', {
+      level: 1,
+      message: '[gateway-profile-adoption] source=delegated-support-grant value="main"',
+      sourceUrl: 'file:///app/index.js',
+      lineNumber: 1
+    })
+
+    expect(line).toContain('[gateway-profile-adoption] source=delegated-support-grant value="main"')
+  })
 })
 
 describe('attachRendererConsoleCapture', () => {

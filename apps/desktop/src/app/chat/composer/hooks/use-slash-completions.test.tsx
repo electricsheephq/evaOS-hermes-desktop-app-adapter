@@ -179,6 +179,7 @@ describe('useSlashCompletions', () => {
     )
 
     const api = harness({ request } as unknown as HermesGateway)
+
     const restarts = (await completions(api, 'rest')).filter(
       item => (item.metadata as { command?: string }).command === '/restart'
     )
