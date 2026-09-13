@@ -50,6 +50,7 @@ describe('registerFsIpc managed boundary', () => {
       ['hermes:fs:reveal', ['/tmp/file']],
       ['hermes:fs:openDir', ['/tmp/test']],
       ['hermes:fs:desktopPluginsRoot', []],
+      ['hermes:fs:reconcileDesktopPlugins', []],
       ['hermes:fs:logsRoot', []],
       ['hermes:fs:agentPluginsRoot', []],
       ['hermes:plugin:probe', [{ identifier: 'owner/repo' }]],

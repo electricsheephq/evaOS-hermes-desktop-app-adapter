@@ -119,6 +119,7 @@ export function registerFsIpc({
   // Earlier builds scoped it per profile; anything left in those folders is
   // moved up once so it does not silently vanish on a profile switch.
   async function desktopPluginsRoot(): Promise<string> {
+    assertLocalAccessAllowed('Opening local application data directories')
     const root = await ensureDir(path.join(hermesHome, DESKTOP_PLUGINS_DIR))
     await migrateProfileScopedDesktopPlugins(hermesHome, root)
     await reconcileUnifiedDesktopHalves(hermesHome, root)
@@ -132,6 +133,7 @@ export function registerFsIpc({
   // update / uninstall through the gateway) so the app-level copy tracks the
   // package without waiting for the next root resolution.
   ipcMain.handle('hermes:fs:reconcileDesktopPlugins', async () => {
+    assertLocalAccessAllowed('Reconciling local application plugins')
     const root = await ensureDir(path.join(hermesHome, DESKTOP_PLUGINS_DIR))
 
     return reconcileUnifiedDesktopHalves(hermesHome, root)
@@ -142,6 +144,10 @@ export function registerFsIpc({
   // knowing where HERMES_HOME lives. Same Electron-local resolution as the
   // plugin roots: valid in every connection mode, created on demand.
   ipcMain.handle('hermes:fs:logsRoot', async () => localPluginsRoot('logs'))
+
+  // The LOCAL agent-plugin root (`<HERMES_HOME>/plugins`), same Electron-local
+  // resolution as above. This is the desktop half of a unified plugin package.
+  ipcMain.handle('hermes:fs:agentPluginsRoot', async () => localPluginsRoot('plugins'))
 
   ipcMain.handle('hermes:plugin:probe', async (_event, payload) => {
     assertLocalAccessAllowed('Inspecting local plugin repositories')
