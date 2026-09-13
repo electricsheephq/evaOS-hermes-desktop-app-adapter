@@ -74,7 +74,12 @@ def _detach_session_transport(session: dict | None, transport) -> bool:
     with _session_transport_lock:
         (session.get("viewers") or {}).pop(transport, None)
         existing = session.get("transport")
-        if isinstance(existing, FanoutTransport):
+        if existing is transport:
+            # Remove the direct slot before lifecycle chooses a surviving
+            # viewer; otherwise rebinding creates a fanout that resurrects the
+            # socket which just disconnected.
+            session["transport"] = _detached_ws_transport
+        elif isinstance(existing, FanoutTransport):
             existing.detach(transport)
             viewers = session.get("viewers") or {}
             for viewer in list(viewers):
