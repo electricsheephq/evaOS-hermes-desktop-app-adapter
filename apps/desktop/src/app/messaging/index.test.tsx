@@ -10,7 +10,12 @@ const updateMessagingPlatform = vi.fn()
 const getPairing = vi.fn()
 const approvePairing = vi.fn()
 const revokePairing = vi.fn()
-const openExternalLink = vi.fn()
+const openExternal = vi.fn().mockResolvedValue(undefined)
+const windowOpen = vi.fn()
+
+const desktopWindow = window as unknown as { hermesDesktop?: Window['hermesDesktop'] }
+const initialHermesDesktop = desktopWindow.hermesDesktop
+const initialWindowOpen = window.open
 
 vi.mock('@/hermes', () => ({
   approvePairing: (platformId: string, requestId: string, profile?: null | string) =>
@@ -35,10 +40,6 @@ vi.mock('@/store/gateway', () => ({
 }))
 vi.mock('@/lib/query-client', () => ({ invalidateProfileScopedQueries: vi.fn() }))
 vi.mock('@/store/starmap', () => ({ resetStarmapGraph: vi.fn() }))
-
-vi.mock('@/lib/external-link', () => ({
-  openExternalLink: (href: string) => openExternalLink(href)
-}))
 
 vi.mock('@/store/notifications', () => ({
   notify: vi.fn(),
@@ -65,6 +66,8 @@ function platform(patch: Partial<MessagingPlatformInfo> = {}): MessagingPlatform
 }
 
 beforeEach(() => {
+  desktopWindow.hermesDesktop = { openExternal } as unknown as Window['hermesDesktop']
+  window.open = windowOpen
   updateMessagingPlatform.mockResolvedValue({ ok: true, platform: 'teams' })
   getPairing.mockResolvedValue({ approved: [], pending: [] })
 })
@@ -72,6 +75,14 @@ beforeEach(() => {
 afterEach(() => {
   cleanup()
   vi.clearAllMocks()
+
+  if (initialHermesDesktop) {
+    desktopWindow.hermesDesktop = initialHermesDesktop
+  } else {
+    delete desktopWindow.hermesDesktop
+  }
+
+  window.open = initialWindowOpen
 })
 
 async function renderMessaging() {
@@ -122,12 +133,49 @@ describe('MessagingView setup-guide link', () => {
 
     await renderMessaging()
 
-    const link = await screen.findByText('Open setup guide')
+    const link = await screen.findByRole('link', { name: /Open setup guide/ })
+    expect(link.getAttribute('href')).toBe(docsUrl)
+    expect(link.getAttribute('rel')).toBe('noreferrer')
     await act(async () => {
       fireEvent.click(link)
     })
 
-    await waitFor(() => expect(openExternalLink).toHaveBeenCalledWith(docsUrl))
+    await waitFor(() => expect(openExternal).toHaveBeenCalledWith(docsUrl))
+    expect(windowOpen).not.toHaveBeenCalled()
+  })
+
+  it('opens credential-field docs through the validated external opener', async () => {
+    const fieldUrl = 'https://example.com/teams/client-secret'
+    getMessagingPlatforms.mockResolvedValue({
+      platforms: [
+        platform({
+          env_vars: [
+            {
+              advanced: false,
+              description: 'A client secret.',
+              is_password: true,
+              is_set: false,
+              key: 'TEAMS_CLIENT_SECRET',
+              prompt: 'Client secret',
+              redacted_value: null,
+              required: true,
+              url: fieldUrl
+            }
+          ]
+        })
+      ]
+    })
+
+    const { container } = await renderMessaging()
+    const link = container.querySelector(`a[href="${fieldUrl}"]`)
+
+    expect(link?.getAttribute('rel')).toBe('noreferrer')
+    await act(async () => {
+      fireEvent.click(link!)
+    })
+
+    await waitFor(() => expect(openExternal).toHaveBeenCalledWith(fieldUrl))
+    expect(windowOpen).not.toHaveBeenCalled()
   })
 })
 

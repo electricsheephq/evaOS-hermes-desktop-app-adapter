@@ -946,6 +946,7 @@ test('the assigned profile id names the profile this session asked the gateway f
   t.after(() => ordinary.close())
   // An ordinary login expects its own enrolled agent.
   assert.equal(await ordinary.assignedProfileId(), 'main')
+  assert.deepEqual(await ordinary.assignedProfile(), { profile: 'main', source: 'enrollment-agent' })
 
   const supportPath = path.join(directory, 'support-state.json')
   writeActiveEnrollment(supportPath)
@@ -957,6 +958,43 @@ test('the assigned profile id names the profile this session asked the gateway f
   t.after(() => support.close())
   await support.claimSupportRequest('assigned-profile-request')
   assert.equal(await support.assignedProfileId(), 'default')
+  assert.deepEqual(await support.assignedProfile(), {
+    profile: 'default',
+    source: 'delegated-support-grant'
+  })
+})
+
+test('delegated support tickets carry the canonical profile binder', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-support-profile-binder-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'state.json')
+  writeActiveEnrollment(statePath)
+  let ticketInput = null
+  const payload = supportEnrollment(Date.now(), { profile: 'main' })
+  payload.remote_backend.allowed_profiles = ['main']
+  const runtime = makeManagedRuntime(statePath, {
+    brokerPost: async () => payload,
+    createWsRelay: () => ({
+      mintTicket: async input => {
+        ticketInput = input
+        return 'ws://127.0.0.1:12345/managed'
+      },
+      disconnectAll: () => undefined,
+      close: async () => undefined
+    })
+  })
+  t.after(() => runtime.close())
+
+  await runtime.claimSupportRequest('profile-binder-request')
+  assert.equal(await runtime.assignedProfileId(), 'main')
+
+  await runtime.freshWsUrl({ profile: 'default' })
+  assert.equal(ticketInput.profile, 'main')
+  assert.equal(ticketInput.profileBinder('default'), 'main')
+  assert.throws(
+    () => ticketInput.profileBinder('outside'),
+    error => error.code === 'support-profile-mismatch'
+  )
 })
 
 test('admin profile discovery reads every granted agent even without sessions', async t => {

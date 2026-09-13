@@ -167,6 +167,27 @@ describe('useSlashCompletions', () => {
     expect(commandsOf(await completions(api, 'rest'))).toEqual(['/restart'])
   })
 
+  it('keeps one Desktop-wired restart when the backend also completes it', async () => {
+    const request = vi.fn().mockImplementation((method: string) =>
+      Promise.resolve(
+        method === 'commands.catalog'
+          ? CATALOG
+          : {
+              items: [{ text: '/restart', display: '/restart', kind: 'command', meta: 'Backend restart' }]
+            }
+      )
+    )
+
+    const api = harness({ request } as unknown as HermesGateway)
+
+    const restarts = (await completions(api, 'rest')).filter(
+      item => (item.metadata as { command?: string }).command === '/restart'
+    )
+
+    expect(restarts).toHaveLength(1)
+    expect(restarts[0]?.description).toBe('Restart the Hermes gateway (reconnects the desktop)')
+  })
+
   it('keeps a registry command in Commands even when the desktop table has no row', async () => {
     const request = vi.fn().mockImplementation((method: string) =>
       Promise.resolve(

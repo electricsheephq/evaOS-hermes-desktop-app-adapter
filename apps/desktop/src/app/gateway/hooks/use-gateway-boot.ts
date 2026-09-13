@@ -54,8 +54,10 @@ import { notify, notifyError } from '@/store/notifications'
 import { loadPoolLimits } from '@/store/pool-limits'
 import {
   $activeGatewayProfile,
+  adoptActiveGatewayProfile,
   normalizeProfileKey,
   refreshActiveProfile,
+  setActiveGatewayProfile,
   touchActiveGatewayBackend
 } from '@/store/profile'
 import {
@@ -545,31 +547,45 @@ export function useGatewayBoot({
     // URL: the HUD is opened ON a conversation, and when that conversation
     // belongs to a non-primary profile, adopting the primary here resolves the
     // session id against the wrong backend — the HUD then falls back to the
-    // default profile's last session (#82285). The override wins over the
-    // stored preference; absent, behavior is unchanged.
-    async function adoptPrimaryProfile(shouldPublish: () => boolean = () => true): Promise<boolean> {
+    // default profile's last session (#82285). The override wins over an
+    // ordinary stored preference, but never over a delegated-support grant.
+    async function adoptPrimaryProfile(shouldPublish: () => boolean = () => true): Promise<null | string> {
       const override = windowProfileOverride()
+      let adoptedProfile: null | string = null
 
       try {
-        const profileKey = override ?? (await desktop.profile?.get?.())?.profile ?? ''
+        const profileRecord = await desktop.profile?.get?.()
+        const delegatedSupport = profileRecord?.source === 'delegated-support-grant'
+
+        const profileKey = delegatedSupport ? (profileRecord.profile ?? '') : (override ?? profileRecord?.profile ?? '')
+
+        const source = delegatedSupport
+          ? 'delegated-support-grant'
+          : override
+            ? 'window-profile-override'
+            : (profileRecord?.source ?? 'desktop-profile')
 
         if (!shouldPublish()) {
-          return false
+          return null
         }
 
-        const key = normalizeProfileKey(profileKey)
+        const key = adoptActiveGatewayProfile(profileKey, delegatedSupport)
+        adoptedProfile = key
+        supportGrantedProfile = delegatedSupport ? key : null
         sourceProfile = key
-        $activeGatewayProfile.set(key)
+        console.info(`[gateway-profile-adoption] source=${source} value=${JSON.stringify(key)}`)
         setPrimaryGateway(gateway, key)
         void ensureGatewayForProfile(key)
       } catch (error) {
         if (!shouldPublish()) {
-          return false
+          return null
         }
 
         const fallback = normalizeProfileKey(override)
+        adoptedProfile = fallback
+        supportGrantedProfile = null
         sourceProfile = fallback
-        $activeGatewayProfile.set(fallback)
+        adoptActiveGatewayProfile(fallback, false)
 
         // A managed build must never keep using the previous renderer profile
         // when the authoritative assignment cannot be read. Tear down the
@@ -585,7 +601,7 @@ export function useGatewayBoot({
         }
       }
 
-      return true
+      return adoptedProfile
     }
 
     // Seed the working dir from the backend default on a fresh view (nothing
@@ -646,7 +662,7 @@ export function useGatewayBoot({
         // shared backend-boot budget rather than the reconnect budget because
         // ensureBackend may cold-spawn a pooled helper backend here.
         const conn = await withTimeout(
-          desktop.getConnection(windowProfileOverride() ?? undefined),
+          desktop.getConnection(supportGrantedProfile ?? windowProfileOverride() ?? undefined),
           BACKEND_BOOT_WAIT_TIMEOUT_MS,
           'Timed out reconnecting to Hermes backend'
         )
@@ -815,7 +831,7 @@ export function useGatewayBoot({
         const key = normalizeProfileKey(profile)
 
         if (normalizeProfileKey($activeGatewayProfile.get()) !== key) {
-          $activeGatewayProfile.set(key)
+          setActiveGatewayProfile(key)
         }
       },
       onEvent: event => {
@@ -823,7 +839,7 @@ export function useGatewayBoot({
         callbacksRef.current.handleGatewayEvent(event)
       },
       onActiveConnectionInvalidated: (fallbackProfile, invalidationEpoch) => {
-        $activeGatewayProfile.set(fallbackProfile)
+        setActiveGatewayProfile(fallbackProfile)
         // Bounded like every other getConnection() call in this file (#93454):
         // an eviction fallback (idle reap, connection removal, profile delete)
         // must not latch the profile atom to a connection that never resolves
@@ -876,6 +892,7 @@ export function useGatewayBoot({
     })
 
     let sourceProfile = normalizeProfileKey(survivor?.profile ?? $activeGatewayProfile.get())
+    let supportGrantedProfile: null | string = null
 
     const offEvent = gateway.onEvent(event => {
       const connectionId = activeGatewayConnectionId()
@@ -1048,6 +1065,15 @@ export function useGatewayBoot({
 
     async function boot() {
       try {
+        // A managed connection is assigned to one authoritative profile. Adopt
+        // that grant before asking main to dial so the first RPC window cannot
+        // inherit the renderer store's default profile.
+        const managedProfile = isManagedEvaosAgent() ? await adoptPrimaryProfile() : null
+
+        if (isManagedEvaosAgent() && (!managedProfile || cancelled)) {
+          return
+        }
+
         // A profile-pinned helper window (the HUD) dials its target profile's
         // backend directly — ensureBackend spawns/reuses it from the pool.
         // Everything else keeps dialing the primary.
@@ -1056,7 +1082,7 @@ export function useGatewayBoot({
         // rides out a full backend cold spawn, so it gets the shared 45s
         // backend-boot budget, not the 20s reconnect budget.
         const conn = await withTimeout(
-          desktop.getConnection(windowProfileOverride() ?? undefined),
+          desktop.getConnection(supportGrantedProfile ?? windowProfileOverride() ?? managedProfile ?? undefined),
           isManagedEvaosAgent() ? MANAGED_INITIAL_CONNECTION_DEADLINE_MS : BACKEND_BOOT_WAIT_TIMEOUT_MS,
           isManagedEvaosAgent()
             ? translateNow('boot.errors.gatewayConnectionLost')
@@ -1064,13 +1090,6 @@ export function useGatewayBoot({
         )
 
         if (cancelled) {
-          return
-        }
-
-        // Resolve the backend-authoritative managed profile before opening the
-        // socket. Events can arrive immediately after the handshake; adopting
-        // afterwards would tag them with a stale renderer profile.
-        if (isManagedEvaosAgent() && (!(await adoptPrimaryProfile()) || cancelled)) {
           return
         }
 
@@ -1217,7 +1236,7 @@ export function useGatewayBoot({
       }
 
       const profile = survivor?.profile ?? $activeGatewayProfile.get()
-      $activeGatewayProfile.set(profile)
+      setActiveGatewayProfile(profile)
       void ensureGatewayForProfile(profile)
 
       // Mirror the current (already-open) socket state into the composer so the
