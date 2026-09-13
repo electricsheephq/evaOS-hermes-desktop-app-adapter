@@ -666,8 +666,7 @@ def _read_profiles():
     managed_name = _managed_profile_or_http(None)
     if managed_name:
         try:
-            profile = await run_in_threadpool(
-                profiles_mod._profile_info,
+            profile = profiles_mod._profile_info(
                 managed_name,
                 profiles_mod.get_profile_dir(managed_name),
                 is_default=managed_name == "default",
