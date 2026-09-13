@@ -478,6 +478,13 @@ def _state_key_is_current(state_key: _ServerStateKey) -> bool:
             else isinstance(state_key, tuple) and state_key[0] == current[0])
 
 
+def _server_visible_in_scope(state_key: _ServerStateKey, current_scope: Optional[str]) -> bool:
+    """Return whether one profile-owned runtime entry belongs to this registry view."""
+    if isinstance(state_key, tuple):
+        return current_scope is not None and state_key[0] == current_scope
+    return current_scope is None
+
+
 def _tool_provenance_key(tool_name: str) -> str | tuple[str, str]:
     """Profile-scope a generated MCP tool name without changing its display name."""
     state_key = _server_state_key("")
