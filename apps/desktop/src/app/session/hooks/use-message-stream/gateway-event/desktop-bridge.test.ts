@@ -296,4 +296,43 @@ describe('desktop bridge source and foreground isolation', () => {
     expect(mocks.showTip).not.toHaveBeenCalled()
     expect(mocks.requestGatewayForAgent).not.toHaveBeenCalled()
   })
+
+  it('leaves a scoped preview action unanswered in a window showing another session', () => {
+    expect(handleDesktopBridgeEvent(context('preview.act.request', false))).toBe(true)
+    expect(mocks.requestGatewayForAgent).not.toHaveBeenCalled()
+  })
+
+  it('keeps the fail-fast response for an unscoped inactive preview action', async () => {
+    const ctx = context('preview.act.request', false)
+    ctx.explicitSid = ''
+
+    expect(handleDesktopBridgeEvent(ctx)).toBe(true)
+    await vi.waitFor(() => expect(mocks.requestGatewayForAgent).toHaveBeenCalledOnce())
+    expect(mocks.requestGatewayForAgent).toHaveBeenCalledWith(
+      'source-b',
+      'background-profile',
+      'preview.act.respond',
+      expect.objectContaining({ request_id: 'request-1', text: expect.stringContaining('session') })
+    )
+  })
+
+  it('leaves a scoped tour unanswered in another session even when tours are disabled', () => {
+    mocks.toursEnabled.mockReturnValue(false)
+    expect(handleDesktopBridgeEvent(context('tour.request', false))).toBe(true)
+    expect(mocks.requestGatewayForAgent).not.toHaveBeenCalled()
+  })
+
+  it('keeps the fail-fast response for an unscoped inactive tour', async () => {
+    const ctx = context('tour.request', false)
+    ctx.explicitSid = ''
+
+    expect(handleDesktopBridgeEvent(ctx)).toBe(true)
+    await vi.waitFor(() => expect(mocks.requestGatewayForAgent).toHaveBeenCalledOnce())
+    expect(mocks.requestGatewayForAgent).toHaveBeenCalledWith(
+      'source-b',
+      'background-profile',
+      'tour.respond',
+      expect.objectContaining({ request_id: 'request-1', text: expect.stringContaining('session') })
+    )
+  })
 })

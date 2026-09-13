@@ -413,6 +413,9 @@ _servers: Dict[_ServerStateKey, MCPServerTask] = {}
 # Profile registry scope per live connection (None outside multiplex) so a multiplexed
 # /reload-mcp tears down only its own profile's servers.
 _server_scope_keys: Dict[_ServerStateKey, Optional[str]] = {}
+# Registry overlays that may call one compatible live connection. The connection
+# remains owned by _server_scope_keys; this map grants visibility only.
+_server_tool_scopes: Dict[_ServerStateKey, set[str]] = {}
 _server_connecting: set[_ServerStateKey] = set()
 _server_connect_errors: Dict[_ServerStateKey, str] = {}
 # Lazy startup: servers registered from the schema cache without connecting; popped on
@@ -476,6 +479,18 @@ def _state_key_is_current(state_key: _ServerStateKey) -> bool:
     current = _server_state_key("")
     return (isinstance(state_key, str) if isinstance(current, str)
             else isinstance(state_key, tuple) and state_key[0] == current[0])
+
+
+def _server_visible_in_scope(state_key: _ServerStateKey, current_scope: Optional[str]) -> bool:
+    """Return whether one profile-owned runtime entry belongs to this registry view."""
+    if current_scope is None:
+        return isinstance(state_key, str)
+    owner_scope = _server_scope_keys.get(state_key)
+    if owner_scope == current_scope:
+        return True
+    if isinstance(state_key, tuple) and state_key[0] == current_scope:
+        return True
+    return current_scope in _server_tool_scopes.get(state_key, ())
 
 
 def _tool_provenance_key(tool_name: str) -> str | tuple[str, str]:

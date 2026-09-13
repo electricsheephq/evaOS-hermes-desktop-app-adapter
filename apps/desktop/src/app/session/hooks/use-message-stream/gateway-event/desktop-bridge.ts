@@ -46,7 +46,7 @@ const loadPreviewEngine = () => {
  *  (terminal/preview/window), agent terminal streaming, pane reveal, and
  *  message reactions. */
 export function handleDesktopBridgeEvent(ctx: GatewayEventContext): boolean {
-  const { event, payload } = ctx
+  const { event, payload, explicitSid, isActiveEvent } = ctx
 
   // Runtime session ids are only unique within a gateway source. Requiring
   // both the routed id and the composite (connection, profile) owner keeps a
@@ -120,6 +120,12 @@ export function handleDesktopBridgeEvent(ctx: GatewayEventContext): boolean {
     const requestId = typeof payload?.request_id === 'string' ? payload.request_id : ''
 
     if (requestId) {
+      // Only the renderer that owns an explicitly scoped request may answer;
+      // another window's refusal must not race the owning window's result.
+      if (explicitSid && !isActiveEvent) {
+        return true
+      }
+
       const denied = {
         error: 'The in-app browser only takes actions in the session the user is looking at.',
         success: false
@@ -220,6 +226,12 @@ export function handleDesktopBridgeEvent(ctx: GatewayEventContext): boolean {
     const requestId = typeof payload?.request_id === 'string' ? payload.request_id : ''
 
     if (requestId) {
+      // As with preview actions, inactive windows stay silent for explicitly
+      // scoped requests so their refusal cannot beat the owning renderer.
+      if (explicitSid && !isActiveEvent) {
+        return true
+      }
+
       const denied = {
         error: 'Tours only run in the session the user is looking at.',
         success: false
@@ -235,7 +247,6 @@ export function handleDesktopBridgeEvent(ctx: GatewayEventContext): boolean {
         ownsActiveSurfaceNow() &&
         (tourSurface === 'app' ||
           (previewSurface ? ownsActivePreviewSurface(previewSurface) : captureActivePreviewSurface() === null))
-
       const answer = (result: unknown) =>
         respondToSource('tour.respond', {
           request_id: requestId,

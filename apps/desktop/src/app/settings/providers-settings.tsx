@@ -167,19 +167,20 @@ function OAuthPicker({
 
   const select = (p: OAuthProvider) => startManualProviderOAuth(p.id, profile)
 
-  const featured = managedEva ? null : (ordered.find(p => p.id === FEATURED_ID && !p.status?.logged_in) ?? null)
+  // The free tier holds a token but no account: it is never "connected".
+  const isConnected = (p: OAuthProvider) => Boolean(p.status?.logged_in) && p.status?.free_tier !== true
+  const featured = managedEva ? null : (ordered.find(p => p.id === FEATURED_ID && !isConnected(p)) ?? null)
 
   const rest = managedEva
     ? managedOAuthProviders(ordered, true)
     : featured
       ? ordered.filter(p => p.id !== FEATURED_ID)
       : ordered
-
   // Keep connected accounts grouped and always visible; only the unconnected
   // providers hide behind the disclosure, so the page leads with what's set up.
   // Both lists preserve `sortProviders` order (curated priority, then name).
-  const connected = rest.filter(p => p.status?.logged_in)
-  const others = rest.filter(p => !p.status?.logged_in)
+  const connected = rest.filter(isConnected)
+  const others = rest.filter(p => !isConnected(p))
   const collapsible = others.length > 0
   const showOthers = !collapsible || showAll
 

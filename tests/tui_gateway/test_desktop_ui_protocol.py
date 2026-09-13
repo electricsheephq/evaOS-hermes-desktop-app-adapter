@@ -655,7 +655,8 @@ def test_disconnect_restores_surviving_viewer_protocol(monkeypatch):
     try:
         reaped, detached = server._close_sessions_for_transport(legacy)
         assert (reaped, detached) == (0, 0)
-        assert session["transport"] is current
+        assert server._session_transport_contains(session, current)
+        assert not server._session_transport_contains(session, legacy)
         assert session["source"] == "desktop"
         assert session["desktop_ui_protocol"] == 2
     finally:
