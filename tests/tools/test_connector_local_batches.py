@@ -47,7 +47,7 @@ def test_single_local_unwrap_keeps_session_db_todo_store_and_setup_callback(tmp_
         return json.dumps({"status": "declined", "server": server})
 
     agent = SimpleNamespace(
-        enabled_toolsets=["todo", "session_search", "desktop_ui"], disabled_toolsets=[],
+        enabled_toolsets=["todo", "session_search", "desktop_ui", "desktop_ui_v2"], disabled_toolsets=[],
         session_id="current-session", _todo_store=TodoStore(), _memory_manager=None,
         _get_session_db_for_recall=lambda: db, setup_mcp_callback=setup,
     )
