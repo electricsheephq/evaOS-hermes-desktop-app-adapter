@@ -946,6 +946,7 @@ test('the assigned profile id names the profile this session asked the gateway f
   t.after(() => ordinary.close())
   // An ordinary login expects its own enrolled agent.
   assert.equal(await ordinary.assignedProfileId(), 'main')
+  assert.deepEqual(await ordinary.assignedProfile(), { profile: 'main', source: 'enrollment-agent' })
 
   const supportPath = path.join(directory, 'support-state.json')
   writeActiveEnrollment(supportPath)
@@ -957,6 +958,10 @@ test('the assigned profile id names the profile this session asked the gateway f
   t.after(() => support.close())
   await support.claimSupportRequest('assigned-profile-request')
   assert.equal(await support.assignedProfileId(), 'default')
+  assert.deepEqual(await support.assignedProfile(), {
+    profile: 'default',
+    source: 'delegated-support-grant'
+  })
 })
 
 test('delegated support tickets carry the canonical profile binder', async t => {

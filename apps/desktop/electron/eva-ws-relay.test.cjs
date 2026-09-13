@@ -93,6 +93,7 @@ function clientFrame(payload, { fin = true, mask = Buffer.from([0x12, 0x34, 0x56
 
 function decodedClientPayloads(input) {
   const payloads = []
+  let message = []
   let offset = 0
 
   while (offset < input.length) {
@@ -111,7 +112,14 @@ function decodedClientPayloads(input) {
     headerLength += 4
     const payload = Buffer.from(input.subarray(offset + headerLength, offset + headerLength + payloadLength))
     for (let index = 0; index < payload.length; index += 1) payload[index] ^= mask[index % 4]
-    payloads.push(JSON.parse(payload.toString('utf8')))
+    const fin = (input[offset] & 0x80) !== 0
+    const opcode = input[offset] & 0x0f
+    if (opcode === 0x1) message = []
+    message.push(payload)
+    if (fin) {
+      payloads.push(JSON.parse(Buffer.concat(message).toString('utf8')))
+      message = []
+    }
     offset += headerLength + payloadLength
   }
 
@@ -339,7 +347,7 @@ test('relay denies managed billing RPCs before they reach upstream', async t => 
     'billing.future_method',
     'subscription.future_method'
   ]) {
-    const result = await upgrade(await relay.mintTicket())
+    const result = await upgrade(await relay.mintTicket({ profile: 'main', profileBinder: () => 'main' }))
     assert.match(result.response, /^HTTP\/1\.1 101/)
     result.socket.write(clientFrame(JSON.stringify({ id: 1, jsonrpc: '2.0', method, params: {} })))
     await waitForClose(result.socket)
@@ -559,7 +567,9 @@ test('delegated support clamps each outbound RPC profile and drops policy failur
     clientFrame(JSON.stringify({ id: 3, jsonrpc: '2.0', method: 'projects.list', params: { profile: 'outside' } }))
   )
   await waitForClose(rejected.socket)
-  assert.equal(upstream.tunneled().length, beforeRejected)
+  const rejectedBytes = upstream.tunneled().subarray(beforeRejected)
+  assert.ok(rejectedBytes.length > 0)
+  assert.deepEqual(decodedClientPayloads(rejectedBytes), [])
 })
 
 test('relay preserves fragmented binary and allowed text while denying a fragmented blocked RPC', async t => {
@@ -605,7 +615,7 @@ test('relay preserves fragmented binary and allowed text while denying a fragmen
   assert.deepEqual(upstream.tunneled(), Buffer.concat([fragments, allowedFragments]))
 })
 
-test('relay streams a multi-megabyte file.attach frame without changing its bytes', async t => {
+test('delegated support streams and clamps a multi-megabyte file.attach frame', async t => {
   const upstream = fakeUpstream()
   await upstream.start()
   const relay = createEvaWsRelay({
@@ -617,20 +627,31 @@ test('relay streams a multi-megabyte file.attach frame without changing its byte
     await upstream.stop()
   })
 
-  const result = await upgrade(await relay.mintTicket())
+  const result = await upgrade(
+    await relay.mintTicket({
+      profile: 'main',
+      profileBinder: requested => (requested === 'default' ? 'main' : requested)
+    })
+  )
   const payload = JSON.stringify({
     id: 1,
     jsonrpc: '2.0',
     method: 'file.attach',
-    params: { content: 'A'.repeat(8 * 1024 * 1024), filename: 'large.bin' }
+    params: { profile: 'default', content: 'A'.repeat(8 * 1024 * 1024), filename: 'large.bin' }
   })
   const frame = clientFrame(payload)
-  for (let offset = 0; offset < frame.length; offset += 32 * 1024) {
+  result.socket.write(frame.subarray(0, 32 * 1024))
+  await waitForTunnel(upstream, 1)
+  assert.ok(upstream.tunneled().length > 0)
+
+  for (let offset = 32 * 1024; offset < frame.length; offset += 32 * 1024) {
     result.socket.write(frame.subarray(offset, offset + 32 * 1024))
   }
 
   await waitForTunnel(upstream, frame.length)
-  assert.deepEqual(upstream.tunneled(), frame)
+  const [forwarded] = decodedClientPayloads(upstream.tunneled())
+  assert.equal(forwarded.params.profile, 'main')
+  assert.equal(forwarded.params.content.length, 8 * 1024 * 1024)
   result.socket.destroy()
 })
 

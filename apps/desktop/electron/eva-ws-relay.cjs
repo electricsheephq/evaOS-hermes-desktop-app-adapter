@@ -149,7 +149,7 @@ function buildUpgradeRequest(request, upstreamUrl, options = {}) {
 // object key, an eligible object's method, or a supported generic-dispatch
 // selector, so a 300+ MiB base64 file.attach payload adds only a small, fixed
 // amount of policy memory.
-function createGatewayRpcInspector({ onBlocked, onMethod }) {
+function createGatewayRpcInspector({ onBlocked, onMethod, onText = () => undefined, profileBinder = null }) {
   const decoder = new TextDecoder('utf-8')
   const stack = []
   let inString = false
@@ -159,6 +159,7 @@ function createGatewayRpcInspector({ onBlocked, onMethod }) {
   let capturedValue = null
   let captureOverflow = false
   let inPrimitive = false
+  let suppressProfileString = false
 
   const blockRpc = rpc => {
     if (rpc?.blocked) return
@@ -270,6 +271,9 @@ function createGatewayRpcInspector({ onBlocked, onMethod }) {
   const stringCaptureMode = () => {
     const parent = stack.at(-1)
     if (parent?.type === 'object') {
+      if (profileBinder && parent.state === 'value' && parent.role === 'params' && parent.key === 'profile') {
+        return 'profile'
+      }
       if (parent.state === 'keyOrEnd' || (parent.state === 'value' && parent.eligible && parent.key === 'method')) {
         return 'full'
       }
@@ -307,6 +311,7 @@ function createGatewayRpcInspector({ onBlocked, onMethod }) {
   }
 
   const finishString = () => {
+    const mode = captureMode
     let value = capturedValue
     if (value === null && captureMode && !captureOverflow) {
       try {
@@ -315,6 +320,15 @@ function createGatewayRpcInspector({ onBlocked, onMethod }) {
         value = null
       }
     }
+    if (mode === 'profile') {
+      const profile = profileBinder(value)
+      if (typeof profile !== 'string') {
+        const error = new TypeError('Delegated support requires a string RPC profile.')
+        error.code = 'support-profile-mismatch'
+        throw error
+      }
+      onText(JSON.stringify(profile))
+    }
     consumeToken({ type: 'string', value })
     inString = false
     escaped = false
@@ -322,9 +336,16 @@ function createGatewayRpcInspector({ onBlocked, onMethod }) {
     capturedString = ''
     capturedValue = null
     captureOverflow = false
+    return mode
   }
 
   const consumeText = text => {
+    let emitStart = 0
+    const emitThrough = end => {
+      if (end > emitStart) onText(text.slice(emitStart, end))
+      emitStart = end
+    }
+
     for (let index = 0; index < text.length; index += 1) {
       const character = text[index]
       if (inString) {
@@ -342,7 +363,10 @@ function createGatewayRpcInspector({ onBlocked, onMethod }) {
         } else if (character === '\\') {
           escaped = true
         } else if (character === '"') {
-          finishString()
+          if (finishString() === 'profile') {
+            suppressProfileString = false
+            emitStart = index + 1
+          }
         }
         continue
       }
@@ -359,15 +383,31 @@ function createGatewayRpcInspector({ onBlocked, onMethod }) {
       if (character === '"') {
         inString = true
         captureMode = stringCaptureMode()
+        if (captureMode === 'profile') {
+          emitThrough(index)
+          suppressProfileString = true
+          emitStart = index + 1
+        }
         capturedString = ''
         capturedValue = null
         captureOverflow = false
+      } else if (
+        profileBinder &&
+        stack.at(-1)?.type === 'object' &&
+        stack.at(-1)?.state === 'value' &&
+        stack.at(-1)?.role === 'params' &&
+        stack.at(-1)?.key === 'profile'
+      ) {
+        const error = new TypeError('Delegated support requires a string RPC profile.')
+        error.code = 'support-profile-mismatch'
+        throw error
       } else if ('{}[]:,'.includes(character)) {
         consumeToken({ type: character })
       } else {
         inPrimitive = true
       }
     }
+    if (!suppressProfileString) emitThrough(text.length)
   }
 
   return {
@@ -388,9 +428,8 @@ function createGatewayRpcInspector({ onBlocked, onMethod }) {
 // inspecting gateway JSON-RPC text. The last payload byte of a completed text
 // message is withheld until inspection finishes. A blocked method therefore
 // never becomes a complete upstream WebSocket message. Delegated-support text
-// is instead retained within the same message bound so its profile can be
-// clamped before any bytes reach upstream.
-function createClientFrameGuard({ onFrame, onReject, transformTextMessage }) {
+// is reframed incrementally so profile clamping does not retain bulk params.
+function createClientFrameGuard({ onFrame, onReject, profileBinder }) {
   const PRELUDE_MAX_BYTES = 64 * 1024
   let header = Buffer.alloc(0)
   let frame = null
@@ -400,7 +439,9 @@ function createClientFrameGuard({ onFrame, onReject, transformTextMessage }) {
   let methodSeen = false
   let prelude = []
   let preludeBytes = 0
-  let textPayload = []
+  let transformedPrelude = []
+  let transformedPreludeBytes = 0
+  let transformedStarted = false
   let rejected = false
 
   const reject = event => {
@@ -427,21 +468,46 @@ function createClientFrameGuard({ onFrame, onReject, transformTextMessage }) {
     preludeBytes += chunk.length
   }
 
+  const writeTransformed = (chunk, fin = false) => {
+    onFrame(buildMaskedClientTextFrame(chunk, { fin, opcode: transformedStarted ? 0x0 : 0x1 }))
+    transformedStarted = true
+  }
+
+  const flushTransformed = (fin = false) => {
+    if (transformedPrelude.length) {
+      transformedPrelude.forEach((chunk, index) => writeTransformed(chunk, fin && index === transformedPrelude.length - 1))
+    } else if (fin) {
+      writeTransformed(Buffer.alloc(0), true)
+    }
+    transformedPrelude = []
+    transformedPreludeBytes = 0
+  }
+
+  const forwardTransformed = chunk => {
+    if (rejected || !chunk?.length) return
+    const bytes = Buffer.from(chunk)
+    if (methodSeen || transformedPreludeBytes + bytes.length > PRELUDE_MAX_BYTES) {
+      flushTransformed()
+      writeTransformed(bytes)
+      return
+    }
+    transformedPrelude.push(bytes)
+    transformedPreludeBytes += bytes.length
+  }
+
   const finishTextMessage = tail => {
-    inspector?.finish()
+    try {
+      inspector?.finish()
+    } catch (error) {
+      const code = String(error?.code || error?.name || 'unknown').replace(/[^A-Za-z0-9._-]/g, '')
+      return reject(`client_profile_denied code=${code || 'unknown'}`)
+    }
     inspector = null
     fragmentedOpcode = null
     messageBytes = 0
     if (rejected) return false
-    if (transformTextMessage) {
-      try {
-        onFrame(transformTextMessage(Buffer.concat(textPayload)))
-      } catch (error) {
-        const code = String(error?.code || error?.name || 'unknown').replace(/[^A-Za-z0-9._-]/g, '')
-        textPayload = []
-        return reject(`client_profile_denied code=${code || 'unknown'}`)
-      }
-      textPayload = []
+    if (profileBinder) {
+      flushTransformed(true)
       methodSeen = false
       return true
     }
@@ -485,13 +551,17 @@ function createClientFrameGuard({ onFrame, onReject, transformTextMessage }) {
       methodSeen = false
       prelude = []
       preludeBytes = 0
-      textPayload = []
+      transformedPrelude = []
+      transformedPreludeBytes = 0
+      transformedStarted = false
       inspector = createGatewayRpcInspector({
         onBlocked: () => reject('client_rpc_denied'),
         onMethod: () => {
           methodSeen = true
-          if (!rejected) flushPrelude()
-        }
+          if (!rejected) profileBinder ? flushTransformed() : flushPrelude()
+        },
+        onText: profileBinder ? forwardTransformed : undefined,
+        profileBinder
       })
       inspectText = true
       fragmentedOpcode = fin ? null : opcode
@@ -522,14 +592,14 @@ function createClientFrameGuard({ onFrame, onReject, transformTextMessage }) {
     // incomplete until finishTextMessage releases its held tail byte.
     if (!(inspectText && fin && payloadLength === 0)) {
       if (inspectText) {
-        if (!transformTextMessage) forwardInspected(rawHeader)
+        if (!profileBinder) forwardInspected(rawHeader)
       } else onFrame(rawHeader)
     }
     if (payloadLength === 0) {
       frame = null
       if (inspectText && fin) {
         if (!finishTextMessage()) return false
-        if (!transformTextMessage) onFrame(rawHeader)
+        if (!profileBinder) onFrame(rawHeader)
       } else if (fin && opcode === 0x0) {
         fragmentedOpcode = null
         messageBytes = 0
@@ -579,11 +649,15 @@ function createClientFrameGuard({ onFrame, onReject, transformTextMessage }) {
         for (let index = 0; index < decoded.length; index += 1) {
           decoded[index] ^= frame.mask[(frame.maskOffset + index) % 4]
         }
-        inspector?.push(decoded)
-        if (transformTextMessage) textPayload.push(decoded)
+        try {
+          inspector?.push(decoded)
+        } catch (error) {
+          const code = String(error?.code || error?.name || 'unknown').replace(/[^A-Za-z0-9._-]/g, '')
+          return reject(`client_profile_denied code=${code || 'unknown'}`)
+        }
       }
       if (rejected) return false
-      if (forwarded.length && !(frame.inspectText && transformTextMessage)) {
+      if (forwarded.length && !(frame.inspectText && profileBinder)) {
         if (frame.inspectText) forwardInspected(forwarded)
         else onFrame(forwarded)
       }
@@ -609,51 +683,22 @@ function createClientFrameGuard({ onFrame, onReject, transformTextMessage }) {
   }
 }
 
-function clampGatewayRpcProfile(payload, profileBinder) {
-  let parsed
-  try {
-    parsed = JSON.parse(Buffer.from(payload).toString('utf8'))
-  } catch {
-    return Buffer.from(payload)
-  }
-
-  let changed = false
-  const clamp = rpc => {
-    if (!rpc || typeof rpc !== 'object' || Array.isArray(rpc)) return
-    const params = rpc.params
-    if (
-      !params ||
-      typeof params !== 'object' ||
-      Array.isArray(params) ||
-      !Object.prototype.hasOwnProperty.call(params, 'profile')
-    ) {
-      return
-    }
-    const profile = profileBinder(params.profile)
-    if (profile !== params.profile) {
-      params.profile = profile
-      changed = true
-    }
-  }
-
-  if (Array.isArray(parsed)) parsed.forEach(clamp)
-  else clamp(parsed)
-  return changed ? Buffer.from(JSON.stringify(parsed)) : Buffer.from(payload)
-}
-
-function buildMaskedClientTextFrame(payload, mask) {
+function buildMaskedClientTextFrame(payload, options = {}) {
   const body = Buffer.from(payload)
+  const fin = options.fin !== false
+  const opcode = options.opcode ?? 0x1
+  const mask = options.mask ?? crypto.randomBytes(4)
   let header
   if (body.length < 126) {
-    header = Buffer.from([0x81, 0x80 | body.length])
+    header = Buffer.from([(fin ? 0x80 : 0) | opcode, 0x80 | body.length])
   } else if (body.length <= 0xffff) {
     header = Buffer.alloc(4)
-    header[0] = 0x81
+    header[0] = (fin ? 0x80 : 0) | opcode
     header[1] = 0xfe
     header.writeUInt16BE(body.length, 2)
   } else {
     header = Buffer.alloc(10)
-    header[0] = 0x81
+    header[0] = (fin ? 0x80 : 0) | opcode
     header[1] = 0xff
     header.writeBigUInt64BE(BigInt(body.length), 2)
   }
@@ -906,14 +951,7 @@ function createEvaWsRelay(options) {
             }
           },
           onReject: rejectClientFrame,
-          transformTextMessage:
-            typeof grant.profileBinder === 'function'
-              ? payload =>
-                  buildMaskedClientTextFrame(
-                    clampGatewayRpcProfile(payload, grant.profileBinder),
-                    randomBytes(4)
-                  )
-              : null
+          profileBinder: typeof grant.profileBinder === 'function' ? grant.profileBinder : null
         })
         if (head?.length) inspectClientFrames(head)
         if (!rejected) clientSocket.on('data', inspectClientFrames)

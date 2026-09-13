@@ -378,6 +378,7 @@ afterEach(() => {
   vi.useRealTimers()
   ;(globalThis as { WebSocket: unknown }).WebSocket = originalWebSocket
   delete (window as { hermesDesktop?: unknown }).hermesDesktop
+  window.history.replaceState({}, '', '/')
   window.localStorage.removeItem('hermes.desktop.workspace-cwd')
   $currentCwd.set('')
   $busy.set(false)
@@ -417,6 +418,7 @@ describe('useGatewayBoot remote reconnect loop (real hook, fake socket)', () => 
       return { ...primaryConn, profile: profile ?? 'default' }
     })
 
+    window.history.replaceState({}, '', '/?profile=wrong-helper-profile')
     ;(window as unknown as { hermesDesktop: unknown }).hermesDesktop = { ...desktop, eva: {} }
 
     const mounted = render(<Harness />)

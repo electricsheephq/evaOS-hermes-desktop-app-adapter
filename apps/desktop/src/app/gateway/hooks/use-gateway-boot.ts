@@ -547,23 +547,31 @@ export function useGatewayBoot({
     // URL: the HUD is opened ON a conversation, and when that conversation
     // belongs to a non-primary profile, adopting the primary here resolves the
     // session id against the wrong backend — the HUD then falls back to the
-    // default profile's last session (#82285). The override wins over the
-    // stored preference; absent, behavior is unchanged.
+    // default profile's last session (#82285). The override wins over an
+    // ordinary stored preference, but never over a delegated-support grant.
     async function adoptPrimaryProfile(shouldPublish: () => boolean = () => true): Promise<null | string> {
       const override = windowProfileOverride()
       let adoptedProfile: null | string = null
 
       try {
         const profileRecord = await desktop.profile?.get?.()
-        const profileKey = override ?? profileRecord?.profile ?? ''
-        const source = override ? 'window-profile-override' : (profileRecord?.source ?? 'desktop-profile')
+        const delegatedSupport = profileRecord?.source === 'delegated-support-grant'
+
+        const profileKey = delegatedSupport ? (profileRecord.profile ?? '') : (override ?? profileRecord?.profile ?? '')
+
+        const source = delegatedSupport
+          ? 'delegated-support-grant'
+          : override
+            ? 'window-profile-override'
+            : (profileRecord?.source ?? 'desktop-profile')
 
         if (!shouldPublish()) {
           return null
         }
 
-        const key = adoptActiveGatewayProfile(profileKey, source === 'delegated-support-grant')
+        const key = adoptActiveGatewayProfile(profileKey, delegatedSupport)
         adoptedProfile = key
+        supportGrantedProfile = delegatedSupport ? key : null
         sourceProfile = key
         console.info(`[gateway-profile-adoption] source=${source} value=${JSON.stringify(key)}`)
         setPrimaryGateway(gateway, key)
@@ -575,6 +583,7 @@ export function useGatewayBoot({
 
         const fallback = normalizeProfileKey(override)
         adoptedProfile = fallback
+        supportGrantedProfile = null
         sourceProfile = fallback
         adoptActiveGatewayProfile(fallback, false)
 
@@ -653,7 +662,7 @@ export function useGatewayBoot({
         // shared backend-boot budget rather than the reconnect budget because
         // ensureBackend may cold-spawn a pooled helper backend here.
         const conn = await withTimeout(
-          desktop.getConnection(windowProfileOverride() ?? undefined),
+          desktop.getConnection(supportGrantedProfile ?? windowProfileOverride() ?? undefined),
           BACKEND_BOOT_WAIT_TIMEOUT_MS,
           'Timed out reconnecting to Hermes backend'
         )
@@ -883,6 +892,7 @@ export function useGatewayBoot({
     })
 
     let sourceProfile = normalizeProfileKey(survivor?.profile ?? $activeGatewayProfile.get())
+    let supportGrantedProfile: null | string = null
 
     const offEvent = gateway.onEvent(event => {
       const connectionId = activeGatewayConnectionId()
@@ -1072,7 +1082,7 @@ export function useGatewayBoot({
         // rides out a full backend cold spawn, so it gets the shared 45s
         // backend-boot budget, not the 20s reconnect budget.
         const conn = await withTimeout(
-          desktop.getConnection(windowProfileOverride() ?? managedProfile ?? undefined),
+          desktop.getConnection(supportGrantedProfile ?? windowProfileOverride() ?? managedProfile ?? undefined),
           isManagedEvaosAgent() ? MANAGED_INITIAL_CONNECTION_DEADLINE_MS : BACKEND_BOOT_WAIT_TIMEOUT_MS,
           isManagedEvaosAgent()
             ? translateNow('boot.errors.gatewayConnectionLost')

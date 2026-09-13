@@ -2473,6 +2473,14 @@ function createEvaManagedRuntime(options) {
 
       return (runtime.sessionKind === 'delegated_support' ? runtime.profile : runtime.agentId) ?? null
     },
+    assignedProfile: async () => {
+      const runtime = await ensureRuntimeEnrollment()
+
+      return {
+        profile: (runtime.sessionKind === 'delegated_support' ? runtime.profile : runtime.agentId) ?? null,
+        source: runtime.sessionKind === 'delegated_support' ? 'delegated-support-grant' : 'enrollment-agent'
+      }
+    },
     delegatedProfiles: async () => {
       const runtime = await ensureRuntimeEnrollment()
       return runtime.sessionKind === 'delegated_support' ? [...runtime.allowedProfiles] : null
