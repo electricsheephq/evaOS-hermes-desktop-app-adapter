@@ -95,7 +95,7 @@ def test_hosted_room_recovery_cannot_block_or_abort_backend_startup(monkeypatch)
     def blocked_failure():
         started.set()
         release.wait(timeout=2.0)
-        raise RuntimeError("state.db is locked")
+        raise PermissionError("shared-state.db is read-only")
 
     monkeypatch.setattr(web_server_mod, "_warm_gateway_module", lambda: None)
     monkeypatch.setattr(methods_groups, "start_hosted_room_service", blocked_failure)

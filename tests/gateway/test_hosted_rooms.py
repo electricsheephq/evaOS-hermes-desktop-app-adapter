@@ -1362,3 +1362,16 @@ def test_default_db_path_never_names_the_master_session_store(tmp_path, monkeypa
     assert from_profile == from_root, "one coordination file per install"
     assert from_root.parent == root
     assert from_root.name != "state.db"
+
+    managed_home = tmp_path / "hermes" / "employee"
+    managed_home.mkdir(parents=True)
+    monkeypatch.setenv("HERMES_HOME", str(managed_home))
+    assert rooms.default_db_path() == managed_home / "shared-state.db"
+
+    managed_home.chmod(0o500)
+    try:
+        resolved = rooms.default_db_path()
+        assert resolved == managed_home / "shared-state.db"
+        assert not resolved.exists(), "path resolution and import must not eagerly open the store"
+    finally:
+        managed_home.chmod(0o700)

@@ -22,7 +22,11 @@ def test_managed_startup_preserves_config40_and_soul_unmanaged_migrates(tmp_path
     for profile in (home, sibling):
         (profile / 'SOUL.md').write_bytes(original)
     cfg = home / 'config.yaml'
-    cfg.write_text('_config_version: 40\nmodel:\n  default: fixture-model\n')
+    cfg.write_text(
+        '_config_version: 40\n'
+        'model:\n  default: fixture-model\n'
+        'cron:\n  model_drift_guard: true\n'
+    )
     config_bytes = cfg.read_bytes()
     managed_scope.invalidate_managed_cache()
     try:
@@ -36,7 +40,9 @@ def test_managed_startup_preserves_config40_and_soul_unmanaged_migrates(tmp_path
         managed_scope.invalidate_managed_cache()
         config.migrate_config(interactive=False, quiet=True)
         config.load_config()
-        assert yaml.safe_load(cfg.read_text())['_config_version'] == config.DEFAULT_CONFIG['_config_version']
+        migrated = yaml.safe_load(cfg.read_text())
+        assert migrated['_config_version'] == 42 == config.DEFAULT_CONFIG['_config_version']
+        assert 'model_drift_guard' not in migrated.get('cron', {})
         for profile in (home, sibling):
             changed = (profile / 'SOUL.md').read_bytes()
             assert b'## Messaging other agents' not in changed
