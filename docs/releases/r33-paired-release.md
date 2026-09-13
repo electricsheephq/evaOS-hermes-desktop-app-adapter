@@ -1,0 +1,3 @@
+# r33.0 paired source baseline
+
+Base `6fdaa684898762fbb43721390eb8d8fd1cbd2fe9` merges upstream `v2026.9.11` / Hermes `0.21.2` at `939e45c91d751fadd94dcd1b873ac3cb44846213`, with merge-base `2237be355906fbe6065ce1815711eee52b2d646e`, merge commit `26fa88b03beadbfbbe7e1139843ea3e8d5f1d747`, and initial merge tree `3d10f477ad60f9dce50a9df09d4348c0765fae49`; conflict corrections and source qualification are recorded in [the r33 managed-delta ledger](../r33-managed-delta.md). Planned `evaos-runtime-es.12-v0.21.2-r33.0` is a runtime tag only; Desktop es.7 pairing follows under cadence rule 2 and the 2026-09-13 tagged-release amendment. The orchestrator owns any later prerelease, PCS 0.1.119 and canary; this PR creates no tag and proves no installed, fleet or customer state.
