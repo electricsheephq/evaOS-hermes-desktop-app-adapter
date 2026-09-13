@@ -256,19 +256,26 @@ def _select_new_servers(servers: Dict[str, dict]) -> Dict[str, dict]:
     state_keys = {name: _core._server_state_key(name) for name in servers}
     with _core._lock:
         connecting = set(_core._server_connecting)
+        current_scope = _core._mcp_registry_scope()
+        shared_visible = {
+            state_key if isinstance(state_key, str) else state_key[1]
+            for state_key, scopes in _core._server_tool_scopes.items()
+            if current_scope is not None and current_scope in scopes
+            and getattr(_core._servers.get(state_key), "session", None) is not None
+        }
         # Only attempt servers that aren't already connected (or currently connecting) and are enabled.
         # Checking ``_server_connecting`` prevents duplicate subprocess spawns when ``discover_mcp_tools()``
         # is called from multiple entry-points before the first batch finishes (#58862).
         new_servers = {
             k: v for k, v in servers.items()
-            if state_keys[k] not in _core._servers and state_keys[k] not in connecting
+            if state_keys[k] not in _core._servers and k not in shared_visible
+            and state_keys[k] not in connecting
             and state_keys[k] not in _core._lazy_server_configs
             and _enabled(v) and not _connect_cooldown_active(k, state_keys[k])}
         stale_cached = [_core._servers[state_keys[k]] for k in servers
                         if state_keys[k] in _core._servers
                         and getattr(_core._servers[state_keys[k]], "session", None) is None]
         _core._server_connecting.update(state_keys[name] for name in new_servers)
-        current_scope = _core._mcp_registry_scope()
         for srv_name in new_servers:
             _core._server_scope_keys[state_keys[srv_name]] = current_scope
             _core._server_connect_errors.pop(state_keys[srv_name], None)
@@ -390,10 +397,13 @@ def register_mcp_servers(servers: Dict[str, dict]) -> List[str]:
         logger.debug("MCP SDK not available -- skipping explicit MCP registration")
         return []
     servers = _config._filter_suspicious_mcp_servers(servers)
+    scoped_healed = _registration.register_connected_into_current_scope(servers)
     if not servers:
         logger.debug("No explicit MCP servers provided")
         return _registration._existing_tool_names() if _core._mcp_registry_scope() is not None else []
     new_servers = _select_new_servers(servers)
+    if scoped_healed:
+        logger.info("MCP: registered %d already-connected server(s) into this profile scope", scoped_healed)
     if not new_servers:
         return _registration._existing_tool_names()
     new_servers, lazy_registered, lazy_server_count = _register_lazy_from_cache(new_servers)
