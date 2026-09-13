@@ -9,9 +9,11 @@ describe('stripIpcErrorPrefix', () => {
         "Error invoking remote method 'hermes:api': EvaBrokerError: No personal agent for this account — use Switch support target to open a customer agent."
       )
     ).toBe('No personal agent for this account — use Switch support target to open a customer agent.')
-    expect(stripIpcErrorPrefix("Error invoking remote method 'hermes:eva:refresh': Error: Sign in to evaOS Agent from Settings.")).toBe(
-      'Sign in to evaOS Agent from Settings.'
-    )
+    expect(
+      stripIpcErrorPrefix(
+        "Error invoking remote method 'hermes:eva:refresh': Error: Sign in to evaOS Agent from Settings."
+      )
+    ).toBe('Sign in to evaOS Agent from Settings.')
   })
 
   it('leaves messages without the wrapper untouched, including an empty remainder', () => {

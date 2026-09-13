@@ -86,7 +86,13 @@ export function DelegatedSupportBanner() {
   }
 
   const switchButton = (
-    <Button disabled={switching || ending} onClick={() => void switchTarget()} size="sm" type="button" variant="outline">
+    <Button
+      disabled={switching || ending}
+      onClick={() => void switchTarget()}
+      size="sm"
+      type="button"
+      variant="outline"
+    >
       {switching ? t.delegatedSupport.switchingTarget : t.delegatedSupport.switchTarget}
     </Button>
   )
@@ -108,7 +114,13 @@ export function DelegatedSupportBanner() {
   }
 
   const endButton = (
-    <Button disabled={ending || switching} onClick={() => void endSession()} size="sm" type="button" variant="destructive">
+    <Button
+      disabled={ending || switching}
+      onClick={() => void endSession()}
+      size="sm"
+      type="button"
+      variant="destructive"
+    >
       {ending ? t.delegatedSupport.endingSession : t.delegatedSupport.endSession}
     </Button>
   )

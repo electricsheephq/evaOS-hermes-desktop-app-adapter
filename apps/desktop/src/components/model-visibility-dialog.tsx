@@ -81,7 +81,11 @@ export function ModelVisibilityDialog({
   const q = normalize(search)
 
   const matches = (provider: ModelOptionProvider, model: string) =>
-    !q || foldIncludes(`${model} ${managedProviderDisplayValue(provider.slug, provider.name, managedEva)} ${provider.slug} ${displayModelName(model)}`, q)
+    !q ||
+    foldIncludes(
+      `${model} ${managedProviderDisplayValue(provider.slug, provider.name, managedEva)} ${provider.slug} ${displayModelName(model)}`,
+      q
+    )
 
   return (
     <Dialog onOpenChange={onOpenChange} open={open}>
@@ -134,7 +138,8 @@ export function ModelVisibilityDialog({
                       type="button"
                     >
                       <span className="min-w-0 truncate">
-                        <HighlightMatches foldSeparators
+                        <HighlightMatches
+                          foldSeparators
                           query={search}
                           text={managedProviderDisplayValue(provider.slug, provider.name, managedEva)}
                         />

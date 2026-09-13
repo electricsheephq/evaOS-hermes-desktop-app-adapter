@@ -135,7 +135,7 @@ describe('main.ts wiring for #90812', () => {
   it('routes the registry-scoped dial IPC through the claim keyed by backendScopeKey(connectionId, profile)', () => {
     const handlerStart = mainSource.indexOf("ipcMain.handle('hermes:connection:for', ")
     expect(handlerStart).toBeGreaterThan(-1)
-    const handlerEnd = mainSource.indexOf("\n})", handlerStart)
+    const handlerEnd = mainSource.indexOf('\n})', handlerStart)
     expect(handlerEnd).toBeGreaterThan(handlerStart)
     const body = mainSource.slice(handlerStart, handlerEnd)
 

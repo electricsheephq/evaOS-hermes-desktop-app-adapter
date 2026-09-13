@@ -129,7 +129,9 @@ describe('DelegatedSupportBanner', () => {
 
   it('opens the in-app picker once the switch has a desktop session, without signing out', async () => {
     setSupportPickerOpen(false)
-    const status = vi.fn().mockResolvedValue({ ...supportStatus(), delegatedSupportActive: false, missingAgentBinding: true })
+    const status = vi
+      .fn()
+      .mockResolvedValue({ ...supportStatus(), delegatedSupportActive: false, missingAgentBinding: true })
     const switchSupportTarget = vi.fn().mockResolvedValue({ ...supportStatus(), supportPickerAvailable: true })
     const signOut = vi.fn()
     Object.defineProperty(window, 'hermesDesktop', {

@@ -659,8 +659,12 @@ function sessionListIdentity(session: Pick<SessionInfo, 'id' | 'profile'>): stri
 type ProfileReadError = { profile?: string; error?: string; code?: string }
 const SUPPORT_PROFILE_REFUSED = 'support-profile-refused'
 
-export function dropRefusedProfileSessions(sessions: SessionInfo[], errors: ProfileReadError[] | undefined | null): SessionInfo[] {
-  const refused = errors?.filter(error => error.code === SUPPORT_PROFILE_REFUSED)
+export function dropRefusedProfileSessions(
+  sessions: SessionInfo[],
+  errors: ProfileReadError[] | undefined | null
+): SessionInfo[] {
+  const refused = errors
+    ?.filter(error => error.code === SUPPORT_PROFILE_REFUSED)
     .map(error => (error.profile ?? '').trim() || 'default')
 
   return refused?.length ? sessions.filter(session => !refused.includes(sidebarProfileKey(session))) : sessions
@@ -688,8 +692,11 @@ export function carryForwardFailedProfileSessions(
   }
 
   const failed = new Set(
-    errors.filter(error => error.code !== SUPPORT_PROFILE_REFUSED).map(error => (error.profile ?? '').trim() || 'default')
+    errors
+      .filter(error => error.code !== SUPPORT_PROFILE_REFUSED)
+      .map(error => (error.profile ?? '').trim() || 'default')
   )
+
   const incomingIds = new Set(incoming.map(sessionListIdentity))
   const carried: SessionInfo[] = []
 

@@ -640,8 +640,7 @@ export interface EvaSupportFlowFailure {
 }
 
 export type EvaSupportTargetsResult =
-  | { ok: true; is_admin: boolean; clients: EvaSupportClient[] }
-  | EvaSupportFlowFailure
+  { ok: true; is_admin: boolean; clients: EvaSupportClient[] } | EvaSupportFlowFailure
 
 /** Exactly one of `profile_id` (one agent) or `profile_scope: 'customer'` (all authorized agents; admins only, no profile). */
 export type EvaSupportTarget = {

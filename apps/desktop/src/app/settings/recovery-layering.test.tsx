@@ -101,8 +101,9 @@ describe('Settings recovery layering', () => {
 
       expect(onboarding).toBeTruthy()
       expect(resolvedZIndex(onboarding as Element)).toBeGreaterThan(resolvedZIndex(screen.getByTestId('settings')))
-      expect(Number(getComputedStyle(document.body).getPropertyValue('--z-onboarding-popover')))
-        .toBeGreaterThan(resolvedZIndex(onboarding as Element))
+      expect(Number(getComputedStyle(document.body).getPropertyValue('--z-onboarding-popover'))).toBeGreaterThan(
+        resolvedZIndex(onboarding as Element)
+      )
     })
   })
 

@@ -86,7 +86,12 @@ describe('app-root delegated support controls', () => {
     Object.defineProperty(window, 'hermesDesktop', {
       configurable: true,
       value: {
-        eva: { status: async () => status, endSupportSession: async () => ({ ok: true }), switchSupportTarget, listSupportTargets }
+        eva: {
+          status: async () => status,
+          endSupportSession: async () => ({ ok: true }),
+          switchSupportTarget,
+          listSupportTargets
+        }
       }
     })
 

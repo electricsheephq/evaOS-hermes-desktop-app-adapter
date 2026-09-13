@@ -29,12 +29,7 @@ import {
   recoverActiveSourceAfterFailedGatewaySwitch
 } from '@/store/gateway-switch'
 import { notifyError } from '@/store/notifications'
-import {
-  $activeGatewayProfile,
-  $profiles,
-  adoptActiveGatewayProfile,
-  ensureGatewayProfile
-} from '@/store/profile'
+import { $activeGatewayProfile, $profiles, adoptActiveGatewayProfile, ensureGatewayProfile } from '@/store/profile'
 import {
   $activeSessionId,
   $awaitingResponse,
