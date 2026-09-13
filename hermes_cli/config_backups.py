@@ -49,7 +49,7 @@ def backup_config(config_path: Path, reason: str, *, keep: int = DEFAULT_KEEP) -
     identical bytes. Never raises: a failed backup must not block the write it precedes.
     """
     try:
-        if not config_path.is_file() or config_path.stat().st_size == 0:
+        if config_path.is_symlink() or not config_path.is_file() or config_path.stat().st_size == 0:
             return None
         root = backups_dir(config_path)
         root.mkdir(parents=True, exist_ok=True)

@@ -104,14 +104,26 @@ def run_bootstrap(*, announce: bool = True) -> SetupRecord:
     ``setup.ready`` event: the plain CLI has no client to tell and its stdout is the user's terminal.
     """
     global _record, _started
+    wait_for_owner = False
     with _lock:
         if _record is not None:
             return _record
         if _started:
-            _done.wait(SETUP_READY_WAIT_SECONDS)
-            if _record is not None:
-                return _record
-        _started = True
+            wait_for_owner = True
+        else:
+            _started = True
+
+    if wait_for_owner:
+        if _done.wait(SETUP_READY_WAIT_SECONDS) and _record is not None:
+            return _record
+        return SetupRecord(
+            provider_configured=False,
+            inference_provider="",
+            free_tier=False,
+            has_identity=False,
+            other_providers=False,
+            error="free tier bootstrap is still running",
+        )
 
     from hermes_cli import anon_auth
 

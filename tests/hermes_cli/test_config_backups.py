@@ -38,3 +38,13 @@ def test_legacy_siblings_move_but_user_named_copies_stay(tmp_path: Path):
     assert (root / "config.yaml.corrupt.20260729-093706.bak").exists()
     assert (tmp_path / "config.yaml.bak-my-note").read_text() == "mine"
     assert not list(tmp_path.glob("config.yaml.bak.*")) and not list(tmp_path.glob("config.yaml.corrupt.*"))
+
+
+def test_symlinked_config_source_is_never_copied(tmp_path: Path):
+    outside = tmp_path / "outside.yaml"
+    outside.write_text("private: outside\n")
+    cfg = tmp_path / "config.yaml"
+    cfg.symlink_to(outside)
+
+    assert backup_config(cfg, "corrupt") is None
+    assert not (tmp_path / "backups").exists()

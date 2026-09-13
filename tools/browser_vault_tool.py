@@ -355,11 +355,22 @@ def browser_vault_enter_code(handle: str = "", task_id: Optional[str] = None) ->
     backend = backend_for_handle(handle) if handle else None
     if backend is not None:
         try:
-            code = backend.resolve_otp(handle)
+            meta = backend.get_meta(handle)
         except Exception:
-            code = None
-        if code:
-            source = backend.name
+            meta = None
+        if meta is not None:
+            if not meta.origin or origin != meta.origin:
+                return json.dumps({
+                    "success": False,
+                    "error_type": "origin_mismatch",
+                    "error": "Refused: the current page does not match the saved login's bound origin.",
+                })
+            try:
+                code = backend.resolve_otp(handle)
+            except Exception:
+                code = None
+            if code:
+                source = backend.name
     if not code:
         prompt = get_code_prompt_callback()
         if prompt is None or not can_prompt_here():

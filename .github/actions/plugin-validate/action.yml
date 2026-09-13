@@ -5,9 +5,10 @@ description: >-
   `hermes plugins validate`. Drop this into your plugin repo's CI:
 
     - uses: actions/checkout@<sha>
-    - uses: NousResearch/hermes-agent/.github/actions/plugin-validate@main
+    - uses: NousResearch/hermes-agent/.github/actions/plugin-validate@939e45c91d751fadd94dcd1b873ac3cb44846213
       with:
         path: .
+        hermes-ref: 939e45c91d751fadd94dcd1b873ac3cb44846213
 
   The caller's job owns checkout; this action installs Python + hermes-agent
   (git install — a supported CI-context install route) and runs the
@@ -18,8 +19,8 @@ inputs:
     description: Path to the plugin directory (containing plugin.yaml).
     default: "."
   hermes-ref:
-    description: hermes-agent git ref (branch/tag/sha) to install and validate with.
-    default: "main"
+    description: Immutable 40-character hermes-agent commit SHA to install and validate with.
+    required: true
 
 runs:
   using: composite
@@ -35,8 +36,10 @@ runs:
         _HERMES_REF: ${{ inputs.hermes-ref }}
       run: |
         set -euo pipefail
-        # CI-context install from git; the ref lets plugin authors validate
-        # against a pinned hermes release instead of main.
+        if [[ ! "$_HERMES_REF" =~ ^[0-9a-f]{40}$ ]]; then
+          echo "hermes-ref must be an immutable 40-character commit SHA" >&2
+          exit 2
+        fi
         pip install "git+https://github.com/NousResearch/hermes-agent@${_HERMES_REF}"
 
     - name: Validate plugin

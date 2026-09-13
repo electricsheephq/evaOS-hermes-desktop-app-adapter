@@ -732,6 +732,28 @@ class TestTwoFactor:
         code = re.search(r'"value": "(\d{6})"', seen["expr"]).group(1)
         assert code not in raw  # the code went to the page, not to the model
 
+    def test_saved_authenticator_key_refuses_a_different_page_origin(self, store):
+        from tools import browser_vault_tool
+
+        meta = store.add_item("login", "gh", {"identifier_type": "username", "identifier": "tek", "password": "pw",
+                                                "otp_secret": "JBSWY3DPEHPK3PXP"}, origin="https://github.com")
+        controls = [{"index": 0, "type": "text", "name": "otp", "label": "Authentication code",
+                     "autocomplete": "one-time-code"}]
+        secret_calls = []
+
+        def fake_eval(_task_id, expr):
+            result = json.dumps(controls) if "querySelectorAll" in expr else "https://evil.example/verify"
+            return {"success": True, "result": result}
+
+        with patch("agent.vault_store.get_vault_store", return_value=store), \
+             patch.object(browser_vault_tool, "_focus_bound_origin", lambda *a, **k: None), \
+             patch.object(browser_vault_tool, "_eval_js", side_effect=fake_eval), \
+             patch.object(browser_vault_tool, "_eval_js_secret", side_effect=lambda *a: secret_calls.append(a)):
+            out = json.loads(browser_vault_tool.browser_vault_enter_code(meta.id, task_id="t"))
+
+        assert out["success"] is False and out["error_type"] == "origin_mismatch"
+        assert secret_calls == []
+
     def test_without_a_key_the_user_is_asked_and_split_boxes_get_one_digit_each(self, store):
         from agent.vault_backends import unlock as unlock_mod
         from tools import browser_vault_tool

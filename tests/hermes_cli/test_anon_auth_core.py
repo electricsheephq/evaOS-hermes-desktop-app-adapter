@@ -10,6 +10,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import threading
 import time
 from pathlib import Path
 
@@ -406,6 +407,36 @@ class TestBootstrapIsTheOneCreator:
         again = fb.run_bootstrap()
         assert again is record and portal.minted == 1, "a second boot in the same process adopts, never mints"
         assert fb.wait_for_record(timeout=0) is record
+
+    def test_concurrent_bootstrap_waiter_never_blocks_or_duplicates_owner(self, portal, monkeypatch):
+        fb = self._fresh()
+        entered = threading.Event()
+        release = threading.Event()
+        inventory_calls = 0
+
+        def slow_inventory():
+            nonlocal inventory_calls
+            inventory_calls += 1
+            if inventory_calls == 1:
+                entered.set()
+                assert release.wait(1)
+            return False
+
+        monkeypatch.setattr(fb, "_inventory_other_providers", slow_inventory)
+        monkeypatch.setattr(fb, "SETUP_READY_WAIT_SECONDS", 0.05)
+        records = []
+        first = threading.Thread(target=lambda: records.append(fb.run_bootstrap(announce=False)))
+        second = threading.Thread(target=lambda: records.append(fb.run_bootstrap(announce=False)))
+        first.start()
+        assert entered.wait(1)
+        second.start()
+        release.set()
+        first.join(1)
+        second.join(1)
+
+        assert not first.is_alive() and not second.is_alive()
+        assert inventory_calls == 1
+        assert len(records) == 2 and records[0] is records[1]
 
     def test_own_key_keeps_inference_and_the_identity_stays_off_active_provider(self, portal, monkeypatch):
         monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-own-key")
