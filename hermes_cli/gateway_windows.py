@@ -1133,6 +1133,8 @@ def _probe_pid_exists(candidate_pid: int | None) -> None:
 
 
 def _probe_state_file(state_path: Path) -> None:
+    from gateway.status import gateway_state_is_started
+
     if _probe_missing(5, state_path, "gateway_state.json"):
         return
     try:
@@ -1147,7 +1149,8 @@ def _probe_state_file(state_path: Path) -> None:
                 age_str = f" (updated {age_seconds}s ago)"
             except Exception:
                 pass
-        _probe(5, gateway_state == "running", f"gateway_state.json state={gateway_state!r}{age_str}")
+        _probe(5, gateway_state_is_started(gateway_state),
+               f"gateway_state.json state={gateway_state!r}{age_str}")
     except Exception as exc:
         _probe(5, False, f"gateway_state.json present but unreadable: {exc}")
 

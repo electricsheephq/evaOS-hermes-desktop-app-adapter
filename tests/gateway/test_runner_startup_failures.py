@@ -1,3 +1,5 @@
+import logging
+
 import pytest
 from unittest.mock import AsyncMock
 
@@ -400,21 +402,62 @@ class _NonRetryableFailureAdapter(BasePlatformAdapter):
         return {"id": chat_id}
 
 
+def _nonretryable_runner(tmp_path, *, headless_ok=False):
+    data = {
+        "platforms": {"discord": {"enabled": True, "token": "***"}},
+        "sessions_dir": str(tmp_path / "sessions"),
+    }
+    if headless_ok:
+        data["gateway"] = {"headless_ok": True}
+    config = GatewayConfig.from_dict(data)
+    runner = GatewayRunner(config)
+    runner._create_adapter = lambda platform, platform_config: _NonRetryableFailureAdapter()
+    return runner
+
+
+def _set_dispatcher_enabled(tmp_path, enabled):
+    (tmp_path / "config.yaml").write_text(
+        f"kanban:\n  dispatch_in_gateway: {str(enabled).lower()}\n",
+        encoding="utf-8",
+    )
+
+
+@pytest.mark.asyncio
+async def test_runner_stays_alive_headless_for_enabled_cron_job(monkeypatch, tmp_path, caplog):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    _set_dispatcher_enabled(tmp_path, False)
+    from cron.jobs import save_jobs
+
+    save_jobs([{"id": "scheduled-work", "enabled": True}], replace=True)
+    runner = _nonretryable_runner(tmp_path)
+
+    with caplog.at_level(logging.ERROR):
+        ok = await runner.start()
+
+    assert ok is True
+    assert runner.should_exit_cleanly is False
+    assert runner.exit_code is None
+    assert runner._failed_platforms == {}
+    state = read_runtime_status()
+    assert state["gateway_state"] == "degraded"
+    assert state["exit_reason"] is None
+    assert state["platforms"]["discord"]["state"] == "fatal"
+    parked = [record for record in caplog.records if "fatally misconfigured and parked" in record.message]
+    assert len(parked) == 1
+
+
 @pytest.mark.asyncio
 async def test_runner_exits_with_ex_config_on_nonretryable_startup_error(monkeypatch, tmp_path):
     """Non-retryable startup errors (token collision, no platforms) must
     set exit_code to 78 (EX_CONFIG) so the s6 finish script can translate
     it to exit 125 (permanent failure).  See #51228."""
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
-    config = GatewayConfig(
-        platforms={
-            Platform.DISCORD: PlatformConfig(enabled=True, token="***")
-        },
-        sessions_dir=tmp_path / "sessions",
-    )
-    runner = GatewayRunner(config)
+    monkeypatch.delenv("HERMES_KANBAN_DISPATCH_IN_GATEWAY", raising=False)
+    assert not (tmp_path / "config.yaml").exists()
+    from cron.jobs import save_jobs
 
-    monkeypatch.setattr(runner, "_create_adapter", lambda platform, platform_config: _NonRetryableFailureAdapter())
+    save_jobs([], replace=True)
+    runner = _nonretryable_runner(tmp_path)
 
     ok = await runner.start()
 
@@ -423,6 +466,111 @@ async def test_runner_exits_with_ex_config_on_nonretryable_startup_error(monkeyp
     assert runner.exit_code == GATEWAY_FATAL_CONFIG_EXIT_CODE
     state = read_runtime_status()
     assert state["gateway_state"] == "startup_failed"
+
+
+@pytest.mark.asyncio
+async def test_runner_stays_alive_when_headless_ok_is_enabled(monkeypatch, tmp_path):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    _set_dispatcher_enabled(tmp_path, False)
+    from cron.jobs import save_jobs
+
+    save_jobs([], replace=True)
+    runner = _nonretryable_runner(tmp_path, headless_ok=True)
+
+    ok = await runner.start()
+
+    assert ok is True
+    assert runner.should_exit_cleanly is False
+    assert runner._failed_platforms == {}
+    assert read_runtime_status()["gateway_state"] == "degraded"
+
+
+@pytest.mark.asyncio
+async def test_runner_stays_alive_for_in_gateway_dispatcher(monkeypatch, tmp_path):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.delenv("HERMES_KANBAN_DISPATCH_IN_GATEWAY", raising=False)
+    _set_dispatcher_enabled(tmp_path, True)
+    from cron.jobs import save_jobs
+
+    save_jobs([], replace=True)
+    runner = _nonretryable_runner(tmp_path)
+
+    ok = await runner.start()
+
+    assert ok is True
+    assert runner.should_exit_cleanly is False
+    assert runner._failed_platforms == {}
+    assert read_runtime_status()["gateway_state"] == "degraded"
+
+
+@pytest.mark.asyncio
+async def test_runner_stays_alive_for_dispatcher_env_override(monkeypatch, tmp_path):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("HERMES_KANBAN_DISPATCH_IN_GATEWAY", "1")
+    from cron.jobs import save_jobs
+
+    save_jobs([], replace=True)
+    runner = _nonretryable_runner(tmp_path)
+
+    ok = await runner.start()
+
+    assert ok is True
+    assert runner.should_exit_cleanly is False
+    assert read_runtime_status()["gateway_state"] == "degraded"
+
+
+@pytest.mark.asyncio
+async def test_dispatcher_env_off_wins_over_explicit_config(monkeypatch, tmp_path):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("HERMES_KANBAN_DISPATCH_IN_GATEWAY", "0")
+    _set_dispatcher_enabled(tmp_path, True)
+    from cron.jobs import save_jobs
+
+    save_jobs([], replace=True)
+    runner = _nonretryable_runner(tmp_path)
+
+    ok = await runner.start()
+
+    assert ok is True
+    assert runner.should_exit_cleanly is True
+    assert runner.exit_code == GATEWAY_FATAL_CONFIG_EXIT_CODE
+    assert read_runtime_status()["gateway_state"] == "startup_failed"
+
+
+@pytest.mark.asyncio
+async def test_dispatcher_config_off_wins_over_env_on(monkeypatch, tmp_path):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("HERMES_KANBAN_DISPATCH_IN_GATEWAY", "1")
+    _set_dispatcher_enabled(tmp_path, False)
+    from cron.jobs import save_jobs
+
+    save_jobs([], replace=True)
+    runner = _nonretryable_runner(tmp_path)
+
+    assert await runner.start() is True
+    assert runner.should_exit_cleanly is True
+    assert runner.exit_code == GATEWAY_FATAL_CONFIG_EXIT_CODE
+    assert read_runtime_status()["gateway_state"] == "startup_failed"
+
+
+@pytest.mark.asyncio
+async def test_runner_exits_when_cron_store_is_unreadable(monkeypatch, tmp_path, caplog):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    _set_dispatcher_enabled(tmp_path, False)
+    monkeypatch.setattr(
+        "cron.jobs.load_jobs",
+        lambda: (_ for _ in ()).throw(RuntimeError("simulated unreadable cron store")),
+    )
+    runner = _nonretryable_runner(tmp_path)
+
+    with caplog.at_level(logging.WARNING):
+        ok = await runner.start()
+
+    assert ok is True
+    assert runner.should_exit_cleanly is True
+    assert runner.exit_code == GATEWAY_FATAL_CONFIG_EXIT_CODE
+    assert any("cron" in record.message.lower() and "no scheduled work" in record.message.lower()
+               for record in caplog.records)
 
 
 @pytest.mark.asyncio
@@ -500,6 +648,10 @@ async def test_live_foreign_token_lock_at_startup_exits_ex_config(monkeypatch, t
     retry-queued forever instead of exiting 78 (EX_CONFIG)."""
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     monkeypatch.setenv("HERMES_GATEWAY_LOCK_DIR", str(tmp_path / "locks"))
+    _set_dispatcher_enabled(tmp_path, False)
+    from cron.jobs import save_jobs
+
+    save_jobs([], replace=True)
     # A live foreign holder: acquire_scoped_lock reports (False, record).
     monkeypatch.setattr(
         "gateway.status.acquire_scoped_lock",

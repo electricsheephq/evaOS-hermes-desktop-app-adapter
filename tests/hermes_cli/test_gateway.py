@@ -15,6 +15,14 @@ import hermes_cli.gateway as gateway
 _BREAKAWAY_MARKER = "_HERMES_GATEWAY_BREAKAWAY"
 
 
+def test_gateway_started_state_accepts_degraded_but_not_startup_failed():
+    from gateway.status import gateway_state_is_started
+
+    assert gateway_state_is_started("running") is True
+    assert gateway_state_is_started("degraded") is True
+    assert gateway_state_is_started("startup_failed") is False
+
+
 def _install_fake_gateway_run(monkeypatch, start_gateway):
     module = ModuleType("gateway.run")
     module.start_gateway = start_gateway

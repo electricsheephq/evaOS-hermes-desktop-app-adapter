@@ -651,6 +651,12 @@ Each platform has its own toolset:
 
 A gateway typically runs several adapters at once (Telegram + Discord + Slack, etc.). The sections below cover day-2 operations that span all platforms.
 
+### Running scheduled work without a connected platform
+
+When every configured messaging platform fails non-retryably at startup, the gateway normally exits with fatal-configuration status 78. It stays alive with gateway state `degraded` only when the active profile has an enabled cron job, the in-gateway Kanban dispatcher is explicitly enabled with `kanban.dispatch_in_gateway: true` (or `HERMES_KANBAN_DISPATCH_IN_GATEWAY=1`), or `gateway.headless_ok: true` is set in `~/.hermes/config.yaml`. Failed platforms are parked as `fatal` and are never retried. `hermes gateway status` reports this state, and `hermes gateway restart` accepts it as a successful restart.
+
+Set `gateway.headless_ok` only when another local or scheduled service needs the gateway process. With none of the three headless-work conditions, the gateway exits 78 exactly as before. Currently only the active primary profile's cron store is inspected; enabled jobs in multiplexed secondary profiles do not keep the gateway alive by themselves.
+
 ### `/platform` command
 
 Once the gateway is running, use the `/platform` slash command from any connected CLI session or chat to inspect and steer individual adapters without restarting the whole gateway:

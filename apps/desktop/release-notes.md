@@ -1,5 +1,6 @@
 # Unreleased
 
+- r33.1: When every messaging platform fails non-retryably, keeps the gateway alive in `degraded` only for an enabled primary-profile cron job, an explicitly enabled in-gateway Kanban dispatcher, or `gateway.headless_ok: true`; failed platforms remain `fatal` and are not retried, status/restart accept the degraded state, and otherwise startup exits 78 as before. Multiplexed secondary-profile cron jobs do not yet count.
 - es.6: Adds the adapter#265 serve-side cron ticker gate consumed by pcs#812 for messaging-off managed profiles.
 - es.5: Sign out from the recovery screen; per-profile outages shown instead of an empty workspace.
 
