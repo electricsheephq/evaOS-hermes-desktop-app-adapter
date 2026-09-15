@@ -55,10 +55,10 @@ def kanban_dispatch_explicitly_enabled(config: Any) -> bool:
     env_override = os.environ.get("HERMES_KANBAN_DISPATCH_IN_GATEWAY", "").strip().lower()
     if env_override in {"0", "false", "no", "off"}:
         return False
-    if env_override in {"1", "true", "yes", "on"}:
-        return True
     kanban_cfg = config.get("kanban", {}) if isinstance(config, dict) else {}
-    return isinstance(kanban_cfg, dict) and kanban_cfg.get("dispatch_in_gateway") is True
+    if isinstance(kanban_cfg, dict) and "dispatch_in_gateway" in kanban_cfg:
+        return kanban_cfg.get("dispatch_in_gateway") is True
+    return env_override in {"1", "true", "yes", "on"}
 
 
 class GatewayKanbanWatchersMixin:

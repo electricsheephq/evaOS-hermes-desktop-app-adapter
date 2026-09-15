@@ -538,6 +538,22 @@ async def test_dispatcher_env_off_wins_over_explicit_config(monkeypatch, tmp_pat
 
 
 @pytest.mark.asyncio
+async def test_dispatcher_config_off_wins_over_env_on(monkeypatch, tmp_path):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("HERMES_KANBAN_DISPATCH_IN_GATEWAY", "1")
+    _set_dispatcher_enabled(tmp_path, False)
+    from cron.jobs import save_jobs
+
+    save_jobs([], replace=True)
+    runner = _nonretryable_runner(tmp_path)
+
+    assert await runner.start() is True
+    assert runner.should_exit_cleanly is True
+    assert runner.exit_code == GATEWAY_FATAL_CONFIG_EXIT_CODE
+    assert read_runtime_status()["gateway_state"] == "startup_failed"
+
+
+@pytest.mark.asyncio
 async def test_runner_exits_when_cron_store_is_unreadable(monkeypatch, tmp_path, caplog):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     _set_dispatcher_enabled(tmp_path, False)
