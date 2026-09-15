@@ -1124,7 +1124,7 @@ def _probe_pid_exists(candidate_pid: int | None) -> None:
         _probe(4, False, "No candidate PID to verify")
         return
     try:
-        from gateway.status import _pid_exists, gateway_state_is_started
+        from gateway.status import _pid_exists
 
         alive = bool(_pid_exists(candidate_pid))
         _probe(4, alive, f"_pid_exists({candidate_pid}) => {alive}")
@@ -1133,6 +1133,8 @@ def _probe_pid_exists(candidate_pid: int | None) -> None:
 
 
 def _probe_state_file(state_path: Path) -> None:
+    from gateway.status import gateway_state_is_started
+
     if _probe_missing(5, state_path, "gateway_state.json"):
         return
     try:
