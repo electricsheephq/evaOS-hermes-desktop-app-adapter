@@ -305,6 +305,7 @@ export function useSessionListActions({ profileScope }: UseSessionListActionsArg
           // whole list re-renders once per turn/broadcast for nothing.
           setSessions(prev => {
             const previous = dropRefusedProfileSessions(prev, recentsErrors)
+
             const incoming = dropTombstoned(
               carryForwardFailedProfileSessions(previous, recents.sessions ?? [], recentsErrors)
             )
