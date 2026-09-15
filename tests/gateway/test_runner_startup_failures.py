@@ -452,7 +452,8 @@ async def test_runner_exits_with_ex_config_on_nonretryable_startup_error(monkeyp
     set exit_code to 78 (EX_CONFIG) so the s6 finish script can translate
     it to exit 125 (permanent failure).  See #51228."""
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
-    _set_dispatcher_enabled(tmp_path, False)
+    monkeypatch.delenv("HERMES_KANBAN_DISPATCH_IN_GATEWAY", raising=False)
+    assert not (tmp_path / "config.yaml").exists()
     from cron.jobs import save_jobs
 
     save_jobs([], replace=True)
@@ -487,6 +488,7 @@ async def test_runner_stays_alive_when_headless_ok_is_enabled(monkeypatch, tmp_p
 @pytest.mark.asyncio
 async def test_runner_stays_alive_for_in_gateway_dispatcher(monkeypatch, tmp_path):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.delenv("HERMES_KANBAN_DISPATCH_IN_GATEWAY", raising=False)
     _set_dispatcher_enabled(tmp_path, True)
     from cron.jobs import save_jobs
 
@@ -499,6 +501,40 @@ async def test_runner_stays_alive_for_in_gateway_dispatcher(monkeypatch, tmp_pat
     assert runner.should_exit_cleanly is False
     assert runner._failed_platforms == {}
     assert read_runtime_status()["gateway_state"] == "degraded"
+
+
+@pytest.mark.asyncio
+async def test_runner_stays_alive_for_dispatcher_env_override(monkeypatch, tmp_path):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("HERMES_KANBAN_DISPATCH_IN_GATEWAY", "1")
+    from cron.jobs import save_jobs
+
+    save_jobs([], replace=True)
+    runner = _nonretryable_runner(tmp_path)
+
+    ok = await runner.start()
+
+    assert ok is True
+    assert runner.should_exit_cleanly is False
+    assert read_runtime_status()["gateway_state"] == "degraded"
+
+
+@pytest.mark.asyncio
+async def test_dispatcher_env_off_wins_over_explicit_config(monkeypatch, tmp_path):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("HERMES_KANBAN_DISPATCH_IN_GATEWAY", "0")
+    _set_dispatcher_enabled(tmp_path, True)
+    from cron.jobs import save_jobs
+
+    save_jobs([], replace=True)
+    runner = _nonretryable_runner(tmp_path)
+
+    ok = await runner.start()
+
+    assert ok is True
+    assert runner.should_exit_cleanly is True
+    assert runner.exit_code == GATEWAY_FATAL_CONFIG_EXIT_CODE
+    assert read_runtime_status()["gateway_state"] == "startup_failed"
 
 
 @pytest.mark.asyncio

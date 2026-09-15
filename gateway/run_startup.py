@@ -1153,10 +1153,10 @@ class GatewayStartupMixin:
         if self.config.headless_ok:
             return True
         try:
-            from gateway.kanban_watchers import kanban_dispatch_in_gateway_enabled
-            from hermes_cli.config import load_config
+            from gateway.kanban_watchers import kanban_dispatch_explicitly_enabled
+            from hermes_cli.config import read_raw_config_readonly
 
-            if kanban_dispatch_in_gateway_enabled(load_config()):
+            if kanban_dispatch_explicitly_enabled(read_raw_config_readonly()):
                 return True
         except Exception as exc:
             logger.warning("Could not inspect in-gateway dispatcher config; treating it as disabled: %s", exc)

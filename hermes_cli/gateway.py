@@ -299,6 +299,7 @@ def _wait_for_managed_external_gateway_replacement(
 ) -> bool:
     """Wait for one profile-local external-supervisor replacement."""
     from gateway.status import (
+        gateway_state_is_started,
         get_running_pid_identity_strict,
         get_runtime_status_running_pid,
         read_runtime_status,
@@ -322,7 +323,7 @@ def _wait_for_managed_external_gateway_replacement(
                     if runtime.get("gateway_state") == "startup_failed":
                         return False
                     if (
-                        runtime.get("gateway_state") == "running"
+                        gateway_state_is_started(runtime.get("gateway_state"))
                         and get_runtime_status_running_pid(
                             runtime, expected_home=expected_home
                         )
@@ -1291,7 +1292,7 @@ def _wait_for_systemd_service_restart(
         active_state = props.get("ActiveState", "")
         sub_state = props.get("SubState", "")
         try:
-            from gateway.status import get_running_pid
+            from gateway.status import gateway_state_is_started, get_running_pid
             new_pid = get_running_pid()
         except Exception:
             new_pid = None
@@ -1313,8 +1314,10 @@ def _wait_for_systemd_service_restart(
                 if runtime_state and _runtime_state_pid(runtime_state) != new_pid:
                     runtime_state = None
             gateway_state = (runtime_state or {}).get("gateway_state")
-            if gateway_state == "running":
-                print(f"✓ {scope_label} service restarted (PID {new_pid})")
+            if gateway_state_is_started(gateway_state):
+                suffix = (" (degraded: no messaging platform connected)"
+                          if gateway_state == "degraded" else "")
+                print(f"✓ {scope_label} service restarted (PID {new_pid}){suffix}")
                 return True
             if gateway_state == "startup_failed":
                 reason = (runtime_state or {}).get("exit_reason") or "startup failed"
@@ -4993,7 +4996,7 @@ def _runtime_health_lines() -> list[str]:
     # A live-claiming snapshot can outlive an ungracefully killed gateway (taskkill /F, OOM). Past
     # the freshness TTL with the recorded PID gone, say so instead of rendering stale live state.
     if (
-        gateway_state in ("running", "starting", "draining")
+        gateway_state in ("running", "starting", "draining", "degraded")
         and runtime_status_is_stale(state)
         and not runtime_status_pid_is_live(state)
     ):

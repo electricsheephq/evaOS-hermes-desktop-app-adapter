@@ -1187,6 +1187,13 @@ class TestGatewayBusyDerivation:
             gateway_running=True, gateway_state="running", active_agents=0
         ) is False
 
+        assert status.derive_gateway_drainable(
+            gateway_running=True, gateway_state="degraded"
+        ) is True
+        assert status.derive_gateway_busy(
+            gateway_running=True, gateway_state="degraded", active_agents=1
+        ) is True
+
 
     def test_drainable_is_running_and_live_independent_of_count(self):
         # Idle running gateway is drainable but NOT busy.

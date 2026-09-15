@@ -50,6 +50,17 @@ def kanban_dispatch_in_gateway_enabled(config: Any) -> bool:
     return True
 
 
+def kanban_dispatch_explicitly_enabled(config: Any) -> bool:
+    """Return whether headless startup has explicit embedded-dispatcher work."""
+    env_override = os.environ.get("HERMES_KANBAN_DISPATCH_IN_GATEWAY", "").strip().lower()
+    if env_override in {"0", "false", "no", "off"}:
+        return False
+    if env_override in {"1", "true", "yes", "on"}:
+        return True
+    kanban_cfg = config.get("kanban", {}) if isinstance(config, dict) else {}
+    return isinstance(kanban_cfg, dict) and kanban_cfg.get("dispatch_in_gateway") is True
+
+
 class GatewayKanbanWatchersMixin:
     """Kanban watcher / notifier / dispatcher loops for GatewayRunner."""
 
