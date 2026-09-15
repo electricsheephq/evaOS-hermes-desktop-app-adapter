@@ -1,5 +1,6 @@
 # Unreleased
 
+- r33.1: Keeps the gateway alive for cron, the embedded Kanban dispatcher, or explicit headless work when every messaging platform is fatally parked.
 - es.6: Adds the adapter#265 serve-side cron ticker gate consumed by pcs#812 for messaging-off managed profiles.
 - es.5: Sign out from the recovery screen; per-profile outages shown instead of an empty workspace.
 

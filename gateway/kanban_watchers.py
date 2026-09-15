@@ -37,6 +37,19 @@ _GC_INTERVAL_SECONDS = 3600.0
 _HEALTH_WINDOW = 6
 
 
+def kanban_dispatch_in_gateway_enabled(config: Any) -> bool:
+    """Return the shared env/config gate for the embedded dispatcher."""
+    env_override = os.environ.get("HERMES_KANBAN_DISPATCH_IN_GATEWAY", "").strip().lower()
+    if env_override in {"0", "false", "no", "off"}:
+        logger.info("kanban dispatcher: disabled via HERMES_KANBAN_DISPATCH_IN_GATEWAY env")
+        return False
+    kanban_cfg = config.get("kanban", {}) if isinstance(config, dict) else {}
+    if not kanban_cfg.get("dispatch_in_gateway", True):
+        logger.info("kanban dispatcher: disabled via config kanban.dispatch_in_gateway=false")
+        return False
+    return True
+
+
 class GatewayKanbanWatchersMixin:
     """Kanban watcher / notifier / dispatcher loops for GatewayRunner."""
 
@@ -194,19 +207,14 @@ class GatewayKanbanWatchersMixin:
         except Exception:
             logger.warning("kanban dispatcher: config loader unavailable; disabled")
             return None
-        env_override = os.environ.get("HERMES_KANBAN_DISPATCH_IN_GATEWAY", "").strip().lower()
-        if env_override in {"0", "false", "no", "off"}:
-            logger.info("kanban dispatcher: disabled via HERMES_KANBAN_DISPATCH_IN_GATEWAY env")
-            return None
         try:
             cfg = _load_config()
         except Exception as exc:
             logger.warning("kanban dispatcher: cannot load config (%s); disabled", exc)
             return None
-        kanban_cfg = cfg.get("kanban", {}) if isinstance(cfg, dict) else {}
-        if not kanban_cfg.get("dispatch_in_gateway", True):
-            logger.info("kanban dispatcher: disabled via config kanban.dispatch_in_gateway=false")
+        if not kanban_dispatch_in_gateway_enabled(cfg):
             return None
+        kanban_cfg = cfg.get("kanban", {}) if isinstance(cfg, dict) else {}
         try:
             from hermes_cli import kanban_db as _kb
         except Exception:

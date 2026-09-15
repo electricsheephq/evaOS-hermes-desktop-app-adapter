@@ -1148,6 +1148,31 @@ class GatewayStartupMixin:
                 )
         return False, connected_count
 
+    def _headless_work_available(self) -> bool:
+        """Return whether this gateway has useful work without a connected platform."""
+        if self.config.headless_ok:
+            return True
+        try:
+            from gateway.kanban_watchers import kanban_dispatch_in_gateway_enabled
+            from hermes_cli.config import load_config
+
+            if kanban_dispatch_in_gateway_enabled(load_config()):
+                return True
+        except Exception as exc:
+            logger.warning("Could not inspect in-gateway dispatcher config; treating it as disabled: %s", exc)
+        try:
+            from cron.jobs import load_jobs
+
+            return any(
+                isinstance(job, dict) and bool(job.get("enabled", True))
+                for job in load_jobs()
+            )
+        except Exception as exc:
+            logger.warning(
+                "Could not inspect cron jobs for headless startup; treating as no scheduled work: %s", exc
+            )
+            return False
+
     def _start_handle_no_connections(
         self, connected_count: int, enabled_platform_count: int, startup_retryable_errors: list,
         startup_nonretryable_errors: list,
@@ -1158,6 +1183,14 @@ class GatewayStartupMixin:
             return False
         if startup_nonretryable_errors and not startup_retryable_errors:
             reason = "; ".join(startup_nonretryable_errors)
+            if self._headless_work_available():
+                logger.error(
+                    "%d platform(s) fatally misconfigured and parked: %s. "
+                    "Staying alive for scheduled work (cron/dispatcher/headless_ok).",
+                    len(startup_nonretryable_errors), reason,
+                )
+                _write_runtime_status_quiet(gateway_state="degraded", exit_reason=None)
+                return False
             logger.error("Gateway hit a non-retryable startup conflict: %s", reason)
             self._startup_fail_fatal_config(reason)
             return True
@@ -1371,7 +1404,13 @@ class GatewayStartupMixin:
         self._wire_teams_pipeline_runtime()
         self._running = True
         self._install_plugin_message_injector()
-        self._update_runtime_status("running")
+        self._update_runtime_status(
+            "degraded" if (
+                connected_count == 0
+                and startup_nonretryable_errors
+                and not startup_retryable_errors
+            ) else "running"
+        )
         await self._start_finish_wiring(connected_count)
         self._start_spawn_background_watchers()
         logger.info("Press Ctrl+C to stop")
