@@ -1974,7 +1974,8 @@ function createEvaManagedRuntime(options) {
   }
 
   function normalizeProfileRequestError(runtime, profile, error) {
-    if (runtime.sessionKind !== 'delegated_support' && profile && statusCodeOf(error) === 403) {
+    const forbidden = /^\s*403:\s*([\s\S]*)$/.exec(String(error?.message || ''))?.[1].trim() === 'forbidden'
+    if (runtime.sessionKind !== 'delegated_support' && profile && statusCodeOf(error) === 403 && forbidden) {
       return profileMismatchError(profile)
     }
 

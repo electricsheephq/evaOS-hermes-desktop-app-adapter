@@ -2938,13 +2938,13 @@ test('ordinary managed all-profile lists retain the concrete routing profile', a
   assert.equal(calls.length, 1)
 })
 
-test('ordinary managed request failures preserve their original error', async t => {
+test('ordinary managed requests preserve upstream 403s except the relay bare forbidden', async t => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-ordinary-error-'))
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
   const statePath = path.join(directory, 'eva-enrollment.json')
-  writeActiveEnrollment(statePath)
+  writeScopedEnrollment(statePath)
 
-  const failure = new Error('ordinary backend unavailable')
+  let failure = new EvaBrokerError('403: {"detail":"admin only"}', 403, 'permission-denied')
   const runtime = createEvaManagedRuntime({
     statePath,
     encryptSecret: value => value,
@@ -2960,7 +2960,17 @@ test('ordinary managed request failures preserve their original error', async t 
     resolveTimeoutMs: () => 1_000
   })
 
-  await assert.rejects(runtime.requestApi({ path: '/api/sessions', method: 'GET' }), error => error === failure)
+  await assert.rejects(
+    runtime.requestApi({ path: '/api/sessions?profile=beta', method: 'GET' }),
+    error => error === failure && error.code === 'permission-denied' && error.message === '403: {"detail":"admin only"}'
+  )
+
+  failure = new Error('403:  forbidden \n')
+  failure.statusCode = 403
+  await assert.rejects(
+    runtime.requestApi({ path: '/api/sessions?profile=beta', method: 'GET' }),
+    error => error.code === 'profile-mismatch' && error.message === 'profile beta is not authorized for this session'
+  )
 })
 
 test('managed connections and endpoint tickets preserve the selected profile and runtime generation', async t => {
