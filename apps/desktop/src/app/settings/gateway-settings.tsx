@@ -126,6 +126,9 @@ function SupportSessionCard({ status, onStatus }: { status: EvaManagedStatus | n
 
     try {
       onStatus(await runSupportSessionAction(action))
+    } catch (error) {
+      notifyError(error, action === 'switch' ? t.delegatedSupport.switchTargetFailed : t.delegatedSupport.endFailed)
+      onStatus(await refreshEvaManagedStatus().catch(() => status))
     } finally {
       setBusy(null)
     }
@@ -271,6 +274,7 @@ function EvaManagedGatewaySettings({ embedded = false }: { embedded?: boolean } 
   const g = t.settings.gateway.managed
   const businessDisplayName = managedVendorDisplayName(g.accountTitle)
   const [status, setStatus] = useState<EvaManagedStatus | null>(null)
+  const sharedStatus = useStore($evaManagedStatus)
   const [busy, setBusy] = useState<'refresh' | 'sign-in' | 'sign-out' | null>(null)
   const [error, setError] = useState<string | null>(null)
 
@@ -343,7 +347,7 @@ function EvaManagedGatewaySettings({ embedded = false }: { embedded?: boolean } 
           </div>
         </div>
 
-        <SupportSessionCard onStatus={setStatus} status={status} />
+        <SupportSessionCard onStatus={setStatus} status={sharedStatus ?? status} />
 
         {status ? (
           <div className="overflow-hidden rounded-xl border border-border/70">

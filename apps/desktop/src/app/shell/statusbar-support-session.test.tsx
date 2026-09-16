@@ -36,9 +36,10 @@ describe('support-session shell indicator', () => {
     })
     const item = supportSessionStatusbarItem(active, TRANSLATIONS.en.delegatedSupport)
     expect(item).toMatchObject({ hidden: false, id: 'support-session', lockedVisible: true, to: '/settings?tab=gateway' })
-    item.menuItems?.[0].onSelect?.()
-    await waitFor(() => expect($supportPickerOpen.get()).toBe(true))
+    expect(item.menuItems?.[0]).toMatchObject({ to: '/settings?tab=gateway' })
     item.menuItems?.[1].onSelect?.()
+    await waitFor(() => expect($supportPickerOpen.get()).toBe(true))
+    item.menuItems?.[2].onSelect?.()
     await waitFor(() => expect(endSupportSession).toHaveBeenCalledOnce())
   })
 
@@ -46,7 +47,7 @@ describe('support-session shell indicator', () => {
     $evaManagedStatus.set(active)
     $statusbarVisible.set(false)
     render(
-      <MemoryRouter>
+      <MemoryRouter initialEntries={['/agents']}>
         <I18nProvider configClient={null} initialLocale="en">
           <TitlebarControls onOpenSettings={() => {}} />
         </I18nProvider>

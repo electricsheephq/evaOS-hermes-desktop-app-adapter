@@ -39,6 +39,7 @@ import { copyFilePath, revealFile } from '@/store/file-actions'
 import { $freeTierStatus, FREE_TIER_MODEL } from '@/store/free-tier'
 import { openFreeTierSignIn } from '@/store/free-tier-sign-in'
 import { revealFileInTree } from '@/store/layout'
+import { notifyError } from '@/store/notifications'
 import { $activeGatewayProfile } from '@/store/profile'
 import { $projectTree, projectNameForCwd } from '@/store/projects'
 import {
@@ -721,16 +722,17 @@ export function supportSessionStatusbarItem(
     label: session ? copy.indicator(session.customer, formatSupportRemaining(session.expiresAt)) : undefined,
     lockedVisible: true,
     menuItems: [
+      { id: 'support-session-settings', label: copy.openSettings, to: '/settings?tab=gateway' },
       {
         id: 'support-session-switch',
         label: copy.switchTarget,
-        onSelect: () => void runSupportSessionAction('switch').catch(() => undefined)
+        onSelect: () => void runSupportSessionAction('switch').catch(error => notifyError(error, copy.switchTargetFailed))
       },
       {
         className: 'text-destructive',
         id: 'support-session-end',
         label: copy.endSession,
-        onSelect: () => void runSupportSessionAction('end').catch(() => undefined)
+        onSelect: () => void runSupportSessionAction('end').catch(error => notifyError(error, copy.endFailed))
       }
     ],
     title: copy.openSettings,

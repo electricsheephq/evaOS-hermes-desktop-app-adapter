@@ -89,13 +89,18 @@ describe('GatewaySettings', () => {
       value: { eva: { status, switchSupportTarget, endSupportSession } }
     })
     $evaManagedStatus.set(current)
-    await act(async () => render(<GatewaySettings />))
-
+    let view!: ReturnType<typeof render>
+    await act(async () => {
+      view = render(<GatewaySettings />)
+    })
     const card = screen.getByRole('region', { name: 'Support session' })
     expect(card.textContent).toContain('Ends in 00:00:05')
     expect(screen.getByRole('status').textContent).toContain('Unable to end support session')
     act(() => vi.advanceTimersByTime(1_000))
     expect(card.textContent).toContain('Ends in 00:00:04')
+    $evaManagedStatus.set({ ...current, supportCustomerLabel: 'Other customer' })
+    view.rerender(<GatewaySettings />)
+    expect(card.textContent).toContain('Other customer')
     await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Switch support target…' })))
     expect(switchSupportTarget).toHaveBeenCalledOnce()
     expect($supportPickerOpen.get()).toBe(true)

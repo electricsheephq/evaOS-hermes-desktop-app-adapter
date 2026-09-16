@@ -253,27 +253,26 @@ export function TitlebarControls({ leftTools = [], tools = [], onOpenSettings }:
 
   const view = appViewForPath(location.pathname)
 
-  // Overlays own the window. These clusters are `fixed` at a higher z-index
-  // than the overlay card, so they'd otherwise bleed over it — hide them (and
-  // the nested titleBar slots) and let the overlay's own chrome take over.
-  if (isOverlayView(view)) {
+  // Overlay clusters stay hidden unless they are the only remaining acting-for disclosure.
+  if (isOverlayView(view) && (statusbarVisible || !supportSession)) {
     return null
   }
 
   const supportIndicator =
     !statusbarVisible && supportSession ? (
       <Button
-        className="max-w-96 truncate text-xs"
+        className={cn('max-w-96 truncate text-xs', isOverlayView(view) && `${titlebarToolClusterClass} left-(--titlebar-controls-left) top-(--titlebar-controls-top)`)}
         data-support-session="titlebar"
         onClick={() => navigate('/settings?tab=gateway')}
-        size="inline"
-        type="button"
-        variant="text"
+        size="inline" type="button" variant="text"
       >
-        {t.delegatedSupport.indicator(supportSession.customer, formatSupportRemaining(supportSession.expiresAt))} ·{' '}
-        {t.delegatedSupport.assignedAgent(supportSession.agent)}
+        {t.delegatedSupport.indicator(supportSession.customer, formatSupportRemaining(supportSession.expiresAt))} · {t.delegatedSupport.assignedAgent(supportSession.agent)}
       </Button>
     ) : null
+
+  if (isOverlayView(view)) {
+    return supportIndicator
+  }
 
   const titlebarSlots = (
     <>
