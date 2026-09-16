@@ -2001,17 +2001,21 @@ function createEvaManagedRuntime(options) {
   }
 
   function bindSupportRequest(runtime, request) {
-    const profile = supportProfileFor(runtime, request?.profile)
     if (runtime?.sessionKind !== 'delegated_support') {
-      let path = request?.path
-      if (!runtime.allowedProfiles.includes('default')) {
-        const parsed = new URL(String(path || ''), 'http://eva-managed.invalid')
-        if (parsed.searchParams.get('profile') === 'default') {
-          parsed.searchParams.set('profile', runtime.profile)
-          path = `${parsed.pathname}${parsed.search}`
-        }
+      const parsed = new URL(String(request?.path || ''), 'http://eva-managed.invalid')
+      const bodyProfile = request?.body && typeof request.body === 'object' && !Array.isArray(request.body)
+        ? request.body.profile
+        : undefined
+      const carriedProfile = request?.profile ?? parsed.searchParams.get('profile') ?? bodyProfile
+      const profile = supportProfileFor(runtime, carriedProfile)
+      if (parsed.searchParams.get('profile') === 'default' && profile !== 'default') {
+        parsed.searchParams.set('profile', profile)
       }
-      const ordinaryRequest = { ...request, path }
+      const ordinaryRequest = {
+        ...request,
+        path: `${parsed.pathname}${parsed.search}`,
+        ...(bodyProfile === undefined ? {} : { body: { ...request.body, profile } })
+      }
       assertEvaManagedApiRequestAllowed(
         profile ? { ...ordinaryRequest, profile } : ordinaryRequest,
         { allowBroadProfileSelectors: false }
@@ -2019,6 +2023,7 @@ function createEvaManagedRuntime(options) {
       return { policy: { allowBroadProfileSelectors: false }, profile, request: ordinaryRequest }
     }
 
+    const profile = supportProfileFor(runtime, request?.profile)
     let path = request?.path
     if (!runtime.allowedProfiles.includes('default')) {
       const validated = assertEvaManagedApiRequestAllowed({ ...request, profile: request?.profile ?? profile }, { allowBroadProfileSelectors: false })

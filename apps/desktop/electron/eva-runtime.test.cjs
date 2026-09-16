@@ -4,7 +4,7 @@ const os = require('node:os')
 const path = require('node:path')
 const test = require('node:test')
 
-const { EvaBrokerError, brokerPost, evaDesktopCodeChallenge } = require('./eva-managed.cjs')
+const { EvaBrokerError, brokerPost, evaDesktopCodeChallenge, normalizeHermesEnrollment } = require('./eva-managed.cjs')
 const { createEvaManagedRuntime } = require('./eva-runtime.cjs')
 
 const FUTURE = '2099-07-23T12:00:00.000Z'
@@ -228,6 +228,24 @@ function writeScopedEnrollment(statePath) {
   fs.writeFileSync(statePath, JSON.stringify(state))
 }
 
+function parsedScopedEnrollment() {
+  return normalizeHermesEnrollment({
+    schema_version: 'evaos.hermes_desktop_enrollment.v1',
+    runtime: 'hermes',
+    customer_id: 'fixture-account',
+    remote_backend: {
+      base_url: 'https://hermes-fixture-account.ecs.electricsheephq.com',
+      session_token: 'fixture-runtime-session',
+      expires_at: FUTURE,
+      agent_id: 'alpha',
+      allowed_profiles: ['alpha', 'beta', 'gamma'],
+      primary_profile: 'alpha',
+      profile_admin: true,
+      agent_display_name: 'Alpha'
+    }
+  })
+}
+
 function makeManagedRuntime(statePath, overrides = {}) {
   return createEvaManagedRuntime({
     statePath,
@@ -349,6 +367,60 @@ test('ordinary profile routing preserves a literal default member', async t => {
 
   await runtime.requestApi({ path: '/api/cron/jobs?profile=default', profile: 'default' })
   assert.equal(requested, 'default')
+})
+
+test('ordinary managed REST binding honors query and body profile carriers from parsed enrollment', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-carried-profile-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeEnrollment(statePath)
+  const requests = []
+  const runtime = makeManagedRuntime(statePath, {
+    launchRuntime: async () => parsedScopedEnrollment(),
+    fetchJson: async (url, _token, options) => {
+      requests.push({ url: new URL(url), body: options.body })
+      return { ok: true }
+    }
+  })
+  t.after(() => runtime.close())
+
+  await runtime.requestApi({ path: '/api/profiles/sessions?profile=beta' })
+  await runtime.requestApi({ method: 'POST', path: '/api/profiles/sessions/hide', body: { profile: 'beta' } })
+  await runtime.requestApi({ path: '/api/profiles/sessions?profile=default' })
+
+  assert.equal(requests[0].url.searchParams.get('profile'), 'beta')
+  assert.equal(requests[1].url.searchParams.get('profile'), 'beta')
+  assert.equal(requests[1].body.profile, 'beta')
+  assert.equal(requests[2].url.searchParams.get('profile'), 'alpha')
+  await assert.rejects(
+    runtime.requestApi({ path: '/api/profiles/sessions?profile=zeta' }),
+    error => error.statusCode === 403 && error.code === 'profile-mismatch' && /profile zeta/.test(error.message)
+  )
+})
+
+test('delegated support keeps rejecting unbound query and body profile carriers', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-delegated-carried-profile-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeActiveEnrollment(statePath)
+  const payload = supportEnrollment()
+  payload.admin_bypass = true
+  payload.assignment_version = null
+  payload.profile = 'alpha'
+  payload.remote_backend.agent_id = 'alpha'
+  payload.remote_backend.allowed_profiles = ['alpha', 'beta', 'gamma']
+  const runtime = makeManagedRuntime(statePath, { brokerPost: async () => payload })
+  t.after(() => runtime.close())
+  await runtime.claimSupportRequest('carried-profile-request')
+
+  await assert.rejects(
+    runtime.requestApi({ path: '/api/profiles/sessions?profile=beta' }),
+    error => error.code === 'managed-escape'
+  )
+  await assert.rejects(
+    runtime.requestApi({ method: 'POST', path: '/api/profiles/sessions/hide', body: { profile: 'beta' } }),
+    error => error.code === 'support-profile-mismatch'
+  )
 })
 
 test('ordinary upstream profile refusals name the authorized selector', async t => {
