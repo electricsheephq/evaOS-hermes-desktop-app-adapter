@@ -59,9 +59,13 @@ describe('cron jobs request fencing', () => {
 })
 
 describe('cron job identity', () => {
-  it('separates same-id jobs owned by different profiles', () => {
-    expect(cronJobIdentity({ id: 'daily', profile: 'alpha' })).not.toBe(
-      cronJobIdentity({ id: 'daily', profile: 'beta' })
-    )
+  it('separates same-id row and busy-state keys owned by different profiles', () => {
+    const alpha = cronJobIdentity({ id: 'daily', profile: 'alpha' })
+    const beta = cronJobIdentity({ id: 'daily', profile: 'beta' })
+    const busy = new Set([beta])
+
+    expect(alpha).not.toBe(beta)
+    expect(busy.has(alpha)).toBe(false)
+    expect(busy.has(beta)).toBe(true)
   })
 })

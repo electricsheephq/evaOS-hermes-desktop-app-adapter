@@ -463,7 +463,7 @@ export function CronView({ onClose, onOpenSession, setStatusbarItemGroup: _setSt
   }
 
   async function handlePauseResume(job: CronJob) {
-    const busyToken = beginJobBusy(job.id)
+    const busyToken = beginJobBusy(cronJobIdentity(job))
 
     try {
       const isPaused = jobState(job) === 'paused'
@@ -488,7 +488,7 @@ export function CronView({ onClose, onOpenSession, setStatusbarItemGroup: _setSt
     } catch (err) {
       notifyError(err, c.failedUpdate)
     } finally {
-      endJobBusy(job.id, busyToken)
+      endJobBusy(cronJobIdentity(job), busyToken)
     }
   }
 
@@ -710,7 +710,7 @@ export function CronView({ onClose, onOpenSession, setStatusbarItemGroup: _setSt
 
           {selectedJob ? (
             <CronJobDetail
-              busy={busyJobTokens.has(selectedJob.id) || triggeringJobKeys.has(cronJobIdentity(selectedJob))}
+              busy={busyJobTokens.has(cronJobIdentity(selectedJob)) || triggeringJobKeys.has(cronJobIdentity(selectedJob))}
               c={c}
               job={selectedJob}
               onOpenSession={onOpenSession}

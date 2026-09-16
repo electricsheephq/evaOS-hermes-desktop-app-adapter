@@ -973,7 +973,6 @@ export interface CronJob {
 }
 
 export type CronJobList = CronJob[] & { errors?: ProfileReadError[] }
-
 export interface ProfileReadError {
   error: string
   profile: string

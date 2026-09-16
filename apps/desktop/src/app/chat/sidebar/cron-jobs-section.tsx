@@ -45,7 +45,6 @@ const LOAD_MORE_STEP = 10
 
 export const replaceCronJobRow = (rows: CronJob[], job: CronJob, updated: CronJob): CronJob[] =>
   rows.map(row => (cronJobIdentity(row) === cronJobIdentity(job) ? { ...updated, profile: job.profile } : row))
-
 export const removeCronJobRow = (rows: CronJob[], job: CronJob): CronJob[] =>
   rows.filter(row => cronJobIdentity(row) !== cronJobIdentity(job))
 
