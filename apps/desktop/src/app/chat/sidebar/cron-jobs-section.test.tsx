@@ -34,10 +34,10 @@ describe('SidebarCronJobsSection', () => {
   it('keeps the alpha trigger idle while a same-id beta job is busy', async () => {
     const alpha = { enabled: true, id: 'shared-job', name: 'Alpha job', profile: 'alpha' } satisfies CronJob
     const beta = { enabled: true, id: 'shared-job', name: 'Beta job', profile: 'beta' } satisfies CronJob
-    let release = () => undefined
+    let release: () => void = () => {}
     const onTriggerJob = vi.fn(
       () => new Promise<void>(resolve => {
-        release = resolve
+        release = () => resolve()
       })
     )
 
@@ -86,7 +86,7 @@ describe('SidebarCronJobsSection', () => {
   })
 
   it('routes a beta row run-history request through the beta query path', async () => {
-    const api = vi.fn(async () => [] as never)
+    const api = vi.fn(async (_request: { path: string }) => [] as never)
     ;(window as { hermesDesktop?: unknown }).hermesDesktop = { api }
     const beta = { enabled: true, id: 'shared-job', name: 'Beta job', profile: 'beta' } satisfies CronJob
 

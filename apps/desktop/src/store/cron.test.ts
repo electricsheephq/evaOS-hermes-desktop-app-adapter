@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 
 import { removeCronJobRow, replaceCronJobRow } from '../app/chat/sidebar/cron-jobs-section'
+import type { CronJob } from '../types/hermes'
 
 import {
   $cronJobErrors,
@@ -61,8 +62,8 @@ describe('cron jobs request fencing', () => {
 
 describe('cron job identity', () => {
   it('mutates and deletes only the selected profile when job ids match', () => {
-    const alpha = { enabled: true, id: 'daily', profile: 'alpha', state: 'scheduled' } as never
-    const beta = { enabled: true, id: 'daily', profile: 'beta', state: 'scheduled' } as never
+    const alpha = { enabled: true, id: 'daily', profile: 'alpha', state: 'scheduled' } satisfies CronJob
+    const beta = { enabled: true, id: 'daily', profile: 'beta', state: 'scheduled' } satisfies CronJob
     const alphaSnapshot = structuredClone(alpha)
     setCronJobs([alpha, beta])
 
