@@ -312,6 +312,45 @@ test('ordinary enrollment exposes its finite authorized profile scope after a co
   assert.equal(await runtime.delegatedProfiles(), null)
 })
 
+test('parsed non-admin enrollment rejects sibling reads before upstream access', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-non-admin-scope-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeEnrollment(statePath)
+  const requests = []
+  const enrollment = normalizeHermesEnrollment({
+    customer_id: 'alpha',
+    remote_backend: {
+      agent_id: 'alpha',
+      allowed_profiles: ['alpha'],
+      base_url: 'https://hermes-alpha.ecs.electricsheephq.com',
+      expires_at: FUTURE,
+      primary_profile: 'alpha',
+      profile_admin: false,
+      session_token: 'fixture-runtime-session'
+    },
+    runtime: 'hermes',
+    schema_version: 'evaos.hermes_desktop_enrollment.v1'
+  })
+  const runtime = makeManagedRuntime(statePath, {
+    launchRuntime: async () => enrollment,
+    fetchJson: async url => {
+      requests.push(new URL(url))
+      return { sessions: [], total: 0 }
+    }
+  })
+  t.after(() => runtime.close())
+
+  assert.deepEqual(await runtime.authorizedProfiles(), ['alpha'])
+  for (const path of ['/api/profiles/sessions?profile=beta', '/api/cron/jobs?profile=beta']) {
+    await assert.rejects(runtime.requestApi({ path }), error => error.code === 'profile-mismatch')
+  }
+  assert.equal(requests.length, 0)
+
+  await runtime.requestApi({ path: '/api/profiles/sessions?profile=default' })
+  assert.equal(requests[0].searchParams.get('profile'), 'alpha')
+})
+
 test('ordinary profile routing aliases default to alpha and rejects selectors outside the scope', async t => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-customer-routing-'))
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
