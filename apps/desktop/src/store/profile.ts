@@ -3,6 +3,7 @@ import { atom, batch, computed } from 'nanostores'
 
 import type { HermesConnection } from '@/global'
 import { getProfiles, hermesApi, setApiRequestProfile, STARTUP_REQUEST_TIMEOUT_MS } from '@/hermes'
+import { isManagedEvaosAgent } from '@/i18n/managed-brand'
 import { invalidateProfileScopedQueries } from '@/lib/query-client'
 import {
   arraysEqual,
@@ -867,7 +868,11 @@ export const ALL_PROFILES = '__all__'
 
 /** Normalize a sidebar scope to the profile key used by session and cron queries. */
 export const sidebarProfileForScope = (profileScope: string): string =>
-  profileScope === ALL_PROFILES ? 'all' : normalizeProfileKey(profileScope)
+  profileScope === ALL_PROFILES
+    ? isManagedEvaosAgent()
+      ? normalizeProfileKey($activeGatewayProfile.get())
+      : 'all'
+    : normalizeProfileKey(profileScope)
 
 /** Key a platform total by its Desktop profile route so counts cannot leak across profiles. */
 export const messagingTotalsKey = (messagingProfile: string, sourceId: string): string =>

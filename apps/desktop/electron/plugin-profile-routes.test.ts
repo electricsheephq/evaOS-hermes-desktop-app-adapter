@@ -70,16 +70,18 @@ describe('managed plugin profile routes', () => {
   })
 
   it('publishes one opaque assigned-runtime roster without workstation sources', () => {
-    expect(buildEvaManagedAgentRoster(' research ')).toEqual({
+    const roster = buildEvaManagedAgentRoster(' alpha ')
+
+    expect(roster).toEqual({
       agents: [
         {
           connectionId: EVA_MANAGED_CONNECTION_ID,
           connectionKind: 'remote',
           connectionLabel: 'Assigned runtime',
-          handle: 'research',
+          handle: 'alpha',
           managedSource: true,
-          profile: 'research',
-          targetProfile: 'research'
+          profile: 'alpha',
+          targetProfile: 'alpha'
         }
       ],
       primaryConnectionId: EVA_MANAGED_CONNECTION_ID,
@@ -92,6 +94,8 @@ describe('managed plugin profile routes', () => {
         }
       ]
     })
+    expect(roster.agents.map(agent => agent.profile)).not.toContain('default')
+    expect(roster.agents.map(agent => agent.handle)).not.toContain('hermes')
 
     expect(buildEvaManagedAgentRoster('')).toMatchObject({
       agents: [{ connectionId: EVA_MANAGED_CONNECTION_ID, handle: 'default', profile: 'default' }]

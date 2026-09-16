@@ -11672,7 +11672,10 @@ function waitForBackendExit(child, timeoutMs = 5000) {
 const primaryProfilePin = new PrimaryProfilePin()
 
 function primaryProfileKey() {
-  return primaryProfilePin.resolve(readActiveDesktopProfile)
+  return primaryProfilePin.resolve(
+    readActiveDesktopProfile,
+    EVA_MANAGED_BUILD ? evaManagedRuntime.status().agentId : null
+  )
 }
 
 // Options describing the current connection setup for `resolveProfileBackendRoute`.
