@@ -30,7 +30,7 @@ import { sessionMatchesSearch } from '@/lib/session-search'
 import { normalizeSessionSource, sessionSourceLabel } from '@/lib/session-source'
 import { cn } from '@/lib/utils'
 import { $activeConnectionId } from '@/store/connections'
-import { $cronJobs } from '@/store/cron'
+import { $cronJobErrors, $cronJobs } from '@/store/cron'
 import { $bindings } from '@/store/keybinds'
 import {
   $dismissedAutoProjectIds,
@@ -399,6 +399,7 @@ export function ChatSidebar({
   const sessions = useStore($sessions)
   const cronSessions = useStore($cronSessions)
   const cronJobs = useStore($cronJobs)
+  const cronJobErrors = useStore($cronJobErrors)
   const messagingSessions = useStore($messagingSessions)
   const messagingPlatformTotals = useStore($messagingPlatformTotals)
   const messagingTruncated = useStore($messagingTruncated)
@@ -1917,6 +1918,7 @@ export function ChatSidebar({
 
             {!trimmedQuery && !worktreeGroupingActive && cronJobs.length > 0 && (
               <SidebarCronJobsSection
+                errors={cronJobErrors}
                 jobs={cronJobs}
                 label={s.cronJobs}
                 onManageJob={onManageCronJob}

@@ -2482,6 +2482,8 @@ export const en: Translations = {
     },
     search: 'Search cron jobs...',
     loading: 'Loading cron jobs...',
+    partialFailures: (count, details) =>
+      `${count} ${count === 1 ? 'profile' : 'profiles'} could not be read: ${details}`,
     states: {
       enabled: 'enabled',
       scheduled: 'scheduled',

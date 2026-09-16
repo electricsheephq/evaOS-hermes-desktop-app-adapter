@@ -29,7 +29,7 @@ async function requestAuthorizedCronJobs({
         assertSupportRequestCurrent(guard)
         const status = statusCodeOf(error)
         if (status !== null && status < 500) throw error
-        errors.push({ profile, error: 'Profile temporarily unavailable.' })
+        errors.push({ profile, error: 'Profile temporarily unavailable.', ...(status === null ? {} : { status }) })
         continue
       }
       assertSupportRequestCurrent(guard)
@@ -46,8 +46,7 @@ async function requestAuthorizedCronJobs({
     finishSupportRequestGuard(guard)
   }
 
-  if (errors.length) jobs.errors = errors
-  return jobs
+  return errors.length ? { errors, jobs } : jobs
 }
 
 module.exports = { requestAuthorizedCronJobs }

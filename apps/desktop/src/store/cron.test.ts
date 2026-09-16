@@ -1,6 +1,13 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 
-import { $cronJobs, beginCronJobsRequest, commitCronJobsRequest, setCronJobs, updateCronJobs } from './cron'
+import {
+  $cronJobErrors,
+  $cronJobs,
+  beginCronJobsRequest,
+  commitCronJobsRequest,
+  setCronJobs,
+  updateCronJobs
+} from './cron'
 
 const oldJob = { id: 'old' } as never
 const newJob = { id: 'new' } as never
@@ -35,5 +42,16 @@ describe('cron jobs request fencing', () => {
 
     expect(commitCronJobsRequest(poll, [oldJob])).toBe(false)
     expect($cronJobs.get()).toEqual([newJob])
+  })
+
+  it('publishes partial profile errors with the healthy cron rows', () => {
+    const request = beginCronJobsRequest('all')
+    const jobs = Object.assign([newJob], {
+      errors: [{ error: 'Profile temporarily unavailable.', profile: 'beta', status: 502 }]
+    })
+
+    expect(commitCronJobsRequest(request, jobs)).toBe(true)
+    expect($cronJobs.get()).toEqual([newJob])
+    expect($cronJobErrors.get()).toEqual([{ error: 'Profile temporarily unavailable.', profile: 'beta', status: 502 }])
   })
 })

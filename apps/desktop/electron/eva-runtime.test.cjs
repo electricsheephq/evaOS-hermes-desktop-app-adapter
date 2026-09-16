@@ -594,8 +594,8 @@ test('cron fan-out preserves healthy profiles and reports sanitized failures', a
     finishSupportRequestGuard: () => undefined
   })
 
-  assert.deepEqual(jobs.map(job => job.id), ['job-alpha', 'job-gamma'])
-  assert.deepEqual(jobs.errors, [{ profile: 'beta', error: 'Profile temporarily unavailable.' }])
+  assert.deepEqual(jobs.jobs.map(job => job.id), ['job-alpha', 'job-gamma'])
+  assert.deepEqual(jobs.errors, [{ profile: 'beta', error: 'Profile temporarily unavailable.', status: 502 }])
   assert.equal(JSON.stringify(jobs.errors).includes('private upstream detail'), false)
 })
 

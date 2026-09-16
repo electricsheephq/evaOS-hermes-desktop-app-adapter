@@ -3,7 +3,9 @@ import type {
   CronDeliveryTarget,
   CronJob,
   CronJobCreatePayload,
+  CronJobList,
   CronJobUpdates,
+  ProfileReadError,
   SessionInfo
 } from '@/types/hermes'
 
@@ -24,13 +26,15 @@ function cronProfileSuffix(profile?: string): string {
 // list just that profile's jobs, or 'all' for the unified cross-profile view.
 // Omitting the arg keeps the legacy 'all' default for non-profile callers.
 // profileScoped() still rides along for backend-process routing.
-export function getCronJobs(profile?: string): Promise<CronJob[]> {
-  return hermesApi<CronJob[]>({
+export async function getCronJobs(profile?: string): Promise<CronJobList> {
+  const result = await hermesApi<CronJob[] | { errors?: ProfileReadError[]; jobs: CronJob[] }>({
     ...profileScoped(),
     ...connectionScoped(),
     path: `/api/cron/jobs${cronProfileSuffix(profile)}`,
     timeoutMs: STARTUP_REQUEST_TIMEOUT_MS
   })
+
+  return Array.isArray(result) ? result : Object.assign(result.jobs, { errors: result.errors ?? [] })
 }
 
 export function getCronJob(jobId: string): Promise<CronJob> {

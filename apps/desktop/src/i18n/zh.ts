@@ -304,7 +304,8 @@ export const zh: Translations = {
     start: '打开所选客户智能体',
     starting: '正在打开客户智能体…',
     started: '已授予支持访问。正在重新加载…',
-    signInRequired: '请重新登录 Electric Sheep 以选择支持目标。如果刚登录后仍然出现此提示，说明应用内支持所需的 Electric Sheep 更新尚未部署。',
+    signInRequired:
+      '请重新登录 Electric Sheep 以选择支持目标。如果刚登录后仍然出现此提示，说明应用内支持所需的 Electric Sheep 更新尚未部署。',
     signIn: '登录 Electric Sheep',
     signingIn: '请在浏览器中完成 Electric Sheep 登录…',
     forbidden: '此账户未获授权进行委托支持。',
@@ -2631,6 +2632,7 @@ export const zh: Translations = {
     },
     search: '搜索定时任务…',
     loading: '正在加载定时任务…',
+    partialFailures: (count, details) => `${count} 个配置档案无法读取：${details}`,
     states: {
       enabled: '已启用',
       scheduled: '已排程',

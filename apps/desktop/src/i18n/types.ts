@@ -2149,6 +2149,7 @@ export interface Translations {
     }
     search: string
     loading: string
+    partialFailures: (count: number, details: string) => string
     states: Record<string, string>
     deliveryLabels: Record<string, string>
     scheduleLabels: Record<string, string>

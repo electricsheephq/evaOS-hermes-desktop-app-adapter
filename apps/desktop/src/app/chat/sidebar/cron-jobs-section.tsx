@@ -18,7 +18,7 @@ import { updateCronJobs } from '@/store/cron'
 import { $changeEventsAvailable, $cronChangeTick } from '@/store/live-sync'
 import { notify, notifyError } from '@/store/notifications'
 import { $selectedStoredSessionId } from '@/store/session'
-import type { CronJob } from '@/types/hermes'
+import type { CronJob, ProfileReadError } from '@/types/hermes'
 
 import { jobState, jobTitle, STATE_DOT } from '../../cron/job-state'
 import { SidebarPanelLabel } from '../../shell/sidebar-label'
@@ -67,6 +67,7 @@ function formatRunTime(seconds?: null | number): string {
 }
 
 interface SidebarCronJobsSectionProps {
+  errors?: ProfileReadError[]
   jobs: CronJob[]
   label: string
   max?: number
@@ -81,6 +82,7 @@ interface SidebarCronJobsSectionProps {
 }
 
 export function SidebarCronJobsSection({
+  errors = [],
   jobs,
   label,
   max = 50,
@@ -90,6 +92,8 @@ export function SidebarCronJobsSection({
   onToggle,
   open
 }: SidebarCronJobsSectionProps) {
+  const { t } = useI18n()
+  const c = t.cron
   const [nowMs, setNowMs] = useState(() => Date.now())
   // Single-open inline peek so the section stays scannable.
   const [peekJobId, setPeekJobId] = useState<null | string>(null)
@@ -193,6 +197,14 @@ export function SidebarCronJobsSection({
       </div>
       {open && (
         <SidebarGroupContent className="scrollbar-fade flex max-h-72 flex-col gap-px overflow-x-hidden overflow-y-auto overscroll-contain pb-1.75 compact:max-h-none compact:overflow-visible">
+          {errors.length > 0 && (
+            <div className="px-2 py-1 text-xs text-(--ui-warning-text)" role="status">
+              {c.partialFailures(
+                errors.length,
+                errors.map(error => `${error.profile}: ${error.status ?? error.error}`).join(', ')
+              )}
+            </div>
+          )}
           {shown.map(job => (
             <CronJobSidebarRow
               busy={triggeringJobIds.has(job.id)}
@@ -252,9 +264,7 @@ function CronJobSidebarRow({
   // row updates in place.
   const togglePause = async () => {
     try {
-      const updated = isPaused
-        ? await resumeCronJob(job.id, job.profile)
-        : await pauseCronJob(job.id, job.profile)
+      const updated = isPaused ? await resumeCronJob(job.id, job.profile) : await pauseCronJob(job.id, job.profile)
 
       updateCronJobs(rows => rows.map(row => (row.id === job.id ? { ...updated, profile: job.profile } : row)))
       notify({ kind: 'success', title: isPaused ? c.resumed : c.paused, message: label })

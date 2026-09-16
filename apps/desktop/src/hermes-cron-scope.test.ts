@@ -21,7 +21,7 @@ import {
 // show up" bug), the counterpart to the backend-action-helper fix in
 // hermes-profile-scope.test.ts.
 describe('cron helpers are profile-scoped', () => {
-  const api = vi.fn(async (_req: { path: string; profile?: string }) => ({}) as never)
+  const api = vi.fn(async (_req: { path: string; profile?: string }) => [] as never)
 
   beforeEach(() => {
     ;(window as { hermesDesktop?: unknown }).hermesDesktop = { api }
@@ -103,6 +103,18 @@ describe('cron helpers are profile-scoped', () => {
     // Omitting the arg keeps the legacy unfiltered path.
     void getCronJobs()
     expect(api.mock.calls.at(-1)?.[0].path).toBe('/api/cron/jobs')
+  })
+
+  it('normalizes a managed partial result without hiding its profile errors', async () => {
+    api.mockResolvedValueOnce({
+      errors: [{ error: 'Profile temporarily unavailable.', profile: 'beta', status: 502 }],
+      jobs: [{ enabled: true, id: 'job-alpha', profile: 'alpha' }]
+    } as never)
+
+    const jobs = await getCronJobs('all')
+
+    expect(jobs.map(job => job.id)).toEqual(['job-alpha'])
+    expect(jobs.errors).toEqual([{ error: 'Profile temporarily unavailable.', profile: 'beta', status: 502 }])
   })
 
   it('run history accepts the owning job profile for endpoint routing', () => {

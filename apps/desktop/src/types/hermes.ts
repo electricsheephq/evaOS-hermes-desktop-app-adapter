@@ -972,6 +972,14 @@ export interface CronJob {
   state?: null | string
 }
 
+export type CronJobList = CronJob[] & { errors?: ProfileReadError[] }
+
+export interface ProfileReadError {
+  error: string
+  profile: string
+  status?: number
+}
+
 export interface CronJobCreatePayload {
   deliver?: string
   model?: string
@@ -1117,7 +1125,7 @@ export interface ProfileSoul {
 
 export interface ProfilesResponse {
   profiles: ProfileInfo[]
-  errors?: Array<{ profile: string; error: string }>
+  errors?: ProfileReadError[]
 }
 
 export interface SkillInfo {
