@@ -577,8 +577,13 @@ function normalizeHermesEnrollment(payload, options = {}) {
     new Set(rawAllowedProfiles).size === rawAllowedProfiles.length &&
     rawAllowedProfiles.includes(agentId)
   const allowedProfiles = validProfileScope ? [...rawAllowedProfiles] : [agentId]
-  const profile = payload.primary_profile === agentId ? payload.primary_profile : agentId
-  const profileAdmin = validProfileScope && payload.profile_admin === true
+  // The broker binds primary_profile to agent_id. Keep the enrolled agent
+  // authoritative if those fields ever disagree instead of silently retargeting.
+  if (Object.hasOwn(remote, 'primary_profile') && remote.primary_profile !== agentId) {
+    options.onDiagnostic?.('[eva-managed] broker primary profile did not match assigned agent; using assigned agent')
+  }
+  const profile = agentId
+  const profileAdmin = validProfileScope && remote.profile_admin === true
 
   const rawDisplayName = typeof remote.agent_display_name === 'string' ? remote.agent_display_name.trim() : ''
   const agentDisplayName =

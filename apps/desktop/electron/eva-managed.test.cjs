@@ -706,6 +706,8 @@ test('account reset clears renderer account state while preserving global prefer
 
 test('managed enrollment accepts server-selected accounts and rejects mismatched or malformed identities', () => {
   const payload = {
+    ok: true,
+    session: { role: 'owner' },
     schema_version: 'evaos.hermes_desktop_enrollment.v1',
     runtime: 'hermes',
     customer_id: 'jackie-david',
@@ -715,10 +717,10 @@ test('managed enrollment accepts server-selected accounts and rejects mismatched
       expires_at: FUTURE,
       agent_id: 'alpha',
       allowed_profiles: ['alpha', 'beta', 'gamma'],
+      primary_profile: 'alpha',
+      profile_admin: true,
       agent_display_name: 'Asuka'
-    },
-    primary_profile: 'alpha',
-    profile_admin: true
+    }
   }
   const scoped = normalizeHermesEnrollment(payload)
   assert.equal(scoped.agentId, 'alpha')
@@ -728,15 +730,25 @@ test('managed enrollment accepts server-selected accounts and rejects mismatched
   assert.equal(scoped.profileAdmin, true)
   assert.equal(scoped.sessionKind, 'customer')
 
-  const legacy = normalizeHermesEnrollment({
-    ...payload,
-    remote_backend: { ...payload.remote_backend, allowed_profiles: undefined },
-    admin_bypass: true
-  })
+  const legacyRemote = { ...payload.remote_backend }
+  delete legacyRemote.allowed_profiles
+  delete legacyRemote.primary_profile
+  delete legacyRemote.profile_admin
+  const legacy = normalizeHermesEnrollment({ ...payload, remote_backend: legacyRemote, admin_bypass: true })
   assert.deepEqual(legacy.allowedProfiles, ['alpha'])
   assert.equal(legacy.profile, 'alpha')
   assert.equal(legacy.profileAdmin, false)
   assert.equal(Object.hasOwn(legacy, 'adminBypass'), false)
+
+  const diagnostics = []
+  const mismatchedPrimary = normalizeHermesEnrollment({
+    ...payload,
+    remote_backend: { ...payload.remote_backend, primary_profile: 'beta' }
+  }, { onDiagnostic: message => diagnostics.push(message) })
+  assert.equal(mismatchedPrimary.profile, 'alpha')
+  assert.deepEqual(diagnostics, [
+    '[eva-managed] broker primary profile did not match assigned agent; using assigned agent'
+  ])
 
   const invalidScope = normalizeHermesEnrollment({
     ...payload,

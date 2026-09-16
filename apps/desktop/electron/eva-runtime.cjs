@@ -275,7 +275,7 @@ function createEvaManagedRuntime(options) {
   const updateBootProgress = options.updateBootProgress ?? (() => undefined)
   const resetConnection = options.resetConnection ?? (() => undefined)
   const resetRenderer = options.resetRenderer ?? (async () => undefined)
-  const launchRuntime = options.launchRuntime ?? launchEvaHermesRuntime
+  const launchRuntime = options.launchRuntime ?? (token => launchEvaHermesRuntime(token, { onDiagnostic: rememberLog }))
   const makeCodeVerifier = options.makeCodeVerifier ?? makeEvaDesktopCodeVerifier
   const codeChallengeFor = options.codeChallengeFor ?? evaDesktopCodeChallenge
   const pollDeviceCode = options.pollDeviceCode ?? pollEvaDeviceCode
@@ -375,10 +375,10 @@ function createEvaManagedRuntime(options) {
             expires_at: parsed.runtime?.expires_at,
             agent_id: parsed.runtime?.agent_id,
             allowed_profiles: parsed.runtime?.allowed_profiles,
+            primary_profile: parsed.runtime?.primary_profile,
+            profile_admin: parsed.runtime?.profile_admin,
             agent_display_name: parsed.runtime?.agent_display_name
-          },
-          primary_profile: parsed.runtime?.primary_profile,
-          profile_admin: parsed.runtime?.profile_admin
+          }
         })
       } catch {
         runtime = null
