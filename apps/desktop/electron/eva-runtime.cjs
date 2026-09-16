@@ -2048,6 +2048,9 @@ function createEvaManagedRuntime(options) {
       // granted profile can still be read safely, so expose this leaf as down.
       let refusedProfile = false
       if (status === 403) {
+        if (runtime.sessionKind !== 'delegated_support') {
+          throw profileMismatchError(request.profile)
+        }
         const match = /^\s*403:\s*(\{.*\})\s*$/.exec(String(error?.message || ''))
         try {
           refusedProfile = JSON.parse(match?.[1] ?? 'null')?.detail === 'profile is not authorized'
@@ -2411,7 +2414,11 @@ function createEvaManagedRuntime(options) {
       assertSupportRequestCurrent(guard)
       return result
     } catch (error) {
-      const normalizedError = normalizeSupportRequestError(error, guard)
+      const normalizedError = normalizeProfileRequestError(
+        runtime,
+        bound.profile,
+        normalizeSupportRequestError(error, guard)
+      )
       if (guard && normalizedError?.code === 'support-session-expired') throw normalizedError
       if (!retry || statusCodeOf(normalizedError) !== 401) throw normalizedError
       finishSupportRequestGuard(guard)
@@ -2437,7 +2444,11 @@ function createEvaManagedRuntime(options) {
         assertSupportRequestCurrent(refreshedGuard)
         return result
       } catch (retryError) {
-        throw normalizeSupportRequestError(retryError, refreshedGuard)
+        throw normalizeProfileRequestError(
+          refreshed,
+          nextBound.profile,
+          normalizeSupportRequestError(retryError, refreshedGuard)
+        )
       } finally {
         finishSupportRequestGuard(refreshedGuard)
       }

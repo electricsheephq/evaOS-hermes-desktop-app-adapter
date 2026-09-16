@@ -351,6 +351,27 @@ test('ordinary profile routing preserves a literal default member', async t => {
   assert.equal(requested, 'default')
 })
 
+test('ordinary upstream profile refusals name the authorized selector', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-customer-refusal-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeScopedEnrollment(statePath)
+  const runtime = makeManagedRuntime(statePath, {
+    fetchJson: async () => {
+      const error = new Error('403: forbidden')
+      error.statusCode = 403
+      throw error
+    }
+  })
+  t.after(() => runtime.close())
+
+  await assert.rejects(
+    runtime.requestApi({ path: '/api/cron/jobs?profile=beta', profile: 'beta' }),
+    error => error.statusCode === 403 && error.code === 'profile-mismatch' &&
+      error.message === 'profile beta is not authorized for this session'
+  )
+})
+
 test('ordinary all scope fans out to concrete profiles for metadata, sessions, and cron', async t => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-customer-all-'))
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
