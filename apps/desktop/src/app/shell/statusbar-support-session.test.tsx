@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { I18nProvider } from '@/i18n'
 import { TRANSLATIONS } from '@/i18n/catalog'
 import { $statusbarVisible } from '@/store/statusbar-prefs'
-import { $evaManagedStatus, $supportPickerOpen, setSupportPickerOpen } from '@/store/support-picker'
+import { $evaManagedStatus, $supportPickerOpen, runSupportSessionAction, setSupportPickerOpen } from '@/store/support-picker'
 
 import { supportSessionStatusbarItem } from './hooks/use-statusbar-items'
 import { TitlebarControls } from './titlebar-controls'
@@ -24,14 +24,11 @@ describe('support-session shell indicator', () => {
   it('is locked, links to Gateways, and runs the switch/end menu actions only while active', async () => {
     expect(supportSessionStatusbarItem(null, TRANSLATIONS.en.delegatedSupport).hidden).toBe(true)
     const endSupportSession = vi.fn().mockResolvedValue({ ok: true })
+    const status = vi.fn().mockRejectedValue(new Error('status unavailable'))
     Object.defineProperty(window, 'hermesDesktop', {
       configurable: true,
       value: {
-        eva: {
-          status: vi.fn().mockResolvedValue(active),
-          switchSupportTarget: vi.fn().mockResolvedValue(active),
-          endSupportSession
-        }
+        eva: { status, switchSupportTarget: vi.fn().mockResolvedValue(active), endSupportSession }
       }
     })
     const item = supportSessionStatusbarItem(active, TRANSLATIONS.en.delegatedSupport)
@@ -39,8 +36,11 @@ describe('support-session shell indicator', () => {
     expect(item.menuItems?.[0]).toMatchObject({ to: '/settings?tab=gateway' })
     item.menuItems?.[1].onSelect?.()
     await waitFor(() => expect($supportPickerOpen.get()).toBe(true))
+    expect(status).not.toHaveBeenCalled()
     item.menuItems?.[2].onSelect?.()
     await waitFor(() => expect(endSupportSession).toHaveBeenCalledOnce())
+    endSupportSession.mockResolvedValueOnce({ ok: false })
+    await expect(runSupportSessionAction('end')).rejects.toThrow('Support session remains active')
   })
 
   it('renders exactly one titlebar fallback when the statusbar is hidden', async () => {

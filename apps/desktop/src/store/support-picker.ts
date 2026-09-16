@@ -33,10 +33,11 @@ export async function refreshEvaManagedStatus() {
 
 export async function runSupportSessionAction(action: 'end' | 'switch') {
   if (action === 'switch') {
-    await window.hermesDesktop.eva.switchSupportTarget()
+    const status = await window.hermesDesktop.eva.switchSupportTarget()
+    $evaManagedStatus.set({ ...status })
     setSupportPickerOpen(true)
-  } else {
-    await window.hermesDesktop.eva.endSupportSession()
+    return status
   }
-  return refreshEvaManagedStatus()
+  const ended = await window.hermesDesktop.eva.endSupportSession()
+  return ended.ok ? refreshEvaManagedStatus().catch(() => $evaManagedStatus.get()) : Promise.reject(new Error('Support session remains active'))
 }
