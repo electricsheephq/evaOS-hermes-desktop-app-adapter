@@ -48,7 +48,7 @@ import { $billingSettingsRequest } from '@/store/billing-block'
 import { $desktopBoot } from '@/store/boot'
 import { requestVoiceConversationStart } from '@/store/composer'
 import { $activeConnectionId } from '@/store/connections'
-import { $cronReviewRequest, setCronFocusJobId } from '@/store/cron'
+import { $cronReviewRequest, cronJobIdentity, setCronFocusJobId } from '@/store/cron'
 import { requestGatewayForProfile } from '@/store/gateway'
 import { $pinnedSessionIds, pinSession, restoreWorktree, unpinSession } from '@/store/layout'
 import { notifyError } from '@/store/notifications'
@@ -1091,8 +1091,8 @@ export function ContribWiring({ children }: { children: ReactNode }) {
     onEdit: editMessage,
     onLoadMoreMessaging: loadMoreMessagingForPlatform,
     onLoadMoreSessions: loadMoreSessions,
-    onManageCronJob: jobId => {
-      setCronFocusJobId(jobId)
+    onManageCronJob: job => {
+      setCronFocusJobId(cronJobIdentity(job))
       navigate(CRON_ROUTE)
     },
     onNavigate: selectSidebarItem,

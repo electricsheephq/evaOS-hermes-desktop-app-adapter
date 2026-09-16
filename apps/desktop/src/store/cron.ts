@@ -2,6 +2,9 @@ import { atom } from 'nanostores'
 
 import type { CronJob, CronJobList, ProfileReadError } from '@/types/hermes'
 
+export const cronJobIdentity = (job: Pick<CronJob, 'id' | 'profile'>): string =>
+  JSON.stringify([job.profile ?? '', job.id])
+
 // Cron *jobs* (not run sessions) power the sidebar "Cron jobs" section. Listing
 // the job — schedule, state, live next-run countdown — makes the job the
 // first-class entity; its runs (sessions) resolve under it in the cron detail.

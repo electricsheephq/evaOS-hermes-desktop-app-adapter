@@ -14,7 +14,7 @@ import { useI18n } from '@/i18n'
 import { fmtDayTime, relativeTime } from '@/lib/time'
 import { cn } from '@/lib/utils'
 import { confirm } from '@/store/confirm'
-import { updateCronJobs } from '@/store/cron'
+import { cronJobIdentity, updateCronJobs } from '@/store/cron'
 import { $changeEventsAvailable, $cronChangeTick } from '@/store/live-sync'
 import { notify, notifyError } from '@/store/notifications'
 import { $selectedStoredSessionId } from '@/store/session'
@@ -42,10 +42,6 @@ const PEEK_BACKSTOP_INTERVAL_MS = 60_000
 // steps on demand (mirrors the messaging sections in the sidebar).
 const INITIAL_VISIBLE_JOBS = 3
 const LOAD_MORE_STEP = 10
-
-export function cronJobIdentity(job: Pick<CronJob, 'id' | 'profile'>): string {
-  return JSON.stringify([job.profile ?? '', job.id])
-}
 
 export function replaceCronJobRow(rows: CronJob[], job: CronJob, updated: CronJob): CronJob[] {
   const identity = cronJobIdentity(job)
@@ -90,7 +86,7 @@ interface SidebarCronJobsSectionProps {
   // Open a run session's chat (1 click to output).
   onOpenRun: (sessionId: string) => void
   // Open the full Cron page focused on this job (manage / full history).
-  onManageJob: (jobId: string) => void
+  onManageJob: (job: CronJob) => void
   // Fire the job now.
   onTriggerJob: (job: CronJob) => Promise<void>
   onToggle: () => void
@@ -231,7 +227,7 @@ export function SidebarCronJobsSection({
                 job={job}
                 key={identity}
                 nowMs={nowMs}
-                onManage={() => onManageJob(job.id)}
+                onManage={() => onManageJob(job)}
                 onOpenRun={onOpenRun}
                 onTogglePeek={() => setPeekJobKey(prev => (prev === identity ? null : identity))}
                 onTrigger={() => triggerJob(job)}

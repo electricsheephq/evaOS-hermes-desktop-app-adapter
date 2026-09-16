@@ -49,7 +49,7 @@ import { isManagedEvaosAgent, managedProviderDisplayValue } from '@/i18n/managed
 import { AlertTriangle } from '@/lib/icons'
 import { requestModelOptions } from '@/lib/model-options'
 import { asText } from '@/lib/text'
-import { $cronFocusJobId, $cronJobs, invalidateCronJobsRequests, setCronFocusJobId } from '@/store/cron'
+import { $cronFocusJobId, $cronJobs, cronJobIdentity, invalidateCronJobsRequests, setCronFocusJobId } from '@/store/cron'
 import { $changeEventsAvailable, $cronChangeTick } from '@/store/live-sync'
 import { notify, notifyError } from '@/store/notifications'
 import { $profileScope, ALL_PROFILES } from '@/store/profile'
@@ -385,11 +385,11 @@ export function CronView({ onClose, onOpenSession, setStatusbarItemGroup: _setSt
       return
     }
 
-    const match = jobs.find(job => job.id === focusJobId || jobName(job) === focusJobId)
+    const match = jobs.find(job => cronJobIdentity(job) === focusJobId || jobName(job) === focusJobId)
 
     if (match) {
-      setSelectedJobId(match.id)
-      pendingScrollRef.current = match.id
+      setSelectedJobId(cronJobIdentity(match))
+      pendingScrollRef.current = cronJobIdentity(match)
     }
 
     setCronFocusJobId(null)
@@ -418,7 +418,7 @@ export function CronView({ onClose, onOpenSession, setStatusbarItemGroup: _setSt
   // Detail always reflects a concrete job: the explicitly selected one, else the
   // first visible row, so the right pane is never empty while jobs exist.
   const selectedJob = useMemo(
-    () => visibleJobs.find(job => job.id === selectedJobId) ?? visibleJobs[0] ?? null,
+    () => visibleJobs.find(job => cronJobIdentity(job) === selectedJobId) ?? visibleJobs[0] ?? null,
     [visibleJobs, selectedJobId]
   )
 
@@ -427,7 +427,7 @@ export function CronView({ onClose, onOpenSession, setStatusbarItemGroup: _setSt
   useEffect(() => {
     const target = pendingScrollRef.current
 
-    if (!target || selectedJob?.id !== target) {
+    if (!target || !selectedJob || cronJobIdentity(selectedJob) !== target) {
       return
     }
 
@@ -665,15 +665,15 @@ export function CronView({ onClose, onOpenSession, setStatusbarItemGroup: _setSt
           >
             {visibleJobs.map(job => (
               <CronJobListRow
-                active={selectedJob?.id === job.id}
+                active={selectedJob ? cronJobIdentity(selectedJob) === cronJobIdentity(job) : false}
                 job={job}
-                key={job.id}
+                key={cronJobIdentity(job)}
                 menuItems={[
                   { icon: 'edit', label: c.edit, onSelect: () => setEditor({ mode: 'edit', job }) },
                   { icon: 'trash', label: t.common.delete, onSelect: () => setPendingDelete(job), tone: 'danger' }
                 ]}
                 menuLabel={c.manage}
-                onSelect={() => setSelectedJobId(job.id)}
+                onSelect={() => setSelectedJobId(cronJobIdentity(job))}
               />
             ))}
             {visibleJobs.length === 0 && (
@@ -774,7 +774,7 @@ function CronJobListRow({
       menuItems={menuItems}
       menuLabel={menuLabel}
       onSelect={onSelect}
-      rowKey={job.id}
+      rowKey={cronJobIdentity(job)}
       title={jobTitle(job)}
     />
   )

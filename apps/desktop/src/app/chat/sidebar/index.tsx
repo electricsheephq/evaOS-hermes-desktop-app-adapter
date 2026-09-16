@@ -318,7 +318,7 @@ interface ChatSidebarProps extends React.ComponentProps<typeof Sidebar> {
    *  buttons), which land a fresh session exactly where it's dropped. The
    *  context-menu "Open in split" path passes just a `dir`. */
   onNewSessionSplit: NewSessionSplitHandler
-  onManageCronJob: (jobId: string) => void
+  onManageCronJob: (job: CronJob) => void
   onTriggerCronJob: (job: CronJob) => Promise<void>
 }
 
