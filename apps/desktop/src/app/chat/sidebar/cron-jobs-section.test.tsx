@@ -1,12 +1,14 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { cronJobIdentity } from '@/store/cron'
 import type { CronJob } from '@/types/hermes'
 
-import { removeCronJobRow, replaceCronJobRow, SidebarCronJobsSection } from './cron-jobs-section'
+import { SidebarCronJobsSection } from './cron-jobs-section'
 
-afterEach(cleanup)
+afterEach(() => {
+  cleanup()
+  delete (window as { hermesDesktop?: unknown }).hermesDesktop
+})
 
 describe('SidebarCronJobsSection', () => {
   it('renders healthy jobs beside a visible partial-profile failure', () => {
@@ -29,14 +31,36 @@ describe('SidebarCronJobsSection', () => {
     expect(screen.getByText('Gamma job')).toBeTruthy()
   })
 
-  it('keeps same-id jobs isolated by profile during updates, deletion, and triggering', () => {
-    const alpha = { enabled: true, id: 'shared-job', profile: 'alpha', state: 'scheduled' } satisfies CronJob
-    const beta = { enabled: true, id: 'shared-job', profile: 'beta', state: 'scheduled' } satisfies CronJob
-    const paused = replaceCronJobRow([alpha, beta], beta, { ...beta, state: 'paused' })
+  it('keeps the alpha trigger idle while a same-id beta job is busy', async () => {
+    const alpha = { enabled: true, id: 'shared-job', name: 'Alpha job', profile: 'alpha' } satisfies CronJob
+    const beta = { enabled: true, id: 'shared-job', name: 'Beta job', profile: 'beta' } satisfies CronJob
+    let release = () => undefined
+    const onTriggerJob = vi.fn(
+      () => new Promise<void>(resolve => {
+        release = resolve
+      })
+    )
 
-    expect(paused).toEqual([alpha, { ...beta, state: 'paused' }])
-    expect(removeCronJobRow(paused, beta)).toEqual([alpha])
-    expect(cronJobIdentity(alpha)).not.toBe(cronJobIdentity(beta))
+    render(
+      <SidebarCronJobsSection
+        errors={[]}
+        jobs={[alpha, beta]}
+        label="Scheduled jobs"
+        onManageJob={vi.fn()}
+        onOpenRun={vi.fn()}
+        onToggle={vi.fn()}
+        onTriggerJob={onTriggerJob}
+        open
+      />
+    )
+
+    const triggers = screen.getAllByRole('button', { name: 'Trigger now' })
+    fireEvent.click(triggers[1])
+    await waitFor(() => expect((triggers[1] as HTMLButtonElement).disabled).toBe(true))
+    expect((triggers[0] as HTMLButtonElement).disabled).toBe(false)
+    expect(onTriggerJob).toHaveBeenCalledWith(beta)
+    release()
+    await waitFor(() => expect((triggers[1] as HTMLButtonElement).disabled).toBe(false))
   })
 
   it('passes the selected profile with a same-id job to management', () => {
@@ -59,5 +83,29 @@ describe('SidebarCronJobsSection', () => {
 
     fireEvent.click(screen.getAllByRole('button', { name: 'Manage' })[1])
     expect(onManageJob).toHaveBeenCalledWith(beta)
+  })
+
+  it('routes a beta row run-history request through the beta query path', async () => {
+    const api = vi.fn(async () => [] as never)
+    ;(window as { hermesDesktop?: unknown }).hermesDesktop = { api }
+    const beta = { enabled: true, id: 'shared-job', name: 'Beta job', profile: 'beta' } satisfies CronJob
+
+    render(
+      <SidebarCronJobsSection
+        errors={[]}
+        jobs={[beta]}
+        label="Scheduled jobs"
+        onManageJob={vi.fn()}
+        onOpenRun={vi.fn()}
+        onToggle={vi.fn()}
+        onTriggerJob={vi.fn()}
+        open
+      />
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show runs' }))
+    await waitFor(() =>
+      expect(api.mock.calls.at(-1)?.[0].path).toBe('/api/cron/jobs/shared-job/runs?limit=5&profile=beta')
+    )
   })
 })

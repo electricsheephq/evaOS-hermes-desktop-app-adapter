@@ -1,11 +1,12 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 
+import { removeCronJobRow, replaceCronJobRow } from '../app/chat/sidebar/cron-jobs-section'
+
 import {
   $cronJobErrors,
   $cronJobs,
   beginCronJobsRequest,
   commitCronJobsRequest,
-  cronJobIdentity,
   setCronJobs,
   updateCronJobs
 } from './cron'
@@ -59,13 +60,18 @@ describe('cron jobs request fencing', () => {
 })
 
 describe('cron job identity', () => {
-  it('separates same-id row and busy-state keys owned by different profiles', () => {
-    const alpha = cronJobIdentity({ id: 'daily', profile: 'alpha' })
-    const beta = cronJobIdentity({ id: 'daily', profile: 'beta' })
-    const busy = new Set([beta])
+  it('mutates and deletes only the selected profile when job ids match', () => {
+    const alpha = { enabled: true, id: 'daily', profile: 'alpha', state: 'scheduled' } as never
+    const beta = { enabled: true, id: 'daily', profile: 'beta', state: 'scheduled' } as never
+    const alphaSnapshot = structuredClone(alpha)
+    setCronJobs([alpha, beta])
 
-    expect(alpha).not.toBe(beta)
-    expect(busy.has(alpha)).toBe(false)
-    expect(busy.has(beta)).toBe(true)
+    updateCronJobs(rows => replaceCronJobRow(rows, beta, { ...beta, state: 'paused' }))
+    expect($cronJobs.get()[0]).toBe(alpha)
+    expect($cronJobs.get()[0]).toEqual(alphaSnapshot)
+    expect($cronJobs.get()[1]).toEqual({ ...beta, state: 'paused' })
+
+    updateCronJobs(rows => removeCronJobRow(rows, beta))
+    expect($cronJobs.get()).toEqual([alphaSnapshot])
   })
 })
