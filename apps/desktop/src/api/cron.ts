@@ -47,7 +47,7 @@ export function getCronJob(jobId: string): Promise<CronJob> {
 
 export async function getCronJobRuns(jobId: string, limit = 20, profile?: string): Promise<SessionInfo[]> {
   const { runs } = await hermesApi<{ runs: SessionInfo[] }>({
-    ...profileScoped(),
+    ...profileScoped(profile),
     ...connectionScoped(),
     path: `/api/cron/jobs/${encodeURIComponent(jobId)}/runs?limit=${limit}${profile ? `&profile=${encodeURIComponent(profile)}` : ''}`
   })
@@ -80,7 +80,7 @@ export function createCronJob(body: CronJobCreatePayload): Promise<CronJob> {
 
 export function updateCronJob(jobId: string, updates: CronJobUpdates, profile?: string): Promise<CronJob> {
   return hermesApi<CronJob>({
-    ...profileScoped(),
+    ...profileScoped(profile),
     ...connectionScoped(),
     path: `/api/cron/jobs/${encodeURIComponent(jobId)}${cronProfileSuffix(profile)}`,
     method: 'PUT',
@@ -90,7 +90,7 @@ export function updateCronJob(jobId: string, updates: CronJobUpdates, profile?: 
 
 export function pauseCronJob(jobId: string, profile?: string): Promise<CronJob> {
   return hermesApi<CronJob>({
-    ...profileScoped(),
+    ...profileScoped(profile),
     ...connectionScoped(),
     path: `/api/cron/jobs/${encodeURIComponent(jobId)}/pause${cronProfileSuffix(profile)}`,
     method: 'POST'
@@ -99,7 +99,7 @@ export function pauseCronJob(jobId: string, profile?: string): Promise<CronJob> 
 
 export function resumeCronJob(jobId: string, profile?: string): Promise<CronJob> {
   return hermesApi<CronJob>({
-    ...profileScoped(),
+    ...profileScoped(profile),
     ...connectionScoped(),
     path: `/api/cron/jobs/${encodeURIComponent(jobId)}/resume${cronProfileSuffix(profile)}`,
     method: 'POST'
@@ -108,7 +108,7 @@ export function resumeCronJob(jobId: string, profile?: string): Promise<CronJob>
 
 export function triggerCronJob(jobId: string, profile?: string): Promise<CronJob> {
   return hermesApi<CronJob>({
-    ...profileScoped(),
+    ...profileScoped(profile),
     ...connectionScoped(),
     path: `/api/cron/jobs/${encodeURIComponent(jobId)}/trigger${cronProfileSuffix(profile)}`,
     method: 'POST',
@@ -118,7 +118,7 @@ export function triggerCronJob(jobId: string, profile?: string): Promise<CronJob
 
 export function deleteCronJob(jobId: string, profile?: string): Promise<{ ok: boolean }> {
   return hermesApi<{ ok: boolean }>({
-    ...profileScoped(),
+    ...profileScoped(profile),
     ...connectionScoped(),
     path: `/api/cron/jobs/${encodeURIComponent(jobId)}${cronProfileSuffix(profile)}`,
     method: 'DELETE'
