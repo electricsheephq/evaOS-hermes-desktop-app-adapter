@@ -228,7 +228,7 @@ function writeScopedEnrollment(statePath) {
   fs.writeFileSync(statePath, JSON.stringify(state))
 }
 
-function parsedScopedEnrollment() {
+function parsedScopedEnrollment(allowedProfiles = ['alpha', 'beta', 'gamma']) {
   return normalizeHermesEnrollment({
     schema_version: 'evaos.hermes_desktop_enrollment.v1',
     runtime: 'hermes',
@@ -238,7 +238,7 @@ function parsedScopedEnrollment() {
       session_token: 'fixture-runtime-session',
       expires_at: FUTURE,
       agent_id: 'alpha',
-      allowed_profiles: ['alpha', 'beta', 'gamma'],
+      allowed_profiles: allowedProfiles,
       primary_profile: 'alpha',
       profile_admin: true,
       agent_display_name: 'Alpha'
@@ -490,6 +490,49 @@ test('ordinary all scope fans out to concrete profiles for metadata, sessions, a
 
   await single.requestApi({ path: '/api/cron/jobs?profile=all', profile: 'alpha' })
   assert.deepEqual(singleRequests.map(url => url.searchParams.get('profile')), ['alpha'])
+})
+
+test('ordinary all scope fans out project tree and pull-request reads', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-customer-projects-all-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeEnrollment(statePath)
+  const requests = []
+  const runtime = makeManagedRuntime(statePath, {
+    launchRuntime: async () => parsedScopedEnrollment(),
+    fetchJson: async (url, _token, options) => {
+      const parsed = new URL(url)
+      const profile = parsed.searchParams.get('profile')
+      requests.push({ path: parsed.pathname, profile })
+      if (parsed.pathname === '/api/profiles/projects/tree') {
+        return { projects: [{ id: profile, path: `/${profile}`, previewSessions: [], repos: [] }], errors: [] }
+      }
+      assert.equal(options.method, 'POST')
+      return { pull_requests: {}, scanned: [] }
+    }
+  })
+  t.after(() => runtime.close())
+
+  await runtime.requestApi({ path: '/api/profiles/projects/tree?profile=all' })
+  await runtime.requestApi({ method: 'POST', path: '/api/profiles/sessions/pull-requests?profile=all', body: { ids: [] } })
+  assert.deepEqual(requests.map(entry => entry.profile), ['alpha', 'beta', 'gamma', 'alpha', 'beta', 'gamma'])
+  assert.ok(requests.every(entry => entry.profile !== 'all'))
+
+  const singlePath = path.join(directory, 'single-enrollment.json')
+  writeEnrollment(singlePath)
+  const singleRequests = []
+  const single = makeManagedRuntime(singlePath, {
+    launchRuntime: async () => parsedScopedEnrollment(['alpha']),
+    fetchJson: async url => {
+      const parsed = new URL(url)
+      singleRequests.push(parsed.searchParams.get('profile'))
+      return parsed.pathname.endsWith('/tree') ? { projects: [], errors: [] } : { pull_requests: {}, scanned: [] }
+    }
+  })
+  t.after(() => single.close())
+  await single.requestApi({ path: '/api/profiles/projects/tree' })
+  await single.requestApi({ method: 'POST', path: '/api/profiles/sessions/pull-requests', body: { ids: [] } })
+  assert.deepEqual(singleRequests, ['alpha', 'alpha'])
 })
 
 function sealExistingState(statePath) {

@@ -2369,13 +2369,15 @@ function createEvaManagedRuntime(options) {
           supportProfileError
         })
       }
-      if (supportRequest && String(request?.method || 'GET').toUpperCase() === 'GET' &&
-        requestPath === '/api/profiles/projects/tree' && !parsedRequest.searchParams.has('profile')) {
+      if (String(request?.method || 'GET').toUpperCase() === 'GET' &&
+        requestPath === '/api/profiles/projects/tree' &&
+        (!parsedRequest.searchParams.has('profile') || parsedRequest.searchParams.get('profile') === 'all')) {
         assertEvaManagedApiRequestAllowed({ ...request, profile: supportProfileFor(runtime, request?.profile) })
         return await requestDelegatedProjectTree(runtime, request, retry)
       }
-      if (supportRequest && String(request?.method || 'GET').toUpperCase() === 'POST' &&
-        requestPath === '/api/profiles/sessions/pull-requests' && !parsedRequest.searchParams.has('profile')) {
+      if (String(request?.method || 'GET').toUpperCase() === 'POST' &&
+        requestPath === '/api/profiles/sessions/pull-requests' &&
+        (!parsedRequest.searchParams.has('profile') || parsedRequest.searchParams.get('profile') === 'all')) {
         assertEvaManagedApiRequestAllowed({ ...request, profile: supportProfileFor(runtime, request?.profile) })
         return await requestDelegatedPullRequests(runtime, request, retry)
       }
