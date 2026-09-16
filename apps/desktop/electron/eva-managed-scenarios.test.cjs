@@ -38,12 +38,16 @@ function writeEnrollment(statePath, overrides = {}) {
       runtime: overrides.runtime === null
         ? null
         : {
+            schema_version: EVA_MANAGED_POLICY.enrollmentSchemaVersion,
             token: overrides.runtimeToken ?? 'runtime-session',
             expires_at: FUTURE,
             base_url: MANAGED_BASE_URL,
             agent_id: 'main',
+            allowed_profiles: ['main'],
             agent_display_name: overrides.agentDisplayName ?? 'Atris',
             customer_id: 'customer-one',
+            primary_profile: 'main',
+            profile_admin: false,
             runtime: 'hermes'
           }
     })
@@ -178,6 +182,10 @@ test('managed.signin-assignment-chat', async t => {
         customerId: 'customer-one',
         runtime: 'hermes',
         agentId: 'assigned-agent',
+        allowedProfiles: ['assigned-agent', 'main'],
+        profile: 'assigned-agent',
+        profileAdmin: true,
+        sessionKind: 'customer',
         baseUrl: MANAGED_BASE_URL,
         token: 'assigned-runtime-session',
         expiresAt: FUTURE

@@ -3,7 +3,7 @@ const { version: EVA_DESKTOP_PACKAGE_VERSION } = require('../package.json')
 
 const EVA_MANAGED_POLICY = Object.freeze({
   schemaVersion: 'evaos.eva_desktop_managed.v1',
-  enrollmentSchemaVersion: 'evaos.hermes_desktop_enrollment.v1',
+  enrollmentSchemaVersion: 'evaos.hermes_desktop_enrollment.v2',
   productName: 'evaOS Agent',
   dashboardAuthUrl: 'https://www.electricsheephq.com/desktop-auth',
   brokerUrl: 'https://rhfojelkgtwcxnrfhtlj.supabase.co/functions/v1/desktop-runtime-session',

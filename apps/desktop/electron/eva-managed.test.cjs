@@ -449,7 +449,7 @@ test('runtime launch lets the broker select the account and assigned agent', asy
       observed = { url, init, body: JSON.parse(init.body) }
       return new Response(
         JSON.stringify({
-          schema_version: 'evaos.hermes_desktop_enrollment.v1',
+          schema_version: 'evaos.hermes_desktop_enrollment.v2',
           runtime: 'hermes',
           customer_id: 'jackie-david',
           remote_backend: {
@@ -708,7 +708,7 @@ test('managed enrollment accepts server-selected accounts and rejects mismatched
   const payload = {
     ok: true,
     session: { role: 'owner' },
-    schema_version: 'evaos.hermes_desktop_enrollment.v1',
+    schema_version: 'evaos.hermes_desktop_enrollment.v2',
     runtime: 'hermes',
     customer_id: 'jackie-david',
     remote_backend: {
@@ -807,7 +807,7 @@ test('managed enrollment accepts server-selected accounts and rejects mismatched
 test('delegated support enrollment requires a bounded assignment and presentation labels', () => {
   const now = Date.now()
   const payload = {
-    schema_version: 'evaos.hermes_desktop_enrollment.v1',
+    schema_version: 'evaos.hermes_desktop_enrollment.v2',
     runtime: 'hermes',
     customer_id: 'customer-one',
     remote_backend: {

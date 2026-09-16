@@ -361,11 +361,15 @@ function createEvaManagedRuntime(options) {
     let runtime = null
     if (desktop) {
       try {
+        if (parsed.runtime?.schema_version !== EVA_MANAGED_POLICY.enrollmentSchemaVersion) {
+          throw new Error('persisted enrollment schema is not current')
+        }
         const persistedDisplayName = parsed.runtime?.agent_display_name
         if (typeof persistedDisplayName !== 'string' || !persistedDisplayName.trim()) {
           throw new Error('legacy enrollment has no assigned-agent display label')
         }
-        runtime = normalizeHermesEnrollment({
+        const persistedAllowedProfiles = parsed.runtime?.allowed_profiles
+        const normalizedRuntime = normalizeHermesEnrollment({
           schema_version: EVA_MANAGED_POLICY.enrollmentSchemaVersion,
           runtime: parsed.runtime?.runtime,
           customer_id: parsed.runtime?.customer_id,
@@ -380,6 +384,14 @@ function createEvaManagedRuntime(options) {
             agent_display_name: parsed.runtime?.agent_display_name
           }
         })
+        if (
+          !Array.isArray(persistedAllowedProfiles) ||
+          persistedAllowedProfiles.length !== normalizedRuntime.allowedProfiles.length ||
+          persistedAllowedProfiles.some((profile, index) => profile !== normalizedRuntime.allowedProfiles[index])
+        ) {
+          throw new Error('persisted enrollment has no valid authorized profile scope')
+        }
+        runtime = normalizedRuntime
       } catch {
         runtime = null
       }
@@ -485,6 +497,7 @@ function createEvaManagedRuntime(options) {
       },
       runtime: state.runtime
         ? {
+            schema_version: state.runtime.schemaVersion,
             token: options.encryptSecret(state.runtime.token),
             expires_at: state.runtime.expiresAt,
             base_url: state.runtime.baseUrl,
