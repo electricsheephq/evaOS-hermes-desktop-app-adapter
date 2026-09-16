@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import type { CronJob } from '@/types/hermes'
 
-import { SidebarCronJobsSection } from './cron-jobs-section'
+import { cronJobIdentity, removeCronJobRow, replaceCronJobRow, SidebarCronJobsSection } from './cron-jobs-section'
 
 afterEach(cleanup)
 
@@ -26,5 +26,15 @@ describe('SidebarCronJobsSection', () => {
 
     expect(screen.getByRole('status').textContent).toContain('1 profile could not be read: beta: 502')
     expect(screen.getByText('Gamma job')).toBeTruthy()
+  })
+
+  it('keeps same-id jobs isolated by profile during updates, deletion, and triggering', () => {
+    const alpha = { enabled: true, id: 'shared-job', profile: 'alpha', state: 'scheduled' } satisfies CronJob
+    const beta = { enabled: true, id: 'shared-job', profile: 'beta', state: 'scheduled' } satisfies CronJob
+    const paused = replaceCronJobRow([alpha, beta], beta, { ...beta, state: 'paused' })
+
+    expect(paused).toEqual([alpha, { ...beta, state: 'paused' }])
+    expect(removeCronJobRow(paused, beta)).toEqual([alpha])
+    expect(cronJobIdentity(alpha)).not.toBe(cronJobIdentity(beta))
   })
 })

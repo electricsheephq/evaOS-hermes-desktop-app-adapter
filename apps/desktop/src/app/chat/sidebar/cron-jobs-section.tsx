@@ -43,6 +43,20 @@ const PEEK_BACKSTOP_INTERVAL_MS = 60_000
 const INITIAL_VISIBLE_JOBS = 3
 const LOAD_MORE_STEP = 10
 
+export function cronJobIdentity(job: Pick<CronJob, 'id' | 'profile'>): string {
+  return JSON.stringify([job.profile ?? '', job.id])
+}
+
+export function replaceCronJobRow(rows: CronJob[], job: CronJob, updated: CronJob): CronJob[] {
+  const identity = cronJobIdentity(job)
+  return rows.map(row => (cronJobIdentity(row) === identity ? { ...updated, profile: job.profile } : row))
+}
+
+export function removeCronJobRow(rows: CronJob[], job: CronJob): CronJob[] {
+  const identity = cronJobIdentity(job)
+  return rows.filter(row => cronJobIdentity(row) !== identity)
+}
+
 function nextRunMs(job: CronJob): null | number {
   if (!job.next_run_at) {
     return null
@@ -96,26 +110,26 @@ export function SidebarCronJobsSection({
   const c = t.cron
   const [nowMs, setNowMs] = useState(() => Date.now())
   // Single-open inline peek so the section stays scannable.
-  const [peekJobId, setPeekJobId] = useState<null | string>(null)
+  const [peekJobKey, setPeekJobKey] = useState<null | string>(null)
   // Rows revealed so far; starts compact, grows in steps via "load more".
   const [visibleCount, setVisibleCount] = useState(INITIAL_VISIBLE_JOBS)
-  const [triggeringJobIds, setTriggeringJobIds] = useState<ReadonlySet<string>>(() => new Set())
+  const [triggeringJobKeys, setTriggeringJobKeys] = useState<ReadonlySet<string>>(() => new Set())
   const triggerControllerRef = useRef<CronTriggerController | null>(null)
 
   // eslint-disable-next-line no-restricted-syntax -- controller mount identity, not an atom mirror
   useEffect(() => {
-    const controller = createCronTriggerController((jobId, running) => {
+    const controller = createCronTriggerController((jobKey, running) => {
       if (triggerControllerRef.current !== controller) {
         return
       }
 
-      setTriggeringJobIds(current => {
+      setTriggeringJobKeys(current => {
         const next = new Set(current)
 
         if (running) {
-          next.add(jobId)
+          next.add(jobKey)
         } else {
-          next.delete(jobId)
+          next.delete(jobKey)
         }
 
         return next
@@ -136,7 +150,7 @@ export function SidebarCronJobsSection({
       return
     }
 
-    void controller.run(job.id, () => onTriggerJob(job)).catch(() => undefined)
+    void controller.run(cronJobIdentity(job), () => onTriggerJob(job)).catch(() => undefined)
   }
 
   const visible = usePaneVisible()
@@ -205,19 +219,22 @@ export function SidebarCronJobsSection({
               )}
             </div>
           )}
-          {shown.map(job => (
-            <CronJobSidebarRow
-              busy={triggeringJobIds.has(job.id)}
-              expanded={peekJobId === job.id}
-              job={job}
-              key={job.id}
-              nowMs={nowMs}
-              onManage={() => onManageJob(job.id)}
-              onOpenRun={onOpenRun}
-              onTogglePeek={() => setPeekJobId(prev => (prev === job.id ? null : job.id))}
-              onTrigger={() => triggerJob(job)}
-            />
-          ))}
+          {shown.map(job => {
+            const identity = cronJobIdentity(job)
+            return (
+              <CronJobSidebarRow
+                busy={triggeringJobKeys.has(identity)}
+                expanded={peekJobKey === identity}
+                job={job}
+                key={identity}
+                nowMs={nowMs}
+                onManage={() => onManageJob(job.id)}
+                onOpenRun={onOpenRun}
+                onTogglePeek={() => setPeekJobKey(prev => (prev === identity ? null : identity))}
+                onTrigger={() => triggerJob(job)}
+              />
+            )
+          })}
           {hiddenCount > 0 && (
             <SidebarLoadMoreRow
               onClick={() => setVisibleCount(count => count + LOAD_MORE_STEP)}
@@ -266,7 +283,7 @@ function CronJobSidebarRow({
     try {
       const updated = isPaused ? await resumeCronJob(job.id, job.profile) : await pauseCronJob(job.id, job.profile)
 
-      updateCronJobs(rows => rows.map(row => (row.id === job.id ? { ...updated, profile: job.profile } : row)))
+      updateCronJobs(rows => replaceCronJobRow(rows, job, updated))
       notify({ kind: 'success', title: isPaused ? c.resumed : c.paused, message: label })
     } catch (err) {
       notifyError(err, c.failedUpdate)
@@ -287,7 +304,7 @@ function CronJobSidebarRow({
 
     try {
       await deleteCronJob(job.id, job.profile)
-      updateCronJobs(rows => rows.filter(row => row.id !== job.id))
+      updateCronJobs(rows => removeCronJobRow(rows, job))
       notify({ kind: 'success', title: c.deleted, message: label })
     } catch (err) {
       notifyError(err, c.failedDelete)
