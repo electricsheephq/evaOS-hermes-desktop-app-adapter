@@ -2363,7 +2363,8 @@ function createEvaManagedRuntime(options) {
         assertEvaManagedApiRequestAllowed({ ...request, profile: supportProfileFor(runtime, request?.profile) })
         return await requestDelegatedSessionList(runtime, request, runtime.allowedProfiles, retry)
       }
-      if (requestPath === '/api/profiles/sessions/sidebar') {
+      if (requestPath === '/api/profiles/sessions/sidebar' &&
+        (supportRequest || !parsedRequest.searchParams.has('profile') || parsedRequest.searchParams.get('profile') === 'all')) {
         assertEvaManagedApiRequestAllowed({ ...request, profile: supportProfileFor(runtime, request?.profile) })
         return await requestDelegatedSidebar(runtime, request, retry)
       }

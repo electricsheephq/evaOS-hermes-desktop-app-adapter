@@ -547,6 +547,36 @@ test('ordinary all scope fans out to concrete profiles for metadata, sessions, a
   assert.deepEqual(singleRequests.map(url => url.searchParams.get('profile')), ['alpha'])
 })
 
+test('ordinary sidebar routes a concrete selector once and fans out an absent selector', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-sidebar-scope-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeScopedEnrollment(statePath)
+  const requests = []
+  const runtime = makeManagedRuntime(statePath, {
+    fetchJson: async url => {
+      const parsed = new URL(url)
+      const profile = parsed.searchParams.get('profile')
+      requests.push(parsed)
+      if (parsed.pathname === '/api/profiles/sessions/sidebar') {
+        return { cron: { sessions: [] }, messaging: { sessions: [], total: 0 }, recents: { sessions: [{ id: profile, profile }] } }
+      }
+      return { sessions: [{ id: `${parsed.searchParams.get('source') ?? 'recent'}-${profile}` }], total: 1 }
+    }
+  })
+  t.after(() => runtime.close())
+
+  const concrete = await runtime.requestApi({ path: '/api/profiles/sessions/sidebar?profile=beta' })
+  assert.deepEqual(concrete.recents.sessions.map(row => row.profile), ['beta'])
+  assert.deepEqual(requests.map(url => url.searchParams.get('profile')), ['beta'])
+
+  requests.length = 0
+  const aggregate = await runtime.requestApi({ path: '/api/profiles/sessions/sidebar' })
+  assert.deepEqual([...new Set(aggregate.recents.sessions.map(row => row.profile))], ['alpha', 'beta', 'gamma'])
+  assert.equal(requests.length, 9)
+  assert.ok(requests.every(url => ['alpha', 'beta', 'gamma'].includes(url.searchParams.get('profile'))))
+})
+
 test('cron fan-out preserves healthy profiles and reports sanitized failures', async () => {
   const jobs = await requestAuthorizedCronJobs({
     runtime: { allowedProfiles: ['alpha', 'beta', 'gamma'], sessionKind: 'customer' },
