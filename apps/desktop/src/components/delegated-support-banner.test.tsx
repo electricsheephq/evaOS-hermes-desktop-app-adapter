@@ -68,7 +68,7 @@ describe('DelegatedSupportBanner', () => {
       supportEndFailed: true
     })
 
-    const endSupportSession = vi.fn().mockResolvedValue({ ok: true })
+    const endSupportSession = vi.fn().mockResolvedValue({ ok: false })
     Object.defineProperty(window, 'hermesDesktop', {
       configurable: true,
       value: { eva: { status, endSupportSession } }

@@ -2,12 +2,7 @@ import { useStore } from '@nanostores/react'
 import { useCallback, useEffect, useState } from 'react'
 
 import { useI18n } from '@/i18n'
-import {
-  $evaManagedStatus,
-  activeSupportSession,
-  refreshEvaManagedStatus,
-  runSupportSessionAction
-} from '@/store/support-picker'
+import { $evaManagedStatus, activeSupportSession, refreshEvaManagedStatus, runSupportSessionAction } from '@/store/support-picker'
 
 import { TITLEBAR_HEIGHT } from '../app/shell/titlebar'
 
@@ -76,6 +71,8 @@ export function DelegatedSupportBanner() {
 
     try {
       await runSupportSessionAction('end')
+    } catch {
+      refresh()
     } finally {
       setEnding(false)
     }
