@@ -449,7 +449,7 @@ test('runtime launch lets the broker select the account and assigned agent', asy
       observed = { url, init, body: JSON.parse(init.body) }
       return new Response(
         JSON.stringify({
-          schema_version: 'evaos.hermes_desktop_enrollment.v2',
+          schema_version: 'evaos.hermes_desktop_enrollment.v1',
           runtime: 'hermes',
           customer_id: 'jackie-david',
           remote_backend: {
@@ -704,11 +704,44 @@ test('account reset clears renderer account state while preserving global prefer
   assert.equal(values.get('hermes.desktop.keybinds'), '{"newChat":"Cmd+N"}')
 })
 
+test('managed enrollment pins the wire schema to the literal the broker emits', () => {
+  // This literal mirrors the broker's HERMES_DESKTOP_ENROLLMENT_SCHEMA_VERSION. It is
+  // spelled out here on purpose instead of being read from EVA_MANAGED_POLICY, so a
+  // policy-side bump cannot silently move the wire contract away from the broker.
+  const payload = {
+    schema_version: 'evaos.hermes_desktop_enrollment.v1',
+    runtime: 'hermes',
+    customer_id: 'fixture-account',
+    remote_backend: {
+      base_url: 'https://hermes-fixture-account.ecs.electricsheephq.com',
+      session_token: 'opaque-runtime-session',
+      expires_at: FUTURE,
+      agent_id: 'fixture-agent',
+      allowed_profiles: ['fixture-agent'],
+      primary_profile: 'fixture-agent',
+      profile_admin: false,
+      agent_display_name: 'Fixture agent'
+    }
+  }
+  const enrollment = normalizeHermesEnrollment(payload)
+  assert.equal(enrollment.schemaVersion, 'evaos.hermes_desktop_enrollment.v1')
+  assert.equal(enrollment.customerId, 'fixture-account')
+  assert.equal(enrollment.agentId, 'fixture-agent')
+
+  // The broker never emits a v2 enrollment. The version of the record this client
+  // persists on disk is tracked separately by persistedRuntimeRecordVersion.
+  assert.throws(
+    () => normalizeHermesEnrollment({ ...payload, schema_version: 'evaos.hermes_desktop_enrollment.v2' }),
+    error => error instanceof EvaBrokerError && error.code === 'invalid-enrollment'
+  )
+  assert.notEqual(EVA_MANAGED_POLICY.persistedRuntimeRecordVersion, EVA_MANAGED_POLICY.enrollmentSchemaVersion)
+})
+
 test('managed enrollment accepts server-selected accounts and rejects mismatched or malformed identities', () => {
   const payload = {
     ok: true,
     session: { role: 'owner' },
-    schema_version: 'evaos.hermes_desktop_enrollment.v2',
+    schema_version: 'evaos.hermes_desktop_enrollment.v1',
     runtime: 'hermes',
     customer_id: 'jackie-david',
     remote_backend: {
@@ -807,7 +840,7 @@ test('managed enrollment accepts server-selected accounts and rejects mismatched
 test('delegated support enrollment requires a bounded assignment and presentation labels', () => {
   const now = Date.now()
   const payload = {
-    schema_version: 'evaos.hermes_desktop_enrollment.v2',
+    schema_version: 'evaos.hermes_desktop_enrollment.v1',
     runtime: 'hermes',
     customer_id: 'customer-one',
     remote_backend: {

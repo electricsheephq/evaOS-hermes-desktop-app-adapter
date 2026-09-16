@@ -38,7 +38,7 @@ function writeEnrollment(statePath, overrides = {}) {
       runtime: overrides.runtime === null
         ? null
         : {
-            schema_version: EVA_MANAGED_POLICY.enrollmentSchemaVersion,
+            schema_version: EVA_MANAGED_POLICY.persistedRuntimeRecordVersion,
             token: overrides.runtimeToken ?? 'runtime-session',
             expires_at: FUTURE,
             base_url: MANAGED_BASE_URL,

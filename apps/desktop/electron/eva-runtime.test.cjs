@@ -16,7 +16,10 @@ const { requestAuthorizedCronJobs } = require('./eva-runtime-profile-scope.cjs')
 
 const FUTURE = '2099-07-23T12:00:00.000Z'
 const EXPIRED = '2020-07-23T12:00:00.000Z'
-const CURRENT_ENROLLMENT_SCHEMA = 'evaos.hermes_desktop_enrollment.v2'
+// Mirrors the broker's HERMES_DESKTOP_ENROLLMENT_SCHEMA_VERSION; the wire contract.
+const WIRE_ENROLLMENT_SCHEMA = 'evaos.hermes_desktop_enrollment.v1'
+// Version stamped on the runtime record this client persists on disk.
+const CURRENT_RECORD_SCHEMA = 'evaos.hermes_desktop_runtime_record.v2'
 
 function writeEnrollment(statePath) {
   fs.writeFileSync(
@@ -205,7 +208,7 @@ function writeActiveEnrollment(statePath) {
         email: 'employee@example.invalid'
       },
       runtime: {
-        schema_version: CURRENT_ENROLLMENT_SCHEMA,
+        schema_version: CURRENT_RECORD_SCHEMA,
         token: 'runtime-token',
         expires_at: FUTURE,
         base_url: 'https://hermes-customer-one.ecs.electricsheephq.com',
@@ -233,7 +236,7 @@ function writeScopedEnrollment(statePath) {
 
 function parsedScopedEnrollment(allowedProfiles = ['alpha', 'beta', 'gamma']) {
   return normalizeHermesEnrollment({
-    schema_version: CURRENT_ENROLLMENT_SCHEMA,
+    schema_version: WIRE_ENROLLMENT_SCHEMA,
     runtime: 'hermes',
     customer_id: 'fixture-account',
     remote_backend: {
@@ -255,6 +258,8 @@ test('cold launch discards a persisted v1 runtime and re-enrolls through the sig
   const statePath = path.join(directory, 'eva-enrollment.json')
   writeActiveEnrollment(statePath)
   const legacy = JSON.parse(fs.readFileSync(statePath, 'utf8'))
+  // A record written by an older client: it carries the wire enrollment string and
+  // no persisted-record version, so it must still be discarded exactly once.
   legacy.runtime.schema_version = 'evaos.hermes_desktop_enrollment.v1'
   legacy.runtime.primary_profile = 'alpha'
   delete legacy.runtime.allowed_profiles
@@ -286,7 +291,7 @@ test('cold launch reuses a valid persisted v2 runtime without re-enrolling', asy
   })
   t.after(() => runtime.close())
 
-  assert.equal(EVA_MANAGED_POLICY.enrollmentSchemaVersion, CURRENT_ENROLLMENT_SCHEMA)
+  assert.equal(EVA_MANAGED_POLICY.persistedRuntimeRecordVersion, CURRENT_RECORD_SCHEMA)
   assert.deepEqual(await runtime.authorizedProfiles(), ['alpha', 'beta', 'gamma'])
   assert.equal(launches, 0)
 })
@@ -324,13 +329,15 @@ test('persisted v2 ordinary runtime round-trips its authorized profile scope', a
   const persisted = JSON.parse(fs.readFileSync(statePath, 'utf8'))
   assert.deepEqual(persisted.runtime, {
     ...persisted.runtime,
-    schema_version: CURRENT_ENROLLMENT_SCHEMA,
+    schema_version: CURRENT_RECORD_SCHEMA,
     allowed_profiles: ['alpha', 'beta', 'gamma'],
     primary_profile: 'alpha',
     profile_admin: true
   })
+  // eva-runtime.cjs re-parses a persisted record through the wire normalizer, so the
+  // synthesized payload carries the wire constant, not the persisted-record version.
   const persistedEnrollment = normalizeHermesEnrollment({
-    schema_version: persisted.runtime.schema_version,
+    schema_version: WIRE_ENROLLMENT_SCHEMA,
     runtime: persisted.runtime.runtime,
     customer_id: persisted.runtime.customer_id,
     remote_backend: {
@@ -379,7 +386,7 @@ function makeManagedRuntime(statePath, overrides = {}) {
 
 function supportEnrollment(now = Date.now(), overrides = {}) {
   return {
-    schema_version: 'evaos.hermes_desktop_enrollment.v2',
+    schema_version: 'evaos.hermes_desktop_enrollment.v1',
     runtime: 'hermes',
     customer_id: 'customer-one',
     remote_backend: {
@@ -442,7 +449,7 @@ test('parsed non-admin enrollment rejects sibling reads before upstream access',
       session_token: 'fixture-runtime-session'
     },
     runtime: 'hermes',
-    schema_version: 'evaos.hermes_desktop_enrollment.v2'
+    schema_version: 'evaos.hermes_desktop_enrollment.v1'
   })
   const runtime = makeManagedRuntime(statePath, {
     launchRuntime: async () => enrollment,
@@ -1186,7 +1193,7 @@ test('restart resumes only the same support assignment and rejects actor or repl
       throw new EvaBrokerError('support assignment was revoked', 403, 'support_assignment_revoked')
     },
     launchRuntime: async () => ({
-      schemaVersion: 'evaos.hermes_desktop_enrollment.v2',
+      schemaVersion: 'evaos.hermes_desktop_enrollment.v1',
       customerId: 'customer-one',
       runtime: 'hermes',
       agentId: 'main',
@@ -2199,7 +2206,7 @@ test('cold launch replaces an expired runtime enrollment before connecting', asy
       launches += 1
       assert.equal(token, 'desktop-token')
       return {
-        schemaVersion: 'evaos.hermes_desktop_enrollment.v2',
+        schemaVersion: 'evaos.hermes_desktop_enrollment.v1',
         customerId: 'customer-one',
         runtime: 'hermes',
         agentId: 'main',
@@ -2375,7 +2382,7 @@ test('forced refresh supersedes an automatic enrollment without reusing its stal
       const index = launches
       await new Promise(resolve => releases.push(resolve))
       return {
-        schemaVersion: 'evaos.hermes_desktop_enrollment.v2',
+        schemaVersion: 'evaos.hermes_desktop_enrollment.v1',
         customerId: 'customer-one',
         runtime: 'hermes',
         agentId: 'main',
@@ -2433,7 +2440,7 @@ test('refresh preserves renderer state while reconnecting the same customer and 
   let rendererResets = 0
   const runtime = makeManagedRuntime(statePath, {
     launchRuntime: async () => ({
-      schemaVersion: 'evaos.hermes_desktop_enrollment.v2',
+      schemaVersion: 'evaos.hermes_desktop_enrollment.v1',
       customerId: 'customer-one',
       runtime: 'hermes',
       agentId: 'main',
@@ -2471,7 +2478,7 @@ test('refresh resets renderer state when either assignment identity changes', as
     let rendererResets = 0
     const runtime = makeManagedRuntime(statePath, {
       launchRuntime: async () => ({
-        schemaVersion: 'evaos.hermes_desktop_enrollment.v2',
+        schemaVersion: 'evaos.hermes_desktop_enrollment.v1',
         customerId: assignment.customerId,
         runtime: 'hermes',
         agentId: assignment.agentId,
@@ -2512,7 +2519,7 @@ test('production reauthentication errors trigger one runtime re-enrollment', asy
     launchRuntime: async () => {
       launches += 1
       return {
-        schemaVersion: 'evaos.hermes_desktop_enrollment.v2',
+        schemaVersion: 'evaos.hermes_desktop_enrollment.v1',
         customerId: 'customer-one',
         runtime: 'hermes',
         agentId: 'main',
@@ -2548,7 +2555,7 @@ test('PKCE sign-in keeps one verifier per attempt, rejects wrong callbacks, and 
     email: 'employee@example.invalid'
   }
   const enrollment = {
-    schemaVersion: 'evaos.hermes_desktop_enrollment.v2',
+    schemaVersion: 'evaos.hermes_desktop_enrollment.v1',
     customerId: 'customer-one',
     runtime: 'hermes',
     agentId: 'main',
@@ -2919,7 +2926,7 @@ test('a stale in-flight launch cannot restore backoff after auth invalidation', 
   let outcome = 'wait'
   const failure = new EvaBrokerError('Runtime enrollment is temporarily unavailable.', 500, 'vm_lookup_failed')
   const enrollment = {
-    schemaVersion: 'evaos.hermes_desktop_enrollment.v2',
+    schemaVersion: 'evaos.hermes_desktop_enrollment.v1',
     customerId: 'customer-one',
     runtime: 'hermes',
     agentId: 'main',
@@ -3993,7 +4000,7 @@ function freshRuntimeEnrollment() {
     profile: 'main',
     profileAdmin: false,
     runtime: 'hermes',
-    schemaVersion: 'evaos.hermes_desktop_enrollment.v2',
+    schemaVersion: 'evaos.hermes_desktop_enrollment.v1',
     sessionKind: 'customer',
     token: 'fresh-runtime-token'
   }
