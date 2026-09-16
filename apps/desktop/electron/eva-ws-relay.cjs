@@ -711,9 +711,8 @@ function buildMaskedClientTextFrame(payload, options = {}) {
 
 function profileMismatchCloseReason(error, code) {
   const message = String(error?.message || '')
-  return code === 'profile-mismatch' && /^profile [A-Za-z0-9_-]{1,120} is not authorized for this session$/.test(message)
-    ? message
-    : ''
+  const match = /^profile (.+) is not authorized for this session$/.exec(message)
+  return code === 'profile-mismatch' && MANAGED_PROFILE_RE.test(match?.[1] || '') ? message : ''
 }
 
 function policyCloseFrame(reason = '') {
