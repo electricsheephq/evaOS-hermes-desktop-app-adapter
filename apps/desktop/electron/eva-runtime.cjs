@@ -2004,11 +2004,20 @@ function createEvaManagedRuntime(options) {
   function bindSupportRequest(runtime, request) {
     if (runtime?.sessionKind !== 'delegated_support') {
       const parsed = new URL(String(request?.path || ''), 'http://eva-managed.invalid')
+      const queryProfiles = parsed.searchParams.getAll('profile')
       const bodyProfile = request?.body && typeof request.body === 'object' && !Array.isArray(request.body)
         ? request.body.profile
         : undefined
-      const carriedProfile = request?.profile ?? parsed.searchParams.get('profile') ?? bodyProfile
-      const profile = supportProfileFor(runtime, carriedProfile)
+      if (queryProfiles.length > 1) {
+        assertEvaManagedApiRequestAllowed({ ...request, profile: queryProfiles[0] }, { allowBroadProfileSelectors: false })
+      }
+      const queryProfile = queryProfiles[0]
+      const resolvedQueryProfile = queryProfile === undefined ? undefined : supportProfileFor(runtime, queryProfile)
+      const resolvedBodyProfile = bodyProfile === undefined ? undefined : supportProfileFor(runtime, bodyProfile)
+      if (resolvedQueryProfile !== undefined && resolvedBodyProfile !== undefined && resolvedQueryProfile !== resolvedBodyProfile) {
+        throw new EvaBrokerError('evaOS Agent blocked conflicting Hermes profiles.', 400, 'managed-policy')
+      }
+      const profile = resolvedQueryProfile ?? resolvedBodyProfile ?? supportProfileFor(runtime, request?.profile)
       if (parsed.searchParams.get('profile') === 'default' && profile !== 'default') {
         parsed.searchParams.set('profile', profile)
       }

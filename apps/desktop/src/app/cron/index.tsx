@@ -844,7 +844,7 @@ function CronJobDetail({
         </section>
       ) : null}
 
-      <CronJobRuns c={c} jobId={job.id} onOpenSession={onOpenSession} />
+      <CronJobRuns c={c} jobId={job.id} onOpenSession={onOpenSession} profile={job.profile} />
     </PanelDetail>
   )
 }
@@ -869,11 +869,13 @@ const RUNS_BACKSTOP_INTERVAL_MS = 60_000
 function CronJobRuns({
   c,
   jobId,
-  onOpenSession
+  onOpenSession,
+  profile
 }: {
   c: Translations['cron']
   jobId: string
   onOpenSession?: (sessionId: string) => void
+  profile?: string
 }) {
   const [runs, setRuns] = useState<null | SessionInfo[]>(null)
   const changeEventsAvailable = useStore($changeEventsAvailable)
@@ -883,7 +885,7 @@ function CronJobRuns({
     let cancelled = false
 
     const load = () =>
-      getCronJobRuns(jobId)
+      getCronJobRuns(jobId, 20, profile)
         .then(result => {
           if (!cancelled) {
             setRuns(result)
@@ -920,7 +922,7 @@ function CronJobRuns({
       document.removeEventListener('visibilitychange', onVisible)
     }
     // cronChangeTick: a fired run moves jobs.json bookkeeping → reload now.
-  }, [changeEventsAvailable, cronChangeTick, jobId])
+  }, [changeEventsAvailable, cronChangeTick, jobId, profile])
 
   return (
     <div>

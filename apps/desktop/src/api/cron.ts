@@ -41,11 +41,11 @@ export function getCronJob(jobId: string): Promise<CronJob> {
   })
 }
 
-export async function getCronJobRuns(jobId: string, limit = 20): Promise<SessionInfo[]> {
+export async function getCronJobRuns(jobId: string, limit = 20, profile?: string): Promise<SessionInfo[]> {
   const { runs } = await hermesApi<{ runs: SessionInfo[] }>({
     ...profileScoped(),
     ...connectionScoped(),
-    path: `/api/cron/jobs/${encodeURIComponent(jobId)}/runs?limit=${limit}`
+    path: `/api/cron/jobs/${encodeURIComponent(jobId)}/runs?limit=${limit}${profile ? `&profile=${encodeURIComponent(profile)}` : ''}`
   })
 
   return runs ?? []

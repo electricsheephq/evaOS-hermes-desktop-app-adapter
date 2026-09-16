@@ -388,14 +388,20 @@ test('ordinary managed REST binding honors query and body profile carriers from 
   await runtime.requestApi({ path: '/api/profiles/sessions?profile=beta' })
   await runtime.requestApi({ method: 'POST', path: '/api/profiles/sessions/hide', body: { profile: 'beta' } })
   await runtime.requestApi({ path: '/api/profiles/sessions?profile=default' })
+  await runtime.requestApi({ method: 'POST', path: '/api/cron/jobs/job-1/trigger?profile=beta', profile: 'all' })
 
   assert.equal(requests[0].url.searchParams.get('profile'), 'beta')
   assert.equal(requests[1].url.searchParams.get('profile'), 'beta')
   assert.equal(requests[1].body.profile, 'beta')
   assert.equal(requests[2].url.searchParams.get('profile'), 'alpha')
+  assert.equal(requests[3].url.searchParams.get('profile'), 'beta')
   await assert.rejects(
     runtime.requestApi({ path: '/api/profiles/sessions?profile=zeta' }),
     error => error.statusCode === 403 && error.code === 'profile-mismatch' && /profile zeta/.test(error.message)
+  )
+  await assert.rejects(
+    runtime.requestApi({ method: 'POST', path: '/api/profiles/sessions?profile=beta', body: { profile: 'gamma' } }),
+    error => error.statusCode === 400 && error.code === 'managed-policy'
   )
 })
 

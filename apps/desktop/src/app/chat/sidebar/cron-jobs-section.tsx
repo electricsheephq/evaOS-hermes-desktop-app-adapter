@@ -256,7 +256,7 @@ function CronJobSidebarRow({
         ? await resumeCronJob(job.id, job.profile)
         : await pauseCronJob(job.id, job.profile)
 
-      updateCronJobs(rows => rows.map(row => (row.id === job.id ? updated : row)))
+      updateCronJobs(rows => rows.map(row => (row.id === job.id ? { ...updated, profile: job.profile } : row)))
       notify({ kind: 'success', title: isPaused ? c.resumed : c.paused, message: label })
     } catch (err) {
       notifyError(err, c.failedUpdate)
@@ -380,12 +380,20 @@ function CronJobSidebarRow({
           </Tip>
         </SidebarRowShell>
       </ActionsContextMenu>
-      {expanded && <CronJobSidebarRuns jobId={job.id} onOpenRun={onOpenRun} />}
+      {expanded && <CronJobSidebarRuns jobId={job.id} onOpenRun={onOpenRun} profile={job.profile} />}
     </div>
   )
 }
 
-function CronJobSidebarRuns({ jobId, onOpenRun }: { jobId: string; onOpenRun: (sessionId: string) => void }) {
+function CronJobSidebarRuns({
+  jobId,
+  onOpenRun,
+  profile
+}: {
+  jobId: string
+  onOpenRun: (sessionId: string) => void
+  profile?: string
+}) {
   const { t } = useI18n()
   const c = t.cron
   const selectedSessionId = useStore($selectedStoredSessionId)
@@ -398,7 +406,7 @@ function CronJobSidebarRuns({ jobId, onOpenRun }: { jobId: string; onOpenRun: (s
     let cancelled = false
 
     const load = () =>
-      getCronJobRuns(jobId, PEEK_RUN_LIMIT)
+      getCronJobRuns(jobId, PEEK_RUN_LIMIT, profile)
         .then(result => {
           if (!cancelled) {
             setRuns(result)
@@ -435,7 +443,7 @@ function CronJobSidebarRuns({ jobId, onOpenRun }: { jobId: string; onOpenRun: (s
       window.clearInterval(intervalId)
     }
     // cronChangeTick: a fired run reloads the peek immediately.
-  }, [changeEventsAvailable, cronChangeTick, jobId, visible])
+  }, [changeEventsAvailable, cronChangeTick, jobId, profile, visible])
 
   return (
     <div className="mb-1 ml-[1.375rem] flex flex-col gap-px">
