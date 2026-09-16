@@ -234,9 +234,12 @@ export const zhHant = defineLocale({
   },
 
   delegatedSupport: {
+    sessionTitle: '支援工作階段',
     actingForCustomer: customer => `正在代表 ${customer}`,
     assignedAgent: agent => `代理：${agent}`,
     endsIn: countdown => `${countdown} 後結束`,
+    indicator: (customer, countdown) => `正在代表 ${customer} · ${countdown}`,
+    openSettings: '開啟支援工作階段設定',
     endSession: '結束支援工作階段',
     endingSession: '正在結束支援工作階段…',
     unavailable: '無法取得支援工作階段狀態。',

@@ -274,9 +274,12 @@ export const zh: Translations = {
   },
 
   delegatedSupport: {
+    sessionTitle: '支持会话',
     actingForCustomer: customer => `正在代表 ${customer}`,
     assignedAgent: agent => `智能体：${agent}`,
     endsIn: countdown => `${countdown} 后结束`,
+    indicator: (customer, countdown) => `正在代表 ${customer} · ${countdown}`,
+    openSettings: '打开支持会话设置',
     endSession: '结束支持会话',
     endingSession: '正在结束支持会话…',
     unavailable: '支持会话状态不可用。',

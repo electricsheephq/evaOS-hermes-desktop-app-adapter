@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import type { EvaManagedStatus } from '@/global'
 import { I18nProvider } from '@/i18n'
-import { setSupportPickerOpen } from '@/store/support-picker'
+import { $evaManagedStatus, setSupportPickerOpen } from '@/store/support-picker'
 
 import App from './index'
 
@@ -40,18 +40,19 @@ function supportStatus(): EvaManagedStatus {
 afterEach(() => {
   cleanup()
   vi.restoreAllMocks()
+  $evaManagedStatus.set(null)
   // The picker's open state is a renderer store; a test that opened it must
   // not leave the modal over the next test's banner.
   setSupportPickerOpen(false)
 })
 
 describe('app-root delegated support controls', () => {
-  it('retains the customer identity and working End control while connecting', async () => {
+  it('retains a working recovery End while connecting', async () => {
     const state = gateway.state
-    let status = supportStatus()
+    let status = { ...supportStatus(), delegatedSupportActive: false, supportCleanupPending: true }
 
     const endSupportSession = vi.fn(async () => {
-      status = { ...status, delegatedSupportActive: false }
+      status = { ...status, supportCleanupPending: false }
 
       return { ok: true }
     })
@@ -68,10 +69,10 @@ describe('app-root delegated support controls', () => {
     )
 
     expect(screen.getByText(state)).toBeTruthy()
-    expect(await screen.findByRole('region', { name: 'Acting for Customer' })).toBeTruthy()
+    expect(await screen.findByRole('region', { name: 'A previous support session still needs to be ended.' })).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'End support session' }))
     await waitFor(() => expect(endSupportSession).toHaveBeenCalledTimes(1))
-    await waitFor(() => expect(screen.queryByRole('region', { name: 'Acting for Customer' })).toBeNull())
+    await waitFor(() => expect(screen.queryByRole('region')).toBeNull())
     expect(screen.getByText(state)).toBeTruthy()
   })
 
@@ -143,13 +144,12 @@ describe('app-root delegated support controls', () => {
     await waitFor(() => expect(switchSupportTarget).toHaveBeenCalledTimes(2))
   })
 
-  it('offers Switch support target beside End during an active session', async () => {
+  it('renders no fixed root strip during an active session', async () => {
     const status = supportStatus()
-    const switchSupportTarget = vi.fn(async () => status)
 
     Object.defineProperty(window, 'hermesDesktop', {
       configurable: true,
-      value: { eva: { status: async () => status, endSupportSession: async () => ({ ok: true }), switchSupportTarget } }
+      value: { eva: { status: async () => status } }
     })
 
     render(
@@ -158,8 +158,7 @@ describe('app-root delegated support controls', () => {
       </I18nProvider>
     )
 
-    await screen.findByRole('region', { name: 'Acting for Customer' })
-    fireEvent.click(screen.getByRole('button', { name: 'Switch support target…' }))
-    await waitFor(() => expect(switchSupportTarget).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect($evaManagedStatus.get()?.delegatedSupportActive).toBe(true))
+    expect(screen.queryByRole('region')).toBeNull()
   })
 })

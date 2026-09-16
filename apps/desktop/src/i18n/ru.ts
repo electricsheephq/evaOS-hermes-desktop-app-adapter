@@ -250,9 +250,12 @@ export const ru = defineLocale({
   },
 
   delegatedSupport: {
+    sessionTitle: 'Сеанс поддержки',
     actingForCustomer: customer => `Работа от имени ${customer}`,
     assignedAgent: agent => `Агент: ${agent}`,
     endsIn: countdown => `Завершится через ${countdown}`,
+    indicator: (customer, countdown) => `Работа от имени ${customer} · ${countdown}`,
+    openSettings: 'Открыть настройки сеанса поддержки',
     endSession: 'Завершить сеанс поддержки',
     endingSession: 'Завершение сеанса поддержки…',
     unavailable: 'Статус сеанса поддержки недоступен.',

@@ -282,9 +282,12 @@ export const en: Translations = {
   },
 
   delegatedSupport: {
+    sessionTitle: 'Support session',
     actingForCustomer: customer => `Acting for ${customer}`,
     assignedAgent: agent => `Agent: ${agent}`,
     endsIn: countdown => `Ends in ${countdown}`,
+    indicator: (customer, countdown) => `Acting for ${customer} · ${countdown}`,
+    openSettings: 'Open support session settings',
     endSession: 'End support session',
     endingSession: 'Ending support session…',
     unavailable: 'Support session status is unavailable.',

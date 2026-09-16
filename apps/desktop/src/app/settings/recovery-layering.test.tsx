@@ -1,6 +1,7 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { DelegatedSupportBanner } from '@/components/delegated-support-banner'
 import { DesktopOnboardingOverlay } from '@/components/onboarding'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import {
@@ -9,6 +10,7 @@ import {
   type DesktopOnboardingState,
   startManualProviderOAuth
 } from '@/store/onboarding'
+import { $evaManagedStatus } from '@/store/support-picker'
 
 const idleOnboarding: DesktopOnboardingState = {
   configured: true,
@@ -23,6 +25,9 @@ const idleOnboarding: DesktopOnboardingState = {
   requested: false
 }
 
+const active = { delegatedSupportActive: true, supportCustomerLabel: 'Customer', supportAgentLabel: 'Agent',
+  supportExpiresAt: new Date(Date.now() + 60_000).toISOString() } as NonNullable<Parameters<typeof $evaManagedStatus.set>[0]>
+
 function resolvedZIndex(element: Element): number {
   const style = getComputedStyle(element)
   let value = style.zIndex.trim()
@@ -30,11 +35,9 @@ function resolvedZIndex(element: Element): number {
 
   while (value.startsWith('var(')) {
     const name = value.match(/^var\((--[^,)]+)/)?.[1]
-
     if (!name || seen.has(name)) {
       throw new Error(`Could not resolve z-index ${style.zIndex}`)
     }
-
     seen.add(name)
     value = style.getPropertyValue(name).trim()
   }
@@ -80,6 +83,7 @@ afterEach(() => {
   document.body.style.removeProperty('--z-onboarding-popover')
   clearPendingProviderOAuth()
   $desktopOnboarding.set(idleOnboarding)
+  $evaManagedStatus.set(null)
 })
 
 describe('Settings recovery layering', () => {
@@ -94,16 +98,14 @@ describe('Settings recovery layering', () => {
         <DesktopOnboardingOverlay enabled={false} profile="default" requestGateway={async () => undefined as never} />
       </>
     )
-
     fireEvent.click(screen.getByRole('button', { name: 'Start provider OAuth' }))
-
     await waitFor(() => {
       const onboarding = document.querySelector('[data-glass-opaque]')
-
       expect(onboarding).toBeTruthy()
       expect(resolvedZIndex(onboarding as Element)).toBeGreaterThan(resolvedZIndex(screen.getByTestId('settings')))
-      expect(Number(getComputedStyle(document.body).getPropertyValue('--z-onboarding-popover')))
-        .toBeGreaterThan(resolvedZIndex(onboarding as Element))
+      expect(Number(getComputedStyle(document.body).getPropertyValue('--z-onboarding-popover'))).toBeGreaterThan(
+        resolvedZIndex(onboarding as Element)
+      )
     })
   })
 
@@ -117,10 +119,20 @@ describe('Settings recovery layering', () => {
         </Popover>
       </>
     )
-
     const popover = screen.getByText('Search results').closest('[data-slot="popover-content"]')
-
     expect(popover).toBeTruthy()
     expect(resolvedZIndex(popover as Element)).toBeGreaterThan(resolvedZIndex(screen.getByTestId('settings')))
+  })
+
+  it('reserves the support-session z layer for root recovery, not an active session', () => {
+    Object.defineProperty(window, 'hermesDesktop', {
+      configurable: true,
+      value: { eva: { status: vi.fn().mockResolvedValue(active) } }
+    })
+    $evaManagedStatus.set(active)
+    render(<DelegatedSupportBanner />)
+    expect(document.querySelector('[class*="z-(--z-support-session)"]')).toBeNull()
+    act(() => $evaManagedStatus.set({ ...active, delegatedSupportActive: false, supportCleanupPending: true }))
+    expect(screen.getByRole('region').className).toContain('z-(--z-support-session)')
   })
 })

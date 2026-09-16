@@ -320,9 +320,12 @@ export interface Translations {
   }
 
   delegatedSupport: {
+    sessionTitle: string
     actingForCustomer: (customer: string) => string
     assignedAgent: (agent: string) => string
     endsIn: (countdown: string) => string
+    indicator: (customer: string, countdown: string) => string
+    openSettings: string
     endSession: string
     endingSession: string
     unavailable: string

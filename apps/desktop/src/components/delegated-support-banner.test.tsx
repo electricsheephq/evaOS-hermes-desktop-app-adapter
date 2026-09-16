@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import type { EvaManagedStatus } from '@/global'
 import { I18nProvider } from '@/i18n'
-import { $supportPickerOpen, setSupportPickerOpen } from '@/store/support-picker'
+import { $evaManagedStatus, $supportPickerOpen, setSupportPickerOpen } from '@/store/support-picker'
 
 import { DelegatedSupportBanner } from './delegated-support-banner'
 
@@ -34,15 +34,15 @@ function supportStatus(): EvaManagedStatus {
 afterEach(() => {
   cleanup()
   vi.restoreAllMocks()
+  $evaManagedStatus.set(null)
 })
 
 describe('DelegatedSupportBanner', () => {
-  it('shows the non-dismissible assignment and ends it through the main-process bridge', async () => {
+  it('renders nothing at root for an active support session', async () => {
     const status = vi.fn().mockResolvedValue(supportStatus())
-    const endSupportSession = vi.fn().mockResolvedValue({ ok: true })
     Object.defineProperty(window, 'hermesDesktop', {
       configurable: true,
-      value: { eva: { status, endSupportSession } }
+      value: { eva: { status } }
     })
 
     render(
@@ -51,43 +51,8 @@ describe('DelegatedSupportBanner', () => {
       </I18nProvider>
     )
 
-    const banner = await screen.findByRole('region', { name: 'Acting for Customer' })
-    expect(banner.textContent).toMatch(/Acting for Customer/)
-    expect(banner.textContent).toMatch(/Agent: Support agent/)
-    expect(banner.textContent).toMatch(/Ends in 00:(?:29|30):/)
-    expect((banner as HTMLElement).style.top).toBe('34px')
-    expect(banner.getAttribute('aria-live')).toBeNull()
-    expect(screen.queryByRole('alert')).toBeNull()
-    expect(screen.getByRole('status').textContent).toBe('Acting for Customer')
-    // Still non-dismissible: the only controls are the two support actions —
-    // no close/dismiss affordance (adapter#91 added Switch support target).
-    expect(screen.getAllByRole('button').map(button => button.textContent)).toEqual([
-      'Switch support target…',
-      'End support session'
-    ])
-
-    fireEvent.click(screen.getByRole('button', { name: 'End support session' }))
-    await waitFor(() => expect(endSupportSession).toHaveBeenCalledTimes(1))
-  })
-
-  it('shows a retryable end failure while retaining the end control', async () => {
-    const status = vi.fn().mockResolvedValue({ ...supportStatus(), supportEndFailed: true })
-    const endSupportSession = vi.fn().mockResolvedValue({ ok: false })
-    Object.defineProperty(window, 'hermesDesktop', {
-      configurable: true,
-      value: { eva: { status, endSupportSession } }
-    })
-
-    render(
-      <I18nProvider configClient={null} initialLocale="en">
-        <DelegatedSupportBanner />
-      </I18nProvider>
-    )
-
-    const banner = await screen.findByRole('region', { name: 'Acting for Customer' })
-    expect((await screen.findByText('Unable to end support session. Try again.')).getAttribute('role')).toBe('status')
-    expect((screen.getByRole('button', { name: 'End support session' }) as HTMLButtonElement).disabled).toBe(false)
-    expect(banner).toBeTruthy()
+    await waitFor(() => expect(status).toHaveBeenCalled())
+    expect(screen.queryByRole('region')).toBeNull()
   })
 
   it('keeps End reachable for a lease the app still holds a handle for but no longer an enrollment', async () => {

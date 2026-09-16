@@ -14,6 +14,7 @@ import { Badge } from '@/components/ui/badge'
 import { Codicon } from '@/components/ui/codicon'
 import { GlyphSpinner } from '@/components/ui/glyph-spinner'
 import { useI18n } from '@/i18n'
+import type { Translations } from '@/i18n/types'
 import { displayPath, pathLeaf } from '@/lib/display-path'
 import {
   Activity,
@@ -56,6 +57,7 @@ import {
 import { $focusedRuntimeId, $focusedSessionState, $focusedStoredSessionId } from '@/store/session-states'
 import { $statusbarHiddenIds } from '@/store/statusbar-prefs'
 import { $subagentsBySession, activeSubagentCount, failedSubagentCount } from '@/store/subagents'
+import { $evaManagedStatus, activeSupportSession, formatSupportRemaining, runSupportSessionAction } from '@/store/support-picker'
 import { $gatewayRestarting } from '@/store/system-actions'
 import {
   $backendUpdateApply,
@@ -147,6 +149,8 @@ export function useStatusbarItems({
   const backendUpdateApply = useStore($backendUpdateApply)
   const desktopVersion = useStore($desktopVersion)
   const connection = useStore($connection)
+  const supportStatus = useStore($evaManagedStatus)
+  const supportSessionItem = supportSessionStatusbarItem(supportStatus, t.delegatedSupport)
 
   // The FOCUSED session (interacted tile, else the primary — the same
   // derivation the titlebar title follows): every session-scoped readout
@@ -435,6 +439,7 @@ export function useStatusbarItems({
         toggleLabel: copy.toggleCommandCenter,
         variant: 'action'
       },
+      supportSessionItem,
       {
         hidden: !sessionsShowing,
         id: 'gateway-switcher',
@@ -589,6 +594,7 @@ export function useStatusbarItems({
       sessionsShowing,
       subagentsFailed,
       subagentsRunning,
+      supportSessionItem,
       toggleCommandCenter
     ]
   )
@@ -700,6 +706,38 @@ export function useStatusbarItems({
   )
 
   return { leftStatusbarItems, statusbarItems }
+}
+
+export function supportSessionStatusbarItem(
+  status: Parameters<typeof activeSupportSession>[0],
+  copy: Translations['delegatedSupport']
+): StatusbarItem {
+  const session = activeSupportSession(status)
+
+  return {
+    detail: session ? copy.assignedAgent(session.agent) : undefined,
+    hidden: !session,
+    id: 'support-session',
+    label: session ? copy.indicator(session.customer, formatSupportRemaining(session.expiresAt)) : undefined,
+    lockedVisible: true,
+    menuItems: [
+      {
+        id: 'support-session-switch',
+        label: copy.switchTarget,
+        onSelect: () => void runSupportSessionAction('switch').catch(() => undefined)
+      },
+      {
+        className: 'text-destructive',
+        id: 'support-session-end',
+        label: copy.endSession,
+        onSelect: () => void runSupportSessionAction('end').catch(() => undefined)
+      }
+    ],
+    title: copy.openSettings,
+    to: '/settings?tab=gateway',
+    toggleLabel: copy.sessionTitle,
+    variant: 'menu'
+  }
 }
 
 function StatusbarGatewaySwitcher() {
