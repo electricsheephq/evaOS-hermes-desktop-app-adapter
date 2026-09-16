@@ -2228,7 +2228,7 @@ function createEvaManagedRuntime(options) {
         if (refused) cache.delete(profile)
         let boundFresh = fresh
         if (fresh) {
-          const bind = row => ({ ...bindSupportSession(row, profile), is_default_profile: profile === 'default' })
+          const bind = row => ({ ...bindSupportSession(row, profile, runtime), is_default_profile: profile === 'default' })
           boundFresh = { ...fresh, projects: (fresh.projects ?? []).map(raw => ({
             ...raw,
             previewSessions: (raw.previewSessions ?? []).map(bind),

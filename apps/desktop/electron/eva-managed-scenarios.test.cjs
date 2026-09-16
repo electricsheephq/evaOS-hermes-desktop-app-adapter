@@ -234,6 +234,10 @@ test('managed.openai-reauth-profile', async t => {
         customerId: 'customer-one',
         runtime: 'hermes',
         agentId: 'main',
+        allowedProfiles: ['main'],
+        profile: 'main',
+        profileAdmin: false,
+        sessionKind: 'customer',
         baseUrl: MANAGED_BASE_URL,
         token: 'refreshed-runtime-session',
         expiresAt: FUTURE
@@ -245,7 +249,7 @@ test('managed.openai-reauth-profile', async t => {
   const result = await runtime.requestApi({
     path: '/api/providers/oauth/openai-codex/start',
     method: 'POST',
-    profile: 'research',
+    profile: 'main',
     body: { redirect_uri: 'https://desktop.example.invalid/callback' }
   })
 
@@ -255,7 +259,7 @@ test('managed.openai-reauth-profile', async t => {
   for (const call of calls) {
     const url = new URL(call.url)
     assert.equal(url.pathname, '/api/providers/oauth/openai-codex/start')
-    assert.equal(url.searchParams.get('profile'), 'research')
+    assert.equal(url.searchParams.get('profile'), 'main')
     assert.equal(call.options.method, 'POST')
     assert.deepEqual(call.options.body, {
       redirect_uri: 'https://desktop.example.invalid/callback'

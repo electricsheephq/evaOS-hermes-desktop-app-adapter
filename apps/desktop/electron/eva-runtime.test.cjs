@@ -2650,7 +2650,7 @@ test('managed media keeps Range and runtime credentials in the main-process fetc
   const result = await runtime.requestMedia({
     headers: { range: 'bytes=100-199' },
     path: '/api/files/download?path=%2Fsrv%2Frender.mp4',
-    profile: 'research'
+    profile: 'main'
   })
 
   assert.equal(result, response)
@@ -2658,7 +2658,7 @@ test('managed media keeps Range and runtime credentials in the main-process fetc
     {
       headers: { range: 'bytes=100-199' },
       token: 'runtime-token',
-      url: 'https://hermes-customer-one.ecs.electricsheephq.com/api/files/download?path=%2Fsrv%2Frender.mp4&profile=research'
+      url: 'https://hermes-customer-one.ecs.electricsheephq.com/api/files/download?path=%2Fsrv%2Frender.mp4&profile=main'
     }
   ])
 })
@@ -2724,7 +2724,7 @@ test('managed runtime forwards unknown APIs, bodies, uploads, and Hermes profile
   await runtime.requestApi({
     path: '/api/future-feature?mode=alpha',
     method: 'POST',
-    profile: 'research',
+    profile: 'main',
     body: { future: true },
     upload
   })
@@ -2732,7 +2732,7 @@ test('managed runtime forwards unknown APIs, bodies, uploads, and Hermes profile
   assert.equal(calls.length, 1)
   assert.equal(
     calls[0].url,
-    'https://hermes-customer-one.ecs.electricsheephq.com/api/future-feature?mode=alpha&profile=research'
+    'https://hermes-customer-one.ecs.electricsheephq.com/api/future-feature?mode=alpha&profile=main'
   )
   assert.equal(calls[0].token, 'runtime-token')
   assert.equal(calls[0].options.method, 'POST')
@@ -2755,17 +2755,17 @@ test('ordinary managed all-profile lists retain the concrete routing profile', a
 
   await runtime.requestApi({
     path: '/api/profiles/sessions?limit=40&offset=0&profile=all',
-    profile: 'research'
+    profile: 'main'
   })
   assert.equal(calls.length, 1)
   const url = new URL(calls[0])
   assert.equal(url.pathname, '/api/profiles/sessions')
-  assert.equal(url.searchParams.get('profile'), 'research')
+  assert.equal(url.searchParams.get('profile'), 'main')
   assert.equal(url.searchParams.get('limit'), '40')
   assert.equal(url.searchParams.get('offset'), '0')
   await assert.rejects(runtime.requestApi({
     path: '/api/profiles/sessions?profile=all&profile=other',
-    profile: 'research'
+    profile: 'main'
   }), error => error.code === 'managed-policy')
   assert.equal(calls.length, 1)
 })
@@ -2818,23 +2818,28 @@ test('managed connections and endpoint tickets preserve the selected profile and
   })
   t.after(async () => runtime.close())
 
-  const connection = await runtime.resolveBackend({ profile: 'research' })
-  assert.equal(connection.profile, 'research')
+  const connection = await runtime.resolveBackend({ profile: 'main' })
+  assert.equal(connection.profile, 'main')
   assert.equal(connection.token, '')
-  assert.deepEqual(minted[0], {
+  const { profileBinder: firstProfileBinder, ...firstTicket } = minted[0]
+  assert.equal(typeof firstProfileBinder, 'function')
+  assert.equal(firstProfileBinder('default'), 'main')
+  assert.deepEqual(firstTicket, {
     generation: 0,
     path: '/api/ws',
-    profile: 'research'
+    profile: 'main'
   })
 
   await runtime.freshWsUrl({
     path: '/api/plugins/kanban/events?mode=live',
-    profile: 'research'
+    profile: 'main'
   })
-  assert.deepEqual(minted[1], {
+  const { profileBinder: secondProfileBinder, ...secondTicket } = minted[1]
+  assert.equal(typeof secondProfileBinder, 'function')
+  assert.deepEqual(secondTicket, {
     generation: 0,
     path: '/api/plugins/kanban/events?mode=live',
-    profile: 'research'
+    profile: 'main'
   })
 
   const upstream = await relayOptions.getUpstream()
