@@ -105,7 +105,7 @@ describe('the registry row wins, always', () => {
     })
 
     const { openBotCanonicalChat } = await loadModule()
-    const opened = await openBotCanonicalChat('ops')
+    const opened = await openBotCanonicalChat('alpha')
 
     expect(opened).toEqual({ openedId: 'forever-chat', registryId: 'forever-chat' })
     expect(hostMock.openSession).toHaveBeenCalledTimes(1)
@@ -114,12 +114,12 @@ describe('the registry row wins, always', () => {
 
     expect(id).toBe('forever-chat')
     expect(options).toMatchObject({
-      profile: 'ops',
+      profile: 'alpha',
       // Opening a bot leaves the Sessions workspace on its current gateway.
       keepAllProfilesScope: true,
       tabTitle: 'Bot Chat',
       workspaceMode: 'bots',
-      workspaceOwnerKey: 'bot:ops'
+      workspaceOwnerKey: 'bot:alpha'
     })
     // Same intent a session row click uses. `tab` stacked a fresh tile on every
     // miss, so bot chats piled up beside each other and beside the untouched
@@ -129,7 +129,7 @@ describe('the registry row wins, always', () => {
     const list = calls.find(call => call.method === 'session.list')
 
     expect(list?.params).toMatchObject({
-      profile: 'ops',
+      profile: 'alpha',
       // Canonical chats are always hidden — the lookup must see hidden rows.
       include_hidden: true,
       title: 'Bot Chat'

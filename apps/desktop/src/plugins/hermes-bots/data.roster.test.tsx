@@ -209,7 +209,7 @@ describe('the active source annotates; other sources append', () => {
     // host.agents is the SDK seam; the Electron builder has its own contract
     // test. Plugin tests must not import main-process modules.
     const union = {
-      agents: ['support', 'sibling'].map(profile => ({
+      agents: ['alpha', 'beta', 'gamma'].map(profile => ({
         connectionId: 'eva-managed-runtime',
         connectionKind: 'remote',
         handle: profile,
@@ -219,13 +219,15 @@ describe('the active source annotates; other sources append', () => {
       primaryConnectionId: 'eva-managed-runtime'
     }
 
-    const rows = await mergedRoster({ profiles: [{ name: 'support' }] }, union, union.primaryConnectionId)
+    const rows = await mergedRoster({ profiles: [{ name: 'alpha' }] }, union, union.primaryConnectionId)
 
-    expect(rows.map(row => row.name)).toEqual(['support', 'sibling'])
+    expect(rows.map(row => row.name)).toEqual(['alpha', 'beta', 'gamma'])
+    expect(rows.map(row => row.name)).not.toContain('default')
+    expect(rows.map(row => row.name)).not.toContain('hermes')
     expect(rows[1]).toMatchObject({
       remoteSource: false,
       sourceScoped: true,
-      route: { connectionId: union.primaryConnectionId, mode: 'remote', profile: 'sibling', targetProfile: 'sibling' }
+      route: { connectionId: union.primaryConnectionId, mode: 'remote', profile: 'beta', targetProfile: 'beta' }
     })
     expect(rows[1].last_session).toBeUndefined()
   })

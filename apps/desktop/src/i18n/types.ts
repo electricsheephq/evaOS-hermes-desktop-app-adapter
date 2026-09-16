@@ -2019,6 +2019,7 @@ export interface Translations {
     failedImport: string
     failedExport: string
     allProfiles: string
+    allAuthorizedAgents: string
     showAllProfiles: string
     profileUnavailable: (name: string) => string
     switchToProfile: (name: string) => string

@@ -161,11 +161,11 @@ describe('profile-scoped cache invalidation', () => {
 })
 
 describe('managed all-profile request scope', () => {
-  it('uses the active managed profile instead of sending all upstream', () => {
+  it('keeps the all selector for Electron to fan out across authorized profiles', () => {
     vi.stubGlobal('window', { hermesDesktop: { eva: {}, getConnection } })
     $activeGatewayProfile.set('alpha')
 
-    expect(sidebarProfileForScope(ALL_PROFILES)).toBe('alpha')
+    expect(sidebarProfileForScope(ALL_PROFILES)).toBe('all')
   })
 
   it('keeps the broad all selector for unmanaged desktops', () => {

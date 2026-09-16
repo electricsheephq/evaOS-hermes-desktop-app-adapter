@@ -218,6 +218,16 @@ function writeActiveEnrollment(statePath) {
   )
 }
 
+function writeScopedEnrollment(statePath) {
+  writeActiveEnrollment(statePath)
+  const state = JSON.parse(fs.readFileSync(statePath, 'utf8'))
+  state.runtime.agent_id = 'alpha'
+  state.runtime.allowed_profiles = ['alpha', 'beta', 'gamma']
+  state.runtime.primary_profile = 'alpha'
+  state.runtime.profile_admin = true
+  fs.writeFileSync(statePath, JSON.stringify(state))
+}
+
 function makeManagedRuntime(statePath, overrides = {}) {
   return createEvaManagedRuntime({
     statePath,
@@ -269,6 +279,125 @@ function sealed(value) {
 function unsealed(value) {
   return Buffer.from(String(value).replace(/^sealed:/, ''), 'base64').toString('utf8')
 }
+
+test('ordinary enrollment exposes its finite authorized profile scope after a cold load', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-customer-scope-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeScopedEnrollment(statePath)
+  const runtime = makeManagedRuntime(statePath)
+  t.after(() => runtime.close())
+
+  assert.deepEqual(await runtime.authorizedProfiles(), ['alpha', 'beta', 'gamma'])
+  assert.equal(await runtime.assignedProfileId(), 'alpha')
+  assert.equal(await runtime.delegatedProfiles(), null)
+})
+
+test('ordinary profile routing aliases default to alpha and rejects selectors outside the scope', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-customer-routing-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeScopedEnrollment(statePath)
+  const requests = []
+  let ticketInput
+  const runtime = makeManagedRuntime(statePath, {
+    fetchJson: async url => {
+      requests.push(new URL(url))
+      return { jobs: [] }
+    },
+    createWsRelay: () => ({
+      mintTicket: async input => {
+        ticketInput = input
+        return 'ws://127.0.0.1:12345/managed'
+      },
+      disconnectAll: () => undefined,
+      close: async () => undefined
+    })
+  })
+  t.after(() => runtime.close())
+
+  await runtime.requestApi({ path: '/api/cron/jobs?profile=default', profile: 'default' })
+  assert.equal(requests[0].searchParams.get('profile'), 'alpha')
+  await runtime.freshWsUrl({ profile: 'default' })
+  assert.equal(ticketInput.profile, 'alpha')
+  assert.throws(
+    () => ticketInput.profileBinder('outside'),
+    error => error.statusCode === 403 && error.code === 'profile-mismatch' && /profile outside/.test(error.message)
+  )
+  await assert.rejects(
+    runtime.requestApi({ path: '/api/cron/jobs?profile=outside', profile: 'outside' }),
+    error => error.statusCode === 403 && error.code === 'profile-mismatch' && /profile outside/.test(error.message)
+  )
+})
+
+test('ordinary profile routing preserves a literal default member', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-customer-default-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeScopedEnrollment(statePath)
+  const state = JSON.parse(fs.readFileSync(statePath, 'utf8'))
+  state.runtime.allowed_profiles = ['alpha', 'default']
+  fs.writeFileSync(statePath, JSON.stringify(state))
+  let requested
+  const runtime = makeManagedRuntime(statePath, {
+    fetchJson: async url => {
+      requested = new URL(url).searchParams.get('profile')
+      return { jobs: [] }
+    }
+  })
+  t.after(() => runtime.close())
+
+  await runtime.requestApi({ path: '/api/cron/jobs?profile=default', profile: 'default' })
+  assert.equal(requested, 'default')
+})
+
+test('ordinary all scope fans out to concrete profiles for metadata, sessions, and cron', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-customer-all-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeScopedEnrollment(statePath)
+  const requests = []
+  const runtime = makeManagedRuntime(statePath, {
+    fetchJson: async url => {
+      const parsed = new URL(url)
+      requests.push(parsed)
+      const profile = parsed.searchParams.get('profile')
+      if (parsed.pathname === '/api/profiles') return { profiles: [{ name: profile }] }
+      if (parsed.pathname === '/api/profiles/sessions') {
+        return { sessions: [{ id: `session-${profile}` }], total: 1 }
+      }
+      if (parsed.pathname === '/api/cron/jobs') return [{ id: `job-${profile}` }]
+      throw new Error(`unexpected path ${parsed.pathname}`)
+    }
+  })
+  t.after(() => runtime.close())
+
+  const profiles = await runtime.requestApi({ path: '/api/profiles', profile: 'alpha' })
+  const sessions = await runtime.requestApi({ path: '/api/profiles/sessions?profile=all', profile: 'alpha' })
+  const jobs = await runtime.requestApi({ path: '/api/cron/jobs?profile=all', profile: 'alpha' })
+
+  assert.deepEqual(profiles.profiles.map(row => row.name), ['alpha', 'beta', 'gamma'])
+  assert.deepEqual(sessions.sessions.map(row => row.profile), ['alpha', 'beta', 'gamma'])
+  assert.deepEqual(jobs.map(row => row.profile), ['alpha', 'beta', 'gamma'])
+  assert.equal(requests.length, 9)
+  assert.ok(requests.every(url => ['alpha', 'beta', 'gamma'].includes(url.searchParams.get('profile'))))
+
+  const singleState = JSON.parse(fs.readFileSync(statePath, 'utf8'))
+  singleState.runtime.allowed_profiles = ['alpha']
+  singleState.runtime.profile_admin = false
+  fs.writeFileSync(statePath, JSON.stringify(singleState))
+  const singleRequests = []
+  const single = makeManagedRuntime(statePath, {
+    fetchJson: async url => {
+      singleRequests.push(new URL(url))
+      return []
+    }
+  })
+  t.after(() => single.close())
+
+  await single.requestApi({ path: '/api/cron/jobs?profile=all', profile: 'alpha' })
+  assert.deepEqual(singleRequests.map(url => url.searchParams.get('profile')), ['alpha'])
+})
 
 function sealExistingState(statePath) {
   const state = JSON.parse(fs.readFileSync(statePath, 'utf8'))

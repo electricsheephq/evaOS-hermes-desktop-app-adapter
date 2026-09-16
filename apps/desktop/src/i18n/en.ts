@@ -2346,6 +2346,7 @@ export const en: Translations = {
     failedImport: 'Failed to import profile',
     failedExport: 'Failed to export profile',
     allProfiles: 'All profiles',
+    allAuthorizedAgents: 'All authorized agents',
     showAllProfiles: 'Show all profiles',
     profileUnavailable: name => `${name} unavailable`,
     switchToProfile: name => `Switch to ${name}`,
