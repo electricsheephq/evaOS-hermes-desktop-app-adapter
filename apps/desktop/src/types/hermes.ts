@@ -965,10 +965,18 @@ export interface CronJob {
   no_agent?: boolean
   prompt?: null | string
   provider?: null | string
+  profile?: string
   schedule?: CronJobSchedule
   schedule_display?: null | string
   script?: null | string
   state?: null | string
+}
+
+export type CronJobList = CronJob[] & { errors?: ProfileReadError[] }
+export interface ProfileReadError {
+  error: string
+  profile: string
+  status?: number
 }
 
 export interface CronJobCreatePayload {
@@ -1116,7 +1124,7 @@ export interface ProfileSoul {
 
 export interface ProfilesResponse {
   profiles: ProfileInfo[]
-  errors?: Array<{ profile: string; error: string }>
+  errors?: ProfileReadError[]
 }
 
 export interface SkillInfo {

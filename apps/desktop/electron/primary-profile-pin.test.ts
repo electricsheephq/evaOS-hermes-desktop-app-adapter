@@ -38,3 +38,13 @@ test('teardown releases the pin so the next start follows the preference', () =>
     'claude'
   )
 })
+
+test('an authoritative managed profile overrides the stale desktop pin', () => {
+  const pin = new PrimaryProfilePin()
+  pin.pin('default')
+
+  assert.equal(
+    pin.resolve(() => 'default', 'alpha'),
+    'alpha'
+  )
+})

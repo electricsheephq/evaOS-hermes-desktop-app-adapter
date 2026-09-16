@@ -2019,6 +2019,7 @@ export interface Translations {
     failedImport: string
     failedExport: string
     allProfiles: string
+    allAuthorizedAgents: string
     showAllProfiles: string
     profileUnavailable: (name: string) => string
     switchToProfile: (name: string) => string
@@ -2148,6 +2149,7 @@ export interface Translations {
     }
     search: string
     loading: string
+    partialFailures: (count: number, details: string) => string
     states: Record<string, string>
     deliveryLabels: Record<string, string>
     scheduleLabels: Record<string, string>

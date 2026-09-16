@@ -30,7 +30,7 @@ import { sessionMatchesSearch } from '@/lib/session-search'
 import { normalizeSessionSource, sessionSourceLabel } from '@/lib/session-source'
 import { cn } from '@/lib/utils'
 import { $activeConnectionId } from '@/store/connections'
-import { $cronJobs } from '@/store/cron'
+import { $cronJobErrors, $cronJobs } from '@/store/cron'
 import { $bindings } from '@/store/keybinds'
 import {
   $dismissedAutoProjectIds,
@@ -131,6 +131,7 @@ import { ackAllSessionsRead } from '@/store/session-unread'
 import { markSessionUnread } from '@/store/session-unread-remote'
 import { $archivedSessions, loadArchivedSessions } from '@/store/sidebar-archive'
 import { $sidebarSessionRankIds } from '@/store/sidebar-sort'
+import type { CronJob } from '@/types/hermes'
 
 import {
   type AppView,
@@ -317,8 +318,8 @@ interface ChatSidebarProps extends React.ComponentProps<typeof Sidebar> {
    *  buttons), which land a fresh session exactly where it's dropped. The
    *  context-menu "Open in split" path passes just a `dir`. */
   onNewSessionSplit: NewSessionSplitHandler
-  onManageCronJob: (jobId: string) => void
-  onTriggerCronJob: (jobId: string) => Promise<void>
+  onManageCronJob: (job: CronJob) => void
+  onTriggerCronJob: (job: CronJob) => Promise<void>
 }
 
 export function ChatSidebar({
@@ -398,6 +399,7 @@ export function ChatSidebar({
   const sessions = useStore($sessions)
   const cronSessions = useStore($cronSessions)
   const cronJobs = useStore($cronJobs)
+  const cronJobErrors = useStore($cronJobErrors)
   const messagingSessions = useStore($messagingSessions)
   const messagingPlatformTotals = useStore($messagingPlatformTotals)
   const messagingTruncated = useStore($messagingTruncated)
@@ -1914,8 +1916,9 @@ export function ChatSidebar({
                 )
               })}
 
-            {!trimmedQuery && !worktreeGroupingActive && cronJobs.length > 0 && (
+            {!trimmedQuery && !worktreeGroupingActive && (cronJobs.length > 0 || cronJobErrors.length > 0) && (
               <SidebarCronJobsSection
+                errors={cronJobErrors}
                 jobs={cronJobs}
                 label={s.cronJobs}
                 onManageJob={onManageCronJob}

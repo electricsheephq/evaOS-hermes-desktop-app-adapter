@@ -41,7 +41,13 @@ export class PrimaryProfilePin {
    * The key routing should treat as "primary": the live primary's profile when
    * one is pinned, else the stored preference, else 'default'.
    */
-  resolve(readPreference: () => null | string | undefined): string {
+  resolve(readPreference: () => null | string | undefined, authoritativeProfile?: null | string): string {
+    const authoritative = String(authoritativeProfile ?? '').trim()
+
+    if (authoritative) {
+      return authoritative
+    }
+
     if (this.#booted) {
       return this.#booted
     }

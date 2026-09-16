@@ -1,11 +1,15 @@
 import { atom } from 'nanostores'
 
-import type { CronJob } from '@/types/hermes'
+import type { CronJob, CronJobList, ProfileReadError } from '@/types/hermes'
+
+export const cronJobIdentity = (job: Pick<CronJob, 'id' | 'profile'>): string =>
+  JSON.stringify([job.profile ?? '', job.id])
 
 // Cron *jobs* (not run sessions) power the sidebar "Cron jobs" section. Listing
 // the job — schedule, state, live next-run countdown — makes the job the
 // first-class entity; its runs (sessions) resolve under it in the cron detail.
 export const $cronJobs = atom<CronJob[]>([])
+export const $cronJobErrors = atom<ProfileReadError[]>([])
 
 export interface CronJobsRequest {
   generation: number
@@ -57,7 +61,7 @@ export function invalidateCronJobsRequests(): void {
   cronJobsScopeGeneration += 1
 }
 
-export function commitCronJobsRequest(request: CronJobsRequest, jobs: CronJob[]): boolean {
+export function commitCronJobsRequest(request: CronJobsRequest, jobs: CronJobList): boolean {
   if (!isCronJobsRequestCurrent(request)) {
     return false
   }
@@ -65,7 +69,8 @@ export function commitCronJobsRequest(request: CronJobsRequest, jobs: CronJob[])
   // Consume the token so neither a duplicate completion nor any older request
   // can publish after this authoritative snapshot.
   cronJobsRequestGeneration += 1
-  $cronJobs.set(jobs)
+  $cronJobs.set([...jobs])
+  $cronJobErrors.set(jobs.errors ?? [])
 
   return true
 }
@@ -73,6 +78,7 @@ export function commitCronJobsRequest(request: CronJobsRequest, jobs: CronJob[])
 export const setCronJobs = (jobs: CronJob[]) => {
   cronJobsRequestGeneration += 1
   $cronJobs.set(jobs)
+  $cronJobErrors.set([])
 }
 
 // In-place edit so the cron overlay's mutations (create/edit/delete/pause/…)

@@ -2346,6 +2346,7 @@ export const en: Translations = {
     failedImport: 'Failed to import profile',
     failedExport: 'Failed to export profile',
     allProfiles: 'All profiles',
+    allAuthorizedAgents: 'All authorized agents',
     showAllProfiles: 'Show all profiles',
     profileUnavailable: name => `${name} unavailable`,
     switchToProfile: name => `Switch to ${name}`,
@@ -2481,6 +2482,8 @@ export const en: Translations = {
     },
     search: 'Search cron jobs...',
     loading: 'Loading cron jobs...',
+    partialFailures: (count, details) =>
+      `${count} ${count === 1 ? 'profile' : 'profiles'} could not be read: ${details}`,
     states: {
       enabled: 'enabled',
       scheduled: 'scheduled',

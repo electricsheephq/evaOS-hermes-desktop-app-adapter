@@ -3,7 +3,7 @@ const { version: EVA_DESKTOP_PACKAGE_VERSION } = require('../package.json')
 
 const EVA_MANAGED_POLICY = Object.freeze({
   schemaVersion: 'evaos.eva_desktop_managed.v1',
-  enrollmentSchemaVersion: 'evaos.hermes_desktop_enrollment.v1',
+  enrollmentSchemaVersion: 'evaos.hermes_desktop_enrollment.v2',
   productName: 'evaOS Agent',
   dashboardAuthUrl: 'https://www.electricsheephq.com/desktop-auth',
   brokerUrl: 'https://rhfojelkgtwcxnrfhtlj.supabase.co/functions/v1/desktop-runtime-session',
@@ -567,6 +567,24 @@ function normalizeHermesEnrollment(payload, options = {}) {
     throw new EvaBrokerError('Electric Sheep returned an invalid assigned agent.', 403, 'wrong-agent')
   }
 
+  const rawAllowedProfiles = remote.allowed_profiles
+  const validProfileScope =
+    Array.isArray(rawAllowedProfiles) &&
+    rawAllowedProfiles.length > 0 &&
+    rawAllowedProfiles.every(
+      value => typeof value === 'string' && EVA_MANAGED_PROFILE_RE.test(value) && value !== 'all'
+    ) &&
+    new Set(rawAllowedProfiles).size === rawAllowedProfiles.length &&
+    rawAllowedProfiles.includes(agentId)
+  const allowedProfiles = validProfileScope ? [...rawAllowedProfiles] : [agentId]
+  // The broker binds primary_profile to agent_id. Keep the enrolled agent
+  // authoritative if those fields ever disagree instead of silently retargeting.
+  if (Object.hasOwn(remote, 'primary_profile') && remote.primary_profile !== agentId) {
+    options.onDiagnostic?.('[eva-managed] broker primary profile did not match assigned agent; using assigned agent')
+  }
+  const profile = agentId
+  const profileAdmin = validProfileScope && remote.profile_admin === true
+
   const rawDisplayName = typeof remote.agent_display_name === 'string' ? remote.agent_display_name.trim() : ''
   const agentDisplayName =
     rawDisplayName && rawDisplayName.length <= 120 && !hasAsciiControl(rawDisplayName) ? rawDisplayName : agentId
@@ -583,6 +601,10 @@ function normalizeHermesEnrollment(payload, options = {}) {
     runtime: policy.runtime,
     agentId,
     agentDisplayName,
+    allowedProfiles,
+    profile,
+    profileAdmin,
+    sessionKind: 'customer',
     baseUrl,
     token: normalizeOpaqueToken(remote.session_token, 'evaOS Agent runtime session'),
     expiresAt: parseFutureTimestamp(remote.expires_at, 'evaOS Agent runtime session', now)
@@ -608,6 +630,10 @@ function normalizeSupportEnrollment(payload, options = {}) {
   }
 
   const enrollment = normalizeHermesEnrollment(payload, options)
+  delete enrollment.allowedProfiles
+  delete enrollment.profile
+  delete enrollment.profileAdmin
+  delete enrollment.sessionKind
   const supportSessionId = normalizeOpaqueToken(
     payload.support_session_id,
     'Electric Sheep support session'

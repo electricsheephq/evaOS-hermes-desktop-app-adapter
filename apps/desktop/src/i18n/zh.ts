@@ -2498,6 +2498,7 @@ export const zh: Translations = {
     failedImport: '导入配置档案失败',
     failedExport: '导出配置档案失败',
     allProfiles: '全部配置档案',
+    allAuthorizedAgents: '所有授权代理',
     showAllProfiles: '显示全部配置档案',
     profileUnavailable: name => `${name} 不可用`,
     switchToProfile: name => `切换到 ${name}`,
@@ -2630,6 +2631,7 @@ export const zh: Translations = {
     },
     search: '搜索定时任务…',
     loading: '正在加载定时任务…',
+    partialFailures: (count, details) => `${count} 个配置档案无法读取：${details}`,
     states: {
       enabled: '已启用',
       scheduled: '已排程',

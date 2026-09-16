@@ -40,10 +40,12 @@ const {
   $activeGatewayProfile,
   $profileErrors,
   $profiles,
+  ALL_PROFILES,
   ensureGatewayProfile,
   invalidateProfileListFetches,
   prewarmProfileBackend,
-  refreshProfiles
+  refreshProfiles,
+  sidebarProfileForScope
 } = await import('./profile')
 
 const { $poolLimits } = await import('@/store/pool-limits')
@@ -155,6 +157,19 @@ describe('profile-scoped cache invalidation', () => {
 
     expect(invalidateProfileScopedQueries).toHaveBeenCalled()
     expect(resetStarmapGraph).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('managed all-profile request scope', () => {
+  it('keeps the all selector for Electron to fan out across authorized profiles', () => {
+    vi.stubGlobal('window', { hermesDesktop: { eva: {}, getConnection } })
+    $activeGatewayProfile.set('alpha')
+
+    expect(sidebarProfileForScope(ALL_PROFILES)).toBe('all')
+  })
+
+  it('keeps the broad all selector for unmanaged desktops', () => {
+    expect(sidebarProfileForScope(ALL_PROFILES)).toBe('all')
   })
 })
 

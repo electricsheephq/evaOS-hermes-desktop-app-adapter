@@ -47,6 +47,7 @@ import { Tip, Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@
 import type { DesktopRegistryConnection } from '@/global'
 import { getProfileSoul, updateProfileSoul } from '@/hermes'
 import { useI18n } from '@/i18n'
+import { isManagedEvaosAgent } from '@/i18n/managed-brand'
 import { sortConnectionsForDisplay } from '@/lib/connection-display'
 import { triggerHaptic } from '@/lib/haptics'
 import { AlertTriangle, Loader2 } from '@/lib/icons'
@@ -438,7 +439,14 @@ export function ProfileRail() {
           Hidden until a second profile exists. */}
       {!fleet &&
         multiProfile &&
-        (defaultProfile ? (
+        (isManagedEvaosAgent() ? (
+          <ProfilePill
+            active={isAll}
+            glyph="layers"
+            label={p.allAuthorizedAgents}
+            onSelect={() => setShowAllProfiles(true)}
+          />
+        ) : defaultProfile ? (
           // On default → toggle to all. Anywhere else (all view or a named
           // profile) → return to default. So leaving a profile never lands on all.
           <ProfilePill

@@ -20,6 +20,7 @@ const {
   publicEvaEnrollmentStatus,
   revokeEvaDesktopSession
 } = require('./eva-managed.cjs')
+const { requestAuthorizedCronJobs } = require('./eva-runtime-profile-scope.cjs')
 const { createEvaWsRelay, normalizeEvaWsEndpoint, normalizeEvaWsProfile } = require('./eva-ws-relay.cjs')
 
 const RUNTIME_ENROLLMENT_RETRY_DELAYS_MS = Object.freeze([2_000, 5_000, 10_000, 20_000, 30_000])
@@ -274,7 +275,7 @@ function createEvaManagedRuntime(options) {
   const updateBootProgress = options.updateBootProgress ?? (() => undefined)
   const resetConnection = options.resetConnection ?? (() => undefined)
   const resetRenderer = options.resetRenderer ?? (async () => undefined)
-  const launchRuntime = options.launchRuntime ?? launchEvaHermesRuntime
+  const launchRuntime = options.launchRuntime ?? (token => launchEvaHermesRuntime(token, { onDiagnostic: rememberLog }))
   const makeCodeVerifier = options.makeCodeVerifier ?? makeEvaDesktopCodeVerifier
   const codeChallengeFor = options.codeChallengeFor ?? evaDesktopCodeChallenge
   const pollDeviceCode = options.pollDeviceCode ?? pollEvaDeviceCode
@@ -360,11 +361,15 @@ function createEvaManagedRuntime(options) {
     let runtime = null
     if (desktop) {
       try {
+        if (parsed.runtime?.schema_version !== EVA_MANAGED_POLICY.enrollmentSchemaVersion) {
+          throw new Error('persisted enrollment schema is not current')
+        }
         const persistedDisplayName = parsed.runtime?.agent_display_name
         if (typeof persistedDisplayName !== 'string' || !persistedDisplayName.trim()) {
           throw new Error('legacy enrollment has no assigned-agent display label')
         }
-        runtime = normalizeHermesEnrollment({
+        const persistedAllowedProfiles = parsed.runtime?.allowed_profiles
+        const normalizedRuntime = normalizeHermesEnrollment({
           schema_version: EVA_MANAGED_POLICY.enrollmentSchemaVersion,
           runtime: parsed.runtime?.runtime,
           customer_id: parsed.runtime?.customer_id,
@@ -373,9 +378,20 @@ function createEvaManagedRuntime(options) {
             session_token: options.decryptSecret(parsed.runtime?.token),
             expires_at: parsed.runtime?.expires_at,
             agent_id: parsed.runtime?.agent_id,
+            allowed_profiles: parsed.runtime?.allowed_profiles,
+            primary_profile: parsed.runtime?.primary_profile,
+            profile_admin: parsed.runtime?.profile_admin,
             agent_display_name: parsed.runtime?.agent_display_name
           }
         })
+        if (
+          !Array.isArray(persistedAllowedProfiles) ||
+          persistedAllowedProfiles.length !== normalizedRuntime.allowedProfiles.length ||
+          persistedAllowedProfiles.some((profile, index) => profile !== normalizedRuntime.allowedProfiles[index])
+        ) {
+          throw new Error('persisted enrollment has no valid authorized profile scope')
+        }
+        runtime = normalizedRuntime
       } catch {
         runtime = null
       }
@@ -481,12 +497,16 @@ function createEvaManagedRuntime(options) {
       },
       runtime: state.runtime
         ? {
+            schema_version: state.runtime.schemaVersion,
             token: options.encryptSecret(state.runtime.token),
             expires_at: state.runtime.expiresAt,
             base_url: state.runtime.baseUrl,
             agent_id: state.runtime.agentId,
+            allowed_profiles: state.runtime.allowedProfiles,
             agent_display_name: state.runtime.agentDisplayName ?? state.runtime.agentId,
             customer_id: state.runtime.customerId,
+            primary_profile: state.runtime.profile,
+            profile_admin: state.runtime.profileAdmin,
             runtime: state.runtime.runtime
           }
         : null,
@@ -701,14 +721,16 @@ function createEvaManagedRuntime(options) {
 
   function supportProfileFor(runtime, requestedProfile) {
     let requested = normalizeEvaWsProfile(requestedProfile)
-    if (runtime?.sessionKind === 'delegated_support') {
+    if (Array.isArray(runtime?.allowedProfiles)) {
       // Match the gateway's default alias, without overriding a real profile
-      // named default when that profile is explicitly in the grant.
+      // named default when that profile is explicitly in the session scope.
       if (requested === 'default' && !runtime.allowedProfiles.includes('default')) requested = null
       if (requested !== null && !runtime.allowedProfiles.includes(requested)) {
-        throw supportProfileError()
+        throw runtime.sessionKind === 'delegated_support'
+          ? supportProfileError()
+          : profileMismatchError(requested)
       }
-      return requested ?? runtime.profile ?? null
+      return requested ?? runtime.profile ?? runtime.agentId ?? null
     }
     return requested
   }
@@ -775,7 +797,7 @@ function createEvaManagedRuntime(options) {
   }
 
   function supportProfileBinder(runtime) {
-    return runtime?.sessionKind === 'delegated_support'
+    return Array.isArray(runtime?.allowedProfiles)
       ? requestedProfile => supportProfileFor(runtime, requestedProfile)
       : null
   }
@@ -1956,6 +1978,23 @@ function createEvaManagedRuntime(options) {
     )
   }
 
+  function profileMismatchError(profile) {
+    return new EvaBrokerError(
+      `profile ${profile} is not authorized for this session`,
+      403,
+      'profile-mismatch'
+    )
+  }
+
+  function normalizeProfileRequestError(runtime, profile, error) {
+    const forbidden = /^\s*403:\s*([\s\S]*)$/.exec(String(error?.message || ''))?.[1].trim() === 'forbidden'
+    if (runtime.sessionKind !== 'delegated_support' && profile && statusCodeOf(error) === 403 && forbidden) {
+      return profileMismatchError(profile)
+    }
+
+    return error
+  }
+
   function bindSupportProfileValue(value, profile, runtime) {
     if (Array.isArray(value)) return value.map(entry => bindSupportProfileValue(entry, profile, runtime))
     if (!value || typeof value !== 'object' || Object.getPrototypeOf(value) !== Object.prototype) return value
@@ -1976,20 +2015,38 @@ function createEvaManagedRuntime(options) {
   }
 
   function bindSupportRequest(runtime, request) {
-    const profile = supportProfileFor(runtime, request?.profile)
     if (runtime?.sessionKind !== 'delegated_support') {
-      const validated = assertEvaManagedApiRequestAllowed(profile ? { ...request, profile } : request)
-      const parsed = new URL(validated.path, 'http://eva-managed.invalid')
-      if (profile && validated.method === 'GET' && parsed.pathname === '/api/profiles/sessions' &&
-        parsed.searchParams.get('profile') === 'all') {
-        // Only delegated reads expand over a finite grant. Ordinary logins
-        // retain the concrete selector previously supplied by the renderer.
-        parsed.searchParams.set('profile', profile)
-        return { policy: undefined, profile, request: { ...request, path: `${parsed.pathname}${parsed.search}` } }
+      const parsed = new URL(String(request?.path || ''), 'http://eva-managed.invalid')
+      const queryProfiles = parsed.searchParams.getAll('profile')
+      const bodyProfile = request?.body && typeof request.body === 'object' && !Array.isArray(request.body)
+        ? request.body.profile
+        : undefined
+      if (queryProfiles.length > 1) {
+        assertEvaManagedApiRequestAllowed({ ...request, profile: queryProfiles[0] }, { allowBroadProfileSelectors: false })
       }
-      return { policy: undefined, profile, request }
+      const queryProfile = queryProfiles[0]
+      const resolvedQueryProfile = queryProfile === undefined ? undefined : supportProfileFor(runtime, queryProfile)
+      const resolvedBodyProfile = bodyProfile === undefined ? undefined : supportProfileFor(runtime, bodyProfile)
+      if (resolvedQueryProfile !== undefined && resolvedBodyProfile !== undefined && resolvedQueryProfile !== resolvedBodyProfile) {
+        throw new EvaBrokerError('evaOS Agent blocked conflicting Hermes profiles.', 400, 'managed-policy')
+      }
+      const profile = resolvedQueryProfile ?? resolvedBodyProfile ?? supportProfileFor(runtime, request?.profile)
+      if (parsed.searchParams.get('profile') === 'default' && profile !== 'default') {
+        parsed.searchParams.set('profile', profile)
+      }
+      const ordinaryRequest = {
+        ...request,
+        path: `${parsed.pathname}${parsed.search}`,
+        ...(bodyProfile === undefined ? {} : { body: { ...request.body, profile } })
+      }
+      assertEvaManagedApiRequestAllowed(
+        profile ? { ...ordinaryRequest, profile } : ordinaryRequest,
+        { allowBroadProfileSelectors: false }
+      )
+      return { policy: { allowBroadProfileSelectors: false }, profile, request: ordinaryRequest }
     }
 
+    const profile = supportProfileFor(runtime, request?.profile)
     let path = request?.path
     if (!runtime.allowedProfiles.includes('default')) {
       const validated = assertEvaManagedApiRequestAllowed({ ...request, profile: request?.profile ?? profile }, { allowBroadProfileSelectors: false })
@@ -2009,7 +2066,7 @@ function createEvaManagedRuntime(options) {
     }
   }
 
-  async function readDelegatedProfile(request, retry, errors, refusedProfiles) {
+  async function readDelegatedProfile(runtime, request, retry, errors, refusedProfiles) {
     try {
       return await requestApi(request, retry)
     } catch (error) {
@@ -2020,6 +2077,9 @@ function createEvaManagedRuntime(options) {
       // granted profile can still be read safely, so expose this leaf as down.
       let refusedProfile = false
       if (status === 403) {
+        if (runtime.sessionKind !== 'delegated_support') {
+          throw normalizeProfileRequestError(runtime, request.profile, error)
+        }
         const match = /^\s*403:\s*(\{.*\})\s*$/.exec(String(error?.message || ''))
         try {
           refusedProfile = JSON.parse(match?.[1] ?? 'null')?.detail === 'profile is not authorized'
@@ -2035,14 +2095,19 @@ function createEvaManagedRuntime(options) {
     }
   }
 
-  function bindSupportSession(row, profile) {
-    if (row.profile != null && row.profile !== profile) throw supportProfileError()
+  function bindSupportSession(row, profile, runtime) {
+    if (row.profile != null && row.profile !== profile) {
+      throw runtime.sessionKind === 'delegated_support'
+        ? supportProfileError()
+        : profileMismatchError(row.profile)
+    }
     return { ...row, profile }
   }
 
   function supportReadCache(runtime) {
-    if (delegatedReadCache?.sessionId !== runtime.supportSessionId) {
-      delegatedReadCache = { sessionId: runtime.supportSessionId, profiles: new Map(), projects: new Map() }
+    const sessionId = runtime.sessionKind === 'delegated_support' ? runtime.supportSessionId : runtimeGeneration
+    if (!delegatedReadCache || delegatedReadCache.sessionId !== sessionId) {
+      delegatedReadCache = { sessionId, profiles: new Map(), projects: new Map() }
     }
     return delegatedReadCache
   }
@@ -2065,9 +2130,12 @@ function createEvaManagedRuntime(options) {
       for (const profile of profiles) {
         assertSupportRequestCurrent(guard)
         parsed.searchParams.set('profile', profile)
-        const result = await readDelegatedProfile({ ...request, profile, path: `${parsed.pathname}?${parsed.searchParams}` }, retry, readErrors)
+        const result = await readDelegatedProfile(runtime, { ...request, profile, path: `${parsed.pathname}?${parsed.searchParams}` }, retry, readErrors)
         assertSupportRequestCurrent(guard)
-        results.push(result && { ...result, sessions: (result.sessions ?? []).map(row => bindSupportSession(row, profile)) })
+        results.push(result && {
+          ...result,
+          sessions: (result.sessions ?? []).map(row => bindSupportSession(row, profile, runtime))
+        })
       }
     } finally {
       finishSupportRequestGuard(guard)
@@ -2101,13 +2169,17 @@ function createEvaManagedRuntime(options) {
     try {
       for (const profile of runtime.allowedProfiles) {
         assertSupportRequestCurrent(guard)
-        const result = await readDelegatedProfile({ ...request, profile, path: `/api/profiles?profile=${encodeURIComponent(profile)}` }, retry, errors, refusedProfiles)
+        const result = await readDelegatedProfile(runtime, { ...request, profile, path: `/api/profiles?profile=${encodeURIComponent(profile)}` }, retry, errors, refusedProfiles)
         assertSupportRequestCurrent(guard)
         const refused = refusedProfiles.has(profile)
         if (refused) cache.delete(profile)
         const freshRows = result?.profiles ?? []
         for (const row of freshRows) {
-          if (row.name !== profile) throw supportProfileError()
+          if (row.name !== profile) {
+            throw runtime.sessionKind === 'delegated_support'
+              ? supportProfileError()
+              : profileMismatchError(row.name)
+          }
         }
         // The exact managed route suppresses metadata failures as an empty
         // successful response; it cannot delete a member of this live grant.
@@ -2156,13 +2228,13 @@ function createEvaManagedRuntime(options) {
       for (const profile of runtime.allowedProfiles) {
         assertSupportRequestCurrent(guard)
         parsed.searchParams.set('profile', profile)
-        const fresh = await readDelegatedProfile({ ...request, profile, path: `${parsed.pathname}?${parsed.searchParams}` }, retry, errors, refusedProfiles)
+        const fresh = await readDelegatedProfile(runtime, { ...request, profile, path: `${parsed.pathname}?${parsed.searchParams}` }, retry, errors, refusedProfiles)
         assertSupportRequestCurrent(guard)
         const refused = refusedProfiles.has(profile)
         if (refused) cache.delete(profile)
         let boundFresh = fresh
         if (fresh) {
-          const bind = row => ({ ...bindSupportSession(row, profile), is_default_profile: profile === 'default' })
+          const bind = row => ({ ...bindSupportSession(row, profile, runtime), is_default_profile: profile === 'default' })
           boundFresh = { ...fresh, projects: (fresh.projects ?? []).map(raw => ({
             ...raw,
             previewSessions: (raw.previewSessions ?? []).map(bind),
@@ -2214,7 +2286,7 @@ function createEvaManagedRuntime(options) {
     try {
       for (const profile of runtime.allowedProfiles) {
         assertSupportRequestCurrent(guard)
-        const result = await readDelegatedProfile({ ...request, profile,
+        const result = await readDelegatedProfile(runtime, { ...request, profile,
           path: `/api/profiles/sessions/pull-requests?profile=${encodeURIComponent(profile)}` }, retry, errors)
         assertSupportRequestCurrent(guard)
         pullRequests = { ...pullRequests, ...(result?.pull_requests ?? {}) }
@@ -2293,27 +2365,48 @@ function createEvaManagedRuntime(options) {
     const parsedRequest = new URL(String(request?.path || ''), 'http://eva-managed.invalid')
     const requestPath = parsedRequest.pathname
     try {
-      if (supportRequest && String(request?.method || 'GET').toUpperCase() === 'GET' &&
+      if (String(request?.method || 'GET').toUpperCase() === 'GET' &&
         requestPath === '/api/profiles' &&
         (!parsedRequest.searchParams.has('profile') || parsedRequest.searchParams.get('profile') === 'all')) {
         assertEvaManagedApiRequestAllowed({ ...request, profile: supportProfileFor(runtime, request?.profile) })
         return await requestDelegatedProfiles(runtime, request, retry)
       }
-      if (supportRequest && String(request?.method || 'GET').toUpperCase() === 'GET' &&
+      if (String(request?.method || 'GET').toUpperCase() === 'GET' &&
         requestPath === '/api/profiles/sessions' && parsedRequest.searchParams.get('profile') === 'all') {
         assertEvaManagedApiRequestAllowed({ ...request, profile: supportProfileFor(runtime, request?.profile) })
         return await requestDelegatedSessionList(runtime, request, runtime.allowedProfiles, retry)
       }
-      if (supportRequest && requestPath === '/api/profiles/sessions/sidebar') {
+      if (requestPath === '/api/profiles/sessions/sidebar' &&
+        (supportRequest || !parsedRequest.searchParams.has('profile') || parsedRequest.searchParams.get('profile') === 'all')) {
+        assertEvaManagedApiRequestAllowed({ ...request, profile: supportProfileFor(runtime, request?.profile) })
         return await requestDelegatedSidebar(runtime, request, retry)
       }
-      if (supportRequest && String(request?.method || 'GET').toUpperCase() === 'GET' &&
-        requestPath === '/api/profiles/projects/tree' && !parsedRequest.searchParams.has('profile')) {
+      if (String(request?.method || 'GET').toUpperCase() === 'GET' &&
+        requestPath === '/api/cron/jobs' &&
+        (!parsedRequest.searchParams.has('profile') || parsedRequest.searchParams.get('profile') === 'all')) {
+        assertEvaManagedApiRequestAllowed({ ...request, profile: supportProfileFor(runtime, request?.profile) })
+        return await requestAuthorizedCronJobs({
+          runtime,
+          request,
+          retry,
+          requestApi,
+          profileMismatchError,
+          supportProfileError,
+          statusCodeOf,
+          startSupportRequestGuard,
+          assertSupportRequestCurrent,
+          finishSupportRequestGuard
+        })
+      }
+      if (String(request?.method || 'GET').toUpperCase() === 'GET' &&
+        requestPath === '/api/profiles/projects/tree' &&
+        (!parsedRequest.searchParams.has('profile') || parsedRequest.searchParams.get('profile') === 'all')) {
         assertEvaManagedApiRequestAllowed({ ...request, profile: supportProfileFor(runtime, request?.profile) })
         return await requestDelegatedProjectTree(runtime, request, retry)
       }
-      if (supportRequest && String(request?.method || 'GET').toUpperCase() === 'POST' &&
-        requestPath === '/api/profiles/sessions/pull-requests' && !parsedRequest.searchParams.has('profile')) {
+      if (String(request?.method || 'GET').toUpperCase() === 'POST' &&
+        requestPath === '/api/profiles/sessions/pull-requests' &&
+        (!parsedRequest.searchParams.has('profile') || parsedRequest.searchParams.get('profile') === 'all')) {
         assertEvaManagedApiRequestAllowed({ ...request, profile: supportProfileFor(runtime, request?.profile) })
         return await requestDelegatedPullRequests(runtime, request, retry)
       }
@@ -2342,7 +2435,11 @@ function createEvaManagedRuntime(options) {
       assertSupportRequestCurrent(guard)
       return result
     } catch (error) {
-      const normalizedError = normalizeSupportRequestError(error, guard)
+      const normalizedError = normalizeProfileRequestError(
+        runtime,
+        bound.profile,
+        normalizeSupportRequestError(error, guard)
+      )
       if (guard && normalizedError?.code === 'support-session-expired') throw normalizedError
       if (!retry || statusCodeOf(normalizedError) !== 401) throw normalizedError
       finishSupportRequestGuard(guard)
@@ -2368,7 +2465,11 @@ function createEvaManagedRuntime(options) {
         assertSupportRequestCurrent(refreshedGuard)
         return result
       } catch (retryError) {
-        throw normalizeSupportRequestError(retryError, refreshedGuard)
+        throw normalizeProfileRequestError(
+          refreshed,
+          nextBound.profile,
+          normalizeSupportRequestError(retryError, refreshedGuard)
+        )
       } finally {
         finishSupportRequestGuard(refreshedGuard)
       }
@@ -2484,6 +2585,10 @@ function createEvaManagedRuntime(options) {
     delegatedProfiles: async () => {
       const runtime = await ensureRuntimeEnrollment()
       return runtime.sessionKind === 'delegated_support' ? [...runtime.allowedProfiles] : null
+    },
+    authorizedProfiles: async () => {
+      const runtime = await ensureRuntimeEnrollment()
+      return [...runtime.allowedProfiles]
     },
     claimSupportRequest,
     close,

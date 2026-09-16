@@ -70,16 +70,18 @@ describe('managed plugin profile routes', () => {
   })
 
   it('publishes one opaque assigned-runtime roster without workstation sources', () => {
-    expect(buildEvaManagedAgentRoster(' research ')).toEqual({
+    const roster = buildEvaManagedAgentRoster(' alpha ')
+
+    expect(roster).toEqual({
       agents: [
         {
           connectionId: EVA_MANAGED_CONNECTION_ID,
           connectionKind: 'remote',
           connectionLabel: 'Assigned runtime',
-          handle: 'research',
+          handle: 'alpha',
           managedSource: true,
-          profile: 'research',
-          targetProfile: 'research'
+          profile: 'alpha',
+          targetProfile: 'alpha'
         }
       ],
       primaryConnectionId: EVA_MANAGED_CONNECTION_ID,
@@ -92,6 +94,8 @@ describe('managed plugin profile routes', () => {
         }
       ]
     })
+    expect(roster.agents.map(agent => agent.profile)).not.toContain('default')
+    expect(roster.agents.map(agent => agent.handle)).not.toContain('hermes')
 
     expect(buildEvaManagedAgentRoster('')).toMatchObject({
       agents: [{ connectionId: EVA_MANAGED_CONNECTION_ID, handle: 'default', profile: 'default' }]
@@ -115,18 +119,18 @@ describe('managed plugin profile routes', () => {
     ])
   })
 
-  it('feeds the managed roster IPC from the live finite delegated grant', async () => {
-    const delegatedProfiles = vi.fn().mockResolvedValue(['support', 'sibling'])
-    const primaryProfileKey = vi.fn(() => 'ordinary')
-    const roster = () => loadEvaManagedAgentRoster({ delegatedProfiles }, primaryProfileKey)
+  it('feeds the managed roster IPC from the live finite authorized scope', async () => {
+    const authorizedProfiles = vi.fn().mockResolvedValue(['alpha', 'beta', 'gamma'])
+    const primaryProfileKey = vi.fn(() => 'alpha')
+    const roster = () => loadEvaManagedAgentRoster({ authorizedProfiles }, primaryProfileKey)
     const result = await roster()
-    expect(result.agents.map((row: { profile: string }) => row.profile)).toEqual(['support', 'sibling'])
+    expect(result.agents.map((row: { profile: string }) => row.profile)).toEqual(['alpha', 'beta', 'gamma'])
     expect(result.sources).toHaveLength(1)
     expect(primaryProfileKey).not.toHaveBeenCalled()
-    delegatedProfiles.mockResolvedValueOnce(null)
-    expect((await roster()).agents[0].profile).toBe('ordinary')
-    delegatedProfiles.mockRejectedValueOnce(new Error('support session expired'))
-    await expect(roster()).rejects.toThrow('support session expired')
+    authorizedProfiles.mockResolvedValueOnce([])
+    expect((await roster()).agents[0].profile).toBe('alpha')
+    authorizedProfiles.mockRejectedValueOnce(new Error('scope unavailable'))
+    await expect(roster()).rejects.toThrow('scope unavailable')
   })
 
   it('accepts only the exact managed route identity', () => {

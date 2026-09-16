@@ -4,11 +4,19 @@ const os = require('node:os')
 const path = require('node:path')
 const test = require('node:test')
 
-const { EvaBrokerError, brokerPost, evaDesktopCodeChallenge } = require('./eva-managed.cjs')
+const {
+  EVA_MANAGED_POLICY,
+  EvaBrokerError,
+  brokerPost,
+  evaDesktopCodeChallenge,
+  normalizeHermesEnrollment
+} = require('./eva-managed.cjs')
 const { createEvaManagedRuntime } = require('./eva-runtime.cjs')
+const { requestAuthorizedCronJobs } = require('./eva-runtime-profile-scope.cjs')
 
 const FUTURE = '2099-07-23T12:00:00.000Z'
 const EXPIRED = '2020-07-23T12:00:00.000Z'
+const CURRENT_ENROLLMENT_SCHEMA = 'evaos.hermes_desktop_enrollment.v2'
 
 function writeEnrollment(statePath) {
   fs.writeFileSync(
@@ -58,16 +66,7 @@ test('cold launch re-enrolls an unexpired ES12 state that has no display label',
   const runtime = makeManagedRuntime(statePath, {
     launchRuntime: async () => {
       launches += 1
-      return {
-        agentDisplayName: 'Asuka',
-        agentId: 'main',
-        baseUrl: 'https://hermes-customer-one.ecs.electricsheephq.com',
-        customerId: 'customer-one',
-        expiresAt: FUTURE,
-        runtime: 'hermes',
-        schemaVersion: 'evaos.hermes_desktop_enrollment.v1',
-        token: 'fresh-runtime-token'
-      }
+      return freshRuntimeEnrollment()
     }
   })
 
@@ -206,17 +205,159 @@ function writeActiveEnrollment(statePath) {
         email: 'employee@example.invalid'
       },
       runtime: {
+        schema_version: CURRENT_ENROLLMENT_SCHEMA,
         token: 'runtime-token',
         expires_at: FUTURE,
         base_url: 'https://hermes-customer-one.ecs.electricsheephq.com',
         agent_id: 'main',
+        allowed_profiles: ['main'],
         agent_display_name: 'Asuka',
         customer_id: 'customer-one',
+        primary_profile: 'main',
+        profile_admin: false,
         runtime: 'hermes'
       }
     })
   )
 }
+
+function writeScopedEnrollment(statePath) {
+  writeActiveEnrollment(statePath)
+  const state = JSON.parse(fs.readFileSync(statePath, 'utf8'))
+  state.runtime.agent_id = 'alpha'
+  state.runtime.allowed_profiles = ['alpha', 'beta', 'gamma']
+  state.runtime.primary_profile = 'alpha'
+  state.runtime.profile_admin = true
+  fs.writeFileSync(statePath, JSON.stringify(state))
+}
+
+function parsedScopedEnrollment(allowedProfiles = ['alpha', 'beta', 'gamma']) {
+  return normalizeHermesEnrollment({
+    schema_version: CURRENT_ENROLLMENT_SCHEMA,
+    runtime: 'hermes',
+    customer_id: 'fixture-account',
+    remote_backend: {
+      base_url: 'https://hermes-fixture-account.ecs.electricsheephq.com',
+      session_token: 'fixture-runtime-session',
+      expires_at: FUTURE,
+      agent_id: 'alpha',
+      allowed_profiles: allowedProfiles,
+      primary_profile: 'alpha',
+      profile_admin: true,
+      agent_display_name: 'Alpha'
+    }
+  })
+}
+
+test('cold launch discards a persisted v1 runtime and re-enrolls through the signed-in session', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-v1-reenroll-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeActiveEnrollment(statePath)
+  const legacy = JSON.parse(fs.readFileSync(statePath, 'utf8'))
+  legacy.runtime.schema_version = 'evaos.hermes_desktop_enrollment.v1'
+  legacy.runtime.primary_profile = 'alpha'
+  delete legacy.runtime.allowed_profiles
+  fs.writeFileSync(statePath, JSON.stringify(legacy))
+  let launches = 0
+  const runtime = makeManagedRuntime(statePath, {
+    launchRuntime: async () => {
+      launches += 1
+      return parsedScopedEnrollment()
+    }
+  })
+  t.after(() => runtime.close())
+
+  assert.deepEqual(await runtime.authorizedProfiles(), ['alpha', 'beta', 'gamma'])
+  assert.equal(launches, 1)
+})
+
+test('cold launch reuses a valid persisted v2 runtime without re-enrolling', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-v2-reuse-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeScopedEnrollment(statePath)
+  let launches = 0
+  const runtime = makeManagedRuntime(statePath, {
+    launchRuntime: async () => {
+      launches += 1
+      return parsedScopedEnrollment()
+    }
+  })
+  t.after(() => runtime.close())
+
+  assert.equal(EVA_MANAGED_POLICY.enrollmentSchemaVersion, CURRENT_ENROLLMENT_SCHEMA)
+  assert.deepEqual(await runtime.authorizedProfiles(), ['alpha', 'beta', 'gamma'])
+  assert.equal(launches, 0)
+})
+
+test('cold launch discards a persisted v2 ordinary runtime without allowed profiles', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-v2-missing-scope-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeScopedEnrollment(statePath)
+  const malformed = JSON.parse(fs.readFileSync(statePath, 'utf8'))
+  delete malformed.runtime.allowed_profiles
+  fs.writeFileSync(statePath, JSON.stringify(malformed))
+  let launches = 0
+  const runtime = makeManagedRuntime(statePath, {
+    launchRuntime: async () => {
+      launches += 1
+      return parsedScopedEnrollment()
+    }
+  })
+  t.after(() => runtime.close())
+
+  assert.deepEqual(await runtime.authorizedProfiles(), ['alpha', 'beta', 'gamma'])
+  assert.equal(launches, 1)
+})
+
+test('persisted v2 ordinary runtime round-trips its authorized profile scope', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-v2-round-trip-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeEnrollment(statePath)
+  const first = makeManagedRuntime(statePath, { launchRuntime: async () => parsedScopedEnrollment() })
+  await first.resolveBackend()
+  await first.close()
+
+  const persisted = JSON.parse(fs.readFileSync(statePath, 'utf8'))
+  assert.deepEqual(persisted.runtime, {
+    ...persisted.runtime,
+    schema_version: CURRENT_ENROLLMENT_SCHEMA,
+    allowed_profiles: ['alpha', 'beta', 'gamma'],
+    primary_profile: 'alpha',
+    profile_admin: true
+  })
+  const persistedEnrollment = normalizeHermesEnrollment({
+    schema_version: persisted.runtime.schema_version,
+    runtime: persisted.runtime.runtime,
+    customer_id: persisted.runtime.customer_id,
+    remote_backend: {
+      base_url: persisted.runtime.base_url,
+      session_token: persisted.runtime.token,
+      expires_at: persisted.runtime.expires_at,
+      agent_id: persisted.runtime.agent_id,
+      allowed_profiles: persisted.runtime.allowed_profiles,
+      primary_profile: persisted.runtime.primary_profile,
+      profile_admin: persisted.runtime.profile_admin,
+      agent_display_name: persisted.runtime.agent_display_name
+    }
+  })
+  assert.equal(persistedEnrollment.profileAdmin, true)
+
+  let launches = 0
+  const reloaded = makeManagedRuntime(statePath, {
+    launchRuntime: async () => {
+      launches += 1
+      return parsedScopedEnrollment(['alpha'])
+    }
+  })
+  t.after(() => reloaded.close())
+
+  assert.deepEqual(await reloaded.authorizedProfiles(), ['alpha', 'beta', 'gamma'])
+  assert.equal(launches, 0)
+})
 
 function makeManagedRuntime(statePath, overrides = {}) {
   return createEvaManagedRuntime({
@@ -238,7 +379,7 @@ function makeManagedRuntime(statePath, overrides = {}) {
 
 function supportEnrollment(now = Date.now(), overrides = {}) {
   return {
-    schema_version: 'evaos.hermes_desktop_enrollment.v1',
+    schema_version: 'evaos.hermes_desktop_enrollment.v2',
     runtime: 'hermes',
     customer_id: 'customer-one',
     remote_backend: {
@@ -269,6 +410,379 @@ function sealed(value) {
 function unsealed(value) {
   return Buffer.from(String(value).replace(/^sealed:/, ''), 'base64').toString('utf8')
 }
+
+test('ordinary enrollment exposes its finite authorized profile scope after a cold load', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-customer-scope-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeScopedEnrollment(statePath)
+  const runtime = makeManagedRuntime(statePath)
+  t.after(() => runtime.close())
+
+  assert.deepEqual(await runtime.authorizedProfiles(), ['alpha', 'beta', 'gamma'])
+  assert.equal(await runtime.assignedProfileId(), 'alpha')
+  assert.equal(await runtime.delegatedProfiles(), null)
+})
+
+test('parsed non-admin enrollment rejects sibling reads before upstream access', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-non-admin-scope-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeEnrollment(statePath)
+  const requests = []
+  const enrollment = normalizeHermesEnrollment({
+    customer_id: 'alpha',
+    remote_backend: {
+      agent_id: 'alpha',
+      allowed_profiles: ['alpha'],
+      base_url: 'https://hermes-alpha.ecs.electricsheephq.com',
+      expires_at: FUTURE,
+      primary_profile: 'alpha',
+      profile_admin: false,
+      session_token: 'fixture-runtime-session'
+    },
+    runtime: 'hermes',
+    schema_version: 'evaos.hermes_desktop_enrollment.v2'
+  })
+  const runtime = makeManagedRuntime(statePath, {
+    launchRuntime: async () => enrollment,
+    fetchJson: async url => {
+      requests.push(new URL(url))
+      return { sessions: [], total: 0 }
+    }
+  })
+  t.after(() => runtime.close())
+
+  assert.deepEqual(await runtime.authorizedProfiles(), ['alpha'])
+  for (const path of ['/api/profiles/sessions?profile=beta', '/api/cron/jobs?profile=beta']) {
+    await assert.rejects(runtime.requestApi({ path }), error => error.code === 'profile-mismatch')
+  }
+  assert.equal(requests.length, 0)
+
+  await runtime.requestApi({ path: '/api/profiles/sessions?profile=default' })
+  assert.equal(requests[0].searchParams.get('profile'), 'alpha')
+})
+
+test('ordinary profile routing aliases default to alpha and rejects selectors outside the scope', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-customer-routing-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeScopedEnrollment(statePath)
+  const requests = []
+  let ticketInput
+  const runtime = makeManagedRuntime(statePath, {
+    fetchJson: async url => {
+      requests.push(new URL(url))
+      return { jobs: [] }
+    },
+    createWsRelay: () => ({
+      mintTicket: async input => {
+        ticketInput = input
+        return 'ws://loopback.invalid/managed'
+      },
+      disconnectAll: () => undefined,
+      close: async () => undefined
+    })
+  })
+  t.after(() => runtime.close())
+
+  await runtime.requestApi({ path: '/api/cron/jobs?profile=default', profile: 'default' })
+  assert.equal(requests[0].searchParams.get('profile'), 'alpha')
+  await runtime.freshWsUrl({ profile: 'default' })
+  assert.equal(ticketInput.profile, 'alpha')
+  assert.throws(
+    () => ticketInput.profileBinder('outside'),
+    error => error.statusCode === 403 && error.code === 'profile-mismatch' && /profile outside/.test(error.message)
+  )
+  await assert.rejects(
+    runtime.requestApi({ path: '/api/cron/jobs?profile=outside', profile: 'outside' }),
+    error => error.statusCode === 403 && error.code === 'profile-mismatch' && /profile outside/.test(error.message)
+  )
+})
+
+test('ordinary profile routing preserves a literal default member', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-customer-default-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeScopedEnrollment(statePath)
+  const state = JSON.parse(fs.readFileSync(statePath, 'utf8'))
+  state.runtime.allowed_profiles = ['alpha', 'default']
+  fs.writeFileSync(statePath, JSON.stringify(state))
+  let requested
+  const runtime = makeManagedRuntime(statePath, {
+    fetchJson: async url => {
+      requested = new URL(url).searchParams.get('profile')
+      return { jobs: [] }
+    }
+  })
+  t.after(() => runtime.close())
+
+  await runtime.requestApi({ path: '/api/cron/jobs?profile=default', profile: 'default' })
+  assert.equal(requested, 'default')
+})
+
+test('ordinary managed REST binding honors query and body profile carriers from parsed enrollment', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-carried-profile-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeEnrollment(statePath)
+  const requests = []
+  const runtime = makeManagedRuntime(statePath, {
+    launchRuntime: async () => parsedScopedEnrollment(),
+    fetchJson: async (url, _token, options) => {
+      requests.push({ url: new URL(url), body: options.body })
+      return { ok: true }
+    }
+  })
+  t.after(() => runtime.close())
+
+  await runtime.requestApi({ path: '/api/profiles/sessions?profile=beta' })
+  await runtime.requestApi({ method: 'POST', path: '/api/profiles/sessions/hide', body: { profile: 'beta' } })
+  await runtime.requestApi({ path: '/api/profiles/sessions?profile=default' })
+  await runtime.requestApi({ method: 'POST', path: '/api/cron/jobs/job-1/trigger?profile=beta', profile: 'all' })
+
+  assert.equal(requests[0].url.searchParams.get('profile'), 'beta')
+  assert.equal(requests[1].url.searchParams.get('profile'), 'beta')
+  assert.equal(requests[1].body.profile, 'beta')
+  assert.equal(requests[2].url.searchParams.get('profile'), 'alpha')
+  assert.equal(requests[3].url.searchParams.get('profile'), 'beta')
+  await assert.rejects(
+    runtime.requestApi({ path: '/api/profiles/sessions?profile=zeta' }),
+    error => error.statusCode === 403 && error.code === 'profile-mismatch' && /profile zeta/.test(error.message)
+  )
+  await assert.rejects(
+    runtime.requestApi({ method: 'POST', path: '/api/profiles/sessions?profile=beta', body: { profile: 'gamma' } }),
+    error => error.statusCode === 400 && error.code === 'managed-policy'
+  )
+})
+
+test('delegated support keeps rejecting unbound query and body profile carriers', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-delegated-carried-profile-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeActiveEnrollment(statePath)
+  const payload = supportEnrollment()
+  payload.admin_bypass = true
+  payload.assignment_version = null
+  payload.profile = 'alpha'
+  payload.remote_backend.agent_id = 'alpha'
+  payload.remote_backend.allowed_profiles = ['alpha', 'beta', 'gamma']
+  const runtime = makeManagedRuntime(statePath, { brokerPost: async () => payload })
+  t.after(() => runtime.close())
+  await runtime.claimSupportRequest('carried-profile-request')
+
+  await assert.rejects(
+    runtime.requestApi({ path: '/api/profiles/sessions?profile=beta' }),
+    error => error.code === 'managed-escape'
+  )
+  await assert.rejects(
+    runtime.requestApi({ method: 'POST', path: '/api/profiles/sessions/hide', body: { profile: 'beta' } }),
+    error => error.code === 'support-profile-mismatch'
+  )
+})
+
+test('ordinary upstream profile refusals name the authorized selector', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-customer-refusal-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeScopedEnrollment(statePath)
+  const runtime = makeManagedRuntime(statePath, {
+    fetchJson: async () => {
+      const error = new Error('403: forbidden')
+      error.statusCode = 403
+      throw error
+    }
+  })
+  t.after(() => runtime.close())
+
+  await assert.rejects(
+    runtime.requestApi({ path: '/api/cron/jobs?profile=beta', profile: 'beta' }),
+    error => error.statusCode === 403 && error.code === 'profile-mismatch' &&
+      error.message === 'profile beta is not authorized for this session'
+  )
+})
+
+test('ordinary all scope fans out to concrete profiles for metadata, sessions, and cron', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-customer-all-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeScopedEnrollment(statePath)
+  const requests = []
+  const runtime = makeManagedRuntime(statePath, {
+    fetchJson: async url => {
+      const parsed = new URL(url)
+      requests.push(parsed)
+      const profile = parsed.searchParams.get('profile')
+      if (parsed.pathname === '/api/profiles') return { profiles: [{ name: profile }] }
+      if (parsed.pathname === '/api/profiles/sessions') {
+        return { sessions: [{ id: `session-${profile}` }], total: 1 }
+      }
+      if (parsed.pathname === '/api/cron/jobs') return [{ id: `job-${profile}` }]
+      throw new Error(`unexpected path ${parsed.pathname}`)
+    }
+  })
+  t.after(() => runtime.close())
+
+  const profiles = await runtime.requestApi({ path: '/api/profiles', profile: 'alpha' })
+  const sessions = await runtime.requestApi({ path: '/api/profiles/sessions?profile=all', profile: 'alpha' })
+  const jobs = await runtime.requestApi({ path: '/api/cron/jobs?profile=all', profile: 'alpha' })
+
+  await assert.rejects(
+    runtime.requestApi({ path: '/api/profiles/sessions/sidebar?profile=zeta' }),
+    error => error.code === 'profile-mismatch'
+  )
+  await assert.rejects(
+    runtime.requestApi({ path: '/api/profiles/sessions/sidebar?profile=alpha&profile=beta' }),
+    error => error.code === 'managed-policy'
+  )
+
+  assert.deepEqual(profiles.profiles.map(row => row.name), ['alpha', 'beta', 'gamma'])
+  assert.deepEqual(sessions.sessions.map(row => row.profile), ['alpha', 'beta', 'gamma'])
+  assert.deepEqual(jobs.map(row => row.profile), ['alpha', 'beta', 'gamma'])
+  assert.equal(requests.length, 9)
+  assert.ok(requests.every(url => ['alpha', 'beta', 'gamma'].includes(url.searchParams.get('profile'))))
+
+  const singleState = JSON.parse(fs.readFileSync(statePath, 'utf8'))
+  singleState.runtime.allowed_profiles = ['alpha']
+  singleState.runtime.profile_admin = false
+  fs.writeFileSync(statePath, JSON.stringify(singleState))
+  const singleRequests = []
+  const single = makeManagedRuntime(statePath, {
+    fetchJson: async url => {
+      singleRequests.push(new URL(url))
+      return []
+    }
+  })
+  t.after(() => single.close())
+
+  await single.requestApi({ path: '/api/cron/jobs?profile=all', profile: 'alpha' })
+  assert.deepEqual(singleRequests.map(url => url.searchParams.get('profile')), ['alpha'])
+})
+
+test('ordinary sidebar routes a concrete selector once and fans out an absent selector', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-sidebar-scope-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeScopedEnrollment(statePath)
+  const requests = []
+  const runtime = makeManagedRuntime(statePath, {
+    fetchJson: async url => {
+      const parsed = new URL(url)
+      const profile = parsed.searchParams.get('profile')
+      requests.push(parsed)
+      if (parsed.pathname === '/api/profiles/sessions/sidebar') {
+        return { cron: { sessions: [] }, messaging: { sessions: [], total: 0 }, recents: { sessions: [{ id: profile, profile }] } }
+      }
+      return { sessions: [{ id: `${parsed.searchParams.get('source') ?? 'recent'}-${profile}` }], total: 1 }
+    }
+  })
+  t.after(() => runtime.close())
+
+  const concrete = await runtime.requestApi({ path: '/api/profiles/sessions/sidebar?profile=beta' })
+  assert.deepEqual(concrete.recents.sessions.map(row => row.profile), ['beta'])
+  assert.deepEqual(requests.map(url => url.searchParams.get('profile')), ['beta'])
+
+  requests.length = 0
+  const aggregate = await runtime.requestApi({ path: '/api/profiles/sessions/sidebar' })
+  assert.deepEqual([...new Set(aggregate.recents.sessions.map(row => row.profile))], ['alpha', 'beta', 'gamma'])
+  assert.equal(requests.length, 9)
+  assert.ok(requests.every(url => ['alpha', 'beta', 'gamma'].includes(url.searchParams.get('profile'))))
+})
+
+test('cron fan-out preserves healthy profiles and reports sanitized failures', async () => {
+  const jobs = await requestAuthorizedCronJobs({
+    runtime: { allowedProfiles: ['alpha', 'beta', 'gamma'], sessionKind: 'customer' },
+    request: { path: '/api/cron/jobs?profile=all' },
+    retry: true,
+    requestApi: async request => {
+      if (request.profile === 'beta') throw new EvaBrokerError('private upstream detail', 502, 'upstream')
+      return [{ id: `job-${request.profile}` }]
+    },
+    profileMismatchError: profile => new EvaBrokerError(`profile ${profile}`, 403, 'profile-mismatch'),
+    supportProfileError: () => new EvaBrokerError('support profile', 403, 'support-profile-mismatch'),
+    statusCodeOf: error => error.statusCode ?? null,
+    startSupportRequestGuard: () => null,
+    assertSupportRequestCurrent: () => undefined,
+    finishSupportRequestGuard: () => undefined
+  })
+
+  assert.deepEqual(jobs.jobs.map(job => job.id), ['job-alpha', 'job-gamma'])
+  assert.deepEqual(jobs.errors, [{ profile: 'beta', error: 'Profile temporarily unavailable.', status: 502 }])
+  assert.equal(JSON.stringify(jobs.errors).includes('private upstream detail'), false)
+})
+
+test('cron fan-out stops after delegated support guard revocation', async () => {
+  const guard = { current: true }
+  const requested = []
+  let finished = false
+
+  await assert.rejects(
+    requestAuthorizedCronJobs({
+      runtime: { allowedProfiles: ['alpha', 'beta', 'gamma'], sessionKind: 'delegated_support' },
+      request: { path: '/api/cron/jobs?profile=all' },
+      retry: true,
+      requestApi: async request => {
+        requested.push(request.profile)
+        guard.current = false
+        return []
+      },
+      profileMismatchError: profile => new EvaBrokerError(`profile ${profile}`, 403, 'profile-mismatch'),
+      supportProfileError: () => new EvaBrokerError('support profile', 403, 'support-profile-mismatch'),
+      statusCodeOf: error => error.statusCode ?? null,
+      startSupportRequestGuard: () => guard,
+      assertSupportRequestCurrent: current => {
+        if (!current.current) throw new EvaBrokerError('support expired', 401, 'support-session-expired')
+      },
+      finishSupportRequestGuard: () => { finished = true }
+    }),
+    error => error.code === 'support-session-expired'
+  )
+  assert.deepEqual(requested, ['alpha'])
+  assert.equal(finished, true)
+})
+
+test('ordinary all scope fans out project tree and pull-request reads', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-customer-projects-all-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeEnrollment(statePath)
+  const requests = []
+  const runtime = makeManagedRuntime(statePath, {
+    launchRuntime: async () => parsedScopedEnrollment(),
+    fetchJson: async (url, _token, options) => {
+      const parsed = new URL(url)
+      const profile = parsed.searchParams.get('profile')
+      requests.push({ path: parsed.pathname, profile })
+      if (parsed.pathname === '/api/profiles/projects/tree') {
+        return { projects: [{ id: profile, path: `/${profile}`, previewSessions: [], repos: [] }], errors: [] }
+      }
+      assert.equal(options.method, 'POST')
+      return { pull_requests: {}, scanned: [] }
+    }
+  })
+  t.after(() => runtime.close())
+
+  await runtime.requestApi({ path: '/api/profiles/projects/tree?profile=all' })
+  await runtime.requestApi({ method: 'POST', path: '/api/profiles/sessions/pull-requests?profile=all', body: { ids: [] } })
+  assert.deepEqual(requests.map(entry => entry.profile), ['alpha', 'beta', 'gamma', 'alpha', 'beta', 'gamma'])
+  assert.ok(requests.every(entry => entry.profile !== 'all'))
+
+  const singlePath = path.join(directory, 'single-enrollment.json')
+  writeEnrollment(singlePath)
+  const singleRequests = []
+  const single = makeManagedRuntime(singlePath, {
+    launchRuntime: async () => parsedScopedEnrollment(['alpha']),
+    fetchJson: async url => {
+      const parsed = new URL(url)
+      singleRequests.push(parsed.searchParams.get('profile'))
+      return parsed.pathname.endsWith('/tree') ? { projects: [], errors: [] } : { pull_requests: {}, scanned: [] }
+    }
+  })
+  t.after(() => single.close())
+  await single.requestApi({ path: '/api/profiles/projects/tree' })
+  await single.requestApi({ method: 'POST', path: '/api/profiles/sessions/pull-requests', body: { ids: [] } })
+  assert.deepEqual(singleRequests, ['alpha', 'alpha'])
+})
 
 function sealExistingState(statePath) {
   const state = JSON.parse(fs.readFileSync(statePath, 'utf8'))
@@ -672,7 +1186,7 @@ test('restart resumes only the same support assignment and rejects actor or repl
       throw new EvaBrokerError('support assignment was revoked', 403, 'support_assignment_revoked')
     },
     launchRuntime: async () => ({
-      schemaVersion: 'evaos.hermes_desktop_enrollment.v1',
+      schemaVersion: 'evaos.hermes_desktop_enrollment.v2',
       customerId: 'customer-one',
       runtime: 'hermes',
       agentId: 'main',
@@ -1685,7 +2199,7 @@ test('cold launch replaces an expired runtime enrollment before connecting', asy
       launches += 1
       assert.equal(token, 'desktop-token')
       return {
-        schemaVersion: 'evaos.hermes_desktop_enrollment.v1',
+        schemaVersion: 'evaos.hermes_desktop_enrollment.v2',
         customerId: 'customer-one',
         runtime: 'hermes',
         agentId: 'main',
@@ -1765,15 +2279,7 @@ test('deterministic enrollment rejection terminates boot progress and a later re
     403,
     'feature_not_enabled'
   )
-  const enrollment = {
-    schemaVersion: 'evaos.hermes_desktop_enrollment.v1',
-    customerId: 'customer-one',
-    runtime: 'hermes',
-    agentId: 'main',
-    baseUrl: 'https://hermes-customer-one.ecs.electricsheephq.com',
-    token: 'fresh-runtime-token',
-    expiresAt: FUTURE
-  }
+  const enrollment = freshRuntimeEnrollment()
   const runtime = makeManagedRuntime(statePath, {
     updateBootProgress: update => updates.push(update),
     launchRuntime: async () => {
@@ -1813,15 +2319,7 @@ test('explicit refresh bypasses cooldown once, coalesces callers, and success re
   let releaseLaunch
   let outcome = 'fail'
   const failure = new EvaBrokerError('Runtime enrollment is temporarily unavailable.', 500, 'vm_lookup_failed')
-  const enrollment = {
-    schemaVersion: 'evaos.hermes_desktop_enrollment.v1',
-    customerId: 'customer-one',
-    runtime: 'hermes',
-    agentId: 'main',
-    baseUrl: 'https://hermes-customer-one.ecs.electricsheephq.com',
-    token: 'fresh-runtime-token',
-    expiresAt: FUTURE
-  }
+  const enrollment = freshRuntimeEnrollment()
   const runtime = makeManagedRuntime(statePath, {
     now: () => clock,
     launchRuntime: async () => {
@@ -1877,7 +2375,7 @@ test('forced refresh supersedes an automatic enrollment without reusing its stal
       const index = launches
       await new Promise(resolve => releases.push(resolve))
       return {
-        schemaVersion: 'evaos.hermes_desktop_enrollment.v1',
+        schemaVersion: 'evaos.hermes_desktop_enrollment.v2',
         customerId: 'customer-one',
         runtime: 'hermes',
         agentId: 'main',
@@ -1935,7 +2433,7 @@ test('refresh preserves renderer state while reconnecting the same customer and 
   let rendererResets = 0
   const runtime = makeManagedRuntime(statePath, {
     launchRuntime: async () => ({
-      schemaVersion: 'evaos.hermes_desktop_enrollment.v1',
+      schemaVersion: 'evaos.hermes_desktop_enrollment.v2',
       customerId: 'customer-one',
       runtime: 'hermes',
       agentId: 'main',
@@ -1973,7 +2471,7 @@ test('refresh resets renderer state when either assignment identity changes', as
     let rendererResets = 0
     const runtime = makeManagedRuntime(statePath, {
       launchRuntime: async () => ({
-        schemaVersion: 'evaos.hermes_desktop_enrollment.v1',
+        schemaVersion: 'evaos.hermes_desktop_enrollment.v2',
         customerId: assignment.customerId,
         runtime: 'hermes',
         agentId: assignment.agentId,
@@ -2014,7 +2512,7 @@ test('production reauthentication errors trigger one runtime re-enrollment', asy
     launchRuntime: async () => {
       launches += 1
       return {
-        schemaVersion: 'evaos.hermes_desktop_enrollment.v1',
+        schemaVersion: 'evaos.hermes_desktop_enrollment.v2',
         customerId: 'customer-one',
         runtime: 'hermes',
         agentId: 'main',
@@ -2050,7 +2548,7 @@ test('PKCE sign-in keeps one verifier per attempt, rejects wrong callbacks, and 
     email: 'employee@example.invalid'
   }
   const enrollment = {
-    schemaVersion: 'evaos.hermes_desktop_enrollment.v1',
+    schemaVersion: 'evaos.hermes_desktop_enrollment.v2',
     customerId: 'customer-one',
     runtime: 'hermes',
     agentId: 'main',
@@ -2421,7 +2919,7 @@ test('a stale in-flight launch cannot restore backoff after auth invalidation', 
   let outcome = 'wait'
   const failure = new EvaBrokerError('Runtime enrollment is temporarily unavailable.', 500, 'vm_lookup_failed')
   const enrollment = {
-    schemaVersion: 'evaos.hermes_desktop_enrollment.v1',
+    schemaVersion: 'evaos.hermes_desktop_enrollment.v2',
     customerId: 'customer-one',
     runtime: 'hermes',
     agentId: 'main',
@@ -2500,17 +2998,17 @@ test('managed media keeps Range and runtime credentials in the main-process fetc
   const result = await runtime.requestMedia({
     headers: { range: 'bytes=100-199' },
     path: '/api/files/download?path=%2Fsrv%2Frender.mp4',
-    profile: 'research'
+    profile: 'main'
   })
 
   assert.equal(result, response)
-  assert.deepEqual(calls, [
-    {
-      headers: { range: 'bytes=100-199' },
-      token: 'runtime-token',
-      url: 'https://hermes-customer-one.ecs.electricsheephq.com/api/files/download?path=%2Fsrv%2Frender.mp4&profile=research'
-    }
-  ])
+  assert.equal(calls.length, 1)
+  assert.deepEqual(calls[0].headers, { range: 'bytes=100-199' })
+  assert.equal(calls[0].token, 'runtime-token')
+  const requestedUrl = new URL(calls[0].url)
+  assert.equal(requestedUrl.pathname, '/api/files/download')
+  assert.equal(requestedUrl.searchParams.get('path'), '/srv/render.mp4')
+  assert.equal(requestedUrl.searchParams.get('profile'), 'main')
 })
 
 test('a runtime 401 clears older transient backoff before requiring sign-in', async t => {
@@ -2574,16 +3072,16 @@ test('managed runtime forwards unknown APIs, bodies, uploads, and Hermes profile
   await runtime.requestApi({
     path: '/api/future-feature?mode=alpha',
     method: 'POST',
-    profile: 'research',
+    profile: 'main',
     body: { future: true },
     upload
   })
 
   assert.equal(calls.length, 1)
-  assert.equal(
-    calls[0].url,
-    'https://hermes-customer-one.ecs.electricsheephq.com/api/future-feature?mode=alpha&profile=research'
-  )
+  const requestedUrl = new URL(calls[0].url)
+  assert.equal(requestedUrl.pathname, '/api/future-feature')
+  assert.equal(requestedUrl.searchParams.get('mode'), 'alpha')
+  assert.equal(requestedUrl.searchParams.get('profile'), 'main')
   assert.equal(calls[0].token, 'runtime-token')
   assert.equal(calls[0].options.method, 'POST')
   assert.deepEqual(calls[0].options.body, { future: true })
@@ -2605,28 +3103,28 @@ test('ordinary managed all-profile lists retain the concrete routing profile', a
 
   await runtime.requestApi({
     path: '/api/profiles/sessions?limit=40&offset=0&profile=all',
-    profile: 'research'
+    profile: 'main'
   })
   assert.equal(calls.length, 1)
   const url = new URL(calls[0])
   assert.equal(url.pathname, '/api/profiles/sessions')
-  assert.equal(url.searchParams.get('profile'), 'research')
+  assert.equal(url.searchParams.get('profile'), 'main')
   assert.equal(url.searchParams.get('limit'), '40')
   assert.equal(url.searchParams.get('offset'), '0')
   await assert.rejects(runtime.requestApi({
     path: '/api/profiles/sessions?profile=all&profile=other',
-    profile: 'research'
+    profile: 'main'
   }), error => error.code === 'managed-policy')
   assert.equal(calls.length, 1)
 })
 
-test('ordinary managed request failures preserve their original error', async t => {
+test('ordinary managed requests preserve upstream 403s except the relay bare forbidden', async t => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-ordinary-error-'))
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
   const statePath = path.join(directory, 'eva-enrollment.json')
-  writeActiveEnrollment(statePath)
+  writeScopedEnrollment(statePath)
 
-  const failure = new Error('ordinary backend unavailable')
+  let failure = new EvaBrokerError('403: {"detail":"admin only"}', 403, 'permission-denied')
   const runtime = createEvaManagedRuntime({
     statePath,
     encryptSecret: value => value,
@@ -2642,7 +3140,25 @@ test('ordinary managed request failures preserve their original error', async t 
     resolveTimeoutMs: () => 1_000
   })
 
-  await assert.rejects(runtime.requestApi({ path: '/api/sessions', method: 'GET' }), error => error === failure)
+  await assert.rejects(
+    runtime.requestApi({ path: '/api/sessions?profile=beta', method: 'GET' }),
+    error => error === failure && error.code === 'permission-denied' && error.message === '403: {"detail":"admin only"}'
+  )
+  await assert.rejects(
+    runtime.requestApi({ path: '/api/profiles' }),
+    error => error === failure && error.code === 'permission-denied' && error.message === '403: {"detail":"admin only"}'
+  )
+
+  failure = new Error('403:  forbidden \n')
+  failure.statusCode = 403
+  await assert.rejects(
+    runtime.requestApi({ path: '/api/sessions?profile=beta', method: 'GET' }),
+    error => error.code === 'profile-mismatch' && error.message === 'profile beta is not authorized for this session'
+  )
+  await assert.rejects(
+    runtime.requestApi({ path: '/api/profiles' }),
+    error => error.code === 'profile-mismatch' && error.message === 'profile alpha is not authorized for this session'
+  )
 })
 
 test('managed connections and endpoint tickets preserve the selected profile and runtime generation', async t => {
@@ -2668,23 +3184,28 @@ test('managed connections and endpoint tickets preserve the selected profile and
   })
   t.after(async () => runtime.close())
 
-  const connection = await runtime.resolveBackend({ profile: 'research' })
-  assert.equal(connection.profile, 'research')
+  const connection = await runtime.resolveBackend({ profile: 'main' })
+  assert.equal(connection.profile, 'main')
   assert.equal(connection.token, '')
-  assert.deepEqual(minted[0], {
+  const { profileBinder: firstProfileBinder, ...firstTicket } = minted[0]
+  assert.equal(typeof firstProfileBinder, 'function')
+  assert.equal(firstProfileBinder('default'), 'main')
+  assert.deepEqual(firstTicket, {
     generation: 0,
     path: '/api/ws',
-    profile: 'research'
+    profile: 'main'
   })
 
   await runtime.freshWsUrl({
     path: '/api/plugins/kanban/events?mode=live',
-    profile: 'research'
+    profile: 'main'
   })
-  assert.deepEqual(minted[1], {
+  const { profileBinder: secondProfileBinder, ...secondTicket } = minted[1]
+  assert.equal(typeof secondProfileBinder, 'function')
+  assert.deepEqual(secondTicket, {
     generation: 0,
     path: '/api/plugins/kanban/events?mode=live',
-    profile: 'research'
+    profile: 'main'
   })
 
   const upstream = await relayOptions.getUpstream()
@@ -2787,16 +3308,7 @@ test('a binding created while the app is running recovers on the next forced lau
     launchRuntime: async () => {
       launches += 1
       if (launches < 2) throw missingAgentBindingError()
-      return {
-        agentDisplayName: 'Asuka',
-        agentId: 'main',
-        baseUrl: 'https://hermes-customer-one.ecs.electricsheephq.com',
-        customerId: 'customer-one',
-        expiresAt: FUTURE,
-        runtime: 'hermes',
-        schemaVersion: 'evaos.hermes_desktop_enrollment.v1',
-        token: 'fresh-runtime-token'
-      }
+      return freshRuntimeEnrollment()
     }
   })
   t.after(() => runtime.close())
@@ -3474,11 +3986,15 @@ function freshRuntimeEnrollment() {
   return {
     agentDisplayName: 'Asuka',
     agentId: 'main',
+    allowedProfiles: ['main'],
     baseUrl: 'https://hermes-customer-one.ecs.electricsheephq.com',
     customerId: 'customer-one',
     expiresAt: FUTURE,
+    profile: 'main',
+    profileAdmin: false,
     runtime: 'hermes',
-    schemaVersion: 'evaos.hermes_desktop_enrollment.v1',
+    schemaVersion: 'evaos.hermes_desktop_enrollment.v2',
+    sessionKind: 'customer',
     token: 'fresh-runtime-token'
   }
 }
@@ -4405,7 +4921,13 @@ test('a forced plain sign-in re-homes the renderer only when it comes back as a 
       opened = new URL(url)
     },
     pollDeviceCode: async () => ({ token: 'next-desktop-session', expiresAt: FUTURE, email }),
-    launchRuntime: async () => ({ ...freshRuntimeEnrollment(), agentId: agent, agentDisplayName: agent })
+    launchRuntime: async () => ({
+      ...freshRuntimeEnrollment(),
+      agentId: agent,
+      agentDisplayName: agent,
+      allowedProfiles: [agent],
+      profile: agent
+    })
   })
   t.after(() => runtime.close())
 

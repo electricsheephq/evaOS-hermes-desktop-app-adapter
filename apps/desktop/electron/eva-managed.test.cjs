@@ -449,7 +449,7 @@ test('runtime launch lets the broker select the account and assigned agent', asy
       observed = { url, init, body: JSON.parse(init.body) }
       return new Response(
         JSON.stringify({
-          schema_version: 'evaos.hermes_desktop_enrollment.v1',
+          schema_version: 'evaos.hermes_desktop_enrollment.v2',
           runtime: 'hermes',
           customer_id: 'jackie-david',
           remote_backend: {
@@ -706,19 +706,56 @@ test('account reset clears renderer account state while preserving global prefer
 
 test('managed enrollment accepts server-selected accounts and rejects mismatched or malformed identities', () => {
   const payload = {
-    schema_version: 'evaos.hermes_desktop_enrollment.v1',
+    ok: true,
+    session: { role: 'owner' },
+    schema_version: 'evaos.hermes_desktop_enrollment.v2',
     runtime: 'hermes',
     customer_id: 'jackie-david',
     remote_backend: {
       base_url: 'https://hermes-jackie-david.ecs.electricsheephq.com',
       session_token: 'opaque-runtime-session',
       expires_at: FUTURE,
-      agent_id: 'louis',
+      agent_id: 'alpha',
+      allowed_profiles: ['alpha', 'beta', 'gamma'],
+      primary_profile: 'alpha',
+      profile_admin: true,
       agent_display_name: 'Asuka'
     }
   }
-  assert.equal(normalizeHermesEnrollment(payload).agentId, 'louis')
-  assert.equal(normalizeHermesEnrollment(payload).agentDisplayName, 'Asuka')
+  const scoped = normalizeHermesEnrollment(payload)
+  assert.equal(scoped.agentId, 'alpha')
+  assert.equal(scoped.agentDisplayName, 'Asuka')
+  assert.deepEqual(scoped.allowedProfiles, ['alpha', 'beta', 'gamma'])
+  assert.equal(scoped.profile, 'alpha')
+  assert.equal(scoped.profileAdmin, true)
+  assert.equal(scoped.sessionKind, 'customer')
+
+  const legacyRemote = { ...payload.remote_backend }
+  delete legacyRemote.allowed_profiles
+  delete legacyRemote.primary_profile
+  delete legacyRemote.profile_admin
+  const legacy = normalizeHermesEnrollment({ ...payload, remote_backend: legacyRemote, admin_bypass: true })
+  assert.deepEqual(legacy.allowedProfiles, ['alpha'])
+  assert.equal(legacy.profile, 'alpha')
+  assert.equal(legacy.profileAdmin, false)
+  assert.equal(Object.hasOwn(legacy, 'adminBypass'), false)
+
+  const diagnostics = []
+  const mismatchedPrimary = normalizeHermesEnrollment({
+    ...payload,
+    remote_backend: { ...payload.remote_backend, primary_profile: 'beta' }
+  }, { onDiagnostic: message => diagnostics.push(message) })
+  assert.equal(mismatchedPrimary.profile, 'alpha')
+  assert.deepEqual(diagnostics, [
+    '[eva-managed] broker primary profile did not match assigned agent; using assigned agent'
+  ])
+
+  const invalidScope = normalizeHermesEnrollment({
+    ...payload,
+    remote_backend: { ...payload.remote_backend, allowed_profiles: ['alpha', 'alpha'] }
+  })
+  assert.deepEqual(invalidScope.allowedProfiles, ['alpha'])
+  assert.equal(invalidScope.profileAdmin, false)
   const benjamin = normalizeHermesEnrollment({
     ...payload,
     customer_id: 'benjamin-kennedy',
@@ -770,7 +807,7 @@ test('managed enrollment accepts server-selected accounts and rejects mismatched
 test('delegated support enrollment requires a bounded assignment and presentation labels', () => {
   const now = Date.now()
   const payload = {
-    schema_version: 'evaos.hermes_desktop_enrollment.v1',
+    schema_version: 'evaos.hermes_desktop_enrollment.v2',
     runtime: 'hermes',
     customer_id: 'customer-one',
     remote_backend: {
@@ -800,6 +837,7 @@ test('delegated support enrollment requires a bounded assignment and presentatio
   assert.equal(support.supportCustomerLabel, 'Customer')
   assert.equal(support.supportAgentLabel, 'Assigned agent')
   assert.equal(support.profile, 'support')
+  assert.equal(Object.hasOwn(support, 'profileAdmin'), false)
 
   const adminSupport = normalizeSupportEnrollment(
     { ...payload, admin_bypass: true, assignment_version: null },
