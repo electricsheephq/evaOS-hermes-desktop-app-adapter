@@ -494,7 +494,7 @@ export function CronView({ onClose, onOpenSession, setStatusbarItemGroup: _setSt
 
   async function handleTrigger(job: CronJob) {
     const viewProfile = profile
-    const key = `${viewProfile}:${job.id}`
+    const key = cronJobIdentity(job)
     const controller = triggerControllerRef.current
 
     if (!controller) {
@@ -710,7 +710,7 @@ export function CronView({ onClose, onOpenSession, setStatusbarItemGroup: _setSt
 
           {selectedJob ? (
             <CronJobDetail
-              busy={busyJobTokens.has(selectedJob.id) || triggeringJobKeys.has(`${profile}:${selectedJob.id}`)}
+              busy={busyJobTokens.has(selectedJob.id) || triggeringJobKeys.has(cronJobIdentity(selectedJob))}
               c={c}
               job={selectedJob}
               onOpenSession={onOpenSession}

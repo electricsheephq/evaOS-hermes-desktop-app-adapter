@@ -43,17 +43,11 @@ const PEEK_BACKSTOP_INTERVAL_MS = 60_000
 const INITIAL_VISIBLE_JOBS = 3
 const LOAD_MORE_STEP = 10
 
-export function replaceCronJobRow(rows: CronJob[], job: CronJob, updated: CronJob): CronJob[] {
-  const identity = cronJobIdentity(job)
+export const replaceCronJobRow = (rows: CronJob[], job: CronJob, updated: CronJob): CronJob[] =>
+  rows.map(row => (cronJobIdentity(row) === cronJobIdentity(job) ? { ...updated, profile: job.profile } : row))
 
-  return rows.map(row => (cronJobIdentity(row) === identity ? { ...updated, profile: job.profile } : row))
-}
-
-export function removeCronJobRow(rows: CronJob[], job: CronJob): CronJob[] {
-  const identity = cronJobIdentity(job)
-
-  return rows.filter(row => cronJobIdentity(row) !== identity)
-}
+export const removeCronJobRow = (rows: CronJob[], job: CronJob): CronJob[] =>
+  rows.filter(row => cronJobIdentity(row) !== cronJobIdentity(job))
 
 function nextRunMs(job: CronJob): null | number {
   if (!job.next_run_at) {

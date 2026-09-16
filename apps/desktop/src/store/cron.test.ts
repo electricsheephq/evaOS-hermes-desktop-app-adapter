@@ -5,6 +5,7 @@ import {
   $cronJobs,
   beginCronJobsRequest,
   commitCronJobsRequest,
+  cronJobIdentity,
   setCronJobs,
   updateCronJobs
 } from './cron'
@@ -54,5 +55,13 @@ describe('cron jobs request fencing', () => {
     expect(commitCronJobsRequest(request, jobs)).toBe(true)
     expect($cronJobs.get()).toEqual([newJob])
     expect($cronJobErrors.get()).toEqual([{ error: 'Profile temporarily unavailable.', profile: 'beta', status: 502 }])
+  })
+})
+
+describe('cron job identity', () => {
+  it('separates same-id jobs owned by different profiles', () => {
+    expect(cronJobIdentity({ id: 'daily', profile: 'alpha' })).not.toBe(
+      cronJobIdentity({ id: 'daily', profile: 'beta' })
+    )
   })
 })
