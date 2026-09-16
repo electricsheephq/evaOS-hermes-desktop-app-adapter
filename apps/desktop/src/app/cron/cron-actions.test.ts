@@ -29,9 +29,9 @@ describe('triggerAndRefreshCronJobs', () => {
     triggerCronJob.mockResolvedValue({ id: 'deleted-one-shot', state: 'completed' })
     getCronJobs.mockResolvedValue(authoritative)
 
-    const result = await triggerAndRefreshCronJobs('deleted-one-shot', 'work')
+    const result = await triggerAndRefreshCronJobs('deleted-one-shot', 'work', 'beta')
 
-    expect(triggerCronJob).toHaveBeenCalledWith('deleted-one-shot')
+    expect(triggerCronJob).toHaveBeenCalledWith('deleted-one-shot', 'beta')
     expect(getCronJobs).toHaveBeenCalledWith('work')
     expect(result).toEqual({ jobs: authoritative, refreshError: null, stale: false })
   })

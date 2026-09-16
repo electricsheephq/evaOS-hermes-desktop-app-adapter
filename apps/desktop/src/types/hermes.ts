@@ -965,6 +965,7 @@ export interface CronJob {
   no_agent?: boolean
   prompt?: null | string
   provider?: null | string
+  profile?: string
   schedule?: CronJobSchedule
   schedule_display?: null | string
   script?: null | string

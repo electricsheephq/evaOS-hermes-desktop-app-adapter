@@ -75,7 +75,7 @@ interface SidebarCronJobsSectionProps {
   // Open the full Cron page focused on this job (manage / full history).
   onManageJob: (jobId: string) => void
   // Fire the job now.
-  onTriggerJob: (jobId: string) => Promise<void>
+  onTriggerJob: (job: CronJob) => Promise<void>
   onToggle: () => void
   open: boolean
 }
@@ -125,14 +125,14 @@ export function SidebarCronJobsSection({
     }
   }, [])
 
-  const triggerJob = (jobId: string) => {
+  const triggerJob = (job: CronJob) => {
     const controller = triggerControllerRef.current
 
     if (!controller) {
       return
     }
 
-    void controller.run(jobId, () => onTriggerJob(jobId)).catch(() => undefined)
+    void controller.run(job.id, () => onTriggerJob(job)).catch(() => undefined)
   }
 
   const visible = usePaneVisible()
@@ -203,7 +203,7 @@ export function SidebarCronJobsSection({
               onManage={() => onManageJob(job.id)}
               onOpenRun={onOpenRun}
               onTogglePeek={() => setPeekJobId(prev => (prev === job.id ? null : job.id))}
-              onTrigger={() => triggerJob(job.id)}
+              onTrigger={() => triggerJob(job)}
             />
           ))}
           {hiddenCount > 0 && (
@@ -252,7 +252,10 @@ function CronJobSidebarRow({
   // row updates in place.
   const togglePause = async () => {
     try {
-      const updated = isPaused ? await resumeCronJob(job.id) : await pauseCronJob(job.id)
+      const updated = isPaused
+        ? await resumeCronJob(job.id, job.profile)
+        : await pauseCronJob(job.id, job.profile)
+
       updateCronJobs(rows => rows.map(row => (row.id === job.id ? updated : row)))
       notify({ kind: 'success', title: isPaused ? c.resumed : c.paused, message: label })
     } catch (err) {
@@ -273,7 +276,7 @@ function CronJobSidebarRow({
     }
 
     try {
-      await deleteCronJob(job.id)
+      await deleteCronJob(job.id, job.profile)
       updateCronJobs(rows => rows.filter(row => row.id !== job.id))
       notify({ kind: 'success', title: c.deleted, message: label })
     } catch (err) {

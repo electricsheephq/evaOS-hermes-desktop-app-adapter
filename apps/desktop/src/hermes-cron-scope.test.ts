@@ -104,4 +104,20 @@ describe('cron helpers are profile-scoped', () => {
     void getCronJobs()
     expect(api.mock.calls.at(-1)?.[0].path).toBe('/api/cron/jobs')
   })
+
+  it('mutations accept the owning job profile for endpoint routing', () => {
+    void updateCronJob('job-1', { enabled: false } as never, 'beta')
+    void pauseCronJob('job-1', 'beta')
+    void resumeCronJob('job-1', 'beta')
+    void triggerCronJob('job-1', 'beta')
+    void deleteCronJob('job-1', 'beta')
+
+    expect(api.mock.calls.map(call => call[0].path)).toEqual([
+      '/api/cron/jobs/job-1?profile=beta',
+      '/api/cron/jobs/job-1/pause?profile=beta',
+      '/api/cron/jobs/job-1/resume?profile=beta',
+      '/api/cron/jobs/job-1/trigger?profile=beta',
+      '/api/cron/jobs/job-1?profile=beta'
+    ])
+  })
 })

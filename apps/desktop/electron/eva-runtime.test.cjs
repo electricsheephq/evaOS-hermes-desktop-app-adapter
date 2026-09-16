@@ -470,6 +470,15 @@ test('ordinary all scope fans out to concrete profiles for metadata, sessions, a
   const sessions = await runtime.requestApi({ path: '/api/profiles/sessions?profile=all', profile: 'alpha' })
   const jobs = await runtime.requestApi({ path: '/api/cron/jobs?profile=all', profile: 'alpha' })
 
+  await assert.rejects(
+    runtime.requestApi({ path: '/api/profiles/sessions/sidebar?profile=zeta' }),
+    error => error.code === 'managed-escape'
+  )
+  await assert.rejects(
+    runtime.requestApi({ path: '/api/profiles/sessions/sidebar?profile=alpha&profile=beta' }),
+    error => error.code === 'managed-policy'
+  )
+
   assert.deepEqual(profiles.profiles.map(row => row.name), ['alpha', 'beta', 'gamma'])
   assert.deepEqual(sessions.sessions.map(row => row.profile), ['alpha', 'beta', 'gamma'])
   assert.deepEqual(jobs.map(row => row.profile), ['alpha', 'beta', 'gamma'])
@@ -2964,12 +2973,20 @@ test('ordinary managed requests preserve upstream 403s except the relay bare for
     runtime.requestApi({ path: '/api/sessions?profile=beta', method: 'GET' }),
     error => error === failure && error.code === 'permission-denied' && error.message === '403: {"detail":"admin only"}'
   )
+  await assert.rejects(
+    runtime.requestApi({ path: '/api/profiles' }),
+    error => error === failure && error.code === 'permission-denied' && error.message === '403: {"detail":"admin only"}'
+  )
 
   failure = new Error('403:  forbidden \n')
   failure.statusCode = 403
   await assert.rejects(
     runtime.requestApi({ path: '/api/sessions?profile=beta', method: 'GET' }),
     error => error.code === 'profile-mismatch' && error.message === 'profile beta is not authorized for this session'
+  )
+  await assert.rejects(
+    runtime.requestApi({ path: '/api/profiles' }),
+    error => error.code === 'profile-mismatch' && error.message === 'profile alpha is not authorized for this session'
   )
 })
 

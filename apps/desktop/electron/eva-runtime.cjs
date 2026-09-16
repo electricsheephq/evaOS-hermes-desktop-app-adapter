@@ -2056,7 +2056,7 @@ function createEvaManagedRuntime(options) {
       let refusedProfile = false
       if (status === 403) {
         if (runtime.sessionKind !== 'delegated_support') {
-          throw profileMismatchError(request.profile)
+          throw normalizeProfileRequestError(runtime, request.profile, error)
         }
         const match = /^\s*403:\s*(\{.*\})\s*$/.exec(String(error?.message || ''))
         try {
@@ -2355,6 +2355,7 @@ function createEvaManagedRuntime(options) {
         return await requestDelegatedSessionList(runtime, request, runtime.allowedProfiles, retry)
       }
       if (requestPath === '/api/profiles/sessions/sidebar') {
+        assertEvaManagedApiRequestAllowed({ ...request, profile: supportProfileFor(runtime, request?.profile) })
         return await requestDelegatedSidebar(runtime, request, retry)
       }
       if (String(request?.method || 'GET').toUpperCase() === 'GET' &&
