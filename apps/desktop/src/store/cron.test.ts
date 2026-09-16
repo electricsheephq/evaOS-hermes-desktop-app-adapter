@@ -46,6 +46,7 @@ describe('cron jobs request fencing', () => {
 
   it('publishes partial profile errors with the healthy cron rows', () => {
     const request = beginCronJobsRequest('all')
+
     const jobs = Object.assign([newJob], {
       errors: [{ error: 'Profile temporarily unavailable.', profile: 'beta', status: 502 }]
     })

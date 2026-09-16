@@ -49,11 +49,13 @@ export function cronJobIdentity(job: Pick<CronJob, 'id' | 'profile'>): string {
 
 export function replaceCronJobRow(rows: CronJob[], job: CronJob, updated: CronJob): CronJob[] {
   const identity = cronJobIdentity(job)
+
   return rows.map(row => (cronJobIdentity(row) === identity ? { ...updated, profile: job.profile } : row))
 }
 
 export function removeCronJobRow(rows: CronJob[], job: CronJob): CronJob[] {
   const identity = cronJobIdentity(job)
+
   return rows.filter(row => cronJobIdentity(row) !== identity)
 }
 
@@ -221,6 +223,7 @@ export function SidebarCronJobsSection({
           )}
           {shown.map(job => {
             const identity = cronJobIdentity(job)
+
             return (
               <CronJobSidebarRow
                 busy={triggeringJobKeys.has(identity)}
