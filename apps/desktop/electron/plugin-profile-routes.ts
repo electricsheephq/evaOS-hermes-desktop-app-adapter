@@ -233,10 +233,12 @@ export function buildEvaManagedAgentRoster(primaryProfile: string | readonly str
 
 /** The IPC reads the live grant before consulting ordinary-login fallback. */
 export async function loadEvaManagedAgentRoster(
-  runtime: { delegatedProfiles: () => Promise<readonly string[] | null> },
+  runtime: { authorizedProfiles: () => Promise<readonly string[]> },
   primaryProfile: () => string
 ) {
-  return buildEvaManagedAgentRoster((await runtime.delegatedProfiles()) ?? primaryProfile())
+  const profiles = await runtime.authorizedProfiles()
+
+  return buildEvaManagedAgentRoster(profiles.length ? profiles : primaryProfile())
 }
 
 /** Managed plugins may request only the synthetic enrolled-runtime route.

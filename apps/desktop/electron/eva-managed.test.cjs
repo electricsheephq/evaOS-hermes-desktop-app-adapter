@@ -713,12 +713,37 @@ test('managed enrollment accepts server-selected accounts and rejects mismatched
       base_url: 'https://hermes-jackie-david.ecs.electricsheephq.com',
       session_token: 'opaque-runtime-session',
       expires_at: FUTURE,
-      agent_id: 'louis',
+      agent_id: 'alpha',
+      allowed_profiles: ['alpha', 'beta', 'gamma'],
       agent_display_name: 'Asuka'
-    }
+    },
+    primary_profile: 'alpha',
+    profile_admin: true
   }
-  assert.equal(normalizeHermesEnrollment(payload).agentId, 'louis')
-  assert.equal(normalizeHermesEnrollment(payload).agentDisplayName, 'Asuka')
+  const scoped = normalizeHermesEnrollment(payload)
+  assert.equal(scoped.agentId, 'alpha')
+  assert.equal(scoped.agentDisplayName, 'Asuka')
+  assert.deepEqual(scoped.allowedProfiles, ['alpha', 'beta', 'gamma'])
+  assert.equal(scoped.profile, 'alpha')
+  assert.equal(scoped.profileAdmin, true)
+  assert.equal(scoped.sessionKind, 'customer')
+
+  const legacy = normalizeHermesEnrollment({
+    ...payload,
+    remote_backend: { ...payload.remote_backend, allowed_profiles: undefined },
+    admin_bypass: true
+  })
+  assert.deepEqual(legacy.allowedProfiles, ['alpha'])
+  assert.equal(legacy.profile, 'alpha')
+  assert.equal(legacy.profileAdmin, false)
+  assert.equal(Object.hasOwn(legacy, 'adminBypass'), false)
+
+  const invalidScope = normalizeHermesEnrollment({
+    ...payload,
+    remote_backend: { ...payload.remote_backend, allowed_profiles: ['alpha', 'alpha'] }
+  })
+  assert.deepEqual(invalidScope.allowedProfiles, ['alpha'])
+  assert.equal(invalidScope.profileAdmin, false)
   const benjamin = normalizeHermesEnrollment({
     ...payload,
     customer_id: 'benjamin-kennedy',
@@ -800,6 +825,7 @@ test('delegated support enrollment requires a bounded assignment and presentatio
   assert.equal(support.supportCustomerLabel, 'Customer')
   assert.equal(support.supportAgentLabel, 'Assigned agent')
   assert.equal(support.profile, 'support')
+  assert.equal(Object.hasOwn(support, 'profileAdmin'), false)
 
   const adminSupport = normalizeSupportEnrollment(
     { ...payload, admin_bypass: true, assignment_version: null },

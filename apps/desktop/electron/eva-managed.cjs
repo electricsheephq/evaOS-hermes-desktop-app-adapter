@@ -567,6 +567,19 @@ function normalizeHermesEnrollment(payload, options = {}) {
     throw new EvaBrokerError('Electric Sheep returned an invalid assigned agent.', 403, 'wrong-agent')
   }
 
+  const rawAllowedProfiles = remote.allowed_profiles
+  const validProfileScope =
+    Array.isArray(rawAllowedProfiles) &&
+    rawAllowedProfiles.length > 0 &&
+    rawAllowedProfiles.every(
+      value => typeof value === 'string' && EVA_MANAGED_PROFILE_RE.test(value) && value !== 'all'
+    ) &&
+    new Set(rawAllowedProfiles).size === rawAllowedProfiles.length &&
+    rawAllowedProfiles.includes(agentId)
+  const allowedProfiles = validProfileScope ? [...rawAllowedProfiles] : [agentId]
+  const profile = payload.primary_profile === agentId ? payload.primary_profile : agentId
+  const profileAdmin = validProfileScope && payload.profile_admin === true
+
   const rawDisplayName = typeof remote.agent_display_name === 'string' ? remote.agent_display_name.trim() : ''
   const agentDisplayName =
     rawDisplayName && rawDisplayName.length <= 120 && !hasAsciiControl(rawDisplayName) ? rawDisplayName : agentId
@@ -583,6 +596,10 @@ function normalizeHermesEnrollment(payload, options = {}) {
     runtime: policy.runtime,
     agentId,
     agentDisplayName,
+    allowedProfiles,
+    profile,
+    profileAdmin,
+    sessionKind: 'customer',
     baseUrl,
     token: normalizeOpaqueToken(remote.session_token, 'evaOS Agent runtime session'),
     expiresAt: parseFutureTimestamp(remote.expires_at, 'evaOS Agent runtime session', now)
@@ -607,7 +624,14 @@ function normalizeSupportEnrollment(payload, options = {}) {
     throw new EvaBrokerError('Electric Sheep returned a non-support enrollment.', 403, 'invalid-support-session')
   }
 
-  const enrollment = normalizeHermesEnrollment(payload, options)
+  const normalizedEnrollment = normalizeHermesEnrollment(payload, options)
+  const {
+    allowedProfiles: _customerAllowedProfiles,
+    profile: _customerProfile,
+    profileAdmin: _customerProfileAdmin,
+    sessionKind: _customerSessionKind,
+    ...enrollment
+  } = normalizedEnrollment
   const supportSessionId = normalizeOpaqueToken(
     payload.support_session_id,
     'Electric Sheep support session'
