@@ -157,9 +157,10 @@ test.describe('managed signed-out boot', () => {
         supportExpiresAt: new Date(Date.now() + 30 * 60 * 1_000).toISOString()
       }))
     })
+    await fixture!.page.getByRole('button', { name: 'Close settings' }).click()
     for (const width of [1280, 900]) {
       await fixture!.page.setViewportSize({ width, height: 800 })
-      await expect(fixture!.page.getByText('Sessions', { exact: true }).first()).toBeVisible()
+      await expect(fixture!.page.getByRole('tab', { name: 'sessions', exact: true })).toBeVisible()
       await expect(fixture!.page.getByRole('searchbox', { name: 'Search sessions' })).toBeVisible()
       await expect(fixture!.page.getByRole('region', { name: 'Acting for Customer' })).toHaveCount(0)
       expect(await fixture!.page.locator('[class*="z-(--z-support-session)"]').count()).toBe(0)
