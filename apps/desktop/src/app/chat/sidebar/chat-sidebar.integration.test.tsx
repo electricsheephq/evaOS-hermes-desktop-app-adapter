@@ -7,6 +7,8 @@ import { group, split } from '@/components/pane-shell/tree/model'
 import { $layoutTree, noteActiveTreeGroup } from '@/components/pane-shell/tree/store'
 import { SidebarProvider } from '@/components/ui/sidebar'
 import { registry } from '@/contrib/registry'
+import { $cronJobErrors, setCronJobs } from '@/store/cron'
+import { setSidebarCronOpen } from '@/store/layout'
 import { $selectedStoredSessionId, $sessions } from '@/store/session'
 import { $removedSessionIds } from '@/store/session-removal'
 import { makeSessionInfo } from '@/test/session-info'
@@ -97,7 +99,21 @@ describe('ChatSidebar navigation activity', () => {
     $sessions.set([])
     $removedSessionIds.set(new Set())
     $layoutTree.set(null)
+    setCronJobs([])
+    setSidebarCronOpen(false)
     noteActiveTreeGroup(null)
+  })
+
+  it('shows cron profile failures when no profile returns a job', () => {
+    act(() => {
+      setCronJobs([])
+      $cronJobErrors.set([{ error: 'Profile temporarily unavailable.', profile: 'beta', status: 502 }])
+      setSidebarCronOpen(true)
+    })
+
+    renderSidebar('/', 'chat')
+
+    expect(screen.getByText('1 profile could not be read: beta: 502')).toBeTruthy()
   })
 
   it('keeps navigation and session activity coherent with the focused pane', () => {

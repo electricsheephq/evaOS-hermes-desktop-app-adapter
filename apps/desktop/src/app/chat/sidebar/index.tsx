@@ -1916,7 +1916,7 @@ export function ChatSidebar({
                 )
               })}
 
-            {!trimmedQuery && !worktreeGroupingActive && cronJobs.length > 0 && (
+            {!trimmedQuery && !worktreeGroupingActive && (cronJobs.length > 0 || cronJobErrors.length > 0) && (
               <SidebarCronJobsSection
                 errors={cronJobErrors}
                 jobs={cronJobs}
