@@ -453,8 +453,6 @@ describe('Hermes REST helpers', () => {
   })
 
   it('gives the whole startup data burst the long timeout, not just profiles', async () => {
-    api.mockResolvedValue({})
-
     const bootCalls: [() => Promise<unknown>, string][] = [
       [getHermesConfig, '/api/config'],
       [getHermesConfigDefaults, '/api/config/defaults'],
@@ -465,6 +463,7 @@ describe('Hermes REST helpers', () => {
 
     for (const [call, path] of bootCalls) {
       api.mockClear()
+      api.mockResolvedValue(path === '/api/cron/jobs' ? [] : {})
       await call()
       expect(api).toHaveBeenCalledWith(expect.objectContaining({ path, timeoutMs: 60_000 }))
     }
