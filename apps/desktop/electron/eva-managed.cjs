@@ -3,7 +3,11 @@ const { version: EVA_DESKTOP_PACKAGE_VERSION } = require('../package.json')
 
 const EVA_MANAGED_POLICY = Object.freeze({
   schemaVersion: 'evaos.eva_desktop_managed.v1',
-  enrollmentSchemaVersion: 'evaos.hermes_desktop_enrollment.v2',
+  // Wire contract with the broker: must equal HERMES_DESKTOP_ENROLLMENT_SCHEMA_VERSION.
+  enrollmentSchemaVersion: 'evaos.hermes_desktop_enrollment.v1',
+  // Version of the runtime record this client persists on disk. Independent of the
+  // wire contract: bumping it discards records written by older clients exactly once.
+  persistedRuntimeRecordVersion: 'evaos.hermes_desktop_runtime_record.v2',
   productName: 'evaOS Agent',
   dashboardAuthUrl: 'https://www.electricsheephq.com/desktop-auth',
   brokerUrl: 'https://rhfojelkgtwcxnrfhtlj.supabase.co/functions/v1/desktop-runtime-session',
