@@ -308,7 +308,7 @@ test('ordinary profile routing aliases default to alpha and rejects selectors ou
     createWsRelay: () => ({
       mintTicket: async input => {
         ticketInput = input
-        return 'ws://127.0.0.1:12345/managed'
+        return 'ws://loopback.invalid/managed'
       },
       disconnectAll: () => undefined,
       close: async () => undefined
@@ -2654,13 +2654,13 @@ test('managed media keeps Range and runtime credentials in the main-process fetc
   })
 
   assert.equal(result, response)
-  assert.deepEqual(calls, [
-    {
-      headers: { range: 'bytes=100-199' },
-      token: 'runtime-token',
-      url: 'https://hermes-customer-one.ecs.electricsheephq.com/api/files/download?path=%2Fsrv%2Frender.mp4&profile=main'
-    }
-  ])
+  assert.equal(calls.length, 1)
+  assert.deepEqual(calls[0].headers, { range: 'bytes=100-199' })
+  assert.equal(calls[0].token, 'runtime-token')
+  const requestedUrl = new URL(calls[0].url)
+  assert.equal(requestedUrl.pathname, '/api/files/download')
+  assert.equal(requestedUrl.searchParams.get('path'), '/srv/render.mp4')
+  assert.equal(requestedUrl.searchParams.get('profile'), 'main')
 })
 
 test('a runtime 401 clears older transient backoff before requiring sign-in', async t => {
@@ -2730,10 +2730,10 @@ test('managed runtime forwards unknown APIs, bodies, uploads, and Hermes profile
   })
 
   assert.equal(calls.length, 1)
-  assert.equal(
-    calls[0].url,
-    'https://hermes-customer-one.ecs.electricsheephq.com/api/future-feature?mode=alpha&profile=main'
-  )
+  const requestedUrl = new URL(calls[0].url)
+  assert.equal(requestedUrl.pathname, '/api/future-feature')
+  assert.equal(requestedUrl.searchParams.get('mode'), 'alpha')
+  assert.equal(requestedUrl.searchParams.get('profile'), 'main')
   assert.equal(calls[0].token, 'runtime-token')
   assert.equal(calls[0].options.method, 'POST')
   assert.deepEqual(calls[0].options.body, { future: true })

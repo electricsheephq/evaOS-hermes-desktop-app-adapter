@@ -572,6 +572,39 @@ test('delegated support clamps each outbound RPC profile and drops policy failur
   assert.deepEqual(decodedClientPayloads(rejectedBytes), [])
 })
 
+test('ordinary profile rejection closes with the selected profile diagnostic', async t => {
+  const upstream = fakeUpstream()
+  await upstream.start()
+  const profileBinder = requested => {
+    if (requested === 'alpha') return requested
+    const error = new Error(`profile ${requested} is not authorized for this session`)
+    error.code = 'profile-mismatch'
+    throw error
+  }
+  const relay = createEvaWsRelay({
+    connectUpstream: () => upstream.connect(),
+    getUpstream: async () => ({ baseUrl: BASE_URL, token: 'runtime-secret' })
+  })
+  t.after(async () => {
+    await relay.close()
+    await upstream.stop()
+  })
+
+  const rejected = await upgrade(await relay.mintTicket({ profile: 'alpha', profileBinder }))
+  assert.match(rejected.response, /^HTTP\/1\.1 101/)
+  const received = []
+  rejected.socket.on('data', chunk => received.push(Buffer.from(chunk)))
+  rejected.socket.write(
+    clientFrame(JSON.stringify({ id: 4, jsonrpc: '2.0', method: 'projects.list', params: { profile: 'beta' } }))
+  )
+  await waitForClose(rejected.socket)
+
+  const closeFrame = Buffer.concat(received)
+  assert.equal(closeFrame[0] & 0x0f, 0x08)
+  assert.equal(closeFrame.readUInt16BE(2), 1008)
+  assert.equal(closeFrame.subarray(4).toString('utf8'), 'profile beta is not authorized for this session')
+})
+
 test('relay preserves fragmented binary and allowed text while denying a fragmented blocked RPC', async t => {
   const upstream = fakeUpstream()
   await upstream.start()

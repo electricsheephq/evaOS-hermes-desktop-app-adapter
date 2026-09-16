@@ -20,6 +20,7 @@ const {
   publicEvaEnrollmentStatus,
   revokeEvaDesktopSession
 } = require('./eva-managed.cjs')
+const { requestAuthorizedCronJobs } = require('./eva-runtime-profile-scope.cjs')
 const { createEvaWsRelay, normalizeEvaWsEndpoint, normalizeEvaWsProfile } = require('./eva-ws-relay.cjs')
 
 const RUNTIME_ENROLLMENT_RETRY_DELAYS_MS = Object.freeze([2_000, 5_000, 10_000, 20_000, 30_000])
@@ -2165,29 +2166,6 @@ function createEvaManagedRuntime(options) {
     }
   }
 
-  async function requestAuthorizedCronJobs(runtime, request, retry) {
-    const parsed = new URL(String(request.path), 'http://eva-managed.invalid')
-    const jobs = []
-
-    for (const profile of runtime.allowedProfiles) {
-      parsed.searchParams.set('profile', profile)
-      const result = await requestApi(
-        { ...request, profile, path: `${parsed.pathname}?${parsed.searchParams}` },
-        retry
-      )
-      for (const row of result ?? []) {
-        if (row.profile != null && row.profile !== profile) {
-          throw runtime.sessionKind === 'delegated_support'
-            ? supportProfileError()
-            : profileMismatchError(row.profile)
-        }
-        jobs.push({ ...row, profile })
-      }
-    }
-
-    return jobs
-  }
-
   async function requestDelegatedProjectTree(runtime, request, retry) {
     const parsed = new URL(String(request.path), 'http://eva-managed.invalid')
     const previewLimit = Number(parsed.searchParams.get('preview_limit') ?? 3)
@@ -2377,7 +2355,14 @@ function createEvaManagedRuntime(options) {
         requestPath === '/api/cron/jobs' &&
         (!parsedRequest.searchParams.has('profile') || parsedRequest.searchParams.get('profile') === 'all')) {
         assertEvaManagedApiRequestAllowed({ ...request, profile: supportProfileFor(runtime, request?.profile) })
-        return await requestAuthorizedCronJobs(runtime, request, retry)
+        return await requestAuthorizedCronJobs({
+          runtime,
+          request,
+          retry,
+          requestApi,
+          profileMismatchError,
+          supportProfileError
+        })
       }
       if (supportRequest && String(request?.method || 'GET').toUpperCase() === 'GET' &&
         requestPath === '/api/profiles/projects/tree' && !parsedRequest.searchParams.has('profile')) {

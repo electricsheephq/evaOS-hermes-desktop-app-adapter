@@ -444,10 +444,10 @@ function createClientFrameGuard({ onFrame, onReject, profileBinder }) {
   let transformedStarted = false
   let rejected = false
 
-  const reject = event => {
+  const reject = (event, reason = '') => {
     if (rejected) return false
     rejected = true
-    onReject(event)
+    onReject(event, reason)
     return false
   }
 
@@ -500,7 +500,8 @@ function createClientFrameGuard({ onFrame, onReject, profileBinder }) {
       inspector?.finish()
     } catch (error) {
       const code = String(error?.code || error?.name || 'unknown').replace(/[^A-Za-z0-9._-]/g, '')
-      return reject(`client_profile_denied code=${code || 'unknown'}`)
+      const reason = profileMismatchCloseReason(error, code)
+      return reject(`client_profile_denied code=${code || 'unknown'}`, reason)
     }
     inspector = null
     fragmentedOpcode = null
@@ -653,7 +654,8 @@ function createClientFrameGuard({ onFrame, onReject, profileBinder }) {
           inspector?.push(decoded)
         } catch (error) {
           const code = String(error?.code || error?.name || 'unknown').replace(/[^A-Za-z0-9._-]/g, '')
-          return reject(`client_profile_denied code=${code || 'unknown'}`)
+          const reason = profileMismatchCloseReason(error, code)
+          return reject(`client_profile_denied code=${code || 'unknown'}`, reason)
         }
       }
       if (rejected) return false
@@ -707,9 +709,18 @@ function buildMaskedClientTextFrame(payload, options = {}) {
   return Buffer.concat([header, mask, masked])
 }
 
-function policyCloseFrame() {
-  const payload = Buffer.alloc(2)
+function profileMismatchCloseReason(error, code) {
+  const message = String(error?.message || '')
+  return code === 'profile-mismatch' && /^profile [A-Za-z0-9_-]{1,120} is not authorized for this session$/.test(message)
+    ? message
+    : ''
+}
+
+function policyCloseFrame(reason = '') {
+  const reasonBytes = Buffer.from(String(reason)).subarray(0, 123)
+  const payload = Buffer.alloc(2 + reasonBytes.length)
   payload.writeUInt16BE(1008)
+  reasonBytes.copy(payload, 2)
   return Buffer.concat([Buffer.from([0x88, payload.length]), payload])
 }
 
@@ -934,11 +945,11 @@ function createEvaWsRelay(options) {
       const guardGatewayRpc = grant.endpoint.pathname === '/api/ws'
       if (guardGatewayRpc) {
         let rejected = false
-        const rejectClientFrame = event => {
+        const rejectClientFrame = (event, reason) => {
           if (rejected) return
           rejected = true
           onEvent(event)
-          if (!clientSocket.destroyed) clientSocket.end(policyCloseFrame())
+          if (!clientSocket.destroyed) clientSocket.end(policyCloseFrame(reason))
           safeDestroy(upstreamSocket)
         }
         const inspectClientFrames = createClientFrameGuard({
