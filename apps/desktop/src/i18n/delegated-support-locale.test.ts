@@ -11,9 +11,10 @@ describe('delegated support locale coverage', () => {
 
   const render = (copy: typeof english) => ({
     ...copy,
-    actingForCustomer: copy.actingForCustomer('Acme'),
-    assignedAgent: copy.assignedAgent('eva-1'),
-    endsIn: copy.endsIn('00:42:00')
+    actingForCustomer: copy.actingForCustomer('Customer'),
+    assignedAgent: copy.assignedAgent('Agent'),
+    endsIn: copy.endsIn('00:42:00'),
+    indicator: copy.indicator('Customer', '00:42:00')
   })
 
   it('defines every supported locale in the catalog', () => {

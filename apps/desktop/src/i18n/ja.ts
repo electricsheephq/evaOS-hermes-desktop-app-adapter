@@ -243,9 +243,12 @@ export const ja = defineLocale({
   },
 
   delegatedSupport: {
+    sessionTitle: 'サポートセッション',
     actingForCustomer: customer => `${customer} の代理として操作中`,
     assignedAgent: agent => `エージェント: ${agent}`,
     endsIn: countdown => `終了まで ${countdown}`,
+    indicator: (customer, countdown) => `${customer} の代理として操作中 · ${countdown}`,
+    openSettings: 'サポートセッション設定を開く',
     endSession: 'サポートセッションを終了',
     endingSession: 'サポートセッションを終了しています…',
     unavailable: 'サポートセッションの状態を取得できません。',

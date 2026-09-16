@@ -240,9 +240,12 @@ export const ar = defineLocale({
     message: reason => `العرض البرمجي نشط — تم اكتشاف شاشة بعيدة (${reason}). تم تعطيل تسريع GPU لمنع الوميض.`
   },
   delegatedSupport: {
+    sessionTitle: 'جلسة الدعم',
     actingForCustomer: customer => `العمل نيابةً عن ${customer}`,
     assignedAgent: agent => `الوكيل: ${agent}`,
     endsIn: countdown => `ينتهي خلال ${countdown}`,
+    indicator: (customer, countdown) => `العمل نيابةً عن ${customer} · ${countdown}`,
+    openSettings: 'فتح إعدادات جلسة الدعم',
     endSession: 'إنهاء جلسة الدعم',
     endingSession: 'جارٍ إنهاء جلسة الدعم…',
     unavailable: 'حالة جلسة الدعم غير متاحة.',

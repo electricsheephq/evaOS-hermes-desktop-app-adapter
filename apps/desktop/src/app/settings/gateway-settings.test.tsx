@@ -1,5 +1,8 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+import type { EvaManagedStatus } from '@/global'
+import { $evaManagedStatus, $supportPickerOpen, setSupportPickerOpen } from '@/store/support-picker'
 
 // Collect the component graph before the behavioral test deadline starts.
 import { GatewaySettings } from './gateway-settings'
@@ -54,9 +57,58 @@ beforeEach(() => {
 afterEach(() => {
   cleanup()
   vi.clearAllMocks()
+  vi.useRealTimers()
+  $evaManagedStatus.set(null)
+  setSupportPickerOpen(false)
 })
 
 describe('GatewaySettings', () => {
+  it('runs the active support-session card controls and live countdown', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime('2030-01-01T00:00:00.000Z')
+    let current = {
+      managed: true,
+      productName: 'evaOS Agent',
+      signedOut: false,
+      desktopSessionActive: true,
+      updateChannel: 'managed-beta',
+      delegatedSupportActive: true,
+      supportCustomerLabel: 'Customer',
+      supportAgentLabel: 'Agent',
+      supportExpiresAt: '2030-01-01T00:00:05.000Z',
+      supportEndFailed: true
+    } as EvaManagedStatus
+    const status = vi.fn(async () => current)
+    const switchSupportTarget = vi.fn(async () => current)
+    const endSupportSession = vi.fn(async () => {
+      current = { ...current, delegatedSupportActive: false }
+      return { ok: true }
+    })
+    Object.defineProperty(window, 'hermesDesktop', {
+      configurable: true,
+      value: { eva: { status, switchSupportTarget, endSupportSession } }
+    })
+    $evaManagedStatus.set(current)
+    let view!: ReturnType<typeof render>
+    await act(async () => {
+      view = render(<GatewaySettings />)
+    })
+    const card = screen.getByRole('region', { name: 'Support session' })
+    expect(card.textContent).toContain('Ends in 00:00:05')
+    expect(screen.getByRole('status').textContent).toContain('Unable to end support session')
+    act(() => vi.advanceTimersByTime(1_000))
+    expect(card.textContent).toContain('Ends in 00:00:04')
+    $evaManagedStatus.set({ ...current, supportCustomerLabel: 'Other customer' })
+    view.rerender(<GatewaySettings />)
+    expect(card.textContent).toContain('Other customer')
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Switch support target…' })))
+    expect(switchSupportTarget).toHaveBeenCalledOnce()
+    expect($supportPickerOpen.get()).toBe(true)
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'End support session' })))
+    expect(endSupportSession).toHaveBeenCalledOnce()
+    expect(screen.queryByRole('region', { name: 'Support session' })).toBeNull()
+  })
+
   it('keeps saved Cloud instances usable without discovery and marks the live source, not the default', async () => {
     getConnectionConfig.mockResolvedValue({ ...localConnection, mode: 'cloud', remoteUrl: 'https://a.example' })
     registry.value = {

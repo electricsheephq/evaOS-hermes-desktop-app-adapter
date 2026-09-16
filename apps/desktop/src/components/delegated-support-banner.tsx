@@ -1,48 +1,22 @@
+import { useStore } from '@nanostores/react'
 import { useCallback, useEffect, useState } from 'react'
 
-import type { EvaManagedStatus } from '@/global'
 import { useI18n } from '@/i18n'
-import { setSupportPickerOpen } from '@/store/support-picker'
+import { $evaManagedStatus, activeSupportSession, refreshEvaManagedStatus, runSupportSessionAction } from '@/store/support-picker'
 
 import { TITLEBAR_HEIGHT } from '../app/shell/titlebar'
 
 import { Button } from './ui/button'
 
-function formatRemaining(expiresAt: string | null | undefined): string {
-  const parsedExpiry = Date.parse(String(expiresAt || ''))
-  const remainingMs = Number.isFinite(parsedExpiry) ? Math.max(0, parsedExpiry - Date.now()) : 0
-  const totalSeconds = Math.ceil(remainingMs / 1_000)
-  const hours = Math.floor(totalSeconds / 3_600)
-  const minutes = Math.floor((totalSeconds % 3_600) / 60)
-  const seconds = totalSeconds % 60
-
-  return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds
-    .toString()
-    .padStart(2, '0')}`
-}
-
-// One app-root banner owns both support states: the live delegated session and
-// the dead end an account with no agent of its own boots into. Keeping them in
-// a single component keeps one status poller and one z-index above the boot
-// failure overlay — the property PR #264 established and that the "Switch
-// support target" entry depends on, because the 403 state IS a failed boot.
 export function DelegatedSupportBanner() {
   const { t } = useI18n()
-  const [status, setStatus] = useState<EvaManagedStatus | null>(null)
+  const status = useStore($evaManagedStatus)
   const [ending, setEnding] = useState(false)
   const [switching, setSwitching] = useState(false)
   const [switchFailed, setSwitchFailed] = useState(false)
 
   const refresh = useCallback(() => {
-    const readStatus = window.hermesDesktop?.eva?.status
-
-    if (!readStatus) {
-      return
-    }
-
-    void readStatus()
-      .then(setStatus)
-      .catch(() => undefined)
+    void refreshEvaManagedStatus().catch(() => undefined)
   }, [])
 
   useEffect(() => {
@@ -52,9 +26,7 @@ export function DelegatedSupportBanner() {
     return () => window.clearInterval(timer)
   }, [refresh])
 
-  const supportActive = Boolean(
-    status?.delegatedSupportActive && status.supportExpiresAt && status.supportCustomerLabel && status.supportAgentLabel
-  )
+  const supportActive = Boolean(activeSupportSession(status))
 
   // A lease this app still holds a handle for but no longer an enrollment (a
   // start that failed after the server activated it, a sign-out or credential
@@ -73,8 +45,7 @@ export function DelegatedSupportBanner() {
     try {
       // Resolves at once on a live desktop session; otherwise only after the
       // plain browser sign-in lands. The picker itself is an app surface now.
-      await window.hermesDesktop.eva.switchSupportTarget()
-      setSupportPickerOpen(true)
+      await runSupportSessionAction('switch')
     } catch {
       // The main process already logged the bounded broker code; the operator
       // only needs to know the browser handoff did not start.
@@ -99,8 +70,8 @@ export function DelegatedSupportBanner() {
     setEnding(true)
 
     try {
-      await window.hermesDesktop.eva.endSupportSession()
-
+      await runSupportSessionAction('end')
+    } catch {
       refresh()
     } finally {
       setEnding(false)
@@ -153,31 +124,5 @@ export function DelegatedSupportBanner() {
     )
   }
 
-  if (!supportActive || !status) {
-    return null
-  }
-
-  return (
-    <div
-      aria-label={t.delegatedSupport.actingForCustomer(String(status.supportCustomerLabel))}
-      className="fixed inset-x-0 z-(--z-support-session) flex min-h-10 items-center justify-center gap-3 border-b border-(--ui-stroke-tertiary) bg-(--ui-bg-quaternary) px-4 py-2 text-sm text-(--ui-text-primary)"
-      role="region"
-      style={{ top: TITLEBAR_HEIGHT }}
-    >
-      <span aria-live="polite" className="sr-only" role="status">
-        {t.delegatedSupport.actingForCustomer(String(status.supportCustomerLabel))}
-      </span>
-      <span className="font-medium">{t.delegatedSupport.actingForCustomer(String(status.supportCustomerLabel))}</span>
-      <span className="text-(--ui-text-secondary)">
-        {t.delegatedSupport.assignedAgent(String(status.supportAgentLabel))}
-      </span>
-      <span className="tabular-nums text-(--ui-text-secondary)">
-        {t.delegatedSupport.endsIn(formatRemaining(status.supportExpiresAt))}
-      </span>
-      {status.supportEndFailed && <span role="status">{t.delegatedSupport.endFailed}</span>}
-      {switchFailed && <span role="status">{t.delegatedSupport.switchTargetFailed}</span>}
-      {switchButton}
-      {endButton}
-    </div>
-  )
+  return null
 }

@@ -40,6 +40,7 @@ import {
   selectConnection
 } from '@/store/connections'
 import { notify, notifyError, readableError } from '@/store/notifications'
+import { $evaManagedStatus, activeSupportSession, formatSupportRemaining, refreshEvaManagedStatus, runSupportSessionAction } from '@/store/support-picker'
 
 import { ConnectionsRegistrySection } from './connections-registry'
 import { CONTROL_TEXT } from './constants'
@@ -95,6 +96,67 @@ const EMPTY_STATE: GatewaySettingsState = {
   sshKeyPath: '',
   sshRemoteHermesPath: '',
   sshRemoteProfile: ''
+}
+
+function SupportSessionCard({ status, onStatus }: { status: EvaManagedStatus | null; onStatus: (next: EvaManagedStatus | null) => void }) {
+  const { t } = useI18n()
+  const session = activeSupportSession(status)
+  const sessionExpiresAt = session?.expiresAt
+  const cleanupPending = Boolean(status?.supportCleanupPending) && !session
+  const [busy, setBusy] = useState<'end' | 'switch' | null>(null)
+  const [now, setNow] = useState(Date.now())
+
+  useEffect(() => {
+    if (!sessionExpiresAt) {
+      return
+    }
+    const timer = window.setInterval(() => setNow(Date.now()), 1_000)
+    return () => window.clearInterval(timer)
+  }, [sessionExpiresAt])
+
+  if (!session && !cleanupPending) {
+    return null
+  }
+
+  const run = async (action: 'end' | 'switch') => {
+    if (busy) {
+      return
+    }
+    setBusy(action)
+
+    try {
+      onStatus(await runSupportSessionAction(action))
+    } catch (error) {
+      notifyError(error, action === 'switch' ? t.delegatedSupport.switchTargetFailed : t.delegatedSupport.endFailed)
+      onStatus(await refreshEvaManagedStatus().catch(() => status))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  return (
+    <section aria-label={t.delegatedSupport.sessionTitle} className="rounded-xl border border-border/70 px-4" role="region">
+      <ListRow
+        action={
+          <div className="flex flex-wrap gap-2">
+            <Button disabled={busy !== null} onClick={() => void run('switch')} size="sm" variant="outline">
+              {busy === 'switch' ? t.delegatedSupport.switchingTarget : t.delegatedSupport.switchTarget}
+            </Button>
+            <Button disabled={busy !== null} onClick={() => void run('end')} size="sm" variant="destructive">
+              {busy === 'end' ? t.delegatedSupport.endingSession : t.delegatedSupport.endSession}
+            </Button>
+          </div>
+        }
+        below={status?.supportEndFailed ? <p role="status">{t.delegatedSupport.endFailed}</p> : null}
+        description={
+          session
+            ? `${t.delegatedSupport.actingForCustomer(session.customer)} · ${t.delegatedSupport.assignedAgent(session.agent)} · ${t.delegatedSupport.endsIn(formatSupportRemaining(session.expiresAt, now))}`
+            : t.delegatedSupport.cleanupPending
+        }
+        title={t.delegatedSupport.sessionTitle}
+      />
+    </section>
+  )
 }
 
 const SAFE_MANAGED_BROKER_CODES = new Set([
@@ -212,6 +274,7 @@ function EvaManagedGatewaySettings({ embedded = false }: { embedded?: boolean } 
   const g = t.settings.gateway.managed
   const businessDisplayName = managedVendorDisplayName(g.accountTitle)
   const [status, setStatus] = useState<EvaManagedStatus | null>(null)
+  const sharedStatus = useStore($evaManagedStatus)
   const [busy, setBusy] = useState<'refresh' | 'sign-in' | 'sign-out' | null>(null)
   const [error, setError] = useState<string | null>(null)
 
@@ -225,6 +288,7 @@ function EvaManagedGatewaySettings({ embedded = false }: { embedded?: boolean } 
       .then(next => {
         if (!cancelled) {
           setStatus(next)
+          $evaManagedStatus.set({ ...next })
         }
       })
       .catch(() => {
@@ -245,12 +309,14 @@ function EvaManagedGatewaySettings({ embedded = false }: { embedded?: boolean } 
     try {
       if (action === 'sign-out') {
         await window.hermesDesktop.eva.signOut()
-        setStatus(await window.hermesDesktop.eva.status())
+        const next = await refreshEvaManagedStatus()
+        setStatus(next)
       } else {
         const next =
           action === 'sign-in' ? await window.hermesDesktop.eva.signIn() : await window.hermesDesktop.eva.refresh()
 
         setStatus(next)
+        $evaManagedStatus.set({ ...next })
       }
     } catch (err) {
       setError(safeManagedErrorMessage(err, g.failed, managedFailureForCode))
@@ -280,6 +346,8 @@ function EvaManagedGatewaySettings({ embedded = false }: { embedded?: boolean } 
             </div>
           </div>
         </div>
+
+        <SupportSessionCard onStatus={setStatus} status={sharedStatus ?? status} />
 
         {status ? (
           <div className="overflow-hidden rounded-xl border border-border/70">

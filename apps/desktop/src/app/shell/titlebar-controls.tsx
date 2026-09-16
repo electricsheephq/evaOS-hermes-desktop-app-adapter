@@ -25,6 +25,8 @@ import {
   toggleSidebarOpen
 } from '@/store/layout'
 import { $unreadSessionCount } from '@/store/session-dot-state'
+import { $statusbarVisible } from '@/store/statusbar-prefs'
+import { $evaManagedStatus, activeSupportSession, formatSupportRemaining } from '@/store/support-picker'
 import { $titlebarAppActionsSide } from '@/store/titlebar-app-actions'
 
 import { appViewForPath, hidesFixedTitlebarClusters, isOverlayView } from '../routes'
@@ -141,6 +143,8 @@ export function TitlebarControls({ leftTools = [], tools = [], onOpenSettings }:
   const sidebarOpen = useStore($sidebarOpen)
   const unreadCount = useStore($unreadSessionCount)
   const appActionsSide = useStore($titlebarAppActionsSide)
+  const statusbarVisible = useStore($statusbarVisible)
+  const supportSession = activeSupportSession(useStore($evaManagedStatus))
   const unreadBadge = unreadCount > 0 ? unreadCount : undefined
   const unreadHint = unreadBadge ? ` · ${t.titlebar.unreadSessions(unreadBadge)}` : ''
 
@@ -249,17 +253,32 @@ export function TitlebarControls({ leftTools = [], tools = [], onOpenSettings }:
 
   const view = appViewForPath(location.pathname)
 
-  // Overlays own the window. These clusters are `fixed` at a higher z-index
-  // than the overlay card, so they'd otherwise bleed over it — hide them (and
-  // the nested titleBar slots) and let the overlay's own chrome take over.
-  if (isOverlayView(view)) {
+  // Overlay clusters stay hidden unless they are the only remaining acting-for disclosure.
+  if (isOverlayView(view) && (statusbarVisible || !supportSession)) {
     return null
+  }
+
+  const supportIndicator =
+    !statusbarVisible && supportSession ? (
+      <Button
+        className={cn('max-w-96 truncate text-xs', isOverlayView(view) && `${titlebarToolClusterClass} left-(--titlebar-controls-left) top-(--titlebar-controls-top)`)}
+        data-support-session="titlebar"
+        onClick={() => navigate('/settings?tab=gateway')}
+        size="inline" type="button" variant="text"
+      >
+        {t.delegatedSupport.indicator(supportSession.customer, formatSupportRemaining(supportSession.expiresAt))} · {t.delegatedSupport.assignedAgent(supportSession.agent)}
+      </Button>
+    ) : null
+
+  if (isOverlayView(view)) {
+    return supportIndicator
   }
 
   const titlebarSlots = (
     <>
       <Slot area="titleBar.left" />
       <Slot area="titleBar.center" />
+      {supportIndicator}
       <Slot area="titleBar.right" />
     </>
   )
@@ -303,6 +322,7 @@ export function TitlebarControls({ leftTools = [], tools = [], onOpenSettings }:
         ))}
         <Slot area="titleBar.left" />
         <Slot area="titleBar.center" />
+        {supportIndicator}
       </div>
 
       {visiblePaneTools.length > 0 && (

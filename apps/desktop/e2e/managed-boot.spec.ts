@@ -101,12 +101,12 @@ test.describe('managed signed-out boot', () => {
         customerId: null,
         agentId: null,
         updateChannel: 'managed-beta',
-        delegatedSupportActive: active,
-        sessionKind: active ? 'delegated_support' : 'ordinary',
-        supportCustomerLabel: 'Test customer',
-        supportAgentLabel: 'Test agent',
-        supportExpiresAt: expiresAt,
-        supportDeadline: expiresAt
+        delegatedSupportActive: false,
+        sessionKind: 'ordinary',
+        supportCustomerLabel: null,
+        supportAgentLabel: null,
+        supportCleanupPending: active,
+        supportTargetLabel: 'Customer / Agent'
       }))
       ipcMain.removeHandler('hermes:eva:support:end')
       ipcMain.handle('hermes:eva:support:end', () => {
@@ -117,7 +117,7 @@ test.describe('managed signed-out boot', () => {
     })
 
     const page = fixture!.page
-    const banner = page.getByRole('region', { name: 'Acting for Test customer' })
+    const banner = page.getByRole('region', { name: 'A previous support session still needs to be ended.' })
 
     await expect(page.getByRole('button', { name: 'Sign in to evaOS Agent', exact: true })).toBeVisible()
     await expect(banner).toBeVisible()
@@ -145,6 +145,24 @@ test.describe('managed signed-out boot', () => {
     await expect(banner).toBeHidden()
     await expect(page.getByText('Synthetic customer gateway unavailable', { exact: true })).toBeVisible()
     await expect(page.getByRole('heading', { name: /couldn't start/ })).toBeVisible()
+  })
+
+  test('an active support session adds no fixed strip over session chrome at supported widths', async () => {
+    await fixture!.app.evaluate(({ ipcMain }) => {
+      ipcMain.removeHandler('hermes:eva:status')
+      ipcMain.handle('hermes:eva:status', () => ({
+        delegatedSupportActive: true,
+        supportCustomerLabel: 'Customer', supportAgentLabel: 'Agent',
+        supportExpiresAt: new Date(Date.now() + 30 * 60 * 1_000).toISOString()
+      }))
+    })
+    await fixture!.page.getByRole('button', { name: 'Close settings' }).click()
+    await expect(fixture!.page.getByText(/^Acting for Customer ·/)).toBeVisible()
+    for (const width of [1280, 900]) {
+      await fixture!.page.setViewportSize({ width, height: 800 })
+      await expect(fixture!.page.getByRole('region', { name: 'Acting for Customer' })).toHaveCount(0)
+      expect(await fixture!.page.locator('[class*="z-(--z-support-session)"]').count()).toBe(0)
+    }
   })
 
   // adapter#91 / sc#540. An internal admin owns no agent, so `runtime_launch`
