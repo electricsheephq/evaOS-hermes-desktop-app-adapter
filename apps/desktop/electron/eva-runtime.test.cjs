@@ -6,6 +6,7 @@ const test = require('node:test')
 
 const { EvaBrokerError, brokerPost, evaDesktopCodeChallenge, normalizeHermesEnrollment } = require('./eva-managed.cjs')
 const { createEvaManagedRuntime } = require('./eva-runtime.cjs')
+const { requestAuthorizedCronJobs } = require('./eva-runtime-profile-scope.cjs')
 
 const FUTURE = '2099-07-23T12:00:00.000Z'
 const EXPIRED = '2020-07-23T12:00:00.000Z'
@@ -490,6 +491,58 @@ test('ordinary all scope fans out to concrete profiles for metadata, sessions, a
 
   await single.requestApi({ path: '/api/cron/jobs?profile=all', profile: 'alpha' })
   assert.deepEqual(singleRequests.map(url => url.searchParams.get('profile')), ['alpha'])
+})
+
+test('cron fan-out preserves healthy profiles and reports sanitized failures', async () => {
+  const jobs = await requestAuthorizedCronJobs({
+    runtime: { allowedProfiles: ['alpha', 'beta', 'gamma'], sessionKind: 'customer' },
+    request: { path: '/api/cron/jobs?profile=all' },
+    retry: true,
+    requestApi: async request => {
+      if (request.profile === 'beta') throw new EvaBrokerError('private upstream detail', 502, 'upstream')
+      return [{ id: `job-${request.profile}` }]
+    },
+    profileMismatchError: profile => new EvaBrokerError(`profile ${profile}`, 403, 'profile-mismatch'),
+    supportProfileError: () => new EvaBrokerError('support profile', 403, 'support-profile-mismatch'),
+    statusCodeOf: error => error.statusCode ?? null,
+    startSupportRequestGuard: () => null,
+    assertSupportRequestCurrent: () => undefined,
+    finishSupportRequestGuard: () => undefined
+  })
+
+  assert.deepEqual(jobs.map(job => job.id), ['job-alpha', 'job-gamma'])
+  assert.deepEqual(jobs.errors, [{ profile: 'beta', error: 'Profile temporarily unavailable.' }])
+  assert.equal(JSON.stringify(jobs.errors).includes('private upstream detail'), false)
+})
+
+test('cron fan-out stops after delegated support guard revocation', async () => {
+  const guard = { current: true }
+  const requested = []
+  let finished = false
+
+  await assert.rejects(
+    requestAuthorizedCronJobs({
+      runtime: { allowedProfiles: ['alpha', 'beta', 'gamma'], sessionKind: 'delegated_support' },
+      request: { path: '/api/cron/jobs?profile=all' },
+      retry: true,
+      requestApi: async request => {
+        requested.push(request.profile)
+        guard.current = false
+        return []
+      },
+      profileMismatchError: profile => new EvaBrokerError(`profile ${profile}`, 403, 'profile-mismatch'),
+      supportProfileError: () => new EvaBrokerError('support profile', 403, 'support-profile-mismatch'),
+      statusCodeOf: error => error.statusCode ?? null,
+      startSupportRequestGuard: () => guard,
+      assertSupportRequestCurrent: current => {
+        if (!current.current) throw new EvaBrokerError('support expired', 401, 'support-session-expired')
+      },
+      finishSupportRequestGuard: () => { finished = true }
+    }),
+    error => error.code === 'support-session-expired'
+  )
+  assert.deepEqual(requested, ['alpha'])
+  assert.equal(finished, true)
 })
 
 test('ordinary all scope fans out project tree and pull-request reads', async t => {

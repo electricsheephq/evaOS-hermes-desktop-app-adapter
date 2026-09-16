@@ -2366,7 +2366,11 @@ function createEvaManagedRuntime(options) {
           retry,
           requestApi,
           profileMismatchError,
-          supportProfileError
+          supportProfileError,
+          statusCodeOf,
+          startSupportRequestGuard,
+          assertSupportRequestCurrent,
+          finishSupportRequestGuard
         })
       }
       if (String(request?.method || 'GET').toUpperCase() === 'GET' &&
