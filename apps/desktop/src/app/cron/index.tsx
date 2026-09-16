@@ -49,7 +49,7 @@ import { isManagedEvaosAgent, managedProviderDisplayValue } from '@/i18n/managed
 import { AlertTriangle } from '@/lib/icons'
 import { requestModelOptions } from '@/lib/model-options'
 import { asText } from '@/lib/text'
-import { $cronFocusJobId, $cronJobs, cronJobIdentity, invalidateCronJobsRequests, setCronFocusJobId } from '@/store/cron'
+import { $cronFocusJobId, $cronJobErrors, $cronJobs, cronJobIdentity, invalidateCronJobsRequests, setCronFocusJobId } from '@/store/cron'
 import { $changeEventsAvailable, $cronChangeTick } from '@/store/live-sync'
 import { notify, notifyError } from '@/store/notifications'
 import { $profileScope, ALL_PROFILES } from '@/store/profile'
@@ -303,6 +303,7 @@ export function CronView({ onClose, onOpenSession, setStatusbarItemGroup: _setSt
   // sidebar and this overlay never drift — a delete here clears the sidebar row
   // immediately. `loading` only gates the first paint before the atom is filled.
   const jobs = useStore($cronJobs)
+  const cronJobErrors = useStore($cronJobErrors)
   const [loading, setLoading] = useState(jobs.length === 0)
   const [query, setQuery] = useState('')
   const [busyJobTokens, setBusyJobTokens] = useState<ReadonlyMap<string, symbol>>(() => new Map())
@@ -636,6 +637,14 @@ export function CronView({ onClose, onOpenSession, setStatusbarItemGroup: _setSt
   return (
     <Panel closeLabel={c.close} onClose={onClose}>
       <PanelHeader subtitle={c.count(totalCount)} title={c.title} />
+      {cronJobErrors.length > 0 && (
+        <div className="mx-4 mt-3 rounded-md bg-(--ui-warning-background) px-3 py-2 text-xs text-(--ui-warning-text)" role="status">
+          {c.partialFailures(
+            cronJobErrors.length,
+            cronJobErrors.map(error => `${error.profile}: ${error.status ?? error.error}`).join(', ')
+          )}
+        </div>
+      )}
 
       {loading && jobs.length === 0 ? (
         <PageLoader label={c.loading} />
