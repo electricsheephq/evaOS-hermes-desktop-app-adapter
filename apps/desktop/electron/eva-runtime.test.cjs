@@ -517,7 +517,7 @@ test('ordinary all scope fans out to concrete profiles for metadata, sessions, a
 
   await assert.rejects(
     runtime.requestApi({ path: '/api/profiles/sessions/sidebar?profile=zeta' }),
-    error => error.code === 'managed-escape'
+    error => error.code === 'profile-mismatch'
   )
   await assert.rejects(
     runtime.requestApi({ path: '/api/profiles/sessions/sidebar?profile=alpha&profile=beta' }),
