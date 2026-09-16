@@ -624,14 +624,11 @@ function normalizeSupportEnrollment(payload, options = {}) {
     throw new EvaBrokerError('Electric Sheep returned a non-support enrollment.', 403, 'invalid-support-session')
   }
 
-  const normalizedEnrollment = normalizeHermesEnrollment(payload, options)
-  const {
-    allowedProfiles: _customerAllowedProfiles,
-    profile: _customerProfile,
-    profileAdmin: _customerProfileAdmin,
-    sessionKind: _customerSessionKind,
-    ...enrollment
-  } = normalizedEnrollment
+  const enrollment = normalizeHermesEnrollment(payload, options)
+  delete enrollment.allowedProfiles
+  delete enrollment.profile
+  delete enrollment.profileAdmin
+  delete enrollment.sessionKind
   const supportSessionId = normalizeOpaqueToken(
     payload.support_session_id,
     'Electric Sheep support session'
