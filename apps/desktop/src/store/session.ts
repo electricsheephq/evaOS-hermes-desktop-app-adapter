@@ -691,6 +691,7 @@ export function carryForwardFailedProfileSessions(
   const failed = new Set(
     errors.filter(error => error.code !== SUPPORT_PROFILE_REFUSED).map(error => (error.profile ?? '').trim() || 'default')
   )
+
   const incomingIds = new Set(incoming.map(sessionListIdentity))
   const carried: SessionInfo[] = []
 

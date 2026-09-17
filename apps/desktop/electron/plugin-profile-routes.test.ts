@@ -121,6 +121,7 @@ describe('managed plugin profile routes', () => {
 
   it('feeds the managed roster IPC from the live finite authorized scope', async () => {
     const authorizedProfiles = vi.fn().mockResolvedValue(['alpha', 'atlas-desk', 'birch-ops'])
+
     const profileMetadata = vi.fn().mockResolvedValue({
       'atlas-desk': { display_name: 'Harbor Planner' }
     })

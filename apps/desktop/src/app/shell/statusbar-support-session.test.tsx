@@ -14,6 +14,7 @@ import { TitlebarControls } from './titlebar-controls'
 
 const active = { delegatedSupportActive: true, supportCustomerLabel: 'Customer', supportAgentLabel: 'Agent',
   supportExpiresAt: new Date(Date.now() + 60_000).toISOString() } as never
+
 const noStatusbarItems: never[] = []
 const openAgents = vi.fn()
 const openCommandCenterSection = vi.fn()
@@ -74,6 +75,7 @@ describe('support-session shell indicator', () => {
         </I18nProvider>
       </MemoryRouter>
     )
+
     const { result } = renderHook(
       () =>
         useStatusbarItems({

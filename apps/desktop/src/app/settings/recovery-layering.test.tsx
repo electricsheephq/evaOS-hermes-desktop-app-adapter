@@ -35,9 +35,11 @@ function resolvedZIndex(element: Element): number {
 
   while (value.startsWith('var(')) {
     const name = value.match(/^var\((--[^,)]+)/)?.[1]
+
     if (!name || seen.has(name)) {
       throw new Error(`Could not resolve z-index ${style.zIndex}`)
     }
+
     seen.add(name)
     value = style.getPropertyValue(name).trim()
   }

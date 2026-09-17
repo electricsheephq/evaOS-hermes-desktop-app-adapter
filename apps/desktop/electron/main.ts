@@ -179,6 +179,7 @@ import {
 import { describeDevCdpDecision, resolveDevCdpPort } from './dev-cdp'
 import { installEmbedReferer } from './embed-referer'
 const { createEvaAppUpdater, safeApplyFailure, safeCheckFailure } = require('./eva-app-updater.cjs')
+
 const {
   assertEvaManagedLocalMutationAllowed,
   assertEvaManagedLocalTerminalAllowed,
@@ -187,6 +188,7 @@ const {
   resolveEvaManagedConnectionFor,
   resolveEvaManagedDesktopProfileFromSources
 } = require('./eva-managed.cjs')
+
 const { createEvaMediaGrantCodec } = require('./eva-media-grant.cjs')
 const { createEvaProtocolHandlerManager } = require('./eva-protocol-handler.cjs')
 const { createEvaManagedRuntime } = require('./eva-runtime.cjs')
@@ -13659,6 +13661,7 @@ async function runHermesStart() {
     }
   )
 }
+
 // Shared navigation guards + window chrome wiring applied to every window
 // (the primary plus any secondary session windows). Factored out of
 // createWindow() so secondary windows can't drift from the main window's

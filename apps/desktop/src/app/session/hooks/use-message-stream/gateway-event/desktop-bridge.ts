@@ -247,6 +247,7 @@ export function handleDesktopBridgeEvent(ctx: GatewayEventContext): boolean {
         ownsActiveSurfaceNow() &&
         (tourSurface === 'app' ||
           (previewSurface ? ownsActivePreviewSurface(previewSurface) : captureActivePreviewSurface() === null))
+
       const answer = (result: unknown) =>
         respondToSource('tour.respond', {
           request_id: requestId,

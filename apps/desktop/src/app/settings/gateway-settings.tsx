@@ -110,7 +110,9 @@ function SupportSessionCard({ status, onStatus }: { status: EvaManagedStatus | n
     if (!sessionExpiresAt) {
       return
     }
+
     const timer = window.setInterval(() => setNow(Date.now()), 1_000)
+
     return () => window.clearInterval(timer)
   }, [sessionExpiresAt])
 
@@ -122,6 +124,7 @@ function SupportSessionCard({ status, onStatus }: { status: EvaManagedStatus | n
     if (busy) {
       return
     }
+
     setBusy(action)
 
     try {

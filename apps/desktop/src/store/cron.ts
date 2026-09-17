@@ -83,14 +83,17 @@ export function failCronJobsRequest(request: CronJobsRequest, error: unknown): b
   if (!isCronJobsRequestCurrent(request)) {
     return false
   }
+
   cronJobsRequestGeneration += 1
   const message = stripIpcErrorPrefix(error instanceof Error ? error.message : String(error))
   const status = Number(/^\s*(\d{3}):/.exec(message)?.[1])
   const unauthorized = status === 401 || status === 403 || /^profile \S+ is not authorized for this session$/.test(message)
+
   if (unauthorized) {
     $cronJobs.set([])
     $cronJobErrors.set([])
   }
+
   return true
 }
 

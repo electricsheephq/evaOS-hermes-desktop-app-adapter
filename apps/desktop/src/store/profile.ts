@@ -111,6 +111,7 @@ export function refreshProfiles(): Promise<ProfileInfo[]> {
           })
           const active = normalizeProfileKey($activeGatewayProfile.get())
           const source = activeGatewayConnectionId()
+
           if (
             delegatedSupportGatewayProfile === null &&
             (source === null || source === primaryGatewayConnectionId()) &&

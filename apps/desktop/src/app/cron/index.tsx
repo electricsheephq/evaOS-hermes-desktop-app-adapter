@@ -576,6 +576,7 @@ export function CronView({ onClose, onOpenSession, setStatusbarItemGroup: _setSt
         deliver: values.deliver || DEFAULT_DELIVER,
         ...(values.model.trim() ? { model: values.model.trim(), provider: values.provider.trim() || undefined } : {})
       }
+
       const {
         value: created,
         refreshError,
