@@ -2592,6 +2592,15 @@ function createEvaManagedRuntime(options) {
       const runtime = await ensureRuntimeEnrollment()
       return [...runtime.allowedProfiles]
     },
+    profileMetadata: async () => {
+      const runtime = await ensureRuntimeEnrollment()
+      return Object.fromEntries(
+        [...supportReadCache(runtime).profiles].map(([profile, rows]) => [
+          profile,
+          { display_name: rows[0]?.display_name }
+        ])
+      )
+    },
     claimSupportRequest,
     close,
     completeCallback,

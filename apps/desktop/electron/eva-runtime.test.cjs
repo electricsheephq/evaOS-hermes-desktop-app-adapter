@@ -1555,6 +1555,33 @@ test('admin profile discovery reads every granted agent even without sessions', 
   await assert.rejects(runtime.requestApi({ path: '/api/profiles' }), error => error.code === 'support-profile-mismatch')
 })
 
+test('managed roster metadata reuses cached profile discovery without another fetch', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-support-profile-metadata-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'state.json')
+  writeActiveEnrollment(statePath)
+  const payload = supportEnrollment()
+  payload.admin_bypass = true
+  payload.assignment_version = null
+  payload.profile = 'atlas-desk'
+  payload.remote_backend.agent_id = 'atlas-desk'
+  payload.remote_backend.allowed_profiles = ['atlas-desk']
+  let fetches = 0
+  const runtime = makeManagedRuntime(statePath, {
+    brokerPost: async () => payload,
+    fetchJson: async () => {
+      fetches += 1
+      return { profiles: [{ display_name: 'Harbor Planner', name: 'atlas-desk' }] }
+    }
+  })
+  t.after(() => runtime.close())
+  await runtime.claimSupportRequest('profile-metadata-request')
+  await runtime.requestApi({ path: '/api/profiles' })
+
+  assert.equal((await runtime.profileMetadata())['atlas-desk']?.display_name, 'Harbor Planner')
+  assert.equal(fetches, 1)
+})
+
 test('admin project tree merges granted profiles and rejects mismatched session rows', async t => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-support-tree-'))
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
