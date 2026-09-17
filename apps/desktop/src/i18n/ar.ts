@@ -1794,6 +1794,7 @@ export const ar = defineLocale({
     createTitle: 'إنشاء مهمة مجدولة',
     editDesc: 'عدل الجدول والرسالة.',
     createDesc: 'اضبط مهمة يشغلها Hermes تلقائيا.',
+    createTarget: label => `يُنشأ على ${label}`,
     nameLabel: 'الاسم',
     namePlaceholder: 'مثال: الملخص الصباحي',
     promptLabel: 'الرسالة',

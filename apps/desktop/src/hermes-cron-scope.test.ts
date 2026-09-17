@@ -105,6 +105,16 @@ describe('cron helpers are profile-scoped', () => {
     expect(api.mock.calls.at(-1)?.[0].path).toBe('/api/cron/jobs')
   })
 
+  it('create accepts an explicit target while preserving the ambient-only call', () => {
+    setApiRequestProfile('alpha')
+
+    void createCronJob({ name: 'nightly', prompt: 'run', schedule: '0 3 * * *' } as never, 'beta')
+    expect(api.mock.calls.at(-1)?.[0]).toMatchObject({ path: '/api/cron/jobs?profile=beta', profile: 'beta' })
+
+    void createCronJob({ name: 'nightly', prompt: 'run', schedule: '0 3 * * *' } as never)
+    expect(api.mock.calls.at(-1)?.[0]).toMatchObject({ path: '/api/cron/jobs', profile: 'alpha' })
+  })
+
   it('normalizes a managed partial result without hiding its profile errors', async () => {
     api.mockResolvedValueOnce({
       errors: [{ error: 'Profile temporarily unavailable.', profile: 'beta', status: 502 }],

@@ -2203,6 +2203,7 @@ export interface Translations {
     createTitle: string
     editDesc: string
     createDesc: string
+    createTarget: (label: string) => string
     nameLabel: string
     namePlaceholder: string
     promptLabel: string

@@ -2010,6 +2010,7 @@ export const zhHant = defineLocale({
     createTitle: '新排程工作',
     editDesc: '更新排程、提示詞或傳遞目標。變更將在下次執行時生效。',
     createDesc: '排程一個提示詞以自動執行。使用 cron 語法或類似「每 15 分鐘」的自然語言。',
+    createTarget: label => `建立於 ${label}`,
     nameLabel: '名稱',
     namePlaceholder: '例如：每日摘要',
     promptLabel: '提示詞',

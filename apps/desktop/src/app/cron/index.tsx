@@ -52,7 +52,14 @@ import { asText } from '@/lib/text'
 import { $cronFocusJobId, $cronJobErrors, $cronJobs, cronJobIdentity, invalidateCronJobsRequests, setCronFocusJobId } from '@/store/cron'
 import { $changeEventsAvailable, $cronChangeTick } from '@/store/live-sync'
 import { notify, notifyError } from '@/store/notifications'
-import { $profileScope, ALL_PROFILES } from '@/store/profile'
+import {
+  $activeGatewayProfile,
+  $profiles,
+  $profileScope,
+  ALL_PROFILES,
+  normalizeProfileKey,
+  profileLabel
+} from '@/store/profile'
 
 import { useRefreshHotkey } from '../hooks/use-refresh-hotkey'
 import {
@@ -352,6 +359,10 @@ export function CronView({ onClose, onOpenSession, setStatusbarItemGroup: _setSt
   // and the sidebar (which share the $cronJobs atom) agree on what's shown.
   const profileScope = useStore($profileScope)
   const profile = cronProfileForScope(profileScope)
+  const activeGatewayProfile = useStore($activeGatewayProfile)
+  const profiles = useStore($profiles)
+  const createTarget = normalizeProfileKey(activeGatewayProfile)
+  const createTargetLabel = profileLabel(profiles.find(item => item.name === createTarget) ?? { name: createTarget })
 
   const refresh = useCallback(async () => {
     const { refreshError, stale } = await refreshCronJobs(profile)
@@ -558,18 +569,19 @@ export function CronView({ onClose, onOpenSession, setStatusbarItemGroup: _setSt
 
   async function handleEditorSave(values: EditorValues) {
     if (editor.mode === 'create') {
+      const body = {
+        prompt: values.prompt,
+        schedule: values.schedule,
+        name: values.name || undefined,
+        deliver: values.deliver || DEFAULT_DELIVER,
+        ...(values.model.trim() ? { model: values.model.trim(), provider: values.provider.trim() || undefined } : {})
+      }
       const {
         value: created,
         refreshError,
         stale
       } = await mutateAndRefreshCronJobs(profile, () =>
-        createCronJob({
-          prompt: values.prompt,
-          schedule: values.schedule,
-          name: values.name || undefined,
-          deliver: values.deliver || DEFAULT_DELIVER,
-          ...(values.model.trim() ? { model: values.model.trim(), provider: values.provider.trim() || undefined } : {})
-        })
+        profileScope === ALL_PROFILES ? createCronJob(body, createTarget) : createCronJob(body)
       )
 
       if (stale || !created) {
@@ -609,10 +621,10 @@ export function CronView({ onClose, onOpenSession, setStatusbarItemGroup: _setSt
   // Blueprint instantiation is a distinct backend path (fills typed slots, then
   // creates the job) so it can't share the raw-cron onSave contract. Merge the
   // created job into $cronJobs like every other create path. A blueprint writes a
-  // real per-profile job, and "all" is not a writable target — collapse it to
-  // 'default', matching the manual create path in handleEditorSave.
+  // real per-profile job, and "all" is not a writable target — use the same
+  // active profile as the manual create path in handleEditorSave.
   async function handleBlueprintCreate(blueprint: AutomationBlueprint, values: Record<string, string>) {
-    const writableProfile = profileScope === ALL_PROFILES ? 'default' : profileScope
+    const writableProfile = profileScope === ALL_PROFILES ? createTarget : profileScope
 
     const {
       value: job,
@@ -733,6 +745,7 @@ export function CronView({ onClose, onOpenSession, setStatusbarItemGroup: _setSt
       )}
 
       <CronEditorDialog
+        createTargetLabel={createTargetLabel}
         editor={editor}
         onBlueprintCreate={handleBlueprintCreate}
         onClose={() => setEditor({ mode: 'closed' })}
@@ -1029,11 +1042,13 @@ export function DeliverCheckboxes({
 }
 
 function CronEditorDialog({
+  createTargetLabel,
   editor,
   onBlueprintCreate,
   onClose,
   onSave
 }: {
+  createTargetLabel: string
   editor: EditorState
   onBlueprintCreate: (blueprint: AutomationBlueprint, values: Record<string, string>) => Promise<void>
   onClose: () => void
@@ -1225,6 +1240,8 @@ function CronEditorDialog({
           <DialogTitle>{isEdit ? c.editTitle : c.createTitle}</DialogTitle>
           <DialogDescription>{isEdit ? c.editDesc : c.createDesc}</DialogDescription>
         </DialogHeader>
+
+        {!isEdit && <p className="text-xs text-muted-foreground">{c.createTarget(createTargetLabel)}</p>}
 
         {!isEdit && blueprintList.length > 0 && (
           <Field htmlFor="cron-template" label={c.blueprints.startFrom}>
