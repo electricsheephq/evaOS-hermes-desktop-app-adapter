@@ -402,7 +402,7 @@ import { collectSshConfigHosts, parseSshGOutput } from './ssh-config'
 import { createSshProbeConnection, pickLocalPort, redactSecrets, SshConnection } from './ssh-connection'
 import { createSshTeardownTracker } from './ssh-teardown'
 import { createStreamThrottle } from './stream-throttle'
-import { supportTargetMenuPlacement } from './support-target-menu'
+import { supportTargetMenuPlacement, switchSupportTargetMenuItem } from './support-target-menu'
 import { registerTerminalIpc } from './terminal-ipc'
 import { nativeOverlayWidth as computeNativeOverlayWidth, macTitleBarOverlayHeight } from './titlebar-overlay-width'
 import {
@@ -7113,34 +7113,15 @@ function buildApplicationMenu() {
     click: () => sendOpenUpdatesRequested()
   }
 
-  // Second entry to the delegated-support picker, alongside the app-root
-  // banner. The menu keeps working when the renderer is parked on a boot
-  // failure or an enrollment the broker will never grant, which is exactly the
-  // state an internal admin with no agent of their own boots into. macOS puts
-  // it in the application menu; Windows and Linux have none, so it goes in the
-  // File menu there (`supportTargetMenuPlacement`).
-  const switchSupportTargetItem = {
-    label: 'Switch Support Target…',
-    click: () => {
-      // The picker itself lives in the renderer (sc#540). The runtime only
-      // guarantees a desktop session first — a plain browser sign-in when there
-      // is none — then the app root is asked to open the picker over whatever
-      // it is showing, boot failure included.
-      void evaManagedRuntime
-        .switchSupportTarget()
-        .then(() => {
-          if (mainWindow && !mainWindow.isDestroyed()) {
-            mainWindow.webContents.send('hermes:eva:support:open-picker')
-          }
-        })
-        .catch(error => {
-          // Bounded machine code only — broker prose may carry account, customer
-          // or route detail.
-          const code = String(error?.code || '').match(/^[a-z][a-z0-9]*(?:[_-][a-z0-9]+)*$/)?.[0]
-          rememberLog(`[eva-support] switch support target rejected: ${code || 'switch-target-failed'}`)
-        })
-    }
-  }
+  const switchSupportTargetItem = switchSupportTargetMenuItem({
+    switchSupportTarget: () => evaManagedRuntime.switchSupportTarget(),
+    openPicker: () => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('hermes:eva:support:open-picker')
+      }
+    },
+    log: rememberLog
+  })
 
   const supportTargetMenu = supportTargetMenuPlacement(switchSupportTargetItem, {
     isMac: IS_MAC,

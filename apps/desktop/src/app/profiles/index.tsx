@@ -14,7 +14,7 @@ import { AlertTriangle, Save } from '@/lib/icons'
 import { resolveProfileColor } from '@/lib/profile-color'
 import { normalize } from '@/lib/text'
 import { notify, notifyError } from '@/store/notifications'
-import { $profileColors, refreshProfiles } from '@/store/profile'
+import { $profileColors, profileLabel, refreshProfiles } from '@/store/profile'
 
 import { useRefreshHotkey } from '../hooks/use-refresh-hotkey'
 import {
@@ -46,13 +46,18 @@ interface ManagedProfilePresentation {
 }
 
 export function resolveManagedProfileDisplayName(
-  profileName: string,
+  profile: Pick<ProfileInfo, 'display_name' | 'name'>,
   presentation: ManagedProfilePresentation | null
 ): string {
   const canonicalProfileName = presentation?.profileName?.trim()
   const displayName = presentation?.agentDisplayName?.trim()
+  const nativeLabel = profileLabel(profile)
 
-  return canonicalProfileName && displayName && profileName === canonicalProfileName ? displayName : profileName
+  return profile.display_name?.trim()
+    ? nativeLabel
+    : canonicalProfileName && displayName && profile.name === canonicalProfileName
+      ? displayName
+      : profile.name
 }
 
 export function ProfilesView({ onClose }: ProfilesViewProps) {
@@ -149,7 +154,7 @@ export function ProfilesView({ onClose }: ProfilesViewProps) {
     }
 
     return profiles.filter(profile => {
-      const displayName = resolveManagedProfileDisplayName(profile.name, managedPresentation)
+      const displayName = resolveManagedProfileDisplayName(profile, managedPresentation)
 
       return (
         profile.name.toLowerCase().includes(q) ||
@@ -200,7 +205,7 @@ export function ProfilesView({ onClose }: ProfilesViewProps) {
               {visibleProfiles.map(profile => (
                 <ProfileRow
                   active={selected?.name === profile.name}
-                  displayName={resolveManagedProfileDisplayName(profile.name, managedPresentation)}
+                  displayName={resolveManagedProfileDisplayName(profile, managedPresentation)}
                   key={profile.name}
                   menuItems={
                     managedEva
@@ -228,7 +233,7 @@ export function ProfilesView({ onClose }: ProfilesViewProps) {
 
             {selected ? (
               <ProfileDetail
-                displayName={resolveManagedProfileDisplayName(selected.name, managedPresentation)}
+                displayName={resolveManagedProfileDisplayName(selected, managedPresentation)}
                 key={selected.name}
                 profile={selected}
               />

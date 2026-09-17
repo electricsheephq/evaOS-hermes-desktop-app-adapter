@@ -7,7 +7,7 @@ import { retireLocalProfileGateways } from '@/store/gateway'
 import { refreshProfiles, selectProfile, setActiveProfile } from '@/store/profile'
 import type { ProfileInfo } from '@/types/hermes'
 
-import { ProfilesView } from './index'
+import { ProfilesView, resolveManagedProfileDisplayName } from './index'
 
 // These tests pin the invariant this whole area exists to hold: the Manage
 // Profiles page and the sidebar rail share ONE set of profile dialogs, so both
@@ -122,6 +122,22 @@ async function deleteTheNamedProfile() {
 }
 
 describe('ProfilesView', () => {
+  it('prefers profile metadata, then the managed anchor name, then the profile id', () => {
+    const managedAnchor = { agentDisplayName: 'Harbor Planner', profileName: 'atlas-desk' }
+
+    expect(
+      resolveManagedProfileDisplayName(
+        { ...makeProfile('atlas-desk'), display_name: 'Profile Display Name' },
+        managedAnchor
+      )
+    ).toBe('Profile Display Name')
+    expect(
+      resolveManagedProfileDisplayName({ ...makeProfile('atlas-desk'), display_name: 'atlas-desk' }, managedAnchor)
+    ).toBe('atlas-desk')
+    expect(resolveManagedProfileDisplayName(makeProfile('atlas-desk'), managedAnchor)).toBe('Harbor Planner')
+    expect(resolveManagedProfileDisplayName(makeProfile('birch-ops'), managedAnchor)).toBe('birch-ops')
+  })
+
   it('shows managed profiles without create, rename or delete actions', async () => {
     vi.stubGlobal('hermesDesktop', { eva: {} })
     vi.mocked(refreshProfiles).mockResolvedValue([makeProfile('default', true), makeProfile(NAMED_PROFILE)])

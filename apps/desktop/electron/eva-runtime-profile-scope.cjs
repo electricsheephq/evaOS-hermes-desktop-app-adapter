@@ -3,9 +3,11 @@ async function requestAuthorizedCronJobs({
   request,
   retry,
   requestApi,
+  cache,
+  leafFailureKind,
   profileMismatchError,
   supportProfileError,
-  statusCodeOf,
+  assertOrdinaryScopeUnchanged,
   startSupportRequestGuard,
   assertSupportRequestCurrent,
   finishSupportRequestGuard
@@ -27,25 +29,33 @@ async function requestAuthorizedCronJobs({
         )
       } catch (error) {
         assertSupportRequestCurrent(guard)
-        const status = statusCodeOf(error)
-        if (status !== null && status < 500) throw error
-        errors.push({ profile, error: 'Profile temporarily unavailable.', ...(status === null ? {} : { status }) })
+        const status = Number.isInteger(error?.statusCode) ? error.statusCode : null
+        const kind = leafFailureKind(runtime, error)
+        if (kind === null) throw error
+        if (kind === 'refused') cache.delete(profile)
+        errors.push({ profile, error: 'Profile temporarily unavailable.', ...(status === null ? {} : { status }),
+          ...(kind === 'refused' ? { code: 'support-profile-refused' } : {}) })
+        if (kind !== 'refused') jobs.push(...structuredClone(cache.get(profile) ?? []))
         continue
       }
       assertSupportRequestCurrent(guard)
+      const fresh = []
       for (const row of result ?? []) {
         if (row.profile != null && row.profile !== profile) {
           throw runtime.sessionKind === 'delegated_support'
             ? supportProfileError()
             : profileMismatchError(row.profile)
         }
-        jobs.push({ ...row, profile })
+        fresh.push({ ...row, profile })
       }
+      cache.set(profile, structuredClone(fresh))
+      jobs.push(...fresh)
     }
   } finally {
     finishSupportRequestGuard(guard)
   }
 
+  assertOrdinaryScopeUnchanged(runtime)
   return errors.length ? { errors, jobs } : jobs
 }
 

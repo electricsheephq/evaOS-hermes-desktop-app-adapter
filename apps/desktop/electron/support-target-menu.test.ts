@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 
 import { test, vi } from 'vitest'
 
-import { supportTargetMenuPlacement } from './support-target-menu'
+import { supportTargetMenuPlacement, switchSupportTargetMenuItem } from './support-target-menu'
 
 const item = { label: 'Switch Support Target…' }
 
@@ -36,19 +36,37 @@ test('an unmanaged build carries no switch entry at all', () => {
   assert.deepEqual(supportTargetMenuPlacement(item, { isMac: false, managed: false }), { appMenu: [], fileMenu: [] })
 })
 
-test('the menu opens the picker only after switching resolves', async () => {
+test('the switch click opens the picker only after switching resolves', async () => {
   let resolveSwitch!: () => void
-  const send = vi.fn()
+  const openPicker = vi.fn()
   const pending = new Promise<void>(resolve => (resolveSwitch = resolve))
-  const item = { click: () => void pending.then(send).catch(() => undefined) }
-  ;(supportTargetMenuPlacement(item, { isMac: true, managed: true }).appMenu[0] as typeof item).click()
-  assert.equal(send.mock.calls.length, 0)
-  resolveSwitch()
-  await vi.waitFor(() => assert.equal(send.mock.calls.length, 1))
+  const { click } = switchSupportTargetMenuItem({ switchSupportTarget: () => pending, openPicker, log: vi.fn() })
 
-  const rejectedSend = vi.fn()
-  const rejected = { click: () => void Promise.reject().then(rejectedSend).catch(() => undefined) }
-  ;(supportTargetMenuPlacement(rejected, { isMac: false, managed: true }).fileMenu[0] as typeof rejected).click()
-  await Promise.resolve()
-  assert.equal(rejectedSend.mock.calls.length, 0)
+  click()
+  assert.equal(openPicker.mock.calls.length, 0)
+  resolveSwitch()
+  await vi.waitFor(() => assert.equal(openPicker.mock.calls.length, 1))
+})
+
+test('the switch click never opens the picker on rejection and logs only a bounded code', async () => {
+  for (const [error, expected] of [
+    [{ code: 'support-session-active' }, 'support-session-active'],
+    [{ code: 'Bad Code With detail@x' }, 'switch-target-failed'],
+    [new Error('private detail'), 'switch-target-failed']
+  ] as const) {
+    const openPicker = vi.fn()
+    const log = vi.fn()
+
+    const { click } = switchSupportTargetMenuItem({
+      switchSupportTarget: () => Promise.reject(error),
+      openPicker,
+      log
+    })
+
+    click()
+    await vi.waitFor(() => assert.equal(log.mock.calls.length, 1))
+    assert.equal(openPicker.mock.calls.length, 0)
+    assert.equal(log.mock.calls[0][0], `[eva-support] switch support target rejected: ${expected}`)
+    assert.equal(log.mock.calls[0][0].includes('private detail'), false)
+  }
 })

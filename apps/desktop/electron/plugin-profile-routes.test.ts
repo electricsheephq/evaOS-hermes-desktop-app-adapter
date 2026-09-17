@@ -120,11 +120,19 @@ describe('managed plugin profile routes', () => {
   })
 
   it('feeds the managed roster IPC from the live finite authorized scope', async () => {
-    const authorizedProfiles = vi.fn().mockResolvedValue(['alpha', 'beta', 'gamma'])
+    const authorizedProfiles = vi.fn().mockResolvedValue(['alpha', 'atlas-desk', 'birch-ops'])
+    const profileMetadata = vi.fn().mockResolvedValue({
+      'atlas-desk': { display_name: 'Harbor Planner' }
+    })
+
     const primaryProfileKey = vi.fn(() => 'alpha')
-    const roster = () => loadEvaManagedAgentRoster({ authorizedProfiles }, primaryProfileKey)
+    const roster = () => loadEvaManagedAgentRoster({ authorizedProfiles, profileMetadata }, primaryProfileKey)
     const result = await roster()
-    expect(result.agents.map((row: { profile: string }) => row.profile)).toEqual(['alpha', 'beta', 'gamma'])
+
+    expect(result.agents.map((row: { profile: string }) => row.profile)).toEqual(['alpha', 'atlas-desk', 'birch-ops'])
+    expect(result.agents.find(row => row.profile === 'atlas-desk')?.profileMetadata?.display_name).toBe(
+      'Harbor Planner'
+    )
     expect(result.sources).toHaveLength(1)
     expect(primaryProfileKey).not.toHaveBeenCalled()
     authorizedProfiles.mockResolvedValueOnce([])

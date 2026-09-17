@@ -12,6 +12,7 @@ const {
   launchEvaHermesRuntime,
   makeAuthState,
   makeEvaDesktopCodeVerifier,
+  normalizeEvaManagedApiPath,
   normalizeDesktopSession,
   normalizeHermesEnrollment,
   normalizeSupportEnrollment,
@@ -307,7 +308,10 @@ function createEvaManagedRuntime(options) {
   let rendererResetPending = false
   let rendererResetPromise = null
   const supportRequestControllers = new Set()
+  const upstreamHttpErrors = new WeakSet()
   let delegatedReadCache = null
+  let staleScopeRefresh = null
+  let lastStaleScopeRefreshAt = -Infinity
 
   function emptyState(signedOut = false) {
     return {
@@ -1997,6 +2001,63 @@ function createEvaManagedRuntime(options) {
     return error
   }
 
+  function isStaleProfileScopeError(runtime, error) {
+    return runtime?.sessionKind !== 'delegated_support' &&
+      upstreamHttpErrors.has(error) &&
+      statusCodeOf(error) === 403 &&
+      /^\s*403:\s*Hermes profile scope is not active\s*$/.test(String(error?.message || ''))
+  }
+
+  function leafFailureKind(runtime, error) {
+    if (!upstreamHttpErrors.has(error)) return null
+    const status = statusCodeOf(error)
+    if (status === null || status >= 500) return 'unavailable'
+    if (status === 403) {
+      const match = /^\s*403:\s*(\{.*\})\s*$/.exec(String(error?.message || ''))
+      try {
+        if (JSON.parse(match?.[1] ?? 'null')?.detail === 'profile is not authorized') return 'refused'
+      } catch {
+        // Not the gateway's structured per-profile refusal.
+      }
+    }
+    if (runtime.sessionKind === 'delegated_support') return null
+    return status >= 400 && status < 500 && status !== 401 && !isStaleProfileScopeError(runtime, error)
+      ? 'unavailable'
+      : null
+  }
+
+  function assertOrdinaryScopeUnchanged(runtime) {
+    if (runtime.sessionKind === 'delegated_support') return
+    const current = currentState().runtime
+    const scopeKey = value => JSON.stringify({
+      allowedProfiles: [...(value?.allowedProfiles ?? [])].sort(),
+      profileAdmin: value?.profileAdmin === true
+    })
+    if (!current || scopeKey(current) !== scopeKey(runtime)) {
+      throw new EvaBrokerError('Hermes profile scope changed during the aggregate read.', 409, 'profile-scope-changed')
+    }
+  }
+
+  function refreshStaleProfileScope(staleRuntime) {
+    if (runtimeEnrollmentFailure?.nextRetryAt === Number.POSITIVE_INFINITY) return null
+    if (staleScopeRefresh?.token === staleRuntime.token) return staleScopeRefresh.promise
+    const current = currentState().runtime
+    if (current && current.token !== staleRuntime.token && !expiresSoon(current.expiresAt)) {
+      return Promise.resolve(current)
+    }
+    if (now() - lastStaleScopeRefreshAt < 60_000) return null
+    lastStaleScopeRefreshAt = now()
+    const promise = (async () => {
+      await refresh()
+      return ensureRuntimeEnrollment()
+    })()
+    staleScopeRefresh = { token: staleRuntime.token, promise }
+    void promise.finally(() => {
+      if (staleScopeRefresh?.promise === promise) staleScopeRefresh = null
+    }).catch(() => undefined)
+    return promise
+  }
+
   function bindSupportProfileValue(value, profile, runtime) {
     if (Array.isArray(value)) return value.map(entry => bindSupportProfileValue(entry, profile, runtime))
     if (!value || typeof value !== 'object' || Object.getPrototypeOf(value) !== Object.prototype) return value
@@ -2028,7 +2089,7 @@ function createEvaManagedRuntime(options) {
       }
       const queryProfile = queryProfiles[0]
       const resolvedQueryProfile = queryProfile === undefined ? undefined : supportProfileFor(runtime, queryProfile)
-      const resolvedBodyProfile = bodyProfile === undefined ? undefined : supportProfileFor(runtime, bodyProfile)
+      const resolvedBodyProfile = bodyProfile == null ? undefined : supportProfileFor(runtime, bodyProfile)
       if (resolvedQueryProfile !== undefined && resolvedBodyProfile !== undefined && resolvedQueryProfile !== resolvedBodyProfile) {
         throw new EvaBrokerError('evaOS Agent blocked conflicting Hermes profiles.', 400, 'managed-policy')
       }
@@ -2047,6 +2108,13 @@ function createEvaManagedRuntime(options) {
       )
       return { policy: { allowBroadProfileSelectors: false }, profile, request: ordinaryRequest }
     }
+
+    const { pathname } = normalizeEvaManagedApiPath(request?.path)
+    const policyPath = pathname.length > '/api/'.length ? pathname.replace(/\/+$/, '') : pathname
+    if (
+      String(request?.method || 'GET').toUpperCase() !== 'GET' &&
+      (policyPath === '/api/providers/oauth' || policyPath.startsWith('/api/providers/oauth/'))
+    ) throw new EvaBrokerError('evaOS Agent blocked provider changes during delegated support.', 403, 'managed-policy')
 
     const profile = supportProfileFor(runtime, request?.profile)
     let path = request?.path
@@ -2073,26 +2141,12 @@ function createEvaManagedRuntime(options) {
       return await requestApi(request, retry)
     } catch (error) {
       const status = statusCodeOf(error)
-      // A route outage is local to this profile. Authorization, policy and
-      // lease failures still invalidate the aggregate rather than hiding them.
-      // The one exception is the gateway's exact per-leaf refusal: another
-      // granted profile can still be read safely, so expose this leaf as down.
-      let refusedProfile = false
-      if (status === 403) {
-        if (runtime.sessionKind !== 'delegated_support') {
-          throw normalizeProfileRequestError(runtime, request.profile, error)
-        }
-        const match = /^\s*403:\s*(\{.*\})\s*$/.exec(String(error?.message || ''))
-        try {
-          refusedProfile = JSON.parse(match?.[1] ?? 'null')?.detail === 'profile is not authorized'
-        } catch {
-          refusedProfile = false
-        }
-      }
-      if (!refusedProfile && status !== null && status < 500) throw error
-      if (refusedProfile) refusedProfiles?.add(request.profile)
+      const kind = leafFailureKind(runtime, error)
+      if (kind === null) throw normalizeProfileRequestError(runtime, request.profile, error)
+      if (kind === 'refused') refusedProfiles?.add(request.profile)
       errors.push({ profile: request.profile, error: 'Profile temporarily unavailable.',
-        ...(refusedProfile ? { code: 'support-profile-refused' } : {}) })
+        ...(status === null ? {} : { status }),
+        ...(kind === 'refused' ? { code: 'support-profile-refused' } : {}) })
       return null
     }
   }
@@ -2109,7 +2163,7 @@ function createEvaManagedRuntime(options) {
   function supportReadCache(runtime) {
     const sessionId = runtime.sessionKind === 'delegated_support' ? runtime.supportSessionId : runtimeGeneration
     if (!delegatedReadCache || delegatedReadCache.sessionId !== sessionId) {
-      delegatedReadCache = { sessionId, profiles: new Map(), projects: new Map() }
+      delegatedReadCache = { sessionId, cron: new Map(), profiles: new Map(), projects: new Map() }
     }
     return delegatedReadCache
   }
@@ -2151,6 +2205,7 @@ function createEvaManagedRuntime(options) {
     for (const [profile, total] of Object.entries(profileTotals)) {
       profilesTruncated[profile] = total > sessions.filter(row => row.profile === profile).length
     }
+    assertOrdinaryScopeUnchanged(runtime)
     return {
       sessions,
       total: results.reduce((sum, result) => sum + (result?.total ?? result?.sessions?.length ?? 0), 0),
@@ -2190,6 +2245,7 @@ function createEvaManagedRuntime(options) {
         if (freshRows.length) cache.set(profile, structuredClone(rows))
         profiles.push(...structuredClone(rows))
       }
+      assertOrdinaryScopeUnchanged(runtime)
       return { profiles, ...(errors.length ? { errors } : {}) }
     } finally {
       finishSupportRequestGuard(guard)
@@ -2273,6 +2329,7 @@ function createEvaManagedRuntime(options) {
         }
         if (boundFresh && !fresh.errors?.length) cache.set(profile, { previewLimit, result: structuredClone(boundFresh) })
       }
+      assertOrdinaryScopeUnchanged(runtime)
       return { projects: [...projects.values()].sort((a, b) => (b.lastActive || 0) - (a.lastActive || 0)),
         active_id: null, scoped_session_ids: [...scopedIds], errors }
     } finally {
@@ -2301,6 +2358,7 @@ function createEvaManagedRuntime(options) {
       // leaves can also suppress DB errors, so only positive results prove
       // completion; absent PRs must remain eligible for a later read.
       const confirmed = (scanned ?? []).filter(id => Object.hasOwn(pullRequests, id))
+      assertOrdinaryScopeUnchanged(runtime)
       return { pull_requests: pullRequests, scanned: errors.length ? [] : confirmed,
         ...(errors.length ? { errors } : {}) }
     } finally {
@@ -2316,8 +2374,10 @@ function createEvaManagedRuntime(options) {
     const recentsProfiles = recentsProfile === 'all'
       ? runtime.allowedProfiles : [supportProfileFor(runtime, recentsProfile)]
     const slicePath = (limitKey, defaultLimit, extras = {}) => {
+      const raw = parsed.searchParams.get(limitKey)
+      const requested = Number(raw)
       const params = new URLSearchParams({
-        limit: parsed.searchParams.get(limitKey) || defaultLimit,
+        limit: raw && Number.isInteger(requested) && requested > 500 ? '500' : (raw || defaultLimit),
         offset: '0',
         min_messages: '1',
         archived: 'exclude',
@@ -2363,6 +2423,7 @@ function createEvaManagedRuntime(options) {
 
   async function requestApi(request, retry = true) {
     const runtime = await ensureRuntimeEnrollment()
+    const requestAuth = authGeneration
     const supportRequest = runtime.sessionKind === 'delegated_support'
     const parsedRequest = new URL(String(request?.path || ''), 'http://eva-managed.invalid')
     const requestPath = parsedRequest.pathname
@@ -2392,9 +2453,11 @@ function createEvaManagedRuntime(options) {
           request,
           retry,
           requestApi,
+          cache: supportReadCache(runtime).cron,
+          leafFailureKind,
           profileMismatchError,
           supportProfileError,
-          statusCodeOf,
+          assertOrdinaryScopeUnchanged,
           startSupportRequestGuard,
           assertSupportRequestCurrent,
           finishSupportRequestGuard
@@ -2443,10 +2506,20 @@ function createEvaManagedRuntime(options) {
         normalizeSupportRequestError(error, guard)
       )
       if (guard && normalizedError?.code === 'support-session-expired') throw normalizedError
-      if (!retry || statusCodeOf(normalizedError) !== 401) throw normalizedError
+      upstreamHttpErrors.add(normalizedError)
+      const staleScope = retry && isStaleProfileScopeError(runtime, normalizedError)
+      if (!retry || (statusCodeOf(normalizedError) !== 401 && !staleScope)) throw normalizedError
       finishSupportRequestGuard(guard)
-      clearRuntimeEnrollment()
-      const refreshed = await ensureRuntimeEnrollment({ force: true })
+      let refreshed
+      if (staleScope) {
+        const pending = refreshStaleProfileScope(runtime)
+        if (!pending) throw normalizedError
+        refreshed = await pending
+        assertGeneration(requestAuth)
+      } else {
+        clearRuntimeEnrollment()
+        refreshed = await ensureRuntimeEnrollment({ force: true })
+      }
       if (supportRequest && refreshed.sessionKind !== 'delegated_support') {
         throw supportSessionExpiredError()
       }
@@ -2467,11 +2540,15 @@ function createEvaManagedRuntime(options) {
         assertSupportRequestCurrent(refreshedGuard)
         return result
       } catch (retryError) {
-        throw normalizeProfileRequestError(
+        const normalizedRetryError = normalizeProfileRequestError(
           refreshed,
           nextBound.profile,
           normalizeSupportRequestError(retryError, refreshedGuard)
         )
+        if (!(refreshedGuard && normalizedRetryError?.code === 'support-session-expired')) {
+          upstreamHttpErrors.add(normalizedRetryError)
+        }
+        throw normalizedRetryError
       } finally {
         finishSupportRequestGuard(refreshedGuard)
       }
@@ -2591,6 +2668,15 @@ function createEvaManagedRuntime(options) {
     authorizedProfiles: async () => {
       const runtime = await ensureRuntimeEnrollment()
       return [...runtime.allowedProfiles]
+    },
+    profileMetadata: async () => {
+      const runtime = await ensureRuntimeEnrollment()
+      return Object.fromEntries(
+        [...supportReadCache(runtime).profiles].map(([profile, rows]) => [
+          profile,
+          { display_name: rows[0]?.display_name }
+        ])
+      )
     },
     claimSupportRequest,
     close,

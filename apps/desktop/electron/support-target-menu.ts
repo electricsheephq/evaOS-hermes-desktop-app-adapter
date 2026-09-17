@@ -6,6 +6,26 @@
 // pure helper — that is the seam both platforms are actually tested through.
 export type SupportTargetMenuEntry = Record<string, unknown>
 
+export function switchSupportTargetMenuItem(deps: {
+  switchSupportTarget: () => Promise<unknown>
+  openPicker: () => void
+  log: (line: string) => void
+}) {
+  return {
+    label: 'Switch Support Target…',
+    click: () => {
+      void deps
+        .switchSupportTarget()
+        .then(deps.openPicker)
+        .catch(error => {
+          // Bounded machine code only — broker prose may carry private detail.
+          const code = String(error?.code || '').match(/^[a-z][a-z0-9]*(?:[_-][a-z0-9]+)*$/)?.[0]
+          deps.log(`[eva-support] switch support target rejected: ${code || 'switch-target-failed'}`)
+        })
+    }
+  }
+}
+
 export function supportTargetMenuPlacement<T extends SupportTargetMenuEntry>(
   item: T,
   options: { isMac: boolean; managed: boolean }
