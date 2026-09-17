@@ -1,3 +1,6 @@
+import { isManagedEvaosAgent } from '@/i18n/managed-brand'
+import { $evaManagedStatus } from '@/store/support-picker'
+
 const MANAGED_BILLING_SLASH_COMMANDS = new Set(['/subscription', '/topup', '/upgrade'])
 const MANAGED_NOUS_GATEWAY_METHODS = new Set(['usage.bars'])
 const MANAGED_NOUS_GATEWAY_PREFIXES = ['billing.', 'subscription.']
@@ -22,6 +25,20 @@ export function isManagedConfigFieldVisible(key: string, managed: boolean): bool
 
 export function isManagedTerminalUiVisible(managed: boolean): boolean {
   return !managed
+}
+
+export function isDisplayToggleWriteAllowed(connectPush: boolean): boolean {
+  if (!isManagedEvaosAgent()) {
+    return true
+  }
+
+  if (connectPush) {
+    return false
+  }
+
+  const status = $evaManagedStatus.get()
+
+  return status !== null && !status.delegatedSupportActive
 }
 
 export function isManagedBillingSlashCommand(command: string, managed: boolean): boolean {

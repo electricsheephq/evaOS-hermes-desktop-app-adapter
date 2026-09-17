@@ -24,6 +24,7 @@
 
 import type { ReadableAtom } from 'nanostores'
 
+import { isDisplayToggleWriteAllowed } from '@/lib/managed-ui-policy'
 import { readKey } from '@/lib/storage'
 import { $gateway, activeGateway } from '@/store/gateway'
 
@@ -54,11 +55,21 @@ export function mirrorDisplayToggle(configKey: string, storageKey: string, $enab
 
   mirrors.push(mirror)
   // listen, not subscribe: fire on CHANGE only. Module init must not write.
-  $enabled.listen(() => push(mirror))
+  $enabled.listen(() => {
+    if (!isDisplayToggleWriteAllowed(false)) {
+      return
+    }
+
+    push(mirror)
+  })
 }
 
 if (typeof window !== 'undefined') {
   $gateway.listen(() => {
+    if (!isDisplayToggleWriteAllowed(true)) {
+      return
+    }
+
     for (const mirror of mirrors) {
       if (readKey(mirror.storageKey) !== null) {
         push(mirror)

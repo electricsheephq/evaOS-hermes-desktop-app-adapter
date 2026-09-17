@@ -572,21 +572,26 @@ function normalizeHermesEnrollment(payload, options = {}) {
   }
 
   const rawAllowedProfiles = remote.allowed_profiles
-  const validProfileScope =
+  const validProfileList =
     Array.isArray(rawAllowedProfiles) &&
     rawAllowedProfiles.length > 0 &&
     rawAllowedProfiles.every(
       value => typeof value === 'string' && EVA_MANAGED_PROFILE_RE.test(value) && value !== 'all'
     ) &&
-    new Set(rawAllowedProfiles).size === rawAllowedProfiles.length &&
-    rawAllowedProfiles.includes(agentId)
+    new Set(rawAllowedProfiles).size === rawAllowedProfiles.length
+  const validProfileScope = validProfileList && rawAllowedProfiles.includes(agentId)
   const allowedProfiles = validProfileScope ? [...rawAllowedProfiles] : [agentId]
+  if (!validProfileScope) {
+    const reason = rawAllowedProfiles === undefined ? 'missing' : validProfileList ? 'agent-not-in-scope' : 'invalid'
+    options.onDiagnostic?.(`[eva-managed] broker profile scope unusable (reason=${reason}); using the assigned agent only`)
+  }
   // The broker binds primary_profile to agent_id. Keep the enrolled agent
   // authoritative if those fields ever disagree instead of silently retargeting.
   if (Object.hasOwn(remote, 'primary_profile') && remote.primary_profile !== agentId) {
     options.onDiagnostic?.('[eva-managed] broker primary profile did not match assigned agent; using assigned agent')
   }
   const profile = agentId
+  // Reserved: parsed and persisted for wire parity; client enforcement is allowedProfiles alone.
   const profileAdmin = validProfileScope && remote.profile_admin === true
 
   const rawDisplayName = typeof remote.agent_display_name === 'string' ? remote.agent_display_name.trim() : ''
@@ -1060,6 +1065,7 @@ module.exports = {
   launchEvaHermesRuntime,
   makeAuthState,
   makeEvaDesktopCodeVerifier,
+  normalizeEvaManagedApiPath,
   normalizeDesktopSession,
   normalizeHermesEnrollment,
   normalizeSupportEnrollment,

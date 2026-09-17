@@ -1028,6 +1028,46 @@ test('managed desktop profile accepts a profile literally named default only whe
   )
 })
 
+test('normalizeHermesEnrollment logs an unusable profile scope reason without profile names', () => {
+  const base = {
+    schema_version: 'evaos.hermes_desktop_enrollment.v1',
+    runtime: 'hermes',
+    customer_id: 'fixture-tenant-a',
+    remote_backend: {
+      base_url: 'https://hermes-fixture-tenant-a.ecs.electricsheephq.com',
+      session_token: 'opaque-runtime-session',
+      expires_at: FUTURE,
+      agent_id: 'alpha',
+      allowed_profiles: ['alpha', 'beta'],
+      primary_profile: 'alpha',
+      profile_admin: true
+    }
+  }
+  const fixtures = [
+    { expected: 'missing', allowedProfiles: undefined },
+    { expected: 'invalid', allowedProfiles: ['alpha', 'alpha'] },
+    { expected: 'agent-not-in-scope', allowedProfiles: ['beta'] }
+  ]
+
+  for (const fixture of fixtures) {
+    const diagnostics = []
+    normalizeHermesEnrollment({
+      ...base,
+      remote_backend: { ...base.remote_backend, allowed_profiles: fixture.allowedProfiles }
+    }, { onDiagnostic: message => diagnostics.push(message) })
+
+    assert.deepEqual(diagnostics, [
+      `[eva-managed] broker profile scope unusable (reason=${fixture.expected}); using the assigned agent only`
+    ])
+    assert.equal(diagnostics[0].includes('alpha'), false)
+    assert.equal(diagnostics[0].includes('beta'), false)
+  }
+
+  const diagnostics = []
+  normalizeHermesEnrollment(base, { onDiagnostic: message => diagnostics.push(message) })
+  assert.deepEqual(diagnostics, [])
+})
+
 test('managed desktop profile falls back to enrolled identity only when the active endpoint is absent', async () => {
   const missing = Object.assign(new Error('404: missing'), { statusCode: 404 })
   assert.equal(

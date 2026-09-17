@@ -35,4 +35,22 @@ describe('CronView profile errors', () => {
     await waitFor(() => expect(screen.queryByLabelText('Loading cron jobs...')).toBeNull())
     expect(screen.getByText('1 profile could not be read: beta: 502')).toBeTruthy()
   })
+
+  it('names a failed profile without rendering main-process English prose', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity } } })
+
+    queryClient.setQueryData(['cron-blueprints'], [])
+    setCronJobs([])
+    $cronJobErrors.set([{ error: 'Profile temporarily unavailable.', profile: 'beta' }])
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <CronView onClose={vi.fn()} onOpenSession={vi.fn()} setStatusbarItemGroup={vi.fn()} />
+      </QueryClientProvider>
+    )
+
+    await waitFor(() => expect(screen.queryByLabelText('Loading cron jobs...')).toBeNull())
+    expect(screen.getByRole('status').textContent).toContain('beta')
+    expect(screen.getByRole('status').textContent).not.toContain('temporarily unavailable')
+  })
 })

@@ -58,6 +58,34 @@ describe('cron jobs request fencing', () => {
     expect($cronJobs.get()).toEqual([newJob])
     expect($cronJobErrors.get()).toEqual([{ error: 'Profile temporarily unavailable.', profile: 'beta', status: 502 }])
   })
+
+  it('keeps prior rows for an unavailable profile and clears errors after recovery', () => {
+    const alpha = { enabled: true, id: 'daily-alpha', profile: 'alpha' } satisfies CronJob
+    const beta = { enabled: true, id: 'daily-beta', profile: 'beta' } satisfies CronJob
+    setCronJobs([alpha, beta])
+
+    const partial = Object.assign([{ ...alpha, name: 'Fresh alpha' }], {
+      errors: [{ error: 'Profile temporarily unavailable.', profile: 'beta', status: 404 }]
+    })
+    expect(commitCronJobsRequest(beginCronJobsRequest('all'), partial)).toBe(true)
+    expect($cronJobs.get()).toEqual([{ ...alpha, name: 'Fresh alpha' }, beta])
+    expect($cronJobErrors.get()).toEqual(partial.errors)
+
+    expect(commitCronJobsRequest(beginCronJobsRequest('all'), [alpha, beta])).toBe(true)
+    expect($cronJobErrors.get()).toEqual([])
+  })
+
+  it('does not keep prior rows for an explicitly refused profile', () => {
+    const alpha = { enabled: true, id: 'daily-alpha', profile: 'alpha' } satisfies CronJob
+    const beta = { enabled: true, id: 'daily-beta', profile: 'beta' } satisfies CronJob
+    setCronJobs([alpha, beta])
+    const refused = Object.assign([alpha], {
+      errors: [{ code: 'support-profile-refused', error: 'Profile temporarily unavailable.', profile: 'beta', status: 403 }]
+    })
+
+    expect(commitCronJobsRequest(beginCronJobsRequest('all'), refused)).toBe(true)
+    expect($cronJobs.get()).toEqual([alpha])
+  })
 })
 
 describe('cron job identity', () => {
