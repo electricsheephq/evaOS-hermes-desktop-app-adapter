@@ -3,6 +3,7 @@ import {
   beginCronJobsAction,
   beginCronJobsRequest,
   commitCronJobsRequest,
+  failCronJobsRequest,
   type CronJobsRequest,
   isCronJobsRequestCurrent,
   isCronJobsScopeCurrent
@@ -35,6 +36,8 @@ async function refreshForGeneration(profile: string, request: CronJobsRequest): 
     if (!isCronJobsRequestCurrent(request)) {
       return { jobs: null, refreshError: null, stale: true }
     }
+
+    failCronJobsRequest(request, refreshError)
 
     return { jobs: null, refreshError, stale: false }
   }

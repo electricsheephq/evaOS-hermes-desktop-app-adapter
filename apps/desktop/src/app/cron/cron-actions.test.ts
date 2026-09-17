@@ -10,7 +10,7 @@ vi.mock('@/hermes', () => ({
   triggerCronJob: (...args: unknown[]) => triggerCronJob(...args)
 }))
 
-import { beginCronJobsRequest } from '@/store/cron'
+import { $cronJobs, beginCronJobsRequest, setCronJobs } from '@/store/cron'
 
 import { deferred } from '../../test/deferred'
 
@@ -22,6 +22,7 @@ describe('triggerAndRefreshCronJobs', () => {
     getApiRequestConnection.mockReturnValue(null)
     getCronJobs.mockReset()
     triggerCronJob.mockReset()
+    setCronJobs([])
   })
 
   it('replaces the local cache with the authoritative list after a trigger', async () => {
@@ -44,6 +45,15 @@ describe('triggerAndRefreshCronJobs', () => {
     const result = await triggerAndRefreshCronJobs('job-1', 'all')
 
     expect(result).toEqual({ jobs: null, refreshError, stale: false })
+  })
+
+  it.each([401, 403])('clears cron rows after a whole-aggregate %i refusal', async status => {
+    setCronJobs([{ enabled: true, id: 'private-job', profile: 'beta' }])
+    const refreshError = new Error(`Error invoking remote method 'hermes:api': Error: ${status}: refused`)
+    getCronJobs.mockRejectedValue(refreshError)
+
+    await expect(refreshCronJobs('all')).resolves.toEqual({ jobs: null, refreshError, stale: false })
+    expect($cronJobs.get()).toEqual([])
   })
 
   it('still rejects when the trigger itself fails', async () => {
