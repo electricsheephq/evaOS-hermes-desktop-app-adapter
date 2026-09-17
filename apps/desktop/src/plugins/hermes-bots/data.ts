@@ -621,6 +621,7 @@ interface UnionAgentRow {
   handle?: string
   managedSource?: boolean
   profile?: string
+  profileMetadata?: { display_name?: string }
   targetProfile?: string
 }
 
@@ -886,6 +887,7 @@ function mergeMultiSourceRoster(
 
     profiles.push({
       name: profile,
+      ...(agent.profileMetadata?.display_name ? { display_name: agent.profileMetadata.display_name } : {}),
       handle: agent.handle,
       connectionId,
       connectionKind: agent.connectionKind,
