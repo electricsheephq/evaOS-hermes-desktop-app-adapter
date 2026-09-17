@@ -23,7 +23,8 @@ import {
   ensureGatewayForProfile,
   openGatewayForAgent,
   openGatewayForProfile,
-  openSecondaryCount
+  openSecondaryCount,
+  primaryGatewayConnectionId
 } from '@/store/gateway'
 import { notifyError } from '@/store/notifications'
 import { $poolLimits } from '@/store/pool-limits'
@@ -108,6 +109,16 @@ export function refreshProfiles(): Promise<ProfileInfo[]> {
             $profiles.set(profiles)
             $profileErrors.set(errors)
           })
+          const active = normalizeProfileKey($activeGatewayProfile.get())
+          const source = activeGatewayConnectionId()
+          if (
+            delegatedSupportGatewayProfile === null &&
+            (source === null || source === primaryGatewayConnectionId()) &&
+            !profiles.some(profile => normalizeProfileKey(profile.name) === active) &&
+            !errors.some(error => normalizeProfileKey(error.profile) === active)
+          ) {
+            selectProfile($activeProfile.get())
+          }
         }
 
         return profiles

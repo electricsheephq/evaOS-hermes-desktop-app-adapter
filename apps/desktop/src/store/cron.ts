@@ -1,5 +1,6 @@
 import { atom } from 'nanostores'
 
+import { stripIpcErrorPrefix } from '@/lib/ipc-error'
 import type { CronJob, CronJobList, ProfileReadError } from '@/types/hermes'
 
 export const cronJobIdentity = (job: Pick<CronJob, 'id' | 'profile'>): string =>
@@ -69,9 +70,27 @@ export function commitCronJobsRequest(request: CronJobsRequest, jobs: CronJobLis
   // Consume the token so neither a duplicate completion nor any older request
   // can publish after this authoritative snapshot.
   cronJobsRequestGeneration += 1
-  $cronJobs.set([...jobs])
-  $cronJobErrors.set(jobs.errors ?? [])
+  const errors = jobs.errors ?? []
+  const failed = new Set(errors.filter(error => !('code' in error) || error.code !== 'support-profile-refused').map(error => error.profile))
+  const incoming = new Set(jobs.map(cronJobIdentity))
+  $cronJobs.set([...jobs, ...$cronJobs.get().filter(job => job.profile && failed.has(job.profile) && !incoming.has(cronJobIdentity(job)))])
+  $cronJobErrors.set(errors)
 
+  return true
+}
+
+export function failCronJobsRequest(request: CronJobsRequest, error: unknown): boolean {
+  if (!isCronJobsRequestCurrent(request)) {
+    return false
+  }
+  cronJobsRequestGeneration += 1
+  const message = stripIpcErrorPrefix(error instanceof Error ? error.message : String(error))
+  const status = Number(/^\s*(\d{3}):/.exec(message)?.[1])
+  const unauthorized = status === 401 || status === 403 || /^profile \S+ is not authorized for this session$/.test(message)
+  if (unauthorized) {
+    $cronJobs.set([])
+    $cronJobErrors.set([])
+  }
   return true
 }
 

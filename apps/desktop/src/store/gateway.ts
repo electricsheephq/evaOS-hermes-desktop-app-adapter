@@ -426,6 +426,11 @@ export function activeGatewayConnectionId(): null | string {
   return g.secondaries.get(g.activeKey)?.connectionId ?? null
 }
 
+/** Registry identity published by the window's primary backend, when known. */
+export function primaryGatewayConnectionId(): null | string {
+  return g.primaryConnectionId
+}
+
 /**
  * Registry connections currently served by a live (open-socket) secondary.
  * Used by the reconnect path when the restarted primary's own registry
