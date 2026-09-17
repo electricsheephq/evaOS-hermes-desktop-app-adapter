@@ -71,31 +71,6 @@ export function parseErrorSurface(value: unknown): ErrorSurface | null {
   }
 }
 
-/** Recover the existing OAuth re-login card for older gateways that only
- *  report a Codex refresh failure as text. Transient HTTP failures stay on the
- *  generic retry path; offering sign-in for those would be a false diagnosis. */
-export function classifyCodexReloginText(text: string): ErrorSurface | null {
-  if (!/\bcodex\b/i.test(text) || /\b(?:429|5\d\d)\b/.test(text)) {
-    return null
-  }
-
-  const reloginRequired =
-    /\binvalid_grant\b/i.test(text) ||
-    /\btoken refresh failed\b[^\n]*\bstatus\s+401\b/i.test(text) ||
-    /\brefresh token\b[^\n]*\balready consumed\b/i.test(text)
-
-  return reloginRequired
-    ? {
-        layer: 'auth',
-        code: 'relogin_required',
-        retryable: true,
-        authKind: 'oauth',
-        provider: 'openai-codex',
-        providerLabel: 'ChatGPT'
-      }
-    : null
-}
-
 /** True when the failed turn's provider rejected an OAuth grant — the
  *  one-click recovery is re-running that provider's sign-in, not editing keys. */
 export function isOAuthReauthSurface(surface: ErrorSurface | null | undefined): surface is ErrorSurface & {
