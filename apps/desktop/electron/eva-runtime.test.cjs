@@ -37,7 +37,7 @@ function writeEnrollment(statePath) {
         expires_at: EXPIRED,
         base_url: 'https://hermes-customer-one.ecs.electricsheephq.com',
         agent_id: 'main',
-        agent_display_name: 'Asuka',
+        agent_display_name: 'Fixture Agent',
         customer_id: 'customer-one',
         runtime: 'hermes'
       }
@@ -53,7 +53,7 @@ test('cold launch preserves the authorized assigned-agent display label', async 
 
   const runtime = makeManagedRuntime(statePath)
 
-  assert.equal(runtime.status().agentDisplayName, 'Asuka')
+  assert.equal(runtime.status().agentDisplayName, 'Fixture Agent')
 })
 
 test('cold launch re-enrolls an unexpired ES12 state that has no display label', async t => {
@@ -76,7 +76,7 @@ test('cold launch re-enrolls an unexpired ES12 state that has no display label',
   await runtime.resolveBackend()
 
   assert.equal(launches, 1)
-  assert.equal(runtime.status().agentDisplayName, 'Asuka')
+  assert.equal(runtime.status().agentDisplayName, 'Fixture Agent')
 })
 
 test('cold launch preserves encrypted enrollment when secure storage cannot decrypt it', async t => {
@@ -128,7 +128,7 @@ test('cold launch recovers after a deferred pre-ready secure-storage read', asyn
   const connection = await runtime.resolveBackend()
 
   assert.equal(connection.source, 'electric-sheep')
-  assert.equal(runtime.status().agentDisplayName, 'Asuka')
+  assert.equal(runtime.status().agentDisplayName, 'Fixture Agent')
   assert.ok(decrypts >= 3)
   assert.equal(fs.readFileSync(statePath, 'utf8'), persistedBeforeLaunch)
 })
@@ -214,7 +214,7 @@ function writeActiveEnrollment(statePath) {
         base_url: 'https://hermes-customer-one.ecs.electricsheephq.com',
         agent_id: 'main',
         allowed_profiles: ['main'],
-        agent_display_name: 'Asuka',
+        agent_display_name: 'Fixture Agent',
         customer_id: 'customer-one',
         primary_profile: 'main',
         profile_admin: false,
@@ -2852,7 +2852,7 @@ test('managed sign-in checks callback ownership before clearing the existing enr
   )
   assert.equal(opened, 0)
   assert.equal(runtime.status().email, 'employee@example.invalid')
-  assert.equal(runtime.status().agentDisplayName, 'Asuka')
+  assert.equal(runtime.status().agentDisplayName, 'Fixture Agent')
 })
 
 test('an expired PKCE claim clears its callback state and verifier', async t => {
@@ -3349,7 +3349,7 @@ function supportTarget(overrides = {}) {
     profile_id: 'main',
     acknowledged: true,
     customer_label: 'Acme',
-    agent_label: 'Asuka',
+    agent_label: 'Fixture Agent',
     ...overrides
   }
 }
@@ -3518,7 +3518,7 @@ test('the in-app picker lists the directory over the desktop session and drops r
             customer_vm_id: SUPPORT_VM_ID,
             display_name: ' Acme  Corp ',
             assignment_allowed: true,
-            profiles: [{ profile_id: 'main', display_name: 'Asuka' }, { profile_id: 'bad profile!', display_name: 'x' }]
+            profiles: [{ profile_id: 'main', display_name: 'Fixture Agent' }, { profile_id: 'bad profile!', display_name: 'x' }]
           },
           { customer_account_id: SUPPORT_ACCOUNT_ID, customer_vm_id: null, display_name: 'No VM', profiles: [{ profile_id: 'main', display_name: 'A' }] },
           { customer_account_id: SUPPORT_ACCOUNT_ID, customer_vm_id: SUPPORT_VM_ID, display_name: 'No profiles', profiles: [] },
@@ -3549,7 +3549,7 @@ test('the in-app picker lists the directory over the desktop session and drops r
         customer_account_id: SUPPORT_ACCOUNT_ID,
         customer_vm_id: SUPPORT_VM_ID,
         display_name: 'Acme Corp',
-        profiles: [{ profile_id: 'main', display_name: 'Asuka' }]
+        profiles: [{ profile_id: 'main', display_name: 'Fixture Agent' }]
       }
     ]
   })
@@ -3599,7 +3599,7 @@ test('starting a support target persists the lease handle before the claim and k
   assert.equal(leaseAtClaim?.support_session_id, SUPPORT_SESSION_ID)
   assert.equal(leaseAtClaim?.request_id, SUPPORT_REQUEST_ID)
   assert.equal(leaseAtClaim?.phase, 'pending')
-  assert.equal(leaseAtClaim?.target_label, 'Acme / Asuka')
+  assert.equal(leaseAtClaim?.target_label, 'Acme / Fixture Agent')
   // The handle now lives beside the enrollment, with the server's deadline, so
   // a credential expiry that erases the enrollment cannot erase the only id.
   const active = persistedSupportLease(statePath)
@@ -3705,7 +3705,7 @@ test('a failed end after a failed claim keeps the handle and the next start retr
   assert.equal(first.reason, 'error')
   assert.equal(persistedSupportLease(statePath)?.phase, 'cleanup')
   assert.equal(runtime.status().supportCleanupPending, true)
-  assert.equal(runtime.status().supportTargetLabel, 'Acme / Asuka')
+  assert.equal(runtime.status().supportTargetLabel, 'Acme / Fixture Agent')
 
   const second = await runtime.startDelegatedSupport(supportTarget())
 
@@ -3861,7 +3861,7 @@ test('a start whose stranded-lease cleanup fails never creates a second request'
   const persisted = JSON.parse(fs.readFileSync(statePath, 'utf8'))
   persisted.support_lease = {
     support_session_id: 'stranded-session',
-    target_label: 'Acme / Asuka',
+    target_label: 'Acme / Fixture Agent',
     phase: 'cleanup',
     recorded_at: new Date().toISOString()
   }
@@ -3991,7 +3991,7 @@ test('sign-out drops the lease handle once the revoke has ended the lease server
 // The next-sign-in enrollment stub shared by the recovery tests below.
 function freshRuntimeEnrollment() {
   return {
-    agentDisplayName: 'Asuka',
+    agentDisplayName: 'Fixture Agent',
     agentId: 'main',
     allowedProfiles: ['main'],
     baseUrl: 'https://hermes-customer-one.ecs.electricsheephq.com',
@@ -4106,7 +4106,7 @@ test('a handle recorded before actors were stamped is hidden while signed out an
       signed_out: true,
       support_lease: {
         support_session_id: 'legacy-session',
-        target_label: 'Acme / Asuka',
+        target_label: 'Acme / Fixture Agent',
         phase: 'cleanup',
         recorded_at: new Date().toISOString()
       }
@@ -4160,7 +4160,7 @@ test('only a broker answer that the row no longer exists drops a stranded handle
   const persisted = JSON.parse(fs.readFileSync(statePath, 'utf8'))
   persisted.support_lease = {
     support_session_id: SUPPORT_SESSION_ID,
-    target_label: 'Acme / Asuka',
+    target_label: 'Acme / Fixture Agent',
     phase: 'cleanup',
     recorded_at: new Date().toISOString()
   }
@@ -4501,7 +4501,7 @@ test('boot ends a stranded lease handle left by an interrupted start', async t =
   persisted.support_lease = {
     support_session_id: SUPPORT_SESSION_ID,
     request_id: SUPPORT_REQUEST_ID,
-    target_label: 'Acme / Asuka',
+    target_label: 'Acme / Fixture Agent',
     phase: 'pending',
     recorded_at: new Date().toISOString()
   }
@@ -4589,7 +4589,7 @@ test('the directory caps count startable rows, so unusable rows cannot crowd val
           // 200 malformed profiles precede the one that can be chosen.
           profiles: [
             ...Array.from({ length: 200 }, (_, index) => ({ profile_id: `bad profile ${index}!`, display_name: 'x' })),
-            { profile_id: 'main', display_name: 'Asuka' }
+            { profile_id: 'main', display_name: 'Fixture Agent' }
           ]
         }
       ]
@@ -4605,7 +4605,7 @@ test('the directory caps count startable rows, so unusable rows cannot crowd val
       customer_account_id: SUPPORT_ACCOUNT_ID,
       customer_vm_id: SUPPORT_VM_ID,
       display_name: 'Acme',
-      profiles: [{ profile_id: 'main', display_name: 'Asuka' }]
+      profiles: [{ profile_id: 'main', display_name: 'Fixture Agent' }]
     }
   ])
 })
@@ -4666,7 +4666,7 @@ test('ending the current lease keeps a stranded handle for a different row until
   const persisted = JSON.parse(fs.readFileSync(statePath, 'utf8'))
   persisted.support_lease = {
     support_session_id: 'stranded-session',
-    target_label: 'Acme / Asuka',
+    target_label: 'Acme / Fixture Agent',
     phase: 'cleanup',
     recorded_at: new Date().toISOString(),
     actor_email: 'employee@example.invalid'
@@ -4870,7 +4870,7 @@ test('sign-out ends every row this account holds a handle for and keeps only the
   const persisted = JSON.parse(fs.readFileSync(statePath, 'utf8'))
   persisted.support_lease = {
     support_session_id: 'stranded-session',
-    target_label: 'Acme / Asuka',
+    target_label: 'Acme / Fixture Agent',
     phase: 'cleanup',
     recorded_at: new Date().toISOString(),
     actor_email: 'employee@example.invalid'

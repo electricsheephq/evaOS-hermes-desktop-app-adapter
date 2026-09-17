@@ -223,7 +223,7 @@ test('broker requests identify the actual Desktop package version', async () => 
 })
 
 test('broker rejections preserve a safe diagnostic code without leaking backend detail', async () => {
-  const rawDetail = 'jackie-david'
+  const rawDetail = 'fixture-tenant-a'
 
   await assert.rejects(
     brokerPost(
@@ -249,7 +249,7 @@ test('broker rejections preserve a safe diagnostic code without leaking backend 
       assert.equal(error.code, 'feature_not_enabled')
       assert.equal(error.brokerRejected, true)
       assert.match(error.message, /code: feature_not_enabled/)
-      assert.doesNotMatch(error.message, /jackie-david|secret|internal\.example/i)
+      assert.doesNotMatch(error.message, /fixture-tenant-a|secret|internal\.example/i)
       return true
     }
   )
@@ -451,12 +451,12 @@ test('runtime launch lets the broker select the account and assigned agent', asy
         JSON.stringify({
           schema_version: 'evaos.hermes_desktop_enrollment.v1',
           runtime: 'hermes',
-          customer_id: 'jackie-david',
+          customer_id: 'fixture-tenant-a',
           remote_backend: {
-            base_url: 'https://hermes-jackie-david.ecs.electricsheephq.com/',
+            base_url: 'https://hermes-fixture-tenant-a.ecs.electricsheephq.com/',
             session_token: 'opaque-runtime-session',
             expires_at: FUTURE,
-            agent_id: 'jane'
+            agent_id: 'fixture-agent-a'
           }
         }),
         { status: 200, headers: { 'Content-Type': 'application/json' } }
@@ -474,12 +474,12 @@ test('runtime launch lets the broker select the account and assigned agent', asy
   })
   assert.equal(Object.hasOwn(observed.body, 'customer_id'), false)
   assert.equal(Object.hasOwn(observed.body, 'agent_id'), false)
-  assert.equal(result.agentId, 'jane')
-  assert.equal(result.baseUrl, 'https://hermes-jackie-david.ecs.electricsheephq.com')
+  assert.equal(result.agentId, 'fixture-agent-a')
+  assert.equal(result.baseUrl, 'https://hermes-fixture-tenant-a.ecs.electricsheephq.com')
 })
 
 test('managed WebSocket transport uses only the ws-proxy Eva session parameter', () => {
-  const url = new URL(buildEvaManagedWsUrl('https://hermes-jackie-david.ecs.electricsheephq.com', 'opaque-token'))
+  const url = new URL(buildEvaManagedWsUrl('https://hermes-fixture-tenant-a.ecs.electricsheephq.com', 'opaque-token'))
   assert.equal(url.protocol, 'wss:')
   assert.equal(url.pathname, '/api/ws')
   assert.equal(url.searchParams.get('eva_session'), 'opaque-token')
@@ -743,21 +743,21 @@ test('managed enrollment accepts server-selected accounts and rejects mismatched
     session: { role: 'owner' },
     schema_version: 'evaos.hermes_desktop_enrollment.v1',
     runtime: 'hermes',
-    customer_id: 'jackie-david',
+    customer_id: 'fixture-tenant-a',
     remote_backend: {
-      base_url: 'https://hermes-jackie-david.ecs.electricsheephq.com',
+      base_url: 'https://hermes-fixture-tenant-a.ecs.electricsheephq.com',
       session_token: 'opaque-runtime-session',
       expires_at: FUTURE,
       agent_id: 'alpha',
       allowed_profiles: ['alpha', 'beta', 'gamma'],
       primary_profile: 'alpha',
       profile_admin: true,
-      agent_display_name: 'Asuka'
+      agent_display_name: 'Fixture Agent'
     }
   }
   const scoped = normalizeHermesEnrollment(payload)
   assert.equal(scoped.agentId, 'alpha')
-  assert.equal(scoped.agentDisplayName, 'Asuka')
+  assert.equal(scoped.agentDisplayName, 'Fixture Agent')
   assert.deepEqual(scoped.allowedProfiles, ['alpha', 'beta', 'gamma'])
   assert.equal(scoped.profile, 'alpha')
   assert.equal(scoped.profileAdmin, true)
@@ -789,18 +789,18 @@ test('managed enrollment accepts server-selected accounts and rejects mismatched
   })
   assert.deepEqual(invalidScope.allowedProfiles, ['alpha'])
   assert.equal(invalidScope.profileAdmin, false)
-  const benjamin = normalizeHermesEnrollment({
+  const tenantB = normalizeHermesEnrollment({
     ...payload,
-    customer_id: 'benjamin-kennedy',
+    customer_id: 'fixture-tenant-b',
     remote_backend: {
       ...payload.remote_backend,
-      base_url: 'https://hermes-benjamin-kennedy.ecs.electricsheephq.com',
-      agent_id: 'benjamin-agent'
+      base_url: 'https://hermes-fixture-tenant-b.ecs.electricsheephq.com',
+      agent_id: 'fixture-agent-b'
     }
   })
-  assert.equal(benjamin.customerId, 'benjamin-kennedy')
-  assert.equal(benjamin.agentId, 'benjamin-agent')
-  assert.equal(benjamin.agentDisplayName, 'Asuka')
+  assert.equal(tenantB.customerId, 'fixture-tenant-b')
+  assert.equal(tenantB.agentId, 'fixture-agent-b')
+  assert.equal(tenantB.agentDisplayName, 'Fixture Agent')
   assert.throws(
     () => normalizeHermesEnrollment({ ...payload, customer_id: 'another-customer' }),
     error => error instanceof EvaBrokerError && error.code === 'wrong-customer'
@@ -823,8 +823,8 @@ test('managed enrollment accepts server-selected accounts and rejects mismatched
   )
   for (const baseUrl of [
     'https://other-customer.ecs.electricsheephq.com',
-    'https://hermes-jackie-david.ecs.electricsheephq.com/tenant',
-    'https://hermes-jackie-david.ecs.electricsheephq.com.evil.invalid'
+    'https://hermes-fixture-tenant-a.ecs.electricsheephq.com/tenant',
+    'https://hermes-fixture-tenant-a.ecs.electricsheephq.com.evil.invalid'
   ]) {
     assert.throws(
       () =>
@@ -963,20 +963,20 @@ test('renderer-facing enrollment status never exposes tokens or backend URLs', (
     runtime: {
       token: 'runtime-secret',
       expiresAt: FUTURE,
-      customerId: 'jackie-david',
-      agentId: 'jane',
-      agentDisplayName: 'Asuka',
+      customerId: 'fixture-tenant-a',
+      agentId: 'fixture-agent-a',
+      agentDisplayName: 'Fixture Agent',
       baseUrl: 'https://secret-endpoint.example'
     }
   })
   const serialized = JSON.stringify(status)
-  assert.equal(status.agentId, 'jane')
-  assert.equal(status.agentDisplayName, 'Asuka')
+  assert.equal(status.agentId, 'fixture-agent-a')
+  assert.equal(status.agentDisplayName, 'Fixture Agent')
   assert.doesNotMatch(serialized, /desktop-secret|runtime-secret|secret-endpoint/)
 })
 
 test('managed desktop profile uses only the backend-authoritative current process identity', () => {
-  assert.equal(resolveEvaManagedDesktopProfile({ active: 'asuka-eva02', current: 'asuka-eva02' }), 'asuka-eva02')
+  assert.equal(resolveEvaManagedDesktopProfile({ active: 'fixture-agent-c', current: 'fixture-agent-c' }), 'fixture-agent-c')
   assert.equal(resolveEvaManagedDesktopProfile({ current: 'worker_alpha' }), 'worker_alpha')
   assert.equal(resolveEvaManagedDesktopProfile({ current: 'worker-' }), 'worker-')
   assert.equal(resolveEvaManagedDesktopProfile({ current: `a${'_'.repeat(63)}` }), `a${'_'.repeat(63)}`)
@@ -985,7 +985,7 @@ test('managed desktop profile uses only the backend-authoritative current proces
     {},
     { current: 'default' },
     { current: '../main' },
-    { current: 'ASUKA' },
+    { current: 'FIXTURE-AGENT-C' },
     { current: `a${'_'.repeat(64)}` },
     { current: true },
     { current: 123 }
@@ -998,7 +998,7 @@ test('managed desktop profile uses only the backend-authoritative current proces
 })
 
 test('managed desktop profile accepts a profile literally named default only when the session asked for it', () => {
-  // A flat managed box (david-poku/default) answers `default` for a real
+  // A flat managed box (fixture-tenant-a/default) answers `default` for a real
   // per-customer profile; the unscoped/shared process answers it too. The
   // profile this session asked for separates them.
   assert.equal(
@@ -1006,13 +1006,13 @@ test('managed desktop profile accepts a profile literally named default only whe
     'default'
   )
   assert.equal(
-    resolveEvaManagedDesktopProfile({ current: 'jarvis' }, { expectedProfileId: 'jarvis' }),
-    'jarvis'
+    resolveEvaManagedDesktopProfile({ current: 'ops-lead' }, { expectedProfileId: 'ops-lead' }),
+    'ops-lead'
   )
   // Any answer other than the profile we asked for is another agent's gateway.
   for (const [response, options] of [
-    [{ current: 'default' }, { expectedProfileId: 'jarvis' }],
-    [{ current: 'jarvis' }, { expectedProfileId: 'default' }],
+    [{ current: 'default' }, { expectedProfileId: 'ops-lead' }],
+    [{ current: 'ops-lead' }, { expectedProfileId: 'default' }],
     [{ current: 'default' }, { expectedProfileId: '   ' }],
     [{ current: 'default' }, { expectedProfileId: null }],
     [{ current: '../main' }, { expectedProfileId: '../main' }]
@@ -1035,9 +1035,9 @@ test('managed desktop profile falls back to enrolled identity only when the acti
       async () => {
         throw missing
       },
-      () => ({ agentId: 'asuka-eva02' })
+      () => ({ agentId: 'fixture-agent-c' })
     ),
-    'asuka-eva02'
+    'fixture-agent-c'
   )
 
   for (const error of [
@@ -1050,14 +1050,14 @@ test('managed desktop profile falls back to enrolled identity only when the acti
       () =>
         resolveEvaManagedDesktopProfileFromSources(
           async () => Promise.reject(error),
-          () => ({ agentId: 'asuka-eva02' })
+          () => ({ agentId: 'fixture-agent-c' })
         ),
       candidate => candidate === error
     )
   }
 
   await assert.rejects(
-    () => resolveEvaManagedDesktopProfileFromSources(async () => ({ current: true }), () => ({ agentId: 'asuka-eva02' })),
+    () => resolveEvaManagedDesktopProfileFromSources(async () => ({ current: true }), () => ({ agentId: 'fixture-agent-c' })),
     error => error instanceof EvaBrokerError && error.code === 'invalid-profile-scope'
   )
   await assert.rejects(
@@ -1099,9 +1099,9 @@ test('managed desktop profile falls back to enrolled identity only when the acti
     await resolveEvaManagedDesktopProfileFromSources(
       async () => Promise.reject(missing),
       () => ({ agentId: null }),
-      async () => 'jarvis'
+      async () => 'field-desk'
     ),
-    'jarvis'
+    'field-desk'
   )
   // With neither an answer nor an expectation there is nothing to name the
   // profile, and the leg still fails closed.
@@ -1120,8 +1120,8 @@ test('managed desktop profile falls back to enrolled identity only when the acti
     () =>
       resolveEvaManagedDesktopProfileFromSources(
         async () => ({ current: 'default' }),
-        () => ({ agentId: 'jarvis' }),
-        async () => 'jarvis'
+        () => ({ agentId: 'field-desk' }),
+        async () => 'field-desk'
       ),
     error => error instanceof EvaBrokerError && error.code === 'invalid-profile-scope'
   )

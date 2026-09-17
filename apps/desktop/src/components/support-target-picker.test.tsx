@@ -17,8 +17,8 @@ function clients(): EvaSupportClient[] {
       customer_vm_id: VM_ID,
       display_name: 'Acme',
       profiles: [
-        { profile_id: 'main', display_name: 'Asuka' },
-        { profile_id: 'ops', display_name: 'Rei' }
+        { profile_id: 'ops-lead', display_name: 'Fixture Agent' },
+        { profile_id: 'field-desk', display_name: 'Fixture Agent' }
       ]
     }
   ]
@@ -79,14 +79,14 @@ describe('SupportTargetPickerOverlay', () => {
 
     fireEvent.change(account, { target: { value: ACCOUNT_ID } })
     expect(consent.disabled).toBe(true)
-    fireEvent.change(agent, { target: { value: 'main' } })
+    fireEvent.change(agent, { target: { value: 'ops-lead' } })
     expect(consent.disabled).toBe(false)
     expect(start.disabled).toBe(true)
     fireEvent.click(consent)
     expect(start.disabled).toBe(false)
 
     // Changing the agent withdraws the consent that was given for the other one.
-    fireEvent.change(agent, { target: { value: 'ops' } })
+    fireEvent.change(agent, { target: { value: 'field-desk' } })
     expect(consent.checked).toBe(false)
     expect(start.disabled).toBe(true)
 
@@ -98,10 +98,10 @@ describe('SupportTargetPickerOverlay', () => {
     expect(eva.startSupport).toHaveBeenCalledWith({
       customer_account_id: ACCOUNT_ID,
       customer_vm_id: VM_ID,
-      profile_id: 'ops',
+      profile_id: 'field-desk',
       acknowledged: true,
       customer_label: 'Acme',
-      agent_label: 'Rei'
+      agent_label: 'Fixture Agent'
     })
     expect((await screen.findByRole('status')).textContent).toBe('Support access granted. Reloading…')
   })
@@ -169,7 +169,7 @@ describe('SupportTargetPickerOverlay', () => {
 
     const [account, agent] = await screen.findAllByRole('combobox')
     fireEvent.change(account, { target: { value: ACCOUNT_ID } })
-    fireEvent.change(agent, { target: { value: 'main' } })
+    fireEvent.change(agent, { target: { value: 'ops-lead' } })
     fireEvent.click(screen.getByRole('checkbox'))
     fireEvent.click(screen.getByRole('button', { name: 'Open selected customer agent' }))
 
@@ -192,7 +192,7 @@ describe('SupportTargetPickerOverlay', () => {
     setSupportPickerOpen(true)
     const [pendingAccount, pendingAgent] = await screen.findAllByRole('combobox')
     fireEvent.change(pendingAccount, { target: { value: ACCOUNT_ID } })
-    fireEvent.change(pendingAgent, { target: { value: 'main' } })
+    fireEvent.change(pendingAgent, { target: { value: 'ops-lead' } })
     fireEvent.click(screen.getByRole('checkbox'))
     fireEvent.click(screen.getByRole('button', { name: 'Open selected customer agent' }))
     expect((await screen.findByRole('alert')).textContent).toMatch(/could not be ended yet/)

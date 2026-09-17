@@ -34,7 +34,7 @@ describe('skipMcpSetupRequest', () => {
   })
 
   it('routes a typed decline through the session owner before dropping its card', async () => {
-    const owner = { connectionId: 'source-a', profile: 'clientops', targetProfile: 'asuka' }
+    const owner = { connectionId: 'source-a', profile: 'ops-account', targetProfile: 'field-desk' }
     $sessionTiles.set([{ storedSessionId: 'stored-a', runtimeId: 'runtime-a', ownerRoute: owner }])
     setMcpSetupRequest({
       action: 'install',

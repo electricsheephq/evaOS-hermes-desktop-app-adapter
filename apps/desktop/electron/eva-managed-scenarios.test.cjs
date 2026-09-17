@@ -44,7 +44,7 @@ function writeEnrollment(statePath, overrides = {}) {
             base_url: MANAGED_BASE_URL,
             agent_id: 'main',
             allowed_profiles: ['main'],
-            agent_display_name: overrides.agentDisplayName ?? 'Atris',
+            agent_display_name: overrides.agentDisplayName ?? 'Fixture Agent',
             customer_id: 'customer-one',
             primary_profile: 'main',
             profile_admin: false,
