@@ -563,6 +563,37 @@ test('ordinary managed REST binding honors query and body profile carriers from 
   )
 })
 
+test('ordinary managed REST binding treats a null body profile as absent before binding it', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-null-body-profile-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeScopedEnrollment(statePath)
+  const requests = []
+  const runtime = makeManagedRuntime(statePath, {
+    fetchJson: async (url, _token, options) => {
+      requests.push({ url: new URL(url), body: options.body })
+      return { ok: true }
+    }
+  })
+  t.after(() => runtime.close())
+
+  await runtime.requestApi({
+    method: 'POST',
+    path: '/api/profiles/sessions/hide?profile=beta',
+    body: { profile: null, ids: ['session-1'] }
+  })
+  await runtime.requestApi({
+    method: 'POST',
+    path: '/api/profiles/sessions/hide',
+    body: { profile: null, ids: ['session-2'] }
+  })
+
+  assert.equal(requests[0].url.searchParams.get('profile'), 'beta')
+  assert.equal(requests[0].body.profile, 'beta')
+  assert.equal(requests[1].url.searchParams.get('profile'), 'alpha')
+  assert.equal(requests[1].body.profile, 'alpha')
+})
+
 test('delegated support keeps rejecting unbound query and body profile carriers', async t => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-delegated-carried-profile-'))
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
@@ -586,6 +617,58 @@ test('delegated support keeps rejecting unbound query and body profile carriers'
     runtime.requestApi({ method: 'POST', path: '/api/profiles/sessions/hide', body: { profile: 'beta' } }),
     error => error.code === 'support-profile-mismatch'
   )
+})
+
+test('delegated support refuses provider OAuth writes while ordinary sessions remain allowed', async t => {
+  const supportDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-support-provider-oauth-'))
+  t.after(() => fs.rmSync(supportDirectory, { recursive: true, force: true }))
+  const supportStatePath = path.join(supportDirectory, 'eva-enrollment.json')
+  writeActiveEnrollment(supportStatePath)
+  const payload = supportEnrollment()
+  payload.admin_bypass = true
+  payload.assignment_version = null
+  payload.profile = 'alpha'
+  payload.remote_backend.agent_id = 'alpha'
+  payload.remote_backend.allowed_profiles = ['alpha', 'beta']
+  const supportRequests = []
+  const supportRuntime = makeManagedRuntime(supportStatePath, {
+    brokerPost: async () => payload,
+    fetchJson: async (url, _token, options) => {
+      supportRequests.push({ url: new URL(url), method: options.method })
+      return { ok: true }
+    }
+  })
+  t.after(() => supportRuntime.close())
+  await supportRuntime.claimSupportRequest('provider-oauth-request')
+
+  for (const method of ['POST', 'DELETE']) {
+    await assert.rejects(
+      supportRuntime.requestApi({ method, path: '/api/providers/oauth/openai-codex/start' }),
+      error => error.statusCode === 403 && error.code === 'managed-policy'
+    )
+  }
+  await assert.rejects(
+    supportRuntime.requestApi({ method: 'POST', path: '/api/providers/x/../oauth/openai-codex/start' }),
+    error => error.statusCode === 403 && error.code === 'managed-policy'
+  )
+  await supportRuntime.requestApi({ method: 'GET', path: '/api/providers/oauth/openai-codex/start' })
+  assert.equal(supportRequests.length, 1)
+
+  const ordinaryDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-ordinary-provider-oauth-'))
+  t.after(() => fs.rmSync(ordinaryDirectory, { recursive: true, force: true }))
+  const ordinaryStatePath = path.join(ordinaryDirectory, 'eva-enrollment.json')
+  writeScopedEnrollment(ordinaryStatePath)
+  let ordinaryRequests = 0
+  const ordinaryRuntime = makeManagedRuntime(ordinaryStatePath, {
+    fetchJson: async () => {
+      ordinaryRequests += 1
+      return { ok: true }
+    }
+  })
+  t.after(() => ordinaryRuntime.close())
+
+  await ordinaryRuntime.requestApi({ method: 'POST', path: '/api/providers/oauth/openai-codex/start' })
+  assert.equal(ordinaryRequests, 1)
 })
 
 test('ordinary upstream profile refusals name the authorized selector', async t => {
@@ -666,7 +749,7 @@ test('ordinary all scope fans out to concrete profiles for metadata, sessions, a
   assert.deepEqual(singleRequests.map(url => url.searchParams.get('profile')), ['alpha'])
 })
 
-test('ordinary sidebar routes a concrete selector once and fans out an absent selector', async t => {
+test('ordinary sidebar routes a concrete selector to that profile\'s gateway once and fans out an absent selector', async t => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-sidebar-scope-'))
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
   const statePath = path.join(directory, 'eva-enrollment.json')
@@ -686,6 +769,8 @@ test('ordinary sidebar routes a concrete selector once and fans out an absent se
   t.after(() => runtime.close())
 
   const concrete = await runtime.requestApi({ path: '/api/profiles/sessions/sidebar?profile=beta' })
+  // On a managed box, `profile` is the proxy routing selector. Each profile
+  // gateway returns only its own sessions, which is what this mock models.
   assert.deepEqual(concrete.recents.sessions.map(row => row.profile), ['beta'])
   assert.deepEqual(requests.map(url => url.searchParams.get('profile')), ['beta'])
 

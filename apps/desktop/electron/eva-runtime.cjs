@@ -2028,7 +2028,7 @@ function createEvaManagedRuntime(options) {
       }
       const queryProfile = queryProfiles[0]
       const resolvedQueryProfile = queryProfile === undefined ? undefined : supportProfileFor(runtime, queryProfile)
-      const resolvedBodyProfile = bodyProfile === undefined ? undefined : supportProfileFor(runtime, bodyProfile)
+      const resolvedBodyProfile = bodyProfile == null ? undefined : supportProfileFor(runtime, bodyProfile)
       if (resolvedQueryProfile !== undefined && resolvedBodyProfile !== undefined && resolvedQueryProfile !== resolvedBodyProfile) {
         throw new EvaBrokerError('evaOS Agent blocked conflicting Hermes profiles.', 400, 'managed-policy')
       }
@@ -2047,6 +2047,12 @@ function createEvaManagedRuntime(options) {
       )
       return { policy: { allowBroadProfileSelectors: false }, profile, request: ordinaryRequest }
     }
+
+    const pathname = new URL(String(request?.path || '/'), 'http://eva-managed.invalid').pathname
+    if (
+      String(request?.method || 'GET').toUpperCase() !== 'GET' &&
+      (pathname === '/api/providers/oauth' || pathname.startsWith('/api/providers/oauth/'))
+    ) throw new EvaBrokerError('evaOS Agent blocked provider changes during delegated support.', 403, 'managed-policy')
 
     const profile = supportProfileFor(runtime, request?.profile)
     let path = request?.path
