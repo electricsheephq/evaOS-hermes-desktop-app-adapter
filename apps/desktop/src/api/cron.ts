@@ -68,11 +68,11 @@ export async function getCronDeliveryTargets(): Promise<CronDeliveryTarget[]> {
   return targets ?? []
 }
 
-export function createCronJob(body: CronJobCreatePayload): Promise<CronJob> {
+export function createCronJob(body: CronJobCreatePayload, profile?: string): Promise<CronJob> {
   return hermesApi<CronJob>({
-    ...profileScoped(),
+    ...profileScoped(profile),
     ...connectionScoped(),
-    path: '/api/cron/jobs',
+    path: `/api/cron/jobs${cronProfileSuffix(profile)}`,
     method: 'POST',
     body
   })

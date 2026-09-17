@@ -890,6 +890,13 @@ function expiresSoon(expiresAt, skewMs = EVA_MANAGED_POLICY.runtimeRefreshSkewMs
   return !Number.isFinite(timestamp) || timestamp <= now + skewMs
 }
 
+function profileScopeKey(runtime) {
+  if (!runtime) return ''
+  const profiles = Array.isArray(runtime.allowedProfiles) ? [...runtime.allowedProfiles].sort() : []
+  const admin = runtime.profileAdmin === true || runtime.adminBypass === true
+  return `${profiles.join(',')}|${admin ? '1' : '0'}|${runtime.agentId ?? ''}`
+}
+
 function publicEvaEnrollmentStatus(state, now = Date.now()) {
   const desktop = state?.desktop ?? null
   const runtime = state?.runtime ?? null
@@ -914,8 +921,9 @@ function publicEvaEnrollmentStatus(state, now = Date.now()) {
     runtimeSessionActive: Boolean(presentationRuntime && !expiresSoon(presentationRuntime.expiresAt, 0, now)),
     agentId: delegatedSupportActive ? null : runtime?.agentId ?? null,
     agentDisplayName: delegatedSupportActive
-      ? delegatedSupport.supportAgentLabel
+      ? delegatedSupport.agentDisplayName ?? delegatedSupport.supportAgentLabel
       : runtime?.agentDisplayName ?? runtime?.agentId ?? null,
+    profileScopeKey: profileScopeKey(presentationRuntime),
     updateChannel: EVA_MANAGED_POLICY.updateChannel,
     delegatedSupportActive,
     sessionKind: delegatedSupportActive ? EVA_SUPPORT_SESSION_KIND : 'ordinary',

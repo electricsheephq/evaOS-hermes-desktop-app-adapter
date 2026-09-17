@@ -626,6 +626,8 @@ export interface EvaManagedStatus {
   agentId: null | string
   /** Authorized enrollment label for presentation; agentId remains canonical. */
   agentDisplayName?: null | string
+  /** Stable identity for the current profile scope; changes require a profile-cache refresh. */
+  profileScopeKey: string
   updateChannel: string
   delegatedSupportActive?: boolean
   sessionKind?: 'ordinary' | 'delegated_support' | string

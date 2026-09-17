@@ -2577,6 +2577,7 @@ export const en: Translations = {
     createTitle: 'New cron job',
     editDesc: 'Update the schedule, prompt, or delivery target. Changes apply on next run.',
     createDesc: 'Schedule a prompt to run automatically. Use cron syntax or a natural phrase like "every 15 minutes".',
+    createTarget: label => `Creates on ${label}`,
     nameLabel: 'Name',
     namePlaceholder: 'Morning briefing',
     promptLabel: 'Prompt',

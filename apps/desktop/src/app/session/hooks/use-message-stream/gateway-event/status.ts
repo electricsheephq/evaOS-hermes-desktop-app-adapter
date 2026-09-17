@@ -2,6 +2,8 @@ import { translateNow } from '@/i18n'
 import { isManagedEvaosAgent } from '@/i18n/managed-brand'
 import { textPart } from '@/lib/chat-messages'
 import { coerceGatewayText } from '@/lib/chat-runtime'
+import { classifyCodexReloginText } from '@/lib/codex-relogin-text'
+import { parseErrorSurface } from '@/lib/error-surface'
 import { isProviderSetupErrorMessage } from '@/lib/provider-setup-errors'
 import { type AgentNoticePayload, clearAgentNotice, nativeNoticeInput, showAgentNotice } from '@/store/agent-notices'
 import { clearClarifyRequest } from '@/store/clarify'
@@ -173,6 +175,7 @@ export function handleStatusEvent(ctx: GatewayEventContext): boolean {
 
   if (event.type === 'error') {
     const errorMessage = payload?.message || 'Hermes reported an error'
+    const errorSurface = parseErrorSurface(payload?.error_surface) ?? classifyCodexReloginText(errorMessage)
     const looksLikeProviderSetup = isProviderSetupErrorMessage(errorMessage)
 
     // A turn that errors out has also ended — drop any open blocking prompt
@@ -217,7 +220,7 @@ export function handleStatusEvent(ctx: GatewayEventContext): boolean {
 
     if (sessionId) {
       flushQueuedDeltas(sessionId)
-      failAssistantMessage(sessionId, errorMessage, occurredAt)
+      failAssistantMessage(sessionId, errorMessage, occurredAt, errorSurface)
     }
 
     if (isActiveEvent) {

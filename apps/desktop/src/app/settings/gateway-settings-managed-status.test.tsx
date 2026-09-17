@@ -19,6 +19,7 @@ const managedStatus = (overrides: Partial<EvaManagedStatus> = {}): EvaManagedSta
       runtimeSessionExpiresAt: null,
       runtimeSessionActive: true,
       agentId: 'alpha',
+      profileScopeKey: 'alpha|0|alpha',
       updateChannel: 'managed-beta',
       delegatedSupportActive: false,
       supportCustomerLabel: null,

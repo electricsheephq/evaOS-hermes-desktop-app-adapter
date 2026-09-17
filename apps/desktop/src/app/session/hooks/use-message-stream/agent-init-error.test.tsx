@@ -91,4 +91,64 @@ describe('useMessageStream agent-init error surfacing (#63078)', () => {
     expect(state.messages.some(m => m.id === 'user-123-abc')).toBe(true)
     expect(state.busy).toBe(false)
   })
+
+  it('passes a structured error_surface through an error event', () => {
+    mountStream()
+    seedOptimisticFirstMessage()
+
+    act(() =>
+      stream.handleEvent({
+        payload: {
+          error_surface: {
+            auth_kind: 'oauth',
+            code: 'relogin_required',
+            layer: 'auth',
+            provider: 'openai-codex',
+            provider_label: 'ChatGPT',
+            retryable: true
+          },
+          message: 'agent init failed: structured auth failure'
+        },
+        session_id: SID,
+        type: 'error'
+      })
+    )
+
+    expect(stream.state().messages.at(-1)?.errorSurface).toMatchObject({
+      authKind: 'oauth',
+      provider: 'openai-codex'
+    })
+  })
+
+  it('recovers a Codex relogin surface from legacy text', () => {
+    mountStream()
+    seedOptimisticFirstMessage()
+
+    act(() =>
+      stream.handleEvent({
+        payload: {
+          message: 'agent init failed: Codex token refresh failed: Your refresh token has expired. Please sign in again.'
+        },
+        session_id: SID,
+        type: 'error'
+      })
+    )
+
+    expect(stream.state().messages.at(-1)?.errorSurface).toMatchObject({
+      authKind: 'oauth',
+      provider: 'openai-codex'
+    })
+  })
+
+  it.each([
+    'agent init failed: Codex token refresh failed with status 503.',
+    'agent init failed: Codex token refresh failed with status 429.'
+  ])('keeps transient Codex failures on the generic card: %s', message => {
+    mountStream()
+    seedOptimisticFirstMessage()
+
+    act(() => stream.handleEvent({ payload: { message }, session_id: SID, type: 'error' }))
+
+    expect(stream.state().messages.at(-1)?.errorSurface).toBeUndefined()
+  })
 })

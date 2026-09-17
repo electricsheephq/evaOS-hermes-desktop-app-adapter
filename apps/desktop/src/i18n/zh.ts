@@ -2725,6 +2725,7 @@ export const zh: Translations = {
     createTitle: '新建定时任务',
     editDesc: '更新排程、提示词或投递目标。更改将在下次运行时生效。',
     createDesc: '排程一个提示词以自动运行。使用 cron 语法或类似"每 15 分钟"的自然语言。',
+    createTarget: label => `创建于 ${label}`,
     nameLabel: '名称',
     namePlaceholder: '晨间简报',
     promptLabel: '提示词',

@@ -966,13 +966,45 @@ test('renderer-facing enrollment status never exposes tokens or backend URLs', (
       customerId: 'fixture-tenant-a',
       agentId: 'fixture-agent-a',
       agentDisplayName: 'Fixture Agent',
+      allowedProfiles: ['fixture-agent-b', 'fixture-agent-a'],
+      profileAdmin: true,
       baseUrl: 'https://secret-endpoint.example'
     }
   })
   const serialized = JSON.stringify(status)
   assert.equal(status.agentId, 'fixture-agent-a')
   assert.equal(status.agentDisplayName, 'Fixture Agent')
+  assert.equal(status.profileScopeKey, 'fixture-agent-a,fixture-agent-b|1|fixture-agent-a')
   assert.doesNotMatch(serialized, /desktop-secret|runtime-secret|secret-endpoint/)
+})
+
+test('delegated customer-wide status uses its scope and anchor display name', () => {
+  const status = publicEvaEnrollmentStatus({
+    desktop: { expiresAt: FUTURE, email: 'support@example.invalid' },
+    runtime: {
+      expiresAt: FUTURE,
+      customerId: 'fixture-tenant-a',
+      agentId: 'atlas-desk',
+      agentDisplayName: 'Atlas Desk',
+      allowedProfiles: ['atlas-desk'],
+      profileAdmin: false
+    },
+    delegatedSupport: {
+      expiresAt: FUTURE,
+      supportExpiresAt: FUTURE,
+      supportDeadline: FUTURE,
+      supportCustomerLabel: 'Fixture Customer',
+      supportAgentLabel: 'All authorized agents',
+      agentId: 'atlas-desk',
+      agentDisplayName: 'Atlas Desk',
+      allowedProfiles: ['cedar-lab', 'atlas-desk', 'birch-ops'],
+      adminBypass: true
+    }
+  })
+
+  assert.equal(status.profileScopeKey, 'atlas-desk,birch-ops,cedar-lab|1|atlas-desk')
+  assert.equal(status.agentDisplayName, 'Atlas Desk')
+  assert.equal(status.supportAgentLabel, 'All authorized agents')
 })
 
 test('managed desktop profile uses only the backend-authoritative current process identity', () => {
