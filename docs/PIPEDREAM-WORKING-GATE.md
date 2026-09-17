@@ -35,6 +35,9 @@ POST JSON-RPC to the returned `mcp_url` with the returned headers: `initialize` 
 Layer 0 green = Pipedream-side or lease-header handling — not our fn, not our box config.
 
 ## Layer 2 — automated canaries (nightly, already installed)
+> Placeholders: `customer-a` / `customer-b`, the `@customer-a` profile, the prompt path and the Layer 3 fixture/provenance
+> filenames below are synthetic stand-ins for the two canary tenants (this repo is public). Resolve the real account,
+> profile and paths from the private support-control tracker before inspecting a box.
 - `@customer-a` native-pipedream smoke on customer-a (`/etc/evaos/native-pipedream-smoke/customer-a.prompt`, 02:30 UTC)
 - `@operations` smoke on customer-b (same time) — ⚠ appends to a live customer Telegram session
 GREEN = marker-gated pass. These went RED 2026-08-11/12 with the lease-contract failure and are

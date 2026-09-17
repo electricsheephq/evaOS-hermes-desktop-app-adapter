@@ -45,7 +45,7 @@ delegated-access acceptance or permission to reset a customer conversation.
 
 `resolveEvaManagedDesktopProfile` rejected every gateway answer of `default`,
 which on a flat managed box is the real name of a per-customer profile
-(`customer-a`) rather than the unscoped shared process. The check now
+(`customer-a/default`) rather than the unscoped shared process. The check now
 compares `current` against the profile this session itself asked the gateway
 for: a support lease's granted profile, else the enrollment's own agent. With no
 expectation, `default` still fails closed, and any answer that is not the
