@@ -131,6 +131,9 @@ describe('ProfilesView', () => {
         managedAnchor
       )
     ).toBe('Profile Display Name')
+    expect(
+      resolveManagedProfileDisplayName({ ...makeProfile('atlas-desk'), display_name: 'atlas-desk' }, managedAnchor)
+    ).toBe('atlas-desk')
     expect(resolveManagedProfileDisplayName(makeProfile('atlas-desk'), managedAnchor)).toBe('Harbor Planner')
     expect(resolveManagedProfileDisplayName(makeProfile('birch-ops'), managedAnchor)).toBe('birch-ops')
   })

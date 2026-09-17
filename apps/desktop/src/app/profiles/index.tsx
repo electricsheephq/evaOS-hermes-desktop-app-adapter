@@ -53,7 +53,7 @@ export function resolveManagedProfileDisplayName(
   const displayName = presentation?.agentDisplayName?.trim()
   const nativeLabel = profileLabel(profile)
 
-  return nativeLabel !== profile.name
+  return profile.display_name?.trim()
     ? nativeLabel
     : canonicalProfileName && displayName && profile.name === canonicalProfileName
       ? displayName
