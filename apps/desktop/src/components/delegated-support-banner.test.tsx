@@ -64,7 +64,7 @@ describe('DelegatedSupportBanner', () => {
       supportAgentLabel: null,
       supportExpiresAt: null,
       supportCleanupPending: true,
-      supportTargetLabel: 'Acme / Asuka',
+      supportTargetLabel: 'Acme / Fixture Agent',
       supportEndFailed: true
     })
 
@@ -81,7 +81,7 @@ describe('DelegatedSupportBanner', () => {
     )
 
     const banner = await screen.findByRole('region', { name: 'A previous support session still needs to be ended.' })
-    expect(banner.textContent).toMatch(/Acme \/ Asuka/)
+    expect(banner.textContent).toMatch(/Acme \/ Fixture Agent/)
     expect((await screen.findByText('Unable to end support session. Try again.')).getAttribute('role')).toBe('status')
     expect(screen.getAllByRole('button').map(button => button.textContent)).toEqual([
       'Switch support target…',
