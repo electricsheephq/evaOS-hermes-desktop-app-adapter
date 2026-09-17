@@ -663,18 +663,22 @@ test('delegated support refuses provider OAuth writes while ordinary sessions re
   t.after(() => supportRuntime.close())
   await supportRuntime.claimSupportRequest('provider-oauth-request')
 
-  for (const method of ['POST', 'DELETE']) {
+  for (const [method, requestPath] of [
+    ['POST', '/api/providers/oauth/openai-codex/start'],
+    ['DELETE', '/api/providers/oauth/openai-codex/start'],
+    ['POST', '/api/providers/x/../oauth/openai-codex/start'],
+    ['POST', '/api/providers%2Foauth/openai-codex/start'],
+    ['POST', '/api/providers%2foauth/openai-codex/start'],
+    ['DELETE', '/api/providers/oauth/openai-codex/']
+  ]) {
     await assert.rejects(
-      supportRuntime.requestApi({ method, path: '/api/providers/oauth/openai-codex/start' }),
+      supportRuntime.requestApi({ method, path: requestPath }),
       error => error.statusCode === 403 && error.code === 'managed-policy'
     )
   }
-  await assert.rejects(
-    supportRuntime.requestApi({ method: 'POST', path: '/api/providers/x/../oauth/openai-codex/start' }),
-    error => error.statusCode === 403 && error.code === 'managed-policy'
-  )
   await supportRuntime.requestApi({ method: 'GET', path: '/api/providers/oauth/openai-codex/start' })
-  assert.equal(supportRequests.length, 1)
+  await supportRuntime.requestApi({ method: 'GET', path: '/api/providers%2Foauth/openai-codex/start' })
+  assert.equal(supportRequests.length, 2)
 
   const ordinaryDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-ordinary-provider-oauth-'))
   t.after(() => fs.rmSync(ordinaryDirectory, { recursive: true, force: true }))

@@ -12,6 +12,7 @@ const {
   launchEvaHermesRuntime,
   makeAuthState,
   makeEvaDesktopCodeVerifier,
+  normalizeEvaManagedApiPath,
   normalizeDesktopSession,
   normalizeHermesEnrollment,
   normalizeSupportEnrollment,
@@ -2108,10 +2109,11 @@ function createEvaManagedRuntime(options) {
       return { policy: { allowBroadProfileSelectors: false }, profile, request: ordinaryRequest }
     }
 
-    const pathname = new URL(String(request?.path || '/'), 'http://eva-managed.invalid').pathname
+    const { pathname } = normalizeEvaManagedApiPath(request?.path)
+    const policyPath = pathname.length > '/api/'.length ? pathname.replace(/\/+$/, '') : pathname
     if (
       String(request?.method || 'GET').toUpperCase() !== 'GET' &&
-      (pathname === '/api/providers/oauth' || pathname.startsWith('/api/providers/oauth/'))
+      (policyPath === '/api/providers/oauth' || policyPath.startsWith('/api/providers/oauth/'))
     ) throw new EvaBrokerError('evaOS Agent blocked provider changes during delegated support.', 403, 'managed-policy')
 
     const profile = supportProfileFor(runtime, request?.profile)

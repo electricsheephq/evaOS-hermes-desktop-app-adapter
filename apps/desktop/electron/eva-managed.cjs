@@ -1065,6 +1065,7 @@ module.exports = {
   launchEvaHermesRuntime,
   makeAuthState,
   makeEvaDesktopCodeVerifier,
+  normalizeEvaManagedApiPath,
   normalizeDesktopSession,
   normalizeHermesEnrollment,
   normalizeSupportEnrollment,
