@@ -1,0 +1,19 @@
+# evaOS Agent (managed Desktop) — release checklist
+
+Scope: a fork patch release `YYYY.M.D-es.N` on the paired runtime pin. Every step below is a readback that caught a real problem at least once (es.6 → es.8, 2026-09-13 … 09-17).
+
+0. **Preconditions.** Adapter `main` at the intended sha; every PR merged through the exact-head barrier; private-token grep on the release diff = 0; credential doctor ok (signing identity + notary profile promptless); release worktree detached at the sha with `npm ci` under the pinned node major; the `apps/desktop/package.json` version bump stays UNCOMMITTED.
+1. **Build** `npm run dist:mac:arm64:release`; record dmg/zip byte sizes.
+2. **Notarize + staple the DMG by hand** (electron-builder skips it), THEN `npm run release:refresh-and-verify:mac` — the refresh must run after the staple (it regenerates blockmaps and the yml sha/size).
+3. **Updater notes ≤ ~400 chars:** edit `releaseNotes` in `latest-mac.yml` after the refresh (the changelog "Unreleased" block otherwise embeds thousands of chars), then `npm run release:verify:mac`.
+4. **Verify chain:** codesign app + dmg, stapler validate app + dmg, spctl = Notarized Developer ID; `CFBundleShortVersionString` readback; dmg bytes == yml size; yml newer than the dmg; `SHA256SUMS` for every asset.
+5. **Isolated boot smoke** with its own user-data dir: 0 `decrypt-failed` / `Uncaught` beyond the allowlist. `callback-noncanonical-install` is EXPECTED on a side copy.
+6. **Hand-install into /Applications before publishing** (a side copy can never sign in — canonical-install guard): back up the current bundle; quit the running app with two TERMs 30 s apart, never `kill -9`; the first launch must be silent (persisted sign-in survives; no re-enrollment card unless intended).
+7. **Live drives on the installed app BEFORE publish:** delegated per-agent + customer-wide; ordinary member + temporary admin (scope change must apply WITHOUT Refresh); managed config-sha scan of every touched profile before/after (no managed config may change from a Desktop session); End every lease; the lease gate reads empty; any password/keychain/MFA prompt = STOP.
+8. **Rollback note written BEFORE publish:** feed rollback = `gh release edit <tag> --draft` (NEVER `--prerelease` — the updater runs with `allowPrerelease=true` and the `es` channel, so it takes the newest `es` feed entry regardless); download-pointer rollback = the previous function version.
+9. **Publish** `gh release create <tag> --target <sha> --latest` with dmg, zip, BOTH blockmaps, `latest-mac.yml`, `SHA256SUMS` **plus the previous version's `*.zip.blockmap`** (electron-updater looks the old blockmap up under the NEW tag; without it every update is a full download). The latest-guard workflow requires `latest` + ≥ 2 blockmaps.
+10. **Served-feed readback:** `releases.atom` order (new tag first); served yml + zip sha == `SHA256SUMS`.
+11. **Isolated in-app updater proof** from the previous version on a COPY with its own user data (a side copy takes Squirrel's privileged path — an admin prompt there is a layout artifact; never type into it). Real /Applications updates run as the user.
+12. **Download pointer:** bucket upload + signed-URL sha; pointer PR; the pointer function is ROLLOUT-GATED → dispatch probe + apply explicitly and read the function version back (a push-to-main run deploys nothing).
+13. **Receipts** state what is NOT proven (customer's own path, channel delivery, other boxes); adoption is proven per person (About-screen screenshot) — there is no Desktop version telemetry.
+14. **Fleet managed-config-sha scan** after the first customer sessions on the new build (the instrument that turns a silent config write into a same-day finding).
