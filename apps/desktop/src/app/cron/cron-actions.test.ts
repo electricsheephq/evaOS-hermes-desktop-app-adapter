@@ -47,14 +47,17 @@ describe('triggerAndRefreshCronJobs', () => {
     expect(result).toEqual({ jobs: null, refreshError, stale: false })
   })
 
-  it.each([401, 403])('clears cron rows after a whole-aggregate %i refusal', async status => {
-    setCronJobs([{ enabled: true, id: 'private-job', profile: 'beta' }])
-    const refreshError = new Error(`Error invoking remote method 'hermes:api': Error: ${status}: refused`)
-    getCronJobs.mockRejectedValue(refreshError)
+  it.each(['401: refused', '403: refused', 'profile beta is not authorized for this session'])(
+    'clears cron rows after a whole-aggregate %s refusal',
+    async message => {
+      setCronJobs([{ enabled: true, id: 'private-job', profile: 'beta' }])
+      const refreshError = new Error(`Error invoking remote method 'hermes:api': EvaBrokerError: ${message}`)
+      getCronJobs.mockRejectedValue(refreshError)
 
-    await expect(refreshCronJobs('all')).resolves.toEqual({ jobs: null, refreshError, stale: false })
-    expect($cronJobs.get()).toEqual([])
-  })
+      await expect(refreshCronJobs('all')).resolves.toEqual({ jobs: null, refreshError, stale: false })
+      expect($cronJobs.get()).toEqual([])
+    }
+  )
 
   it('still rejects when the trigger itself fails', async () => {
     const triggerError = new Error('trigger failed')

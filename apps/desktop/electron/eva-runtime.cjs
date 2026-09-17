@@ -2413,6 +2413,7 @@ function createEvaManagedRuntime(options) {
 
   async function requestApi(request, retry = true) {
     const runtime = await ensureRuntimeEnrollment()
+    const requestAuth = authGeneration
     const supportRequest = runtime.sessionKind === 'delegated_support'
     const parsedRequest = new URL(String(request?.path || ''), 'http://eva-managed.invalid')
     const requestPath = parsedRequest.pathname
@@ -2504,6 +2505,7 @@ function createEvaManagedRuntime(options) {
         const pending = refreshStaleProfileScope(runtime)
         if (!pending) throw normalizedError
         refreshed = await pending
+        assertGeneration(requestAuth)
       } else {
         clearRuntimeEnrollment()
         refreshed = await ensureRuntimeEnrollment({ force: true })

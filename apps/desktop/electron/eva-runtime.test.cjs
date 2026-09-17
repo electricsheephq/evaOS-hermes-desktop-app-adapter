@@ -857,6 +857,47 @@ test('stale-scope refresh applies refresh reset semantics for anchor changes onl
   }
 })
 
+test('stale-scope recovery cannot retry an old request after a new sign-in', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-stale-scope-auth-generation-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeScopedEnrollment(statePath)
+  let opened
+  let releaseOldRequest
+  let oldRequestStarted
+  const started = new Promise(resolve => { oldRequestStarted = resolve })
+  const release = new Promise(resolve => { releaseOldRequest = resolve })
+  let newTokenFetches = 0
+  const runtime = makeManagedRuntime(statePath, {
+    openExternal: async url => { opened = new URL(url) },
+    pollDeviceCode: async () => ({ token: 'next-desktop-session', expiresAt: FUTURE, email: 'employee@example.invalid' }),
+    launchRuntime: async () => refreshedScopedEnrollment(),
+    fetchJson: async (_url, token) => {
+      if (token !== 'runtime-token') {
+        newTokenFetches += 1
+        return { ok: true }
+      }
+      oldRequestStarted()
+      await release
+      throw Object.assign(new Error('403: Hermes profile scope is not active\n'), { statusCode: 403 })
+    }
+  })
+  t.after(() => runtime.close())
+
+  const oldRequest = runtime.requestApi({ path: '/api/sessions' })
+  await started
+  const signingIn = runtime.signIn()
+  await new Promise(resolve => setImmediate(resolve))
+  await runtime.completeCallback(
+    `evaos-agent://auth/callback?device_code=ABCDEFGH&desktop_auth_state=${opened.searchParams.get('desktop_auth_state')}`
+  )
+  await signingIn
+  releaseOldRequest()
+
+  await assert.rejects(oldRequest, error => error.code === 'stale-auth')
+  assert.equal(newTokenFetches, 0)
+})
+
 test('stale-scope refresh is single-flight, rate-bounded, and respects a terminal enrollment stop', async t => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-stale-scope-bounds-'))
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
