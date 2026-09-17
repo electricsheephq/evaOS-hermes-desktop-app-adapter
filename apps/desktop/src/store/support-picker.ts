@@ -1,7 +1,6 @@
 import { atom } from 'nanostores'
 
 import type { EvaManagedStatus } from '@/global'
-import { refreshActiveProfile, refreshProfiles } from '@/store/profile'
 
 // Open/closed state of the in-app support target picker (sc#540). Renderer-
 // owned presentation state: the banner's Switch button and the native menu's
@@ -68,7 +67,10 @@ $evaManagedStatus.listen(status => {
     return
   }
 
-  void refreshActiveProfile()
-    .then(refreshProfiles)
+  void import('@/store/profile')
+    .then(async ({ refreshActiveProfile, refreshProfiles }) => {
+      await refreshActiveProfile()
+      await refreshProfiles()
+    })
     .catch(() => undefined)
 })

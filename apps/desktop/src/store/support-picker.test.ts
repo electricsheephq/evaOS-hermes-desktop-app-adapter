@@ -88,11 +88,11 @@ describe('refreshEvaManagedStatus', () => {
 describe('profile-scope refresh trigger', () => {
   it('ignores first load and identical keys, then reacts to a direct store write in order', async () => {
     $evaManagedStatus.set(status({ profileScopeKey: 'alpha|0|alpha' }))
-    await vi.runAllTimersAsync()
+    await vi.dynamicImportSettled()
     expect(refreshActiveProfile).not.toHaveBeenCalled()
 
     $evaManagedStatus.set(status({ profileScopeKey: 'alpha|0|alpha' }))
-    await vi.runAllTimersAsync()
+    await vi.dynamicImportSettled()
     expect(refreshActiveProfile).not.toHaveBeenCalled()
 
     const order: string[] = []
@@ -102,14 +102,14 @@ describe('profile-scope refresh trigger', () => {
       return []
     })
     $evaManagedStatus.set(status({ profileScopeKey: 'alpha,beta|1|alpha' }))
-    await vi.runAllTimersAsync()
+    await vi.dynamicImportSettled()
 
     expect(order).toEqual(['active', 'profiles'])
   })
 
   it('waits for an in-progress active-profile refresh before starting the fresh profile fetch', async () => {
     $evaManagedStatus.set(status({ profileScopeKey: 'gamma|0|gamma' }))
-    await vi.runAllTimersAsync()
+    await vi.dynamicImportSettled()
     refreshActiveProfile.mockClear()
     refreshProfiles.mockClear()
 
@@ -120,12 +120,12 @@ describe('profile-scope refresh trigger', () => {
     refreshActiveProfile.mockImplementationOnce(async () => oldFlight)
 
     $evaManagedStatus.set(status({ profileScopeKey: 'gamma,delta|1|gamma' }))
-    await Promise.resolve()
+    await vi.dynamicImportSettled()
     expect(refreshActiveProfile).toHaveBeenCalledOnce()
     expect(refreshProfiles).not.toHaveBeenCalled()
 
     release()
-    await vi.runAllTimersAsync()
+    await vi.dynamicImportSettled()
     expect(refreshProfiles).toHaveBeenCalledOnce()
   })
 })
