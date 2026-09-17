@@ -970,7 +970,7 @@ function ownedSupportLeases(state, desktop) {
 
 // `default` is the gateway's answer for an unscoped/shared process that was
 // never bound to a profile — and, on a flat managed box, the literal name of a
-// real per-customer profile (david-poku/default). The two are told apart by
+// real per-customer profile (acme-team/default). The two are told apart by
 // what THIS session asked the gateway for: a support lease's granted profile,
 // else the enrollment's own agent. With no expectation to compare against,
 // `default` still throws, so the unscoped-process protection is unchanged.
