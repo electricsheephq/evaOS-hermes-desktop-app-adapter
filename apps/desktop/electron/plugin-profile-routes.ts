@@ -1,5 +1,7 @@
 import crypto from 'node:crypto'
 
+import type { RosterProfileMetadata } from './connection-registry'
+
 /** Opaque renderer-side identity for the one enrollment-bound evaOS runtime.
  * It is routing metadata, never an authorization token. */
 export const EVA_MANAGED_CONNECTION_ID = 'eva-managed-runtime'
@@ -202,7 +204,10 @@ export function buildEvaManagedProfileRoutes(
 /** Managed Desktop has exactly one source: the opaque enrollment-bound
  * runtime. Keep the union-roster IPC on that identity so Bot Mode never reads
  * or probes workstation connection-registry entries left by another build. */
-export function buildEvaManagedAgentRoster(primaryProfile: string | readonly string[]) {
+export function buildEvaManagedAgentRoster(
+  primaryProfile: string | readonly string[],
+  profileMetadata: Record<string, RosterProfileMetadata> = {}
+) {
   const profiles = [
     ...new Set((typeof primaryProfile === 'string' ? [primaryProfile] : primaryProfile).map(normalizeProfile))
   ]
@@ -217,6 +222,7 @@ export function buildEvaManagedAgentRoster(primaryProfile: string | readonly str
       handle: profile,
       managedSource: true,
       profile,
+      ...(profileMetadata[profile] ? { profileMetadata: profileMetadata[profile] } : {}),
       targetProfile: profile
     })),
     primaryConnectionId: EVA_MANAGED_CONNECTION_ID,
@@ -233,12 +239,15 @@ export function buildEvaManagedAgentRoster(primaryProfile: string | readonly str
 
 /** The IPC reads the live grant before consulting ordinary-login fallback. */
 export async function loadEvaManagedAgentRoster(
-  runtime: { authorizedProfiles: () => Promise<readonly string[]> },
+  runtime: {
+    authorizedProfiles: () => Promise<readonly string[]>
+    profileMetadata: () => Promise<Record<string, RosterProfileMetadata>>
+  },
   primaryProfile: () => string
 ) {
-  const profiles = await runtime.authorizedProfiles()
+  const [profiles, profileMetadata] = await Promise.all([runtime.authorizedProfiles(), runtime.profileMetadata()])
 
-  return buildEvaManagedAgentRoster(profiles.length ? profiles : primaryProfile())
+  return buildEvaManagedAgentRoster(profiles.length ? profiles : primaryProfile(), profileMetadata)
 }
 
 /** Managed plugins may request only the synthetic enrolled-runtime route.

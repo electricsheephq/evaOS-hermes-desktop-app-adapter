@@ -60,6 +60,7 @@ interface UnionAgent {
   handle: string
   managedSource?: boolean
   profile: string
+  profileMetadata?: { display_name?: string }
 }
 
 interface Union {
@@ -209,25 +210,37 @@ describe('the active source annotates; other sources append', () => {
     // host.agents is the SDK seam; the Electron builder has its own contract
     // test. Plugin tests must not import main-process modules.
     const union = {
-      agents: ['alpha', 'beta', 'gamma'].map(profile => ({
+      agents: [
+        { profile: 'alpha' },
+        { profile: 'atlas-desk', profileMetadata: { display_name: 'Harbor Planner' } },
+        { profile: 'birch-ops' }
+      ].map(agent => ({
         connectionId: 'eva-managed-runtime',
         connectionKind: 'remote',
-        handle: profile,
+        handle: agent.profile,
         managedSource: true,
-        profile
+        ...agent
       })),
       primaryConnectionId: 'eva-managed-runtime'
     }
 
     const rows = await mergedRoster({ profiles: [{ name: 'alpha' }] }, union, union.primaryConnectionId)
 
-    expect(rows.map(row => row.name)).toEqual(['alpha', 'beta', 'gamma'])
+    expect(rows.map(row => row.name)).toEqual(['alpha', 'atlas-desk', 'birch-ops'])
     expect(rows.map(row => row.name)).not.toContain('default')
     expect(rows.map(row => row.name)).not.toContain('hermes')
+    expect(rows.find(row => row.name === 'atlas-desk')?.display_name).toBe('Harbor Planner')
+    expect(rows.find(row => row.name === 'birch-ops')).toMatchObject({ name: 'birch-ops' })
+    expect(rows.find(row => row.name === 'birch-ops')?.display_name).toBeUndefined()
     expect(rows[1]).toMatchObject({
       remoteSource: false,
       sourceScoped: true,
-      route: { connectionId: union.primaryConnectionId, mode: 'remote', profile: 'beta', targetProfile: 'beta' }
+      route: {
+        connectionId: union.primaryConnectionId,
+        mode: 'remote',
+        profile: 'atlas-desk',
+        targetProfile: 'atlas-desk'
+      }
     })
     expect(rows[1].last_session).toBeUndefined()
   })
