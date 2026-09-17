@@ -66,7 +66,7 @@ def _auth_store(*, access_token: str | None, refresh_token: str | None, pool: bo
 def managed_profile_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Path]:
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     root = tmp_path / ".hermes"
-    profile = root / "profiles" / "asuka"
+    profile = root / "profiles" / "profile-a"
     shared = root / "shared-auth" / "auth.json"
     profile.mkdir(parents=True)
     _write_json(profile / "auth.json", {"version": 1, "providers": {}})

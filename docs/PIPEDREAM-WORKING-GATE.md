@@ -35,8 +35,11 @@ POST JSON-RPC to the returned `mcp_url` with the returned headers: `initialize` 
 Layer 0 green = Pipedream-side or lease-header handling — not our fn, not our box config.
 
 ## Layer 2 — automated canaries (nightly, already installed)
-- `@louis` native-pipedream smoke on jackie-david (`/etc/evaos/native-pipedream-smoke/louis.prompt`, 02:30 UTC)
-- `@operations` smoke on eric-wilder (same time) — ⚠ appends to a live customer Telegram session
+> Placeholders: `customer-a` / `customer-b`, the `@customer-a` profile, the prompt path and the Layer 3 fixture/provenance
+> filenames below are synthetic stand-ins for the two canary tenants (this repo is public). Resolve the real account,
+> profile and paths from the private support-control tracker before inspecting a box.
+- `@customer-a` native-pipedream smoke on customer-a (`/etc/evaos/native-pipedream-smoke/customer-a.prompt`, 02:30 UTC)
+- `@operations` smoke on customer-b (same time) — ⚠ appends to a live customer Telegram session
 GREEN = marker-gated pass. These went RED 2026-08-11/12 with the lease-contract failure and are
 the standing regression tripwire. Red here with Layers 0–1 green = per-profile gateway state
 (identity seeding, env, unit) — check the profile's managed entry carries the two identity fields.
@@ -47,8 +50,8 @@ the standing regression tripwire. Red here with Layers 0–1 green = per-profile
   `cd /root/evaos-eval/scripts && python3 eval/run_customer_matrix.py --fixture <filled fixture> \
    --allowlist <allowlist> --output-dir /var/lib/evaos/eval/<name>` (filled fixtures live on-box
   only, never committed).
-- Eric/Chris: `evaos-provisioning-customer-scripts scripts/eval/fixtures/wilder-workflow-matrix.v1.yaml` (16 cells; provenance
-  `evaos-provisioning-customer-scripts docs/eval-provenance/eric-wilder-workflows.md`, mined from 10,890 OpenClaw transcripts).
+- customer-b: `evaos-provisioning-customer-scripts scripts/eval/fixtures/customer-b-workflow-matrix.v1.yaml` (16 cells; provenance
+  `evaos-provisioning-customer-scripts docs/eval-provenance/customer-b-workflows.md`, mined from 10,890 OpenClaw transcripts).
 Baseline for comparison: jane 2026-08-12 06:39Z = 5P/3F/6INC (writes OFF), preserved in
 session-notes 2026-08-13 real-workflow-evals + published on support-control#546.
 Red here with Layers 0–2 green = AGENT behavior, not plumbing — grade against the 3 axes
@@ -81,10 +84,10 @@ Score lives on the program board (support-control#544 / gate #546) — never in 
   `reload.mcp` JSON-RPC method on the serve RPC surface is revision-aware and refreshes the exact
   session after a confirmed reload; it is not an HTTP endpoint. Both interactive forms may invalidate
   the prompt cache and therefore retain the approval/confirmation gate. Layer-1 lesson
-  (eric-wilder, 2026-08-13): seeding + reload made servers MOUNT per-profile
+  (customer-b, 2026-08-13): seeding + reload made servers MOUNT per-profile
   (principal header resolves the overlay) yet tools stayed unreachable at turn time — L0-green
   via curl does NOT imply the SERVING PROCESS can mint (check the unit's credential delivery:
-  jackie-david's per-profile units carry the broker secret via a LoadCredential drop-in; a serve
+  customer-a's per-profile units carry the broker secret via a LoadCredential drop-in; a serve
   unit without it fails exactly this way). Verify the serving process's credential context, not
   just the files on disk.
 - Token re-mints are connection-invisible (pre-refresh 60 s before expiry); a "transport is down"
