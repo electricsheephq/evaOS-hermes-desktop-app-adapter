@@ -80,7 +80,9 @@ export function commitCronJobsRequest(request: CronJobsRequest, jobs: CronJobLis
 }
 
 export function failCronJobsRequest(request: CronJobsRequest, error: unknown): boolean {
-  if (!isCronJobsRequestCurrent(request)) return false
+  if (!isCronJobsRequestCurrent(request)) {
+    return false
+  }
   cronJobsRequestGeneration += 1
   const message = stripIpcErrorPrefix(error instanceof Error ? error.message : String(error))
   const status = Number(/^\s*(\d{3}):/.exec(message)?.[1])
