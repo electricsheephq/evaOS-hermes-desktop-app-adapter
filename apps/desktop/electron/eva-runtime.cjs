@@ -12,6 +12,7 @@ const {
   launchEvaHermesRuntime,
   makeAuthState,
   makeEvaDesktopCodeVerifier,
+  normalizeEvaManagedApiPath,
   normalizeDesktopSession,
   normalizeHermesEnrollment,
   normalizeSupportEnrollment,
@@ -2088,7 +2089,7 @@ function createEvaManagedRuntime(options) {
       }
       const queryProfile = queryProfiles[0]
       const resolvedQueryProfile = queryProfile === undefined ? undefined : supportProfileFor(runtime, queryProfile)
-      const resolvedBodyProfile = bodyProfile === undefined ? undefined : supportProfileFor(runtime, bodyProfile)
+      const resolvedBodyProfile = bodyProfile == null ? undefined : supportProfileFor(runtime, bodyProfile)
       if (resolvedQueryProfile !== undefined && resolvedBodyProfile !== undefined && resolvedQueryProfile !== resolvedBodyProfile) {
         throw new EvaBrokerError('evaOS Agent blocked conflicting Hermes profiles.', 400, 'managed-policy')
       }
@@ -2107,6 +2108,13 @@ function createEvaManagedRuntime(options) {
       )
       return { policy: { allowBroadProfileSelectors: false }, profile, request: ordinaryRequest }
     }
+
+    const { pathname } = normalizeEvaManagedApiPath(request?.path)
+    const policyPath = pathname.length > '/api/'.length ? pathname.replace(/\/+$/, '') : pathname
+    if (
+      String(request?.method || 'GET').toUpperCase() !== 'GET' &&
+      (policyPath === '/api/providers/oauth' || policyPath.startsWith('/api/providers/oauth/'))
+    ) throw new EvaBrokerError('evaOS Agent blocked provider changes during delegated support.', 403, 'managed-policy')
 
     const profile = supportProfileFor(runtime, request?.profile)
     let path = request?.path
@@ -2366,8 +2374,10 @@ function createEvaManagedRuntime(options) {
     const recentsProfiles = recentsProfile === 'all'
       ? runtime.allowedProfiles : [supportProfileFor(runtime, recentsProfile)]
     const slicePath = (limitKey, defaultLimit, extras = {}) => {
+      const raw = parsed.searchParams.get(limitKey)
+      const requested = Number(raw)
       const params = new URLSearchParams({
-        limit: parsed.searchParams.get(limitKey) || defaultLimit,
+        limit: raw && Number.isInteger(requested) && requested > 500 ? '500' : (raw || defaultLimit),
         offset: '0',
         min_messages: '1',
         archived: 'exclude',
