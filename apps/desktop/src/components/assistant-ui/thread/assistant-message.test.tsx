@@ -134,6 +134,34 @@ function oauthExpiredMessage(): ThreadMessage {
   } as unknown as ThreadMessage
 }
 
+function codexExpiredMessage(): ThreadMessage {
+  return {
+    ...oauthExpiredMessage(),
+    id: 'assistant-error-codex',
+    status: {
+      type: 'incomplete',
+      reason: 'error',
+      error: 'agent init failed: Codex token refresh failed: invalid_grant'
+    },
+    metadata: {
+      unstable_state: null,
+      unstable_annotations: [],
+      unstable_data: [],
+      steps: [],
+      custom: {
+        errorSurface: {
+          authKind: 'oauth',
+          code: 'relogin_required',
+          layer: 'auth',
+          provider: 'openai-codex',
+          providerLabel: 'ChatGPT',
+          retryable: true
+        }
+      }
+    }
+  } as unknown as ThreadMessage
+}
+
 function Harness({
   assistant = assistantMessage(),
   onBranchInNewChat
@@ -195,6 +223,20 @@ describe('expired OAuth grant recovery', () => {
 
     screen.getByRole('button', { name: 'Sign in to Nous Portal again' }).click()
     expect(startManualProviderOAuth).toHaveBeenCalledWith('nous', undefined)
+  })
+
+  it('keeps the normal Codex device-code action in a managed build', async () => {
+    const previousDesktop = window.hermesDesktop
+    Object.defineProperty(window, 'hermesDesktop', { configurable: true, value: { eva: {} } })
+
+    try {
+      render(<Harness assistant={codexExpiredMessage()} />)
+
+      screen.getByRole('button', { name: 'Sign in to ChatGPT again' }).click()
+      expect(startManualProviderOAuth).toHaveBeenCalledWith('openai-codex', undefined)
+    } finally {
+      Object.defineProperty(window, 'hermesDesktop', { configurable: true, value: previousDesktop })
+    }
   })
 })
 

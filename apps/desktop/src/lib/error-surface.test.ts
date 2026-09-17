@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { formatErrorDiagnostics, parseErrorSurface } from './error-surface'
+import { classifyCodexReloginText, formatErrorDiagnostics, parseErrorSurface } from './error-surface'
 
 describe('parseErrorSurface', () => {
   it('accepts a valid descriptor', () => {
@@ -46,6 +46,30 @@ describe('parseErrorSurface', () => {
     expect(surface?.model).toBe('test/m1')
     // Absent identity yields no keys, not empty strings.
     expect(parseErrorSurface({ layer: 'provider', code: 'x', retryable: true })?.provider).toBeUndefined()
+  })
+})
+
+describe('classifyCodexReloginText', () => {
+  it.each([
+    'agent init failed: Codex token refresh failed: invalid_grant',
+    'Codex token refresh failed with status 401.',
+    'Codex refresh token was already consumed'
+  ])('maps a Codex relogin failure to the existing OAuth card: %s', text => {
+    expect(classifyCodexReloginText(text)).toMatchObject({
+      authKind: 'oauth',
+      layer: 'auth',
+      provider: 'openai-codex',
+      retryable: true
+    })
+  })
+
+  it.each([
+    'Codex token refresh failed with status 503.',
+    'Codex token refresh failed with status 500.',
+    'Codex token refresh failed with status 429.',
+    'xAI token refresh failed: invalid_grant'
+  ])('does not offer provider sign-in for transient or non-Codex text: %s', text => {
+    expect(classifyCodexReloginText(text)).toBeNull()
   })
 })
 

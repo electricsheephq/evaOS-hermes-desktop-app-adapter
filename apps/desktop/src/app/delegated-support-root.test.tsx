@@ -26,6 +26,7 @@ function supportStatus(): EvaManagedStatus {
     runtimeSessionActive: false,
     agentId: null,
     agentDisplayName: 'Support agent',
+    profileScopeKey: 'fixture-agent|0|fixture-agent',
     updateChannel: 'managed-beta',
     delegatedSupportActive: true,
     sessionKind: 'delegated_support',

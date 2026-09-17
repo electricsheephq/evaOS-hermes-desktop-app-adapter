@@ -1,6 +1,7 @@
 import { atom } from 'nanostores'
 
 import type { EvaManagedStatus } from '@/global'
+import { refreshActiveProfile, refreshProfiles } from '@/store/profile'
 
 // Open/closed state of the in-app support target picker (sc#540). Renderer-
 // owned presentation state: the banner's Switch button and the native menu's
@@ -26,7 +27,15 @@ export function formatSupportRemaining(expiresAt: string, now = Date.now()): str
 export async function refreshEvaManagedStatus() {
   const status = await window.hermesDesktop?.eva?.status?.()
   if (status) {
-    $evaManagedStatus.set({ ...status })
+    const current = $evaManagedStatus.get()
+    const unchanged =
+      current !== null &&
+      Object.keys(status).length === Object.keys(current).length &&
+      Object.entries(status).every(([key, value]) => Object.is(current[key as keyof EvaManagedStatus], value))
+
+    if (!unchanged || activeSupportSession(status)) {
+      $evaManagedStatus.set({ ...status })
+    }
   }
   return status ?? null
 }
@@ -39,5 +48,27 @@ export async function runSupportSessionAction(action: 'end' | 'switch') {
     return status
   }
   const ended = await window.hermesDesktop.eva.endSupportSession()
-  return ended.ok ? refreshEvaManagedStatus().catch(() => $evaManagedStatus.get()) : Promise.reject(new Error('Support session remains active'))
+  return ended.ok ? refreshEvaManagedStatus().catch(() => $evaManagedStatus.get()) : Promise.reject(new Error())
 }
+
+let lastProfileScopeKey: null | string = null
+
+$evaManagedStatus.listen(status => {
+  const nextProfileScopeKey = status?.profileScopeKey || null
+
+  if (!nextProfileScopeKey) {
+    lastProfileScopeKey = null
+    return
+  }
+
+  const previousProfileScopeKey = lastProfileScopeKey
+  lastProfileScopeKey = nextProfileScopeKey
+
+  if (previousProfileScopeKey === null || previousProfileScopeKey === nextProfileScopeKey) {
+    return
+  }
+
+  void refreshActiveProfile()
+    .then(refreshProfiles)
+    .catch(() => undefined)
+})
