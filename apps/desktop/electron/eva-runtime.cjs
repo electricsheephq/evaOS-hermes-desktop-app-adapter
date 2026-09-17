@@ -2316,8 +2316,10 @@ function createEvaManagedRuntime(options) {
     const recentsProfiles = recentsProfile === 'all'
       ? runtime.allowedProfiles : [supportProfileFor(runtime, recentsProfile)]
     const slicePath = (limitKey, defaultLimit, extras = {}) => {
+      const raw = parsed.searchParams.get(limitKey)
+      const requested = Number(raw)
       const params = new URLSearchParams({
-        limit: parsed.searchParams.get(limitKey) || defaultLimit,
+        limit: raw && Number.isInteger(requested) && requested > 500 ? '500' : (raw || defaultLimit),
         offset: '0',
         min_messages: '1',
         archived: 'exclude',

@@ -696,6 +696,32 @@ test('ordinary sidebar routes a concrete selector once and fans out an absent se
   assert.ok(requests.every(url => ['alpha', 'beta', 'gamma'].includes(url.searchParams.get('profile'))))
 })
 
+test('ordinary sidebar clamps slice limits above 500 like the runtime', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-sidebar-limit-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeScopedEnrollment(statePath)
+  const requests = []
+  const runtime = makeManagedRuntime(statePath, {
+    fetchJson: async url => {
+      requests.push(new URL(url))
+      return { sessions: [], total: 0 }
+    }
+  })
+  t.after(() => runtime.close())
+
+  await runtime.requestApi({
+    path: '/api/profiles/sessions/sidebar?recents_limit=900&cron_limit=501&messaging_limit=999'
+  })
+
+  assert.equal(requests.length, 9)
+  assert.ok(requests.every(url => url.searchParams.get('limit') === '500'))
+  await assert.rejects(
+    runtime.requestApi({ path: '/api/profiles/sessions/sidebar?recents_limit=abc' }),
+    error => error.statusCode === 400 && error.code === 'managed-policy'
+  )
+})
+
 test('cron fan-out preserves healthy profiles and reports sanitized failures', async () => {
   const jobs = await requestAuthorizedCronJobs({
     runtime: { allowedProfiles: ['alpha', 'beta', 'gamma'], sessionKind: 'customer' },
