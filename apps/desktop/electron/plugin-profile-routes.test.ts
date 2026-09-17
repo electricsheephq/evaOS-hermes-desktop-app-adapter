@@ -124,9 +124,11 @@ describe('managed plugin profile routes', () => {
     const profileMetadata = vi.fn().mockResolvedValue({
       'atlas-desk': { display_name: 'Harbor Planner' }
     })
+
     const primaryProfileKey = vi.fn(() => 'alpha')
     const roster = () => loadEvaManagedAgentRoster({ authorizedProfiles, profileMetadata }, primaryProfileKey)
     const result = await roster()
+
     expect(result.agents.map((row: { profile: string }) => row.profile)).toEqual(['alpha', 'atlas-desk', 'birch-ops'])
     expect(result.agents.find(row => row.profile === 'atlas-desk')?.profileMetadata?.display_name).toBe(
       'Harbor Planner'
