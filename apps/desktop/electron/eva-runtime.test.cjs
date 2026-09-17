@@ -252,6 +252,28 @@ function parsedScopedEnrollment(allowedProfiles = ['alpha', 'beta', 'gamma']) {
   })
 }
 
+function refreshedScopedEnrollment({
+  agentId = 'alpha',
+  allowedProfiles = ['alpha', 'beta', 'gamma'],
+  token = 'refreshed-runtime-token'
+} = {}) {
+  return normalizeHermesEnrollment({
+    schema_version: WIRE_ENROLLMENT_SCHEMA,
+    runtime: 'hermes',
+    customer_id: 'customer-one',
+    remote_backend: {
+      base_url: 'https://hermes-customer-one.ecs.electricsheephq.com',
+      session_token: token,
+      expires_at: FUTURE,
+      agent_id: agentId,
+      allowed_profiles: allowedProfiles,
+      primary_profile: agentId,
+      profile_admin: allowedProfiles.length > 1,
+      agent_display_name: 'Fixture Agent'
+    }
+  })
+}
+
 test('cold launch discards a persisted v1 runtime and re-enrolls through the signed-in session', async t => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-v1-reenroll-'))
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
@@ -749,7 +771,317 @@ test('ordinary all scope fans out to concrete profiles for metadata, sessions, a
   assert.deepEqual(singleRequests.map(url => url.searchParams.get('profile')), ['alpha'])
 })
 
-test('ordinary sidebar routes a concrete selector to that profile\'s gateway once and fans out an absent selector', async t => {
+test('ordinary aggregate fan-outs isolate an upstream leaf 4xx through requestApi', async t => {
+  const cases = [
+    {
+      name: 'profiles',
+      request: { path: '/api/profiles' },
+      rows: result => result.profiles.map(row => row.name)
+    },
+    {
+      name: 'sessions',
+      request: { path: '/api/profiles/sessions?profile=all' },
+      rows: result => result.sessions.map(row => row.profile)
+    },
+    {
+      name: 'projects',
+      request: { path: '/api/profiles/projects/tree?profile=all' },
+      rows: result => result.projects.map(row => row.id)
+    },
+    {
+      name: 'pull requests',
+      request: { method: 'POST', path: '/api/profiles/sessions/pull-requests', body: { ids: ['alpha', 'gamma'] } },
+      rows: result => Object.keys(result.pull_requests)
+    },
+    {
+      name: 'cron',
+      request: { path: '/api/cron/jobs?profile=all' },
+      rows: result => result.jobs.map(row => row.profile)
+    }
+  ]
+
+  for (const fixture of cases) {
+    await t.test(fixture.name, async t => {
+      const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-ordinary-leaf-4xx-'))
+      t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+      const statePath = path.join(directory, 'eva-enrollment.json')
+      writeScopedEnrollment(statePath)
+      const runtime = makeManagedRuntime(statePath, {
+        fetchJson: async url => {
+          const parsed = new URL(url)
+          const profile = parsed.searchParams.get('profile')
+          if (profile === 'beta') {
+            throw Object.assign(new Error('404: Hermes agent unavailable'), { statusCode: 404 })
+          }
+          if (parsed.pathname === '/api/profiles') return { profiles: [{ name: profile }] }
+          if (parsed.pathname === '/api/profiles/sessions') return { sessions: [{ id: profile }], total: 1 }
+          if (parsed.pathname === '/api/profiles/projects/tree') {
+            return { projects: [{ id: profile, path: profile, previewSessions: [], repos: [] }], scoped_session_ids: [] }
+          }
+          if (parsed.pathname === '/api/profiles/sessions/pull-requests') {
+            return { pull_requests: { [profile]: { number: 1 } }, scanned: [profile] }
+          }
+          if (parsed.pathname === '/api/cron/jobs') return [{ enabled: true, id: profile }]
+          throw new Error(`unexpected path ${parsed.pathname}`)
+        }
+      })
+      t.after(() => runtime.close())
+
+      const result = await runtime.requestApi(fixture.request)
+
+      assert.deepEqual(fixture.rows(result), ['alpha', 'gamma'])
+      assert.ok(result.errors.some(error => error.profile === 'beta' && error.status === 404))
+      assert.equal(JSON.stringify(result).includes('Hermes agent unavailable'), false)
+    })
+  }
+})
+
+test('ordinary cron fan-out keeps cached rows for unavailable profiles and drops refused rows', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-cron-cache-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeScopedEnrollment(statePath)
+  let failure = null
+  const runtime = makeManagedRuntime(statePath, {
+    fetchJson: async url => {
+      const profile = new URL(url).searchParams.get('profile')
+      if (profile === 'beta' && failure) throw failure
+      return [{ enabled: true, id: `job-${profile}` }]
+    }
+  })
+  t.after(() => runtime.close())
+
+  await runtime.requestApi({ path: '/api/cron/jobs?profile=all' })
+  failure = Object.assign(new Error('404: Hermes agent unavailable'), { statusCode: 404 })
+  const unavailable = await runtime.requestApi({ path: '/api/cron/jobs?profile=all' })
+  assert.deepEqual(unavailable.jobs.map(row => row.profile), ['alpha', 'beta', 'gamma'])
+  assert.ok(unavailable.errors.some(error => error.profile === 'beta' && error.status === 404))
+
+  failure = Object.assign(new Error('403: {"detail":"profile is not authorized"}'), { statusCode: 403 })
+  const refused = await runtime.requestApi({ path: '/api/cron/jobs?profile=all' })
+  assert.deepEqual(refused.jobs.map(row => row.profile), ['alpha', 'gamma'])
+  assert.ok(refused.errors.some(error => error.profile === 'beta' && error.code === 'support-profile-refused'))
+})
+
+test('ordinary stale-scope recovery accepts only the exact relay literals', async t => {
+  for (const message of [
+    '403: Hermes profile scope is not active\n',
+    '403: Hermes profile scope is not active'
+  ]) {
+    await t.test(JSON.stringify(message), async t => {
+      const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-stale-scope-literal-'))
+      t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+      const statePath = path.join(directory, 'eva-enrollment.json')
+      writeScopedEnrollment(statePath)
+      let launches = 0
+      const runtime = makeManagedRuntime(statePath, {
+        launchRuntime: async () => {
+          launches += 1
+          return refreshedScopedEnrollment()
+        },
+        fetchJson: async (_url, token) => {
+          if (token === 'runtime-token') throw Object.assign(new Error(message), { statusCode: 403 })
+          return { ok: true }
+        }
+      })
+      t.after(() => runtime.close())
+
+      await runtime.requestApi({ path: '/api/sessions' })
+      assert.equal(launches, 1)
+    })
+  }
+
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-stale-scope-negative-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeScopedEnrollment(statePath)
+  let launches = 0
+  const runtime = makeManagedRuntime(statePath, {
+    launchRuntime: async () => {
+      launches += 1
+      return refreshedScopedEnrollment()
+    },
+    fetchJson: async () => {
+      throw Object.assign(new Error('403: Hermes profile scope is not active (stale)'), { statusCode: 403 })
+    }
+  })
+  t.after(() => runtime.close())
+
+  await assert.rejects(runtime.requestApi({ path: '/api/sessions' }), /profile scope is not active \(stale\)/)
+  assert.equal(launches, 0)
+})
+
+test('stale-scope refresh applies refresh reset semantics for anchor changes only', async t => {
+  for (const fixture of [
+    { agentId: 'beta', allowedProfiles: ['beta', 'gamma'], expectedResets: 1 },
+    { agentId: 'alpha', allowedProfiles: ['alpha', 'beta'], expectedResets: 0 }
+  ]) {
+    await t.test(fixture.agentId, async t => {
+      const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-stale-scope-reset-'))
+      t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+      const statePath = path.join(directory, 'eva-enrollment.json')
+      writeScopedEnrollment(statePath)
+      let resets = 0
+      const runtime = makeManagedRuntime(statePath, {
+        launchRuntime: async () => refreshedScopedEnrollment(fixture),
+        resetRenderer: async () => { resets += 1 },
+        fetchJson: async (_url, token) => {
+          if (token === 'runtime-token') {
+            throw Object.assign(new Error('403: Hermes profile scope is not active\n'), { statusCode: 403 })
+          }
+          return { ok: true }
+        }
+      })
+      t.after(() => runtime.close())
+
+      await runtime.requestApi({ path: '/api/sessions' })
+      assert.equal(resets, fixture.expectedResets)
+    })
+  }
+})
+
+test('stale-scope recovery cannot retry an old request after a new sign-in', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-stale-scope-auth-generation-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeScopedEnrollment(statePath)
+  let opened
+  let releaseOldRequest
+  let oldRequestStarted
+  const started = new Promise(resolve => { oldRequestStarted = resolve })
+  const release = new Promise(resolve => { releaseOldRequest = resolve })
+  let newTokenFetches = 0
+  const runtime = makeManagedRuntime(statePath, {
+    openExternal: async url => { opened = new URL(url) },
+    pollDeviceCode: async () => ({ token: 'next-desktop-session', expiresAt: FUTURE, email: 'employee@example.invalid' }),
+    launchRuntime: async () => refreshedScopedEnrollment(),
+    fetchJson: async (_url, token) => {
+      if (token !== 'runtime-token') {
+        newTokenFetches += 1
+        return { ok: true }
+      }
+      oldRequestStarted()
+      await release
+      throw Object.assign(new Error('403: Hermes profile scope is not active\n'), { statusCode: 403 })
+    }
+  })
+  t.after(() => runtime.close())
+
+  const oldRequest = runtime.requestApi({ path: '/api/sessions' })
+  await started
+  const signingIn = runtime.signIn()
+  await new Promise(resolve => setImmediate(resolve))
+  await runtime.completeCallback(
+    `evaos-agent://auth/callback?device_code=ABCDEFGH&desktop_auth_state=${opened.searchParams.get('desktop_auth_state')}`
+  )
+  await signingIn
+  releaseOldRequest()
+
+  await assert.rejects(oldRequest, error => error.code === 'stale-auth')
+  assert.equal(newTokenFetches, 0)
+})
+
+test('stale-scope refresh is single-flight, rate-bounded, and respects a terminal enrollment stop', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-stale-scope-bounds-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeScopedEnrollment(statePath)
+  let now = 100_000
+  let launches = 0
+  const runtime = makeManagedRuntime(statePath, {
+    now: () => now,
+    launchRuntime: async () => {
+      launches += 1
+      return refreshedScopedEnrollment({ token: `refreshed-${launches}` })
+    },
+    fetchJson: async () => {
+      throw Object.assign(new Error('403: Hermes profile scope is not active\n'), { statusCode: 403 })
+    }
+  })
+  t.after(() => runtime.close())
+
+  await Promise.allSettled(Array.from({ length: 5 }, () => runtime.requestApi({ path: '/api/sessions' })))
+  assert.equal(launches, 1)
+  now += 10_000
+  await assert.rejects(runtime.requestApi({ path: '/api/sessions' }))
+  assert.equal(launches, 1)
+  now += 51_000
+  await assert.rejects(runtime.requestApi({ path: '/api/sessions' }))
+  assert.equal(launches, 2)
+
+  const terminalPath = path.join(directory, 'terminal.json')
+  writeScopedEnrollment(terminalPath)
+  let terminalLaunches = 0
+  const terminal = makeManagedRuntime(terminalPath, {
+    launchRuntime: async () => {
+      terminalLaunches += 1
+      throw new EvaBrokerError('terminal refusal', 403, 'wrong-customer')
+    },
+    fetchJson: async () => {
+      throw Object.assign(new Error('403: Hermes profile scope is not active\n'), { statusCode: 403 })
+    }
+  })
+  t.after(() => terminal.close())
+
+  await assert.rejects(terminal.refresh(), /terminal refusal/)
+  await assert.rejects(terminal.requestApi({ path: '/api/sessions' }), /profile scope is not active/)
+  assert.equal(terminalLaunches, 1)
+})
+
+test('ordinary aggregate rejects a completed old-scope result and the retry returns only live rows', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-scope-completion-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeScopedEnrollment(statePath)
+  let launches = 0
+  const runtime = makeManagedRuntime(statePath, {
+    launchRuntime: async () => {
+      launches += 1
+      return refreshedScopedEnrollment({ allowedProfiles: ['alpha', 'gamma'] })
+    },
+    fetchJson: async (url, token) => {
+      const profile = new URL(url).searchParams.get('profile')
+      if (profile === 'gamma' && token === 'runtime-token') {
+        throw Object.assign(new Error('403: Hermes profile scope is not active\n'), { statusCode: 403 })
+      }
+      return { profiles: [{ name: profile }] }
+    }
+  })
+  t.after(() => runtime.close())
+
+  await assert.rejects(
+    runtime.requestApi({ path: '/api/profiles' }),
+    error => error.code === 'profile-scope-changed' && error.code !== 'profile-mismatch'
+  )
+  const retried = await runtime.requestApi({ path: '/api/profiles' })
+  assert.deepEqual(retried.profiles.map(row => row.name), ['alpha', 'gamma'])
+  assert.equal(launches, 1)
+})
+
+test('a local profile mismatch after a mid-loop scope refresh rejects the aggregate', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-local-mismatch-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeScopedEnrollment(statePath)
+  const runtime = makeManagedRuntime(statePath, {
+    launchRuntime: async () => refreshedScopedEnrollment({ allowedProfiles: ['alpha'] }),
+    fetchJson: async (url, token) => {
+      const profile = new URL(url).searchParams.get('profile')
+      if (profile === 'alpha' && token === 'runtime-token') {
+        throw Object.assign(new Error('403: Hermes profile scope is not active\n'), { statusCode: 403 })
+      }
+      return { profiles: [{ name: profile }] }
+    }
+  })
+  t.after(() => runtime.close())
+
+  await assert.rejects(
+    runtime.requestApi({ path: '/api/profiles' }),
+    error => error.code === 'profile-mismatch'
+  )
+})
+
+test('ordinary sidebar routes a concrete selector once and fans out an absent selector', async t => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-sidebar-scope-'))
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
   const statePath = path.join(directory, 'eva-enrollment.json')
@@ -809,6 +1141,8 @@ test('ordinary sidebar clamps slice limits above 500 like the runtime', async t 
 
 test('cron fan-out preserves healthy profiles and reports sanitized failures', async () => {
   const jobs = await requestAuthorizedCronJobs({
+    cache: new Map(),
+    leafFailureKind: () => 'unavailable',
     runtime: { allowedProfiles: ['alpha', 'beta', 'gamma'], sessionKind: 'customer' },
     request: { path: '/api/cron/jobs?profile=all' },
     retry: true,
@@ -821,7 +1155,8 @@ test('cron fan-out preserves healthy profiles and reports sanitized failures', a
     statusCodeOf: error => error.statusCode ?? null,
     startSupportRequestGuard: () => null,
     assertSupportRequestCurrent: () => undefined,
-    finishSupportRequestGuard: () => undefined
+    finishSupportRequestGuard: () => undefined,
+    assertOrdinaryScopeUnchanged: () => undefined
   })
 
   assert.deepEqual(jobs.jobs.map(job => job.id), ['job-alpha', 'job-gamma'])
@@ -836,6 +1171,8 @@ test('cron fan-out stops after delegated support guard revocation', async () => 
 
   await assert.rejects(
     requestAuthorizedCronJobs({
+      cache: new Map(),
+      leafFailureKind: () => null,
       runtime: { allowedProfiles: ['alpha', 'beta', 'gamma'], sessionKind: 'delegated_support' },
       request: { path: '/api/cron/jobs?profile=all' },
       retry: true,
@@ -851,7 +1188,8 @@ test('cron fan-out stops after delegated support guard revocation', async () => 
       assertSupportRequestCurrent: current => {
         if (!current.current) throw new EvaBrokerError('support expired', 401, 'support-session-expired')
       },
-      finishSupportRequestGuard: () => { finished = true }
+      finishSupportRequestGuard: () => { finished = true },
+      assertOrdinaryScopeUnchanged: () => undefined
     }),
     error => error.code === 'support-session-expired'
   )
@@ -3262,10 +3600,11 @@ test('ordinary managed requests preserve upstream 403s except the relay bare for
     runtime.requestApi({ path: '/api/sessions?profile=beta', method: 'GET' }),
     error => error === failure && error.code === 'permission-denied' && error.message === '403: {"detail":"admin only"}'
   )
-  await assert.rejects(
-    runtime.requestApi({ path: '/api/profiles' }),
-    error => error === failure && error.code === 'permission-denied' && error.message === '403: {"detail":"admin only"}'
-  )
+  const unavailable = await runtime.requestApi({ path: '/api/profiles' })
+  assert.deepEqual(unavailable.profiles, [])
+  assert.deepEqual(unavailable.errors.map(error => [error.profile, error.status]), [
+    ['alpha', 403], ['beta', 403], ['gamma', 403]
+  ])
 
   failure = new Error('403:  forbidden \n')
   failure.statusCode = 403
@@ -3273,10 +3612,11 @@ test('ordinary managed requests preserve upstream 403s except the relay bare for
     runtime.requestApi({ path: '/api/sessions?profile=beta', method: 'GET' }),
     error => error.code === 'profile-mismatch' && error.message === 'profile beta is not authorized for this session'
   )
-  await assert.rejects(
-    runtime.requestApi({ path: '/api/profiles' }),
-    error => error.code === 'profile-mismatch' && error.message === 'profile alpha is not authorized for this session'
-  )
+  const forbidden = await runtime.requestApi({ path: '/api/profiles' })
+  assert.deepEqual(forbidden.profiles, [])
+  assert.deepEqual(forbidden.errors.map(error => [error.profile, error.status]), [
+    ['alpha', 403], ['beta', 403], ['gamma', 403]
+  ])
 })
 
 test('managed connections and endpoint tickets preserve the selected profile and runtime generation', async t => {

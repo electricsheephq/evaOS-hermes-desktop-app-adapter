@@ -641,7 +641,7 @@ export function CronView({ onClose, onOpenSession, setStatusbarItemGroup: _setSt
         <div className="mx-4 mt-3 rounded-md bg-(--ui-warning-background) px-3 py-2 text-xs text-(--ui-warning-text)" role="status">
           {c.partialFailures(
             cronJobErrors.length,
-            cronJobErrors.map(error => `${error.profile}: ${error.status ?? error.error}`).join(', ')
+            cronJobErrors.map(error => error.status != null ? `${error.profile}: ${error.status}` : error.profile).join(', ')
           )}
         </div>
       )}

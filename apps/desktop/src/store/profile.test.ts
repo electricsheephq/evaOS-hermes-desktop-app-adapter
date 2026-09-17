@@ -12,15 +12,19 @@ const openGatewayForProfile = vi.fn(async (_profile: string) => undefined)
 const openSecondaryCount = vi.fn(() => 0)
 const $gateway = atom<unknown>({ id: 'live-socket', connectionState: 'open' })
 const resetStarmapGraph = vi.fn()
+let activeGatewaySource: null | string = null
+let primaryGatewaySource: null | string = null
 
 vi.mock('@/store/gateway', () => ({
   $gateway,
   // Activation now verifies the socket's route before publishing the profile.
+  activeGatewayConnectionId: () => activeGatewaySource,
   activeGatewayProfileKey: () => ensureGatewayForProfile.mock.lastCall?.[0] ?? $activeGatewayProfile.get(),
   ensureGatewayForAgent,
   ensureGatewayForProfile,
   openGatewayForProfile,
-  openSecondaryCount
+  openSecondaryCount,
+  primaryGatewayConnectionId: () => primaryGatewaySource
 }))
 // The pool-limits atom is profile.ts's live saturation signal — keep the real
 // one so tests can move the cap via the store, but stub its IPC bridge.
@@ -37,10 +41,12 @@ vi.mock('@/lib/query-client', () => ({ invalidateProfileScopedQueries: vi.fn() }
 vi.mock('@/store/starmap', () => ({ resetStarmapGraph }))
 
 const {
+  $activeProfile,
   $activeGatewayProfile,
   $profileErrors,
   $profiles,
   ALL_PROFILES,
+  adoptActiveGatewayProfile,
   ensureGatewayProfile,
   invalidateProfileListFetches,
   prewarmProfileBackend,
@@ -74,6 +80,7 @@ const getConnection = vi.fn<(profile?: string | null) => Promise<HermesConnectio
 
 beforeEach(() => {
   getConnection.mockReset()
+  ensureGatewayForAgent.mockClear()
   ensureGatewayForProfile.mockClear()
   openGatewayForProfile.mockClear()
   openSecondaryCount.mockReturnValue(0)
@@ -85,6 +92,9 @@ beforeEach(() => {
   vi.stubGlobal('window', { hermesDesktop: { getConnection } })
   vi.mocked(invalidateProfileScopedQueries).mockClear()
   resetStarmapGraph.mockClear()
+  activeGatewaySource = null
+  primaryGatewaySource = null
+  adoptActiveGatewayProfile('default', false)
 })
 
 afterEach(() => {
@@ -275,6 +285,61 @@ describe('refreshProfiles shared rail list (#49289)', () => {
 
     expect($profiles.get().map(profile => profile.name)).toEqual(['default'])
     expect($profileErrors.get()).toEqual([{ profile: 'support', error: 'Profile temporarily unavailable.' }])
+  })
+
+  it('re-homes once when the active primary-source profile disappears from the list', async () => {
+    $activeProfile.set('anchor-agent')
+    $activeGatewayProfile.set('field-desk')
+    vi.mocked(getProfiles).mockResolvedValueOnce({ profiles: [profile('anchor-agent', true)] })
+
+    await refreshProfiles()
+    await vi.waitFor(() => expect(ensureGatewayForProfile).toHaveBeenCalledWith('anchor-agent'))
+    expect(ensureGatewayForProfile).toHaveBeenCalledTimes(1)
+  })
+
+  it('re-homes when the active source equals the non-null primary connection id', async () => {
+    activeGatewaySource = 'primary-source'
+    primaryGatewaySource = 'primary-source'
+    $activeProfile.set('anchor-agent')
+    $activeGatewayProfile.set('field-desk')
+    vi.mocked(getProfiles).mockResolvedValueOnce({ profiles: [profile('anchor-agent', true)] })
+
+    await refreshProfiles()
+    await vi.waitFor(() => expect(ensureGatewayForAgent).toHaveBeenCalledWith('primary-source', 'anchor-agent'))
+    expect(ensureGatewayForAgent).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not re-home a profile listed in errors', async () => {
+    $activeProfile.set('anchor-agent')
+    $activeGatewayProfile.set('field-desk')
+    vi.mocked(getProfiles).mockResolvedValueOnce({
+      profiles: [profile('anchor-agent', true)],
+      errors: [{ profile: 'field-desk', error: 'Profile temporarily unavailable.' }]
+    })
+
+    await refreshProfiles()
+    expect(ensureGatewayForProfile).not.toHaveBeenCalled()
+  })
+
+  it('does not re-home during a delegated-support lock', async () => {
+    $activeProfile.set('anchor-agent')
+    adoptActiveGatewayProfile('field-desk', true)
+    vi.mocked(getProfiles).mockResolvedValueOnce({ profiles: [profile('anchor-agent', true)] })
+
+    await refreshProfiles()
+    expect(ensureGatewayForProfile).not.toHaveBeenCalled()
+  })
+
+  it('does not re-home an unrelated registry source', async () => {
+    activeGatewaySource = 'unrelated-source'
+    primaryGatewaySource = 'primary-source'
+    $activeProfile.set('anchor-agent')
+    $activeGatewayProfile.set('field-desk')
+    vi.mocked(getProfiles).mockResolvedValueOnce({ profiles: [profile('anchor-agent', true)] })
+
+    await refreshProfiles()
+    expect(ensureGatewayForProfile).not.toHaveBeenCalled()
+    expect(ensureGatewayForAgent).not.toHaveBeenCalled()
   })
 
   it('recovers from transient failures and writes the returned profile list (#70679)', async () => {

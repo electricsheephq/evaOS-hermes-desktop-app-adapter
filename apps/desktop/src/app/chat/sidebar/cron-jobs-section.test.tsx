@@ -31,6 +31,24 @@ describe('SidebarCronJobsSection', () => {
     expect(screen.getByText('Gamma job')).toBeTruthy()
   })
 
+  it('names a failed profile without rendering main-process English prose', () => {
+    render(
+      <SidebarCronJobsSection
+        errors={[{ error: 'Profile temporarily unavailable.', profile: 'beta' }]}
+        jobs={[]}
+        label="Scheduled jobs"
+        onManageJob={vi.fn()}
+        onOpenRun={vi.fn()}
+        onToggle={vi.fn()}
+        onTriggerJob={vi.fn()}
+        open
+      />
+    )
+
+    expect(screen.getByRole('status').textContent).toContain('beta')
+    expect(screen.getByRole('status').textContent).not.toContain('temporarily unavailable')
+  })
+
   it('keeps the alpha trigger idle while a same-id beta job is busy', async () => {
     const alpha = { enabled: true, id: 'shared-job', name: 'Alpha job', profile: 'alpha' } satisfies CronJob
     const beta = { enabled: true, id: 'shared-job', name: 'Beta job', profile: 'beta' } satisfies CronJob
