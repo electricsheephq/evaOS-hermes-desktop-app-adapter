@@ -14,6 +14,8 @@ import { isVoiceStopCommand } from '@/lib/voice-stop-word'
 import { notify, notifyError } from '@/store/notifications'
 import { $voicePlayback } from '@/store/voice-playback'
 
+import { useComposerScope } from '../scope'
+
 import { useMicRecorder } from './use-mic-recorder'
 
 export type ConversationStatus = 'idle' | 'listening' | 'transcribing' | 'thinking' | 'speaking'
@@ -61,6 +63,11 @@ export function useVoiceConversation({
   const voiceCopy = t.notifications.voice
   const { handle, level } = useMicRecorder(voiceCopy)
   const micHandleRef = useRef(handle)
+  // The scope's session owner (a Bot's own profile) picks the TTS voice; a
+  // ref keeps the long-lived turn closures below reading the current value.
+  const { profile: ownerProfile } = useComposerScope()
+  const ownerProfileRef = useRef(ownerProfile)
+  ownerProfileRef.current = ownerProfile
   const [status, setStatus] = useState<ConversationStatus>('idle')
   const [muted, setMuted] = useState(false)
   const turnTimeoutRef = useRef<number | null>(null)
@@ -523,7 +530,10 @@ export function useVoiceConversation({
         // this is a safety net for read-aloud-style entries into the loop.
         ensureBargeMonitor()
 
-        const playback = playSpeechText(response.text, { source: 'voice-conversation' })
+        const playback = playSpeechText(response.text, {
+          profile: ownerProfileRef.current,
+          source: 'voice-conversation'
+        })
         // playSpeechText performs its normal cleanup synchronously before
         // returning. Capture the sequence after that internal increment so
         // only a later, external stop suppresses the next listen cycle.
@@ -564,7 +574,7 @@ export function useVoiceConversation({
       ensureBargeMonitor()
 
       void (async () => {
-        const session = await startSpeechStream({ source: 'voice-conversation' })
+        const session = await startSpeechStream({ profile: ownerProfileRef.current, source: 'voice-conversation' })
 
         // The session may resolve after the loop moved on (barge, disable).
         if (responseIdRef.current !== responseId) {
