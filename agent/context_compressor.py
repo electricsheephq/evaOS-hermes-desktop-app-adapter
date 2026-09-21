@@ -666,6 +666,10 @@ _CLARIFY_NON_RESPONSE_PREFIXES = (
     "The user did not provide a response", "[user did not respond",
     "[clarify prompt could not be delivered", "[oneshot mode:",
 )
+_CLARIFY_TIMEOUT_SUMMARY = (
+    "[clarify] user did not answer; continue only reversible work inside this conversation; "
+    "do not affect anyone outside it; say you are still waiting and ask again"
+)
 
 
 def _is_clarify_non_response_sentinel(response: Any) -> bool:
@@ -675,6 +679,10 @@ def _is_clarify_non_response_sentinel(response: Any) -> bool:
     misattributes a user answer)."""
     items = [response] if isinstance(response, str) else response if isinstance(response, list) else ()
     return any(isinstance(s, str) and s.lstrip().startswith(_CLARIFY_NON_RESPONSE_PREFIXES) for s in items)
+
+
+def _is_canonical_clarify_timeout(response: Any) -> bool:
+    return isinstance(response, str) and response.lstrip().startswith(_CLARIFY_NON_RESPONSE_PREFIXES[0])
 
 
 # Ghost-skill defense: the ONE canonical prune marker; emit sites and presence
@@ -1459,6 +1467,12 @@ def _sum_clarify(name, args, content, content_len, line_count):
     truncation_marker = "...[truncated]"
     parsed = _json_dict(content)
     response = parsed.get("user_response")
+    if _is_canonical_clarify_timeout(response) or (
+        parsed.get("timed_out") is True
+        and _is_canonical_clarify_timeout(parsed.get("timeout_guidance"))
+    ):
+        # Preserve the no-consent boundary below the shared prune floor so later passes keep it.
+        return _CLARIFY_TIMEOUT_SUMMARY
     # Batch clarify (``questions=[...]``) nests each answer inside ``responses[].user_response``
     # rather than the top level; without this every batch answer was lost and the summarizer only
     # saw "asked user a question" (#106077).

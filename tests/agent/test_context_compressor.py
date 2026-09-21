@@ -66,6 +66,14 @@ class TestSummarizeToolResultWebExtract:
 
 
 class TestSummarizeToolResultClarify:
+    @staticmethod
+    def _assert_no_response_guidance(summary):
+        assert summary.startswith("[clarify] user did not answer")
+        assert "reversible work inside this conversation" in summary
+        assert "do not affect anyone outside it" in summary
+        assert "still waiting and ask again" in summary
+        assert len(summary) < _PRUNE_MIN_CHARS
+
     def test_preserves_resolved_user_response_without_metadata(self):
         content = json.dumps({
             "question": "When should I deploy?",
@@ -182,8 +190,6 @@ class TestSummarizeToolResultClarify:
     @pytest.mark.parametrize(
         "sentinel",
         [
-            # canonical clarify timeout callback
-            TIMEOUT_RESPONSE,
             # gateway/run.py timeout + delivery-failure paths
             "[user did not respond within 15m]",
             "[clarify prompt could not be delivered]",
@@ -203,6 +209,13 @@ class TestSummarizeToolResultClarify:
         summary = _summarize_tool_result("clarify", "{}", content)
 
         assert summary == "[clarify] asked user a question"
+
+    def test_canonical_timeout_preserves_compact_safety_guidance(self):
+        content = json.dumps({"user_response": TIMEOUT_RESPONSE})
+
+        summary = _summarize_tool_result("clarify", "{}", content)
+
+        self._assert_no_response_guidance(summary)
 
     def test_multi_select_containing_sentinel_stays_generic(self):
         content = json.dumps({
@@ -232,6 +245,44 @@ class TestSummarizeToolResultClarify:
             summary = _summarize_tool_result("clarify", "{}", content)
 
             assert summary == "[clarify] asked user a question", sentinel
+
+    @pytest.mark.parametrize(
+        "content",
+        [
+            json.dumps({
+                "question": "Proceed?",
+                "choices_offered": None,
+                "user_response": TIMEOUT_RESPONSE,
+            }),
+            json.dumps({
+                "responses": [{"question": "Proceed?", "user_response": ""}],
+                "timed_out": True,
+                "timeout_guidance": TIMEOUT_RESPONSE,
+            }),
+        ],
+    )
+    def test_timeout_guidance_survives_old_tool_result_pruning(self, compressor, content):
+        """A timeout remains a safety constraint after its full result leaves the tail."""
+        messages = [
+            {
+                "role": "assistant",
+                "tool_calls": [{
+                    "id": "clarify-timeout",
+                    "type": "function",
+                    "function": {"name": "clarify", "arguments": "{}"},
+                }],
+            },
+            {"role": "tool", "tool_call_id": "clarify-timeout", "content": content},
+            {"role": "user", "content": "recent request"},
+            {"role": "assistant", "content": "recent response"},
+        ]
+
+        pruned_messages, pruned_count = compressor._prune_old_tool_results(
+            messages, protect_tail_count=2
+        )
+
+        assert pruned_count == 1
+        self._assert_no_response_guidance(pruned_messages[1]["content"])
 
     def test_preserves_batch_user_response_from_responses_list(self):
         """Batch clarify (``questions=[...]``) nests answers inside ``responses[].user_response``;
