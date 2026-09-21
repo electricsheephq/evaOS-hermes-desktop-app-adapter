@@ -2154,9 +2154,22 @@ class TestDiscordVoiceCurrentPathInvariants:
         decoder = MagicMock()
         decoder.decode.return_value = b"\x00" * 3840
         receiver._decoders[100] = decoder
+        receiver._buffer_pcm(100, b"same-epoch")
+
+        assert receiver.refresh_connection() is False
+        assert bytes(receiver._buffers[100]) == b"same-epoch"
+        assert receiver._decoders[100] is decoder
+        assert receiver._ssrc_to_user[100] == 42
 
         conn.secret_key = [2] * 32
         conn.dave_session = new_dave
+        conn.ssrc = 9998
+        assert receiver.refresh_connection() is False
+        assert not receiver._buffers
+        assert not receiver._decoders
+        assert not receiver._ssrc_to_user
+        receiver.map_ssrc(100, 42)
+        receiver._decoders[100] = decoder
         packet = struct.pack(">BBHII", 0x80, 0x78, 1, 960, 100) + b"ciphertext" + b"\x00\x00\x00\x01"
         davey = SimpleNamespace(MediaType=SimpleNamespace(audio="audio"))
         nacl = ModuleType("nacl")
@@ -2245,26 +2258,37 @@ class TestDiscordVoiceCurrentPathInvariants:
         assert vc.is_connected.call_count == 3
 
     @pytest.mark.asyncio
-    async def test_voice_rejoin_rebinds_capture(self):
+    @pytest.mark.parametrize("existing_channel_id", [456, 789])
+    async def test_voice_rejoin_rebinds_capture(self, existing_channel_id):
         from plugins.platforms.discord import adapter as discord_mod
 
         adapter = self._adapter()
+        events = []
         channel = MagicMock()
         channel.guild.id = 111
         channel.id = 456
         existing = MagicMock()
         existing.is_connected.return_value = True
-        existing.channel.id = 456
+        existing.is_playing.return_value = True
+        existing.channel.id = existing_channel_id
+        existing.stop.side_effect = lambda: events.append("playback-stop")
+        existing.move_to = AsyncMock(side_effect=lambda _channel: events.append("move"))
         adapter._voice_clients[111] = existing
         old_receiver = MagicMock()
         old_receiver._running = True
+        old_receiver.stop.side_effect = lambda: events.append("capture-stop")
         old_task = MagicMock()
         adapter._voice_receivers[111] = old_receiver
         adapter._voice_listen_tasks[111] = old_task
         adapter._voice_text_channels[111] = 123
         adapter._voice_sources[111] = {"platform": "discord", "chat_id": "123"}
         adapter._voice_channel_ids[111] = 456
-        adapter._start_voice_capture = MagicMock()
+        mixer = MagicMock()
+        mixer.stop_speech.side_effect = lambda: events.append("mixer-stop")
+        adapter._voice_mixers = {111: mixer}
+        adapter._start_voice_capture = MagicMock(
+            side_effect=lambda *_args: events.append("capture-start"),
+        )
 
         source = _bound_discord_source(chat_id="999").to_dict()
         with patch.object(discord_mod, "DISCORD_AVAILABLE", True):
@@ -2278,6 +2302,15 @@ class TestDiscordVoiceCurrentPathInvariants:
         assert adapter._voice_text_channels[111] == 999
         assert adapter._voice_sources[111] == source
         assert adapter._voice_channel_ids[111] == 456
+        expected = ["capture-stop", "mixer-stop", "playback-stop"]
+        if existing_channel_id != channel.id:
+            expected.append("move")
+            existing.move_to.assert_awaited_once_with(channel)
+        else:
+            existing.move_to.assert_not_awaited()
+        expected.append("capture-start")
+        assert events == expected
+        assert 111 not in adapter._voice_mixers
         adapter._start_voice_capture.assert_called_once_with(111, existing)
 
     @pytest.mark.asyncio
