@@ -46,7 +46,8 @@ const micHandle = {
 }
 
 vi.mock('./use-mic-recorder', () => ({
-  useMicRecorder: () => ({ handle: micHandle, level: 0, recording: false })
+  // The real recorder returns a new handle on every render.
+  useMicRecorder: () => ({ handle: { ...micHandle }, level: 0, recording: false })
 }))
 
 vi.mock('@/i18n', () => ({
@@ -143,6 +144,24 @@ describe('useVoiceConversation full-duplex barge-in', () => {
   })
 
   afterEach(cleanup)
+
+  it('keeps capture active across renders and cancels it on unmount', async () => {
+    const { hook } = renderConversation()
+
+    await act(async () => {
+      await hook.result.current.start()
+    })
+    await waitFor(() => expect(hook.result.current.status).toBe('listening'))
+    const cancellations = micHandle.cancel.mock.calls.length
+
+    hook.rerender({ busy: false })
+
+    expect(hook.result.current.status).toBe('listening')
+    expect(micHandle.cancel).toHaveBeenCalledTimes(cancellations)
+
+    hook.unmount()
+    expect(micHandle.cancel).toHaveBeenCalledTimes(cancellations + 1)
+  })
 
   it('arms the barge monitor during generation (before any reply audio exists)', async () => {
     const { hook } = renderConversation()

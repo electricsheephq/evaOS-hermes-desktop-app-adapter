@@ -60,6 +60,7 @@ export function useVoiceConversation({
   const { t } = useI18n()
   const voiceCopy = t.notifications.voice
   const { handle, level } = useMicRecorder(voiceCopy)
+  const micHandleRef = useRef(handle)
   const [status, setStatus] = useState<ConversationStatus>('idle')
   const [muted, setMuted] = useState(false)
   const turnTimeoutRef = useRef<number | null>(null)
@@ -81,6 +82,11 @@ export function useVoiceConversation({
   const onStopWordRef = useRef(onStopWord)
   const onInterruptRef = useRef(onInterrupt)
   const generationRef = useRef(0)
+
+  // eslint-disable-next-line no-restricted-syntax -- legitimate non-atom ref write (see eslint rule comment)
+  useEffect(() => {
+    micHandleRef.current = handle
+  }, [handle])
 
   // eslint-disable-next-line no-restricted-syntax -- legitimate non-atom ref write (see eslint rule comment)
   useEffect(() => {
@@ -641,10 +647,10 @@ export function useVoiceConversation({
   useEffect(
     () => () => {
       generationRef.current += 1
-      handle.cancel()
+      micHandleRef.current.cancel()
       stopBargeMonitorRef.current?.()
     },
-    [handle]
+    []
   )
 
   const stopTurn = useCallback(() => {
