@@ -1236,6 +1236,7 @@ class TurnRunner:
         timeout. Returns the response string, or a sentinel when none arrived."""
         from gateway.run import _clarify_send_then_wait
         from tools import clarify_gateway as clarify_mod
+        from tools.clarify_tool import _is_timeout
         import uuid
         ctx = self._ctx
         if not ctx._status_adapter:
@@ -1274,9 +1275,10 @@ class TurnRunner:
         # have posted with a late ack. Only a definitive failure tears down the registration;
         # ambiguous falls through to the bounded wait so a late reply resolves.
         response = _clarify_send_then_wait(fut, clarify_id=clarify_id, session_key=session_key, clarify_mod=clarify_mod)
-        # Only re-arm typing when the user actually answered — the undeliverable sentinel and the
-        # timeout/cancellation strings start with '[' and must pass through untouched.
-        if not (isinstance(response, str) and response.startswith("[")):
+        # Only re-arm typing when the user actually answered — canonical timeouts and the
+        # bracketed undeliverable/cancellation sentinels must pass through untouched.
+        is_bracketed_sentinel = isinstance(response, str) and response.startswith("[")
+        if not (_is_timeout(response) or is_bracketed_sentinel):
             # Reopen typing IMMEDIATELY, not on the LLM's first post-answer token (native streaming
             # otherwise re-seeds lazily on the first delta: ~48s of dead air). request_reopen_seed is
             # a no-op outside the reopen-pending native state.
