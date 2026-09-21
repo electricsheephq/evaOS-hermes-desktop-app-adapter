@@ -202,7 +202,9 @@ describe('useVoiceConversation full-duplex barge-in', () => {
       }
 
       await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(previousSubmissions + 1))
-      act(() => hook.result.current.end())
+      await act(async () => {
+        await hook.result.current.end()
+      })
       expect(hook.result.current.status).toBe('idle')
       await act(async () => {
         finishSubmission()
