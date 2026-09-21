@@ -1646,6 +1646,7 @@ export const en: Translations = {
         label: 'Use My Real Browser Profile',
         description:
           "Copies your default browser's logins and cookies into a managed snapshot the agent browses with. Your live profile is never opened directly. Applies to new sessions.",
+        remoteDescription: 'Available only when this profile uses the local runtime.',
         enabledTitle: 'Real-profile browsing on',
         enabledMessage: 'New sessions will browse with a snapshot of your default browser profile.',
         disabledTitle: 'Real-profile browsing off',

@@ -7,6 +7,7 @@ import {
   $realProfilePromptDismissed,
   $realProfilePromptMuted
 } from '@/store/real-profile-consent'
+import { $connection } from '@/store/session'
 
 import { RealProfileConsentDialog } from './real-profile-consent-dialog'
 
@@ -63,6 +64,7 @@ vi.mock('../../hooks/use-config-record', () => ({
 
 describe('RealProfileConsentDialog', () => {
   beforeEach(() => {
+    $connection.set({ mode: 'local' } as NonNullable<ReturnType<typeof $connection.get>>)
     mocks.loadedConfig = { browser: { allow_private_urls: false }, model: { provider: 'nous' } }
     mocks.save.mockResolvedValue({ ok: true })
     $realProfilePromptDismissed.set(false)
@@ -155,5 +157,13 @@ describe('RealProfileConsentDialog', () => {
 
     expect(mocks.cache).toHaveBeenLastCalledWith(mocks.loadedConfig)
     expect(mocks.notifyError).toHaveBeenCalled()
+  })
+
+  it('does not offer or write consent for a remote managed profile', () => {
+    $connection.set({ mode: 'remote' } as NonNullable<ReturnType<typeof $connection.get>>)
+    render(<RealProfileConsentDialog tabId="tab-1" />)
+
+    expect(screen.queryByText(promptCopy.title)).toBeNull()
+    expect(mocks.save).not.toHaveBeenCalled()
   })
 })

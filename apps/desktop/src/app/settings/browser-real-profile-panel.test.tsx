@@ -2,6 +2,8 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { $connection } from '@/store/session'
+
 import { BrowserRealProfilePanel } from './browser-real-profile-panel'
 
 const mocks = vi.hoisted(() => ({
@@ -24,6 +26,7 @@ vi.mock('@/i18n', () => ({
           browserRealProfile: {
             label: 'Use My Real Browser Profile',
             description: 'Copies your default browser profile into a managed snapshot.',
+            remoteDescription: 'Available only when this profile uses the local runtime.',
             enabledTitle: 'Real-profile browsing on',
             enabledMessage: 'New sessions use the snapshot.',
             disabledTitle: 'Real-profile browsing off',
@@ -48,6 +51,7 @@ vi.mock('../hooks/use-config-record', () => ({
 
 describe('BrowserRealProfilePanel', () => {
   beforeEach(() => {
+    $connection.set({ mode: 'local' } as NonNullable<ReturnType<typeof $connection.get>>)
     mocks.loadedConfig = { browser: { allow_private_urls: false }, model: { provider: 'nous' } }
     mocks.save.mockResolvedValue({ ok: true })
   })
@@ -105,5 +109,14 @@ describe('BrowserRealProfilePanel', () => {
     // Last cache write restores the original record.
     expect(mocks.cache).toHaveBeenLastCalledWith(mocks.loadedConfig)
     expect(mocks.notifyError).toHaveBeenCalled()
+  })
+
+  it('disables the writer for a remote managed profile', () => {
+    $connection.set({ mode: 'remote' } as NonNullable<ReturnType<typeof $connection.get>>)
+    render(<BrowserRealProfilePanel />)
+
+    expect(screen.getByRole('switch', { name: 'Use My Real Browser Profile' })).toHaveProperty('disabled', true)
+    expect(screen.getByText('Available only when this profile uses the local runtime.')).toBeTruthy()
+    expect(mocks.save).not.toHaveBeenCalled()
   })
 })
