@@ -8,10 +8,13 @@ from typing import Dict, List, Optional, Callable
 
 MAX_CHOICES = 4  # the UI always appends an "Other (type your answer)" row
 MAX_QUESTIONS = 5  # independent questions per batch call
-# Canonical timeout sentinel. The CLI returns this exact text; the batch loop
+# Canonical timeout sentinel. CLI and gateway callbacks return this exact text; the batch loop
 # treats it (like ``None``) as "the user walked away" and aborts remaining questions.
 TIMEOUT_RESPONSE = ("The user did not provide a response within the time limit. "
-                    "Use your best judgement to make the choice and proceed.")
+                    "Continue only with work that is safe to undo and stays inside this "
+                    "conversation; never send, invite, book, pay, delete, or otherwise affect "
+                    "anyone outside the conversation on a guess—say you are still waiting and "
+                    "ask again.")
 # Applied to the first choice here (not per-surface) so every adapter renders it identically.
 RECOMMENDED_LABEL = "(Recommended)"
 _UNAVAILABLE = "Clarify tool is not available in this execution context."
@@ -88,6 +91,8 @@ def _parse_multi_select_response(raw_response) -> List[str]:
 
 def _clean_answer(raw, multi: bool):
     """Strip presentation (the label, multi-select JSON) from a locked answer."""
+    if _is_timeout(raw):
+        return TIMEOUT_RESPONSE
     return [strip_recommended(r) for r in _parse_multi_select_response(raw)] if multi else strip_recommended(raw)
 
 
@@ -138,7 +143,8 @@ def _normalize_questions(questions) -> tuple:
 
 def _batch_result(normalized: List[dict], answers: dict, timed_out: bool) -> str:
     """Batch result JSON; unanswered -> "". The top-level ``timed_out`` flag (present only when
-    true) tells the agent whether blanks are deliberate skips or the user walking away."""
+    true) tells the agent whether blanks are deliberate skips or the user walking away, while
+    ``timeout_guidance`` carries the canonical safety guidance for that case."""
     responses = []
     for entry in normalized:
         raw = answers.get(entry["qid"])
@@ -149,6 +155,7 @@ def _batch_result(normalized: List[dict], answers: dict, timed_out: bool) -> str
     result: Dict[str, object] = {"responses": responses}
     if timed_out:
         result["timed_out"] = True
+        result["timeout_guidance"] = TIMEOUT_RESPONSE
     return json.dumps(result, ensure_ascii=False)
 
 
@@ -190,8 +197,9 @@ def clarify_tool(question: str, choices: Optional[List[str]] = None, multi_selec
     (checkboxes). The ``user_response`` in the output JSON will be a list of strings instead of a single
     string. Has no effect when ``choices`` is omitted. questions:    Up to 5 independent questions asked as
     one batch (issue #18450). When present (non-empty), the single ``question``/``choices``/``multi_select``
-    parameters are ignored and the result JSON is ``{"responses": [...]}`` (plus ``"timed_out": true`` when
-    the user stopped answering partway). callback:     Platform-provided function that handles the actual UI
+    parameters are ignored and the result JSON is ``{"responses": [...]}`` (plus ``"timed_out": true`` and
+    ``"timeout_guidance": TIMEOUT_RESPONSE`` when the user stopped answering partway). callback:
+    Platform-provided function that handles the actual UI
     interaction. Batch-capable platforms additionally accept a ``questions`` keyword and receive the
     normalized list in one call; platforms without it are looped one question at a time. Injected by the
     agent runner (cli.py / gateway).
@@ -251,7 +259,7 @@ CLARIFY_SCHEMA = {
         "enumerated inside the question text (choices render as pickable "
         "rows; options written into the question are dead prose the user "
         "can't click). Result: {responses: [...]} in question order (plus "
-        "timed_out=true if the user stopped part-way). Prefer deciding "
+        "timed_out=true and timeout_guidance if the user stopped part-way). Prefer deciding "
         "low-stakes questions yourself; don't use this for dangerous-command "
         "confirmation (the terminal tool handles that)."
     ),

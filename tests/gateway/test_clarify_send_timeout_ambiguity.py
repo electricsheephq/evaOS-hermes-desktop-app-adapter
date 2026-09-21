@@ -18,6 +18,9 @@ import concurrent.futures
 from unittest.mock import MagicMock
 
 from gateway.run import _clarify_send_disposition, _clarify_send_then_wait
+from gateway.run_turn_runner import TurnRunner
+from gateway.turn_context import TurnContext
+from tools.clarify_tool import TIMEOUT_RESPONSE
 
 SENTINEL = "[clarify prompt could not be delivered]"
 
@@ -150,8 +153,29 @@ def test_no_response_returns_timeout_sentinel():
         _clarify_send_then_wait(
             fut, clarify_id="cid123", session_key="sk", clarify_mod=clarify_mod
         )
-        == "[user did not respond within 10m]"
+        == TIMEOUT_RESPONSE
     )
+
+
+def test_timeout_sentinel_does_not_resume_gateway_answer_state(monkeypatch):
+    """A timeout is a non-answer, so it must not reopen streaming or typing."""
+    adapter = MagicMock()
+    consumer = MagicMock()
+    ctx = TurnContext(
+        session_key="session-key",
+        _status_adapter=adapter,
+        _status_chat_id="chat-id",
+    )
+    runner = TurnRunner(MagicMock(), ctx)
+    monkeypatch.setattr(runner, "_close_native_stream_boundary", lambda *args, **kwargs: True)
+    monkeypatch.setattr(runner, "_schedule", lambda *args, **kwargs: MagicMock())
+    monkeypatch.setattr(runner, "_stream_consumer", lambda: consumer)
+    monkeypatch.setattr("gateway.run._clarify_send_then_wait", lambda *args, **kwargs: TIMEOUT_RESPONSE)
+    monkeypatch.setattr("tools.clarify_gateway.register", lambda **kwargs: None)
+
+    assert runner._clarify_callback_sync("Proceed?", None) == TIMEOUT_RESPONSE
+    consumer.request_reopen_seed.assert_not_called()
+    adapter.resume_typing_for_chat.assert_not_called()
 
 
 # --- Definitive failures keep their diagnostic detail in the log ----------
