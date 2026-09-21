@@ -65,6 +65,28 @@ def test_provider_status_is_request_scoped_and_sanitized(tmp_path, monkeypatch):
     assert "fallback_provider" not in results[1]
 
 
+def test_optional_status_preserves_narrow_provider_signature(monkeypatch):
+    from tools import tts_tool_plugins
+
+    class NarrowProvider:
+        calls = 0
+
+        def synthesize(self, text, output_path, *, voice=None, model=None, speed=None, format="mp3"):
+            self.calls += 1
+            assert (text, voice, model, speed, format) == ("fixture", "voice", "model", 1.0, "mp3")
+            return output_path
+
+    provider = NarrowProvider()
+    monkeypatch.setattr(tts_tool_plugins, "_lookup_plugin_provider", lambda *a, **kw: provider)
+    metadata = {}
+    result = tts_tool_plugins._dispatch_to_plugin_provider(
+        "fixture", "/unused/fixture.mp3", "narrow-fixture",
+        {"voice": "voice", "model": "model", "speed": 1.0}, result_metadata=metadata)
+    assert result == "/unused/fixture.mp3"
+    assert provider.calls == 1
+    assert metadata == {}
+
+
 class _FakeTTSProvider(TTSProvider):
     def __init__(
         self,

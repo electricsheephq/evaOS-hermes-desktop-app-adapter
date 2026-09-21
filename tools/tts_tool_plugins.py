@@ -6,6 +6,7 @@ tool module stays importable without the plugin machinery).
 
 from __future__ import annotations
 
+import inspect
 import logging
 from typing import Any, Dict, Optional
 
@@ -82,11 +83,22 @@ def _dispatch_to_plugin_provider(text: str, output_path: str, provider: str, tts
     fmt = cfg.get("output_format", DEFAULT_COMMAND_TTS_OUTPUT_FORMAT)
     logger.info("Generating speech with plugin TTS provider '%s'...", key)
     metadata: Dict[str, Any] = {}
+    metadata_kwargs: Dict[str, Any] = {}
+    try:
+        parameters = inspect.signature(plugin_provider.synthesize).parameters
+    except (TypeError, ValueError):
+        parameters = {}  # Preserve the old call for opaque legacy implementations.
+    metadata_parameter = parameters.get("result_metadata")
+    if any(p.kind == inspect.Parameter.VAR_KEYWORD for p in parameters.values()) or (
+        metadata_parameter is not None and metadata_parameter.kind in {
+            inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY}
+    ):
+        metadata_kwargs["result_metadata"] = metadata
     written = plugin_provider.synthesize(
         text, output_path, voice=voice if isinstance(voice, str) and voice else None,
         model=model if isinstance(model, str) and model else None,
         speed=float(speed) if isinstance(speed, (int, float)) else None,
-        format=str(fmt).lower() if fmt else "mp3", result_metadata=metadata)
+        format=str(fmt).lower() if fmt else "mp3", **metadata_kwargs)
     if result_metadata is not None:
         result_metadata.update(voice_provider_metadata(metadata))
     return written if isinstance(written, str) and written else output_path
