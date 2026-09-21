@@ -157,7 +157,7 @@ class TestPluginDiscovery:
         assert loaded == [legitimate]
         assert caplog.text.count("managed plugin identity") == 1
 
-    def test_managed_entrypoint_survives_and_same_name_user_shadow_does_not(
+    def test_managed_entrypoint_does_not_displace_same_name_profile_plugin(
         self, tmp_path, monkeypatch, caplog
     ):
         from hermes_cli import managed_scope
@@ -170,7 +170,7 @@ class TestPluginDiscovery:
         )
         monkeypatch.setenv("HERMES_MANAGED_DIR", str(managed_dir))
         managed_scope.invalidate_managed_cache()
-        shadow = PluginManifest(
+        profile_plugin = PluginManifest(
             name="managed-plugin", key="managed-plugin", source="user",
             path=str(tmp_path / "home" / "plugins" / "managed-plugin"),
         )
@@ -179,7 +179,7 @@ class TestPluginDiscovery:
             path="vendor.corp:register",
         )
         manager = PluginManager()
-        monkeypatch.setattr(manager, "_collect_directory_manifests", lambda: [shadow])
+        monkeypatch.setattr(manager, "_collect_directory_manifests", lambda: [profile_plugin])
         monkeypatch.setattr(manager, "_scan_entry_points", lambda: [entrypoint])
         monkeypatch.setattr(plugins_mod, "_get_enabled_plugins", lambda: {"managed-plugin"})
         monkeypatch.setattr(plugins_mod, "_get_disabled_plugins", lambda: set())
@@ -189,7 +189,71 @@ class TestPluginDiscovery:
         with caplog.at_level(logging.WARNING):
             manager.discover_and_load()
 
+        assert loaded == [profile_plugin]
+        assert caplog.text.count("managed plugin identity") == 1
+
+    def test_managed_entrypoint_survives_without_directory_candidate(
+        self, tmp_path, monkeypatch
+    ):
+        from hermes_cli import managed_scope
+        from hermes_cli import plugins as plugins_mod
+
+        managed_dir = tmp_path / "managed-scope"
+        managed_dir.mkdir()
+        (managed_dir / "config.yaml").write_text(
+            "plugins:\n  enabled: [managed-plugin]\n", encoding="utf-8"
+        )
+        monkeypatch.setenv("HERMES_MANAGED_DIR", str(managed_dir))
+        managed_scope.invalidate_managed_cache()
+        entrypoint = PluginManifest(
+            name="managed-plugin", key="managed-plugin", source="entrypoint",
+            path="vendor.corp:register",
+        )
+        manager = PluginManager()
+        monkeypatch.setattr(manager, "_collect_directory_manifests", lambda: [])
+        monkeypatch.setattr(manager, "_scan_entry_points", lambda: [entrypoint])
+        monkeypatch.setattr(plugins_mod, "_get_enabled_plugins", lambda: {"managed-plugin"})
+        monkeypatch.setattr(plugins_mod, "_get_disabled_plugins", lambda: set())
+        loaded = []
+        monkeypatch.setattr(manager, "_load_plugin", loaded.append)
+
+        manager.discover_and_load()
+
         assert loaded == [entrypoint]
+
+    def test_managed_manifest_name_uses_its_canonical_key_directory(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        from hermes_cli import managed_scope
+        from hermes_cli import plugins as plugins_mod
+
+        managed_dir = tmp_path / "managed-scope"
+        managed_dir.mkdir()
+        (managed_dir / "config.yaml").write_text(
+            "plugins:\n  enabled: [web-firecrawl]\n", encoding="utf-8"
+        )
+        monkeypatch.setenv("HERMES_MANAGED_DIR", str(managed_dir))
+        managed_scope.invalidate_managed_cache()
+        legitimate = PluginManifest(
+            name="web-firecrawl", key="web/firecrawl", source="bundled",
+            path=str(tmp_path / "bundled" / "web" / "firecrawl"),
+        )
+        shadow = PluginManifest(
+            name="web-firecrawl", key="zz-x", source="user",
+            path=str(tmp_path / "home" / "plugins" / "zz-x"),
+        )
+        manager = PluginManager()
+        monkeypatch.setattr(manager, "_collect_directory_manifests", lambda: [legitimate, shadow])
+        monkeypatch.setattr(manager, "_scan_entry_points", lambda: [])
+        monkeypatch.setattr(plugins_mod, "_get_enabled_plugins", lambda: {"web-firecrawl"})
+        monkeypatch.setattr(plugins_mod, "_get_disabled_plugins", lambda: set())
+        loaded = []
+        monkeypatch.setattr(manager, "_load_plugin", loaded.append)
+
+        with caplog.at_level(logging.WARNING):
+            manager.discover_and_load()
+
+        assert loaded == [legitimate]
         assert caplog.text.count("managed plugin identity") == 1
 
     def test_portable_probe_skips_managed_plugin_name_shadow(self, tmp_path, monkeypatch, caplog):

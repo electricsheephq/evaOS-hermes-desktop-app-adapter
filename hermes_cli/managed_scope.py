@@ -242,23 +242,41 @@ def filter_managed_plugin_candidates(manifests: Iterable[Any], key_fn: Callable[
             values.update(alias for alias in aliases if isinstance(alias, str))
         return values
 
-    trusted = set()
+    choices: dict[str, list[tuple[str, str]]] = {}
     for manifest in candidates:
-        matched = reserved & _claims(manifest)
+        key, source = key_fn(manifest), getattr(manifest, "source", "")
         directory = Path(str(getattr(manifest, "path", "") or "")).name
-        source = getattr(manifest, "source", "")
-        if source not in {"user", "project"} and (
-            source == "entrypoint" or directory in {name.rsplit("/", 1)[-1] for name in matched}
-        ):
-            trusted.update(matched)
+        if source != "entrypoint" and directory == key.rsplit("/", 1)[-1]:
+            for identity in reserved & _claims(manifest):
+                choices.setdefault(identity, []).append((key, source))
+
+    approved: dict[str, str] = {}
+    protected = set()
+    for identity, entries in choices.items():
+        keys = {key for key, _source in entries}
+        exact = {key for key in keys if key == identity}
+        trusted = {key for key, source in entries if source not in {"user", "project"}}
+        preferred = exact or trusted or keys
+        if len(preferred) == 1:
+            approved[identity] = next(iter(preferred))
+            if any(key == approved[identity] and source not in {"user", "project"}
+                   for key, source in entries):
+                protected.add(identity)
     eligible = []
     for manifest in candidates:
         matched = reserved & _claims(manifest)
+        key = key_fn(manifest)
         directory = Path(str(getattr(manifest, "path", "") or "")).name
         source = getattr(manifest, "source", "")
-        wrong_directory = directory not in {name.rsplit("/", 1)[-1] for name in matched}
-        shadowing_trusted = source in {"user", "project"} and bool(matched & trusted)
-        if matched and source != "entrypoint" and (wrong_directory or shadowing_trusted):
+        if source == "entrypoint":
+            rejected = bool(matched & approved.keys())
+        else:
+            rejected = bool(matched) and (
+                directory != key.rsplit("/", 1)[-1]
+                or any(approved.get(identity) != key for identity in matched)
+                or (source in {"user", "project"} and bool(matched & protected))
+            )
+        if rejected:
             logger.warning(
                 "Skipping plugin directory %s: it claims managed plugin identity %s",
                 directory or "<non-directory>", ", ".join(sorted(matched)),
