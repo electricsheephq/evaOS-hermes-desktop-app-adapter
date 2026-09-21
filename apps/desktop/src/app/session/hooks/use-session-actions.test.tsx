@@ -777,6 +777,46 @@ describe('createBackendSessionForSend profile routing', () => {
     expect(params).toMatchObject({ source: 'desktop' })
   })
 
+  it('signals the created runtime before publishing its selection', async () => {
+    const activeSessionIdRef: MutableRefObject<string | null> = { current: null }
+    const selectedStoredSessionIdRef: MutableRefObject<string | null> = { current: null }
+    const navigate = vi.fn()
+    const requestGateway = vi.fn(async (method: string) => {
+      if (method === 'session.create') {
+        return { session_id: RUNTIME_SESSION_ID, stored_session_id: 'stored-new' } as never
+      }
+
+      return {} as never
+    })
+    const onRuntimeSessionCreated = vi.fn((runtimeSessionId: string) => {
+      expect(runtimeSessionId).toBe(RUNTIME_SESSION_ID)
+      expect(activeSessionIdRef.current).toBeNull()
+      expect(selectedStoredSessionIdRef.current).toBeNull()
+      expect(navigate).not.toHaveBeenCalled()
+    })
+    let handle: HarnessHandle | null = null
+
+    render(
+      <Harness
+        activeSessionIdRef={activeSessionIdRef}
+        navigate={navigate}
+        onReady={value => (handle = value)}
+        requestGateway={requestGateway}
+        selectedStoredSessionIdRef={selectedStoredSessionIdRef}
+      />
+    )
+    await waitFor(() => expect(handle).not.toBeNull())
+
+    await act(async () => {
+      await handle!.createBackendSessionForSend('first voice turn', undefined, undefined, onRuntimeSessionCreated)
+    })
+
+    expect(onRuntimeSessionCreated).toHaveBeenCalledOnce()
+    expect(activeSessionIdRef.current).toBe(RUNTIME_SESSION_ID)
+    expect(selectedStoredSessionIdRef.current).toBe('stored-new')
+    expect(navigate).toHaveBeenCalledWith(sessionRoute('stored-new'), { replace: true })
+  })
+
   // Regression (Settings → Model doesn't stick): a stale composer selection
   // must not be shipped as a per-session override on a NEW chat.
   //

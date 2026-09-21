@@ -7,6 +7,8 @@ import { type CommandsCatalogLike, filterDesktopCommandsCatalog } from '@/lib/de
 import { isProviderSetupErrorMessage } from '@/lib/provider-setup-errors'
 import type { ComposerAttachment } from '@/store/composer'
 
+import type { RuntimeSessionCreatedCallback } from '../use-session-actions/create-overrides'
+
 import { registerRecoveredRuntime, singleFlightSessionResume, takeRecoveredRuntime } from './single-flight-resume'
 
 export type GatewayRequest = <T>(method: string, params?: Record<string, unknown>, timeoutMs?: number) => Promise<T>
@@ -720,6 +722,10 @@ export interface SubmitTextOptions {
    *  still receives the text as a normal user turn. */
   displayKind?: 'hidden'
   fromQueue?: boolean
+  /** Local-only signal for the exact runtime session this submit creates from
+   * a fresh draft. The create helper fires it before publishing selection; it
+   * never enters a gateway request. */
+  onRuntimeSessionCreated?: RuntimeSessionCreatedCallback
   /** Runtime session id to submit into. Queue drains pass this so a
    *  backgrounded/source session cannot be replaced by the current foreground
    *  session between enqueue and drain. */

@@ -51,6 +51,11 @@ import type {
   ImageAttachResponse,
   SessionRedirectResponse
 } from '../../../types'
+import type {
+  RuntimeSessionCreatedCallback,
+  SessionCreateOverrides,
+  SessionSeedMessage
+} from '../use-session-actions/create-overrides'
 
 import {
   appendMidTurnUserMessage,
@@ -230,7 +235,12 @@ interface PromptActionsOptions {
   activeSessionIdRef: MutableRefObject<string | null>
   busyRef: MutableRefObject<boolean>
   branchCurrentSession: () => Promise<boolean>
-  createBackendSessionForSend: (preview?: string | null) => Promise<string | null>
+  createBackendSessionForSend: (
+    preview?: string | null,
+    seedMessages?: SessionSeedMessage[],
+    createOverrides?: SessionCreateOverrides,
+    onRuntimeSessionCreated?: RuntimeSessionCreatedCallback
+  ) => Promise<string | null>
   getRoutedStoredSessionId: () => null | string
   getRuntimeIdForStoredSession: (storedSessionId: string) => null | string
   getRouteToken: () => string
