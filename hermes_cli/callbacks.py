@@ -7,6 +7,7 @@ from hermes_cli.banner import cprint, _DIM, _RST
 from hermes_cli.config import save_env_value_secure
 from hermes_cli.secret_prompt import masked_secret_prompt
 from hermes_constants import display_hermes_home
+from tools.clarify_tool import TIMEOUT_RESPONSE
 
 
 def _invalidate(cli) -> None:
@@ -211,9 +212,6 @@ def clarify_callback(cli, question, choices, multi_select=False):
     cli._clarify_deadline = None
     if hasattr(cli, "_app") and cli._app:
         cli._app.invalidate()
-    cprint(f"\n{_DIM}(clarify timed out after {timeout}s — agent will decide){_RST}")
-    return (
-        "The user did not provide a response within the time limit. "
-        "Use your best judgement to make the choice and proceed."
-    )
+    cprint(f"\n{_DIM}(clarify timed out after {timeout}s — still waiting for your answer){_RST}")
+    return TIMEOUT_RESPONSE
 # ---- END PLUGIN-COMPAT ----

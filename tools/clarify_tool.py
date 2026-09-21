@@ -8,10 +8,13 @@ from typing import Dict, List, Optional, Callable
 
 MAX_CHOICES = 4  # the UI always appends an "Other (type your answer)" row
 MAX_QUESTIONS = 5  # independent questions per batch call
-# Canonical timeout sentinel. The CLI returns this exact text; the batch loop
+# Canonical timeout sentinel. CLI and gateway callbacks return this exact text; the batch loop
 # treats it (like ``None``) as "the user walked away" and aborts remaining questions.
 TIMEOUT_RESPONSE = ("The user did not provide a response within the time limit. "
-                    "Use your best judgement to make the choice and proceed.")
+                    "Continue only with work that is safe to undo and stays inside this "
+                    "conversation; never send, invite, book, pay, delete, or otherwise affect "
+                    "anyone outside the conversation on a guess—say you are still waiting and "
+                    "ask again.")
 # Applied to the first choice here (not per-surface) so every adapter renders it identically.
 RECOMMENDED_LABEL = "(Recommended)"
 _UNAVAILABLE = "Clarify tool is not available in this execution context."

@@ -10,7 +10,9 @@ from tools.clarify_tool import (
     MAX_CHOICES,
     MAX_QUESTIONS,
     CLARIFY_SCHEMA,
+    TIMEOUT_RESPONSE,
     _flatten_choice,
+    _is_timeout,
 )
 
 
@@ -78,6 +80,25 @@ class TestClarifyToolCallbackHandling:
         assert "error" in result
         assert "Failed to get user input" in result["error"]
         assert "User cancelled" in result["error"]
+
+    def test_timeout_guidance_reaches_model_and_stays_detectable(self):
+        """The canonical timeout text is both model guidance and the equality sentinel."""
+        result = json.loads(clarify_tool(
+            "May I continue?", callback=lambda question, choices: TIMEOUT_RESPONSE,
+        ))
+
+        assert result["user_response"] == TIMEOUT_RESPONSE
+        assert _is_timeout(result["user_response"])
+        assert TIMEOUT_RESPONSE.startswith(
+            "The user did not provide a response within the time limit. "
+        )
+        assert TIMEOUT_RESPONSE.count(".") == 2
+        for required in (
+            "safe to undo", "inside this conversation", "never send", "invite", "book",
+            "pay", "delete", "outside the conversation", "on a guess", "still waiting",
+            "ask again",
+        ):
+            assert required in TIMEOUT_RESPONSE
 
 
     def test_user_response_stripped(self):

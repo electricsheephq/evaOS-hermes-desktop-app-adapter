@@ -17,6 +17,7 @@ from agent.context_compressor import (
     _is_summary_access_or_quota_error,
 )
 from hermes_state import SessionDB
+from tools.clarify_tool import TIMEOUT_RESPONSE
 
 
 class StubProviderError(Exception):
@@ -181,9 +182,8 @@ class TestSummarizeToolResultClarify:
     @pytest.mark.parametrize(
         "sentinel",
         [
-            # cli.py clarify timeout callback
-            "The user did not provide a response within the time limit. "
-            "Use your best judgement to make the choice and proceed.",
+            # canonical clarify timeout callback
+            TIMEOUT_RESPONSE,
             # gateway/run.py timeout + delivery-failure paths
             "[user did not respond within 15m]",
             "[clarify prompt could not be delivered]",

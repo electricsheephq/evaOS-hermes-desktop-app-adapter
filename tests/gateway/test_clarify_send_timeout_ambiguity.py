@@ -18,6 +18,7 @@ import concurrent.futures
 from unittest.mock import MagicMock
 
 from gateway.run import _clarify_send_disposition, _clarify_send_then_wait
+from tools.clarify_tool import TIMEOUT_RESPONSE
 
 SENTINEL = "[clarify prompt could not be delivered]"
 
@@ -150,7 +151,7 @@ def test_no_response_returns_timeout_sentinel():
         _clarify_send_then_wait(
             fut, clarify_id="cid123", session_key="sk", clarify_mod=clarify_mod
         )
-        == "[user did not respond within 10m]"
+        == TIMEOUT_RESPONSE
     )
 
 
