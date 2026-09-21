@@ -188,3 +188,51 @@ async def test_delete_message_failure_redacts_token_in_log(caplog):
     logged = "\n".join(r.getMessage() for r in caplog.records)
     assert _SECRET_TOKEN not in logged
     assert "***" in logged
+
+
+_SECRET_POLL_URL = f"https://api.telegram.org/bot{_SECRET_TOKEN}/getUpdates"
+
+
+async def _capture_polling_error_callback(adapter, monkeypatch):
+    """Run ``_start_polling_mode`` far enough to publish its error callback."""
+    monkeypatch.setattr(adapter, "_delete_webhook_best_effort", AsyncMock())
+    monkeypatch.setattr(adapter, "_start_polling_resilient", AsyncMock(return_value=True))
+    monkeypatch.setattr(adapter, "_spawn_polling_recovery", lambda *a, **k: None)
+    monkeypatch.setattr(adapter, "_handle_polling_network_error", lambda *a, **k: None)
+    await adapter._start_polling_mode(is_reconnect=False)
+    return adapter._polling_error_callback_ref
+
+
+@pytest.mark.asyncio
+async def test_polling_network_error_redacts_token_in_log(monkeypatch, caplog):
+    """A network polling error embedding the bot token URL must not reach the
+    warning log unredacted (the call site logged the raw exception)."""
+    adapter = _make_connected_adapter()
+    callback = await _capture_polling_error_callback(adapter, monkeypatch)
+    monkeypatch.setattr(adapter, "_looks_like_polling_conflict", lambda _e: False)
+    monkeypatch.setattr(adapter, "_looks_like_network_error", lambda _e: True)
+
+    with caplog.at_level("WARNING"):
+        callback(RuntimeError(f"Timed out requesting {_SECRET_POLL_URL}"))
+
+    logged = "\n".join(r.getMessage() for r in caplog.records)
+    assert _SECRET_TOKEN not in logged
+    assert "***" in logged
+    assert "Telegram network error, scheduling reconnect" in logged
+
+
+@pytest.mark.asyncio
+async def test_polling_other_error_redacts_token_in_log(monkeypatch, caplog):
+    """The sibling non-network branch one line below carries the same defect."""
+    adapter = _make_connected_adapter()
+    callback = await _capture_polling_error_callback(adapter, monkeypatch)
+    monkeypatch.setattr(adapter, "_looks_like_polling_conflict", lambda _e: False)
+    monkeypatch.setattr(adapter, "_looks_like_network_error", lambda _e: False)
+
+    with caplog.at_level("ERROR"):
+        callback(RuntimeError(f"Bad Request: {_SECRET_POLL_URL}"))
+
+    logged = "\n".join(r.getMessage() for r in caplog.records)
+    assert _SECRET_TOKEN not in logged
+    assert "***" in logged
+    assert "Telegram polling error" in logged
