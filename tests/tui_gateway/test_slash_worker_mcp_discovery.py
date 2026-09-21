@@ -26,6 +26,11 @@ if not hasattr(_mcp_server_mod, "MCPServer"):
     )
 
 
+_DISCOVERY_READY_TIMEOUT_SECONDS = 30.0
+_RESPONSE_TIMEOUT_SECONDS = _DISCOVERY_READY_TIMEOUT_SECONDS + 5.0
+_PROCESS_EXIT_TIMEOUT_SECONDS = 10.0
+
+
 def test_profile_local_mcp_tool_is_visible_in_slash_worker(tmp_path):
     profile_home = tmp_path / "profile-home"
     profile_home.mkdir()
@@ -57,7 +62,11 @@ def test_profile_local_mcp_tool_is_visible_in_slash_worker(tmp_path):
                         "command": sys.executable,
                         "args": [str(server)],
                     }
-                }
+                },
+                # The slash worker joins its discovery thread before HermesCLI
+                # snapshots the tool catalog. Give that readiness condition a
+                # loaded-runner budget instead of relying on the 1.5 s default.
+                "mcp_discovery_timeout": _DISCOVERY_READY_TIMEOUT_SECONDS,
             }
         ),
         encoding="utf-8",
@@ -99,16 +108,19 @@ def test_profile_local_mcp_tool_is_visible_in_slash_worker(tmp_path):
         proc.stdin.write(json.dumps({"id": 1, "command": "/tools"}) + "\n")
         proc.stdin.flush()
         try:
-            line = output.get(timeout=10)
+            line = output.get(timeout=_RESPONSE_TIMEOUT_SECONDS)
         except queue.Empty:
-            pytest.fail("slash worker produced no /tools response within 10 seconds")
+            pytest.fail(
+                "slash worker produced no /tools response after bounded MCP discovery"
+            )
         response = json.loads(line)
         assert response["ok"] is True
         assert "mcp__profileprobe__hermes_61922_profile_probe" in response["output"]
     finally:
-        proc.terminate()
+        if proc.stdin is not None:
+            proc.stdin.close()
         try:
-            proc.wait(timeout=5)
+            proc.wait(timeout=_PROCESS_EXIT_TIMEOUT_SECONDS)
         except subprocess.TimeoutExpired:
             proc.kill()
-            proc.wait(timeout=5)
+            proc.wait(timeout=_PROCESS_EXIT_TIMEOUT_SECONDS)

@@ -45,7 +45,8 @@ CHAIN_ENTRY = {
 
 _WORKER_HOLD_SECONDS = 30.0
 _FIXTURE_CEILING_SECONDS = 5.0
-assert _WORKER_HOLD_SECONDS > _FIXTURE_CEILING_SECONDS
+_FIXTURE_IDLE_SECONDS = 0.5
+assert _WORKER_HOLD_SECONDS > _FIXTURE_CEILING_SECONDS > _FIXTURE_IDLE_SECONDS
 
 
 def _patch_chain(chain):
@@ -104,7 +105,7 @@ def _run(
     chain,
     timeouts,
     messages,
-    idle=0.05,
+    idle=_FIXTURE_IDLE_SECONDS,
     ceiling=_FIXTURE_CEILING_SECONDS,
 ):
     with _patch_chain(chain):
@@ -167,7 +168,7 @@ def test_retry_runs_on_a_host_published_fence():
                 worker=worker,
                 messages=original,
                 system_prompt_fallback="degraded-prompt",
-                idle_timeout_seconds=0.05,
+                idle_timeout_seconds=_FIXTURE_IDLE_SECONDS,
                 total_ceiling_seconds=_FIXTURE_CEILING_SECONDS,
                 new_fence=_new_fence,
             )
@@ -197,7 +198,7 @@ def test_hard_interrupt_suppresses_the_fallback_attempt():
                 worker=worker,
                 messages=original,
                 system_prompt_fallback="degraded-prompt",
-                idle_timeout_seconds=0.05,
+                idle_timeout_seconds=_FIXTURE_IDLE_SECONDS,
                 total_ceiling_seconds=_FIXTURE_CEILING_SECONDS,
                 on_timeout=lambda *args: timeouts.append(args),
                 telemetry_agent=agent,
