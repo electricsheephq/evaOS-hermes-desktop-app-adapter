@@ -224,8 +224,22 @@ def plugin_selection_for_save(config: dict, managed_config: dict, persisted_conf
     return result
 
 
+def _operator_owned(manifest: Any) -> bool:
+    """Return whether a plugin candidate is owned outside the profile/project boundary."""
+    source = getattr(manifest, "source", "")
+    if source == "entrypoint" or source not in {"user", "project"}:
+        return True
+    path = getattr(manifest, "path", None)
+    if not path:
+        return False
+    try:
+        return os.stat(path).st_uid == 0
+    except OSError:
+        return False
+
+
 def filter_managed_plugin_candidates(manifests: Iterable[Any], key_fn: Callable[[Any], str]) -> list[Any]:
-    """Reserve managed enabled identities for the matching on-disk directory."""
+    """Keep operator-owned candidates ahead of profile/project shadows of managed identities."""
     managed = expand_managed_config(load_managed_config())
     plugins = managed.get("plugins") if isinstance(managed, dict) else None
     reserved = set(_name_list(plugins.get("enabled"))) if isinstance(plugins, dict) else set()
@@ -242,41 +256,20 @@ def filter_managed_plugin_candidates(manifests: Iterable[Any], key_fn: Callable[
             values.update(alias for alias in aliases if isinstance(alias, str))
         return values
 
-    choices: dict[str, list[tuple[str, str]]] = {}
-    for manifest in candidates:
-        key, source = key_fn(manifest), getattr(manifest, "source", "")
-        directory = Path(str(getattr(manifest, "path", "") or "")).name
-        if source != "entrypoint" and directory == key.rsplit("/", 1)[-1]:
-            for identity in reserved & _claims(manifest):
-                choices.setdefault(identity, []).append((key, source))
-
-    approved: dict[str, str] = {}
-    protected = set()
-    for identity, entries in choices.items():
-        keys = {key for key, _source in entries}
-        exact = {key for key in keys if key == identity}
-        trusted = {key for key, source in entries if source not in {"user", "project"}}
-        preferred = exact or trusted or keys
-        if len(preferred) == 1:
-            approved[identity] = next(iter(preferred))
-            if any(key == approved[identity] and source not in {"user", "project"}
-                   for key, source in entries):
-                protected.add(identity)
+    classified = [
+        (manifest, reserved & _claims(manifest), _operator_owned(manifest))
+        for manifest in candidates
+    ]
+    operator_claims = {
+        identity
+        for _manifest, claims, owned in classified
+        if owned
+        for identity in claims
+    }
     eligible = []
-    for manifest in candidates:
-        matched = reserved & _claims(manifest)
-        key = key_fn(manifest)
+    for manifest, matched, owned in classified:
         directory = Path(str(getattr(manifest, "path", "") or "")).name
-        source = getattr(manifest, "source", "")
-        if source == "entrypoint":
-            rejected = bool(matched & approved.keys())
-        else:
-            rejected = bool(matched) and (
-                directory != key.rsplit("/", 1)[-1]
-                or any(approved.get(identity) != key for identity in matched)
-                or (source in {"user", "project"} and bool(matched & protected))
-            )
-        if rejected:
+        if not owned and matched & operator_claims:
             logger.warning(
                 "Skipping plugin directory %s: it claims managed plugin identity %s",
                 directory or "<non-directory>", ", ".join(sorted(matched)),
