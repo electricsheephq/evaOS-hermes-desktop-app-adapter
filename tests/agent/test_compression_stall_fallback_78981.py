@@ -80,9 +80,9 @@ class _StalledSummaryWorker:
             attempt = len(self.routes)
         if attempt <= self.stall_attempts:
             # Connection open, zero tokens, zero fence progress.
-            # Keep the fake provider hold bounded to the fixture's 200ms
-            # cancellation window so a heavily scheduled host cannot strand
-            # the fallback retry behind this test-only worker.
+            # Keep the fake provider hold bounded well below the fixture's
+            # total ceiling so a heavily scheduled host cannot strand the
+            # fallback retry behind this test-only worker.
             self.release.wait(timeout=0.2)
             return ([{"role": "assistant", "content": "late"}], "late-prompt")
         if not fence.begin_commit():
@@ -93,7 +93,7 @@ class _StalledSummaryWorker:
             fence.finish_commit()
 
 
-def _run(worker, *, chain, timeouts, messages, idle=0.05, ceiling=0.2):
+def _run(worker, *, chain, timeouts, messages, idle=0.05, ceiling=5.0):
     with _patch_chain(chain):
         return run_compress_context_with_progress_timeout(
             worker=worker,
@@ -155,7 +155,7 @@ def test_retry_runs_on_a_host_published_fence():
                 messages=original,
                 system_prompt_fallback="degraded-prompt",
                 idle_timeout_seconds=0.05,
-                total_ceiling_seconds=0.2,
+                total_ceiling_seconds=5.0,
                 new_fence=_new_fence,
             )
     finally:
@@ -185,7 +185,7 @@ def test_hard_interrupt_suppresses_the_fallback_attempt():
                 messages=original,
                 system_prompt_fallback="degraded-prompt",
                 idle_timeout_seconds=0.05,
-                total_ceiling_seconds=0.2,
+                total_ceiling_seconds=5.0,
                 on_timeout=lambda *args: timeouts.append(args),
                 telemetry_agent=agent,
             )
