@@ -11,7 +11,7 @@ import os
 from typing import Any, Dict, Optional
 
 from agent.secret_scope import get_secret
-from plugins.browser._common import CloudBrowserProvider
+from plugins.browser._common import CloudBrowserAPIError, CloudBrowserProvider, _response_error_code
 
 logger = logging.getLogger(__name__)
 
@@ -113,6 +113,50 @@ class BrowserbaseBrowserProvider(CloudBrowserProvider):
             "cdp_url": session_data["connectUrl"],
             "features": features_enabled,
         }
+
+    def get_live_view_url(self, session_id: str) -> str:
+        """Return Browserbase's live-view URL for an existing session."""
+        import requests as _requests
+        from urllib.parse import quote
+
+        config = self._get_config()
+        try:
+            response = _requests.get(
+                f"{config['base_url']}/v1/sessions/{quote(session_id, safe='')}/debug",
+                headers=self._headers(config),
+                timeout=10,
+            )
+        except _requests.RequestException as exc:
+            raise CloudBrowserAPIError(
+                "Browserbase live view is temporarily unavailable (code: browser_unavailable)",
+                status_code=503,
+                code="browser_unavailable",
+            ) from exc
+        if not response.ok:
+            code = _response_error_code(response)
+            raise CloudBrowserAPIError(
+                f"Failed to fetch Browserbase live view: HTTP {response.status_code} (code: {code})",
+                status_code=response.status_code,
+                code=code,
+            )
+        try:
+            payload = response.json()
+        except (ValueError, TypeError) as exc:
+            raise CloudBrowserAPIError(
+                "Browserbase live view returned invalid JSON (code: browser_invalid_response)",
+                status_code=response.status_code,
+                code="browser_invalid_response",
+            ) from exc
+        if not isinstance(payload, dict):
+            payload = {}
+        url = str(payload.get("liveViewUrl") or payload.get("debuggerFullscreenUrl") or "")
+        if not url.startswith("https://"):
+            raise CloudBrowserAPIError(
+                "Browserbase live view returned no secure URL (code: browser_invalid_response)",
+                status_code=response.status_code,
+                code="browser_invalid_response",
+            )
+        return url
 
 
 # ---- BEGIN PLUGIN-COMPAT (revert-scheduled; see COMPAT_MANIFEST.md) ----
