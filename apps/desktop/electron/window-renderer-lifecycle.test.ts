@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { test } from 'vitest'
 
 import {
+  decideChildProcessGoneRecovery,
   describeRendererLifecycleEvent,
   installWindowRendererLifecycle,
   pruneReloadTimes,
@@ -90,6 +91,52 @@ test('pushReloadTime records the timestamp', () => {
   const times: number[] = []
 
   assert.deepEqual(pushReloadTime(times, 42), [42])
+})
+
+test('decideChildProcessGoneRecovery maps GPU loss to the shared reload budget off Windows', () => {
+  assert.deepEqual(
+    decideChildProcessGoneRecovery({
+      type: 'GPU',
+      reason: 'crashed',
+      platform: 'darwin',
+      isMainWindowUsable: true,
+      recentReloadTimes: []
+    }),
+    { action: 'reload' }
+  )
+  assert.deepEqual(
+    decideChildProcessGoneRecovery({
+      type: 'GPU',
+      reason: 'crashed',
+      platform: 'win32',
+      isMainWindowUsable: true,
+      recentReloadTimes: []
+    }),
+    { action: 'log-only' }
+  )
+  assert.deepEqual(
+    decideChildProcessGoneRecovery({
+      type: 'Utility',
+      reason: 'crashed',
+      platform: 'darwin',
+      isMainWindowUsable: true,
+      recentReloadTimes: []
+    }),
+    { action: 'log-only' }
+  )
+  assert.deepEqual(
+    decideChildProcessGoneRecovery({
+      type: 'GPU',
+      reason: 'crashed',
+      platform: 'darwin',
+      isMainWindowUsable: true,
+      recentReloadTimes: [90_000, 95_000, 99_000],
+      reloadWindowMs: 60_000,
+      reloadMax: 3,
+      now: () => 100_000
+    }),
+    { action: 'error-page' }
+  )
 })
 
 test('shouldReloadAfterRendererGone reloads crashed/oom on a live window', () => {

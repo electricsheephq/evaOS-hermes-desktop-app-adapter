@@ -450,7 +450,12 @@ import {
   WindowConnectionRouteRegistry
 } from './window-connection-route'
 import { createWindowOpenHandler } from './window-open-policy'
-import { installWindowRendererLifecycle } from './window-renderer-lifecycle'
+import {
+  decideChildProcessGoneRecovery,
+  installWindowRendererLifecycle,
+  pruneReloadTimes,
+  pushReloadTime
+} from './window-renderer-lifecycle'
 import { createWindowRevealController } from './window-reveal'
 import {
   bindGeometryPersistence,
@@ -1941,6 +1946,48 @@ function rememberLog(chunk) {
 
   scheduleDesktopLogFlush()
 }
+
+app.on('child-process-gone', (_event, details) => {
+  const field = (value: unknown) => String(value ?? '?').replace(/\s+/g, ' ')
+
+  rememberLog(
+    `[child-process-gone] type=${field(details?.type)} reason=${field(details?.reason)} ` +
+      `exitCode=${field(details?.exitCode)} serviceName=${field(details?.serviceName)} name=${field(details?.name)}`
+  )
+
+  const targetWindow = mainWindow
+  const now = Date.now()
+  const recent = pruneReloadTimes(rendererReloadTimesRef.current, now, RENDERER_RELOAD_WINDOW_MS)
+
+  rendererReloadTimesRef.current.length = 0
+  rendererReloadTimesRef.current.push(...recent)
+
+  const decision = decideChildProcessGoneRecovery({
+    type: details?.type,
+    reason: details?.reason,
+    platform: process.platform,
+    isMainWindowUsable: Boolean(targetWindow && !targetWindow.isDestroyed() && targetWindow.isVisible()),
+    recentReloadTimes: rendererReloadTimesRef.current,
+    reloadWindowMs: RENDERER_RELOAD_WINDOW_MS,
+    reloadMax: RENDERER_RELOAD_MAX,
+    now: () => now
+  })
+
+  if (decision.action === 'reload') {
+    pushReloadTime(rendererReloadTimesRef.current, now)
+    setImmediate(() => {
+      if (targetWindow && !targetWindow.isDestroyed() && targetWindow.isVisible()) {
+        targetWindow.webContents.reload()
+      }
+    })
+  } else if (decision.action === 'error-page' && targetWindow) {
+    rememberLog('[child-process-gone] GPU reload budget exhausted; loading visible error page')
+    void loadRendererLoadErrorPage(targetWindow, {
+      errorDescription: 'The desktop GPU process stopped repeatedly.',
+      reloadUrl: DEV_SERVER || pathToFileURL(resolveRendererIndex()).toString()
+    })
+  }
+})
 
 installCrashForensics({ flush: flushDesktopLogBufferSync, log: rememberLog })
 
