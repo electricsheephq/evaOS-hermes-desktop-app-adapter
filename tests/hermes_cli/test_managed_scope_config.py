@@ -90,6 +90,30 @@ def test_managed_plugin_lists_compose_and_save_profile_entries(homes):
     assert "denied" not in reloaded["plugins"]["enabled"]
 
 
+def test_full_config_replacement_can_clear_profile_plugin_list(homes):
+    from hermes_cli.config import read_raw_config, save_config
+
+    home, managed = homes
+    _write(home / "config.yaml", "plugins:\n  enabled: [profile]\n")
+    _write(managed / "config.yaml", "plugins:\n  enabled: [managed]\n")
+
+    save_config({"display": {"skin": "slate"}}, merge_existing=False)
+
+    assert "profile" not in read_raw_config().get("plugins", {}).get("enabled", [])
+
+
+def test_partial_config_merge_preserves_profile_plugin_list(homes):
+    from hermes_cli.config import read_raw_config, save_config
+
+    home, managed = homes
+    _write(home / "config.yaml", "plugins:\n  enabled: [profile]\n")
+    _write(managed / "config.yaml", "plugins:\n  enabled: [managed]\n")
+
+    save_config({"display": {"skin": "slate"}}, merge_existing=True)
+
+    assert read_raw_config()["plugins"]["enabled"] == ["profile"]
+
+
 def test_unmanaged_plugin_lists_keep_existing_load_behavior(homes, monkeypatch):
     from hermes_cli.config import load_config
     from hermes_cli import managed_scope

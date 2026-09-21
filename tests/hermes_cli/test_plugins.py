@@ -363,6 +363,62 @@ class TestPluginDiscovery:
         assert loaded == [legitimate]
         assert caplog.text.count("managed plugin identity") == 1
 
+    def test_managed_disabled_identity_protects_operator_alias(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        from hermes_cli import managed_scope
+
+        managed_dir = tmp_path / "managed-scope"
+        managed_dir.mkdir()
+        (managed_dir / "config.yaml").write_text(
+            "plugins:\n  disabled: [web-firecrawl]\n", encoding="utf-8"
+        )
+        monkeypatch.setenv("HERMES_MANAGED_DIR", str(managed_dir))
+        managed_scope.invalidate_managed_cache()
+        legitimate = PluginManifest(
+            name="web-firecrawl", key="web/firecrawl", source="bundled",
+            path=str(tmp_path / "bundled" / "web" / "firecrawl"),
+        )
+        shadow = PluginManifest(
+            name="different-name", key="web/firecrawl", source="user",
+            path=str(tmp_path / "home" / "plugins" / "web" / "firecrawl"),
+        )
+
+        with caplog.at_level(logging.WARNING):
+            eligible = managed_scope.filter_managed_plugin_candidates(
+                [legitimate, shadow], lambda manifest: manifest.key
+            )
+
+        assert eligible == [legitimate]
+        assert caplog.text.count("managed plugin identity") == 1
+
+    def test_managed_filter_normalizes_non_string_manifest_identity(
+        self, tmp_path, monkeypatch
+    ):
+        from hermes_cli import managed_scope
+
+        managed_dir = tmp_path / "managed-scope"
+        managed_dir.mkdir()
+        (managed_dir / "config.yaml").write_text(
+            "plugins:\n  enabled: [7]\n", encoding="utf-8"
+        )
+        monkeypatch.setenv("HERMES_MANAGED_DIR", str(managed_dir))
+        managed_scope.invalidate_managed_cache()
+        legitimate = PluginManifest(
+            name=7, key=7, source="bundled",
+            path=str(tmp_path / "bundled" / "numeric"),
+        )
+        shadow = PluginManifest(
+            name=7, key="shadow", source="user",
+            path=str(tmp_path / "home" / "plugins" / "shadow"),
+        )
+
+        eligible = managed_scope.filter_managed_plugin_candidates(
+            [legitimate, shadow], lambda manifest: manifest.key
+        )
+
+        assert eligible == [legitimate]
+
     def test_portable_probe_skips_managed_plugin_name_shadow(self, tmp_path, monkeypatch, caplog):
         from hermes_cli import managed_scope
 

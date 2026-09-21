@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Iterable
 
-from agent.skill_utils import get_all_skills_dirs, parse_frontmatter
+from agent.skill_utils import get_all_skills_dirs, iter_skill_index_files, parse_frontmatter
 from hermes_constants import get_hermes_home
 from hermes_cli.config import load_config_readonly
 from hermes_cli.mcp_security import validate_mcp_server_entry
@@ -56,7 +56,7 @@ def _rows(home: Path) -> list[tuple[object, object, object, object]]:
     for skills_dir in get_all_skills_dirs():
         if not skills_dir.is_dir():
             continue
-        for skill_md in sorted(skills_dir.rglob("SKILL.md")):
+        for skill_md in iter_skill_index_files(skills_dir, "SKILL.md"):
             if skill_md in seen or any(part.startswith(".") for part in skill_md.relative_to(skills_dir).parts):
                 continue
             seen.add(skill_md)

@@ -2277,7 +2277,9 @@ _FALLBACK_COMMENT = """
 """
 
 
-def _strip_managed_keys_for_save(config: Dict[str, Any]) -> Dict[str, Any]:
+def _strip_managed_keys_for_save(
+    config: Dict[str, Any], *, merge_existing: bool
+) -> Dict[str, Any]:
     """Drop every leaf the managed layer pins (bulk safety net; single-key ``config set``
     hard-rejects) and tell the user what was not saved."""
     managed_config = managed_scope.load_managed_config()
@@ -2285,7 +2287,12 @@ def _strip_managed_keys_for_save(config: Dict[str, Any]) -> Dict[str, Any]:
     if not managed_keys:
         return config
     managed_expanded = managed_scope.expand_managed_config(managed_config)
-    config = managed_scope.plugin_selection_for_save(config, managed_expanded, read_raw_config())
+    config = managed_scope.plugin_selection_for_save(
+        config,
+        managed_expanded,
+        read_raw_config(),
+        preserve_missing=merge_existing,
+    )
     managed_plugins = managed_config.get("plugins") if isinstance(managed_config, dict) else None
     if isinstance(managed_plugins, dict):
         managed_keys -= {
@@ -2326,7 +2333,7 @@ def save_config(
             managed_error("save configuration")
             return
 
-        config = _strip_managed_keys_for_save(config)
+        config = _strip_managed_keys_for_save(config, merge_existing=merge_existing)
 
         ensure_hermes_home()
         config_path = get_config_path()
