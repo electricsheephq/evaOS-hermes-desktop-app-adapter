@@ -361,8 +361,7 @@ class CDPSupervisor(DialogSupervisionMixin, FrameTrackingMixin):
             return False
         logger.warning("CDP supervisor %s: stopped after %s failed reconnect attempts: %s",
                        self.task_id, failures, _redact_cdp_error_text(e))
-        if SUPERVISOR_REGISTRY.get(self.task_id) is self:
-            SUPERVISOR_REGISTRY._pop(self.task_id)
+        SUPERVISOR_REGISTRY._remove_if_same(self.task_id, self)
         return True
 
     async def _run(self) -> None:
@@ -502,6 +501,14 @@ class _SupervisorRegistry:
     def _pop(self, task_id: str) -> Optional[CDPSupervisor]:
         with self._lock:
             return self._by_task.pop(task_id, None)
+
+    def _remove_if_same(self, task_id: str, supervisor: CDPSupervisor) -> bool:
+        """Remove ``supervisor`` only while it is still the registered instance."""
+        with self._lock:
+            if self._by_task.get(task_id) is not supervisor:
+                return False
+            self._by_task.pop(task_id)
+            return True
 
     def get_or_start(self, task_id: str, cdp_url: str, *, dialog_policy: str = DEFAULT_DIALOG_POLICY,
                      dialog_timeout_s: float = DEFAULT_DIALOG_TIMEOUT_S, start_timeout: float = 15.0) -> CDPSupervisor:

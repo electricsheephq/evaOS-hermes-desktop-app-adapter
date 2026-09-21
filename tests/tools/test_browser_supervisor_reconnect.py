@@ -4,6 +4,7 @@ endpoint forever (#114172). No real Chrome — ``websockets.connect`` is stubbed
 from __future__ import annotations
 
 import asyncio
+import threading
 
 import pytest
 import websockets
@@ -63,6 +64,50 @@ def test_post_attach_reconnects_stop_at_budget_and_unregister(monkeypatch, unreg
     assert len(final) == 1 and f"{budget} failed reconnect" in final[0]
     assert supervisor.snapshot().active is False
     assert bs.SUPERVISOR_REGISTRY.get(supervisor.task_id) is None
+
+
+def test_exhausted_supervisor_cannot_unregister_concurrent_replacement(monkeypatch):
+    """Publishing a replacement between the old two-step get/pop must preserve it."""
+    registry = bs._SupervisorRegistry()
+    monkeypatch.setattr(bs, "SUPERVISOR_REGISTRY", registry)
+    old = bs.CDPSupervisor(task_id="replaced", cdp_url="ws://old")
+    replacement = bs.CDPSupervisor(task_id="replaced", cdp_url="ws://replacement")
+    registry._by_task[old.task_id] = old
+
+    first_unlock = threading.Event()
+    replacement_published = threading.Event()
+    real_lock = threading.Lock()
+
+    class _InterleavingLock:
+        pause_first_exit = True
+
+        def __enter__(self):
+            real_lock.acquire()
+            return self
+
+        def __exit__(self, *_exc):
+            real_lock.release()
+            if self.pause_first_exit:
+                self.pause_first_exit = False
+                first_unlock.set()
+                assert replacement_published.wait(timeout=1.0)
+
+    registry._lock = _InterleavingLock()
+
+    def publish_replacement():
+        if not first_unlock.wait(timeout=1.0):
+            return
+        with registry._lock:
+            registry._by_task[old.task_id] = replacement
+        replacement_published.set()
+
+    publisher = threading.Thread(target=publish_replacement)
+    publisher.start()
+    assert old._reconnect_budget_spent(bs.MAX_POST_ATTACH_RECONNECT_FAILURES, ConnectionError("gone"))
+    publisher.join(timeout=1.0)
+
+    assert not publisher.is_alive()
+    assert registry.get(old.task_id) is replacement
 
 
 def test_initial_connect_failure_stays_fatal_for_start(monkeypatch):
