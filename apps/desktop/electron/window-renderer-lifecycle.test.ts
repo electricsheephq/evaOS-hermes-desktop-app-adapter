@@ -93,17 +93,53 @@ test('pushReloadTime records the timestamp', () => {
   assert.deepEqual(pushReloadTime(times, 42), [42])
 })
 
-test('decideChildProcessGoneRecovery maps GPU loss to the shared reload budget off Windows', () => {
-  assert.deepEqual(
-    decideChildProcessGoneRecovery({
-      type: 'GPU',
-      reason: 'crashed',
-      platform: 'darwin',
-      isMainWindowUsable: true,
-      recentReloadTimes: []
-    }),
-    { action: 'reload' }
-  )
+test('decideChildProcessGoneRecovery recovers abnormal GPU exits within the shared budget', () => {
+  for (const reason of ['crashed', 'oom', 'killed', 'abnormal-exit', 'launch-failed', 'integrity-failure']) {
+    assert.deepEqual(
+      decideChildProcessGoneRecovery({
+        type: 'GPU',
+        reason,
+        platform: 'darwin',
+        isMainWindowUsable: true,
+        recentReloadTimes: []
+      }),
+      { action: 'reload' },
+      reason
+    )
+    assert.deepEqual(
+      decideChildProcessGoneRecovery({
+        type: 'GPU',
+        reason,
+        platform: 'darwin',
+        isMainWindowUsable: true,
+        recentReloadTimes: [90_000, 95_000, 99_000],
+        reloadWindowMs: 60_000,
+        reloadMax: 3,
+        now: () => 100_000
+      }),
+      { action: 'error-page' },
+      reason
+    )
+  }
+})
+
+test('decideChildProcessGoneRecovery logs normal or missing GPU exit reasons without recovery', () => {
+  for (const reason of ['clean-exit', 'unrecognized', undefined]) {
+    assert.deepEqual(
+      decideChildProcessGoneRecovery({
+        type: 'GPU',
+        reason,
+        platform: 'darwin',
+        isMainWindowUsable: true,
+        recentReloadTimes: []
+      }),
+      { action: 'log-only' },
+      String(reason)
+    )
+  }
+})
+
+test('decideChildProcessGoneRecovery keeps Windows, non-GPU, and unusable windows log-only', () => {
   assert.deepEqual(
     decideChildProcessGoneRecovery({
       type: 'GPU',
@@ -129,13 +165,10 @@ test('decideChildProcessGoneRecovery maps GPU loss to the shared reload budget o
       type: 'GPU',
       reason: 'crashed',
       platform: 'darwin',
-      isMainWindowUsable: true,
-      recentReloadTimes: [90_000, 95_000, 99_000],
-      reloadWindowMs: 60_000,
-      reloadMax: 3,
-      now: () => 100_000
+      isMainWindowUsable: false,
+      recentReloadTimes: []
     }),
-    { action: 'error-page' }
+    { action: 'log-only' }
   )
 })
 

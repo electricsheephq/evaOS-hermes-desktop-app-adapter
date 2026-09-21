@@ -125,6 +125,14 @@ const DEFAULT_RELOAD_WINDOW_MS = 60_000
 const DEFAULT_RELOAD_MAX = 3
 
 const RECOVERABLE_REASONS = new Set(['crashed', 'oom'])
+const CHILD_PROCESS_RECOVERABLE_REASONS = new Set([
+  'crashed',
+  'oom',
+  'killed',
+  'abnormal-exit',
+  'launch-failed',
+  'integrity-failure'
+])
 
 function safeNow(now: (() => number) | undefined): number {
   return typeof now === 'function' ? now() : Date.now()
@@ -161,7 +169,12 @@ export function decideChildProcessGoneRecovery(details: {
   reloadMax?: number
   now?: () => number
 }): ChildProcessGoneRecoveryDecision {
-  if (details.platform === 'win32' || details.type !== 'GPU' || !details.isMainWindowUsable) {
+  if (
+    details.platform === 'win32' ||
+    details.type !== 'GPU' ||
+    !details.isMainWindowUsable ||
+    !CHILD_PROCESS_RECOVERABLE_REASONS.has(String(details.reason || ''))
+  ) {
     return { action: 'log-only' }
   }
 
