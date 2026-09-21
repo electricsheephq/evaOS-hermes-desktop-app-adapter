@@ -47,13 +47,15 @@ export function BrowserRealProfilePanel({ profile }: BrowserRealProfilePanelProp
   const { data: config } = useHermesConfigRecord(profile)
   const setConfig = hermesConfigCacheWriter(profile)
   const [busy, setBusy] = useState(false)
-  const remoteManagedProfile = useStore($connection)?.mode === 'remote'
+  const connection = useStore($connection)
+  const enableAllowed = connection?.mode === 'local'
+  const remoteManagedProfile = connection?.mode === 'remote'
 
   const enabled = readUseRealProfile(config)
 
   const toggle = useCallback(
     async (on: boolean) => {
-      if (!config || (remoteManagedProfile && on)) {
+      if (!config || (on && !enableAllowed)) {
         return
       }
 
@@ -81,14 +83,14 @@ export function BrowserRealProfilePanel({ profile }: BrowserRealProfilePanelProp
         setBusy(false)
       }
     },
-    [config, copy, profile, remoteManagedProfile, setConfig]
+    [config, copy, enableAllowed, profile, setConfig]
   )
 
   return (
     <ToggleRow
       checked={enabled}
       description={remoteManagedProfile ? copy.remoteDescription : copy.description}
-      disabled={(remoteManagedProfile && !enabled) || busy || !config}
+      disabled={(!enabled && !enableAllowed) || busy || !config}
       label={copy.label}
       onChange={on => void toggle(on)}
     />

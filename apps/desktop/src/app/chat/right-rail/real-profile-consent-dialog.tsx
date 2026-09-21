@@ -54,7 +54,7 @@ export function RealProfileConsentDialog({ tabId }: RealProfileConsentDialogProp
   const { data: config } = useHermesConfigRecord()
   const setConfig = hermesConfigCacheWriter()
   const [busy, setBusy] = useState(false)
-  const remoteManagedProfile = useStore($connection)?.mode === 'remote'
+  const enableAllowed = useStore($connection)?.mode === 'local'
 
   useEffect(() => {
     claimRealProfilePrompt(tabId)
@@ -65,7 +65,7 @@ export function RealProfileConsentDialog({ tabId }: RealProfileConsentDialogProp
   const enabled = readUseRealProfile(config)
 
   const enable = useCallback(async () => {
-    if (!config || busy || remoteManagedProfile) {
+    if (!config || busy || !enableAllowed) {
       return
     }
 
@@ -88,12 +88,12 @@ export function RealProfileConsentDialog({ tabId }: RealProfileConsentDialogProp
     } finally {
       setBusy(false)
     }
-  }, [busy, config, copy, remoteManagedProfile, setConfig])
+  }, [busy, config, copy, enableAllowed, setConfig])
 
   // Config not loaded yet, feature already on, opted out, or another pane
   // owns the prompt — render nothing. `enabled` flipping true after a
   // successful save is also what closes the dialog.
-  const open = Boolean(config) && !remoteManagedProfile && !enabled && !dismissed && !muted && claim === tabId
+  const open = Boolean(config) && enableAllowed && !enabled && !dismissed && !muted && claim === tabId
 
   if (!open) {
     return null

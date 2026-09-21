@@ -166,4 +166,17 @@ describe('RealProfileConsentDialog', () => {
     expect(screen.queryByText(promptCopy.title)).toBeNull()
     expect(mocks.save).not.toHaveBeenCalled()
   })
+
+  it('closes and refuses consent when the connection mode becomes unresolved', () => {
+    render(<RealProfileConsentDialog tabId="tab-1" />)
+    const enable = screen.getByRole('button', { name: promptCopy.enable })
+
+    act(() => {
+      $connection.set(null)
+    })
+    fireEvent.click(enable)
+
+    expect(screen.queryByText(promptCopy.title)).toBeNull()
+    expect(mocks.save).not.toHaveBeenCalled()
+  })
 })

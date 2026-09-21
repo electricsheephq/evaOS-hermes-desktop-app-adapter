@@ -120,8 +120,33 @@ describe('BrowserRealProfilePanel', () => {
     expect(mocks.save).not.toHaveBeenCalled()
   })
 
+  it('fails closed while the connection mode is unresolved', () => {
+    $connection.set(null)
+    render(<BrowserRealProfilePanel />)
+
+    const toggle = screen.getByRole('switch', { name: 'Use My Real Browser Profile' })
+    expect(toggle).toHaveProperty('disabled', true)
+    expect(screen.getByText('Copies your default browser profile into a managed snapshot.')).toBeTruthy()
+    expect(mocks.save).not.toHaveBeenCalled()
+  })
+
   it('allows a remote managed profile to turn the setting off', async () => {
     $connection.set({ mode: 'remote' } as NonNullable<ReturnType<typeof $connection.get>>)
+    mocks.loadedConfig = { browser: { use_real_profile: true } }
+    render(<BrowserRealProfilePanel />)
+    const toggle = screen.getByRole('switch', { name: 'Use My Real Browser Profile' })
+
+    expect(toggle).toHaveProperty('disabled', false)
+
+    await act(async () => {
+      fireEvent.click(toggle)
+    })
+
+    expect(mocks.save).toHaveBeenCalledWith({ browser: { use_real_profile: false } }, undefined)
+  })
+
+  it('allows turning the setting off while the connection mode is unresolved', async () => {
+    $connection.set(null)
     mocks.loadedConfig = { browser: { use_real_profile: true } }
     render(<BrowserRealProfilePanel />)
     const toggle = screen.getByRole('switch', { name: 'Use My Real Browser Profile' })
