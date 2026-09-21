@@ -41,6 +41,7 @@ def test_agent_browser_layout_is_detected(tmp_path):
     )
     executable.parent.mkdir(parents=True)
     executable.touch()
+    executable.chmod(0o755)
 
     assert bt_install._chromium_installed() is True
 
@@ -69,3 +70,23 @@ def test_agent_browser_build_without_executable_returns_false(tmp_path):
     (tmp_path / ".agent-browser" / "browsers" / "chrome-140.0.7339.82").mkdir(parents=True)
 
     assert bt_install._chromium_installed() is False
+
+
+def _assert_non_executable_agent_browser_build_is_rejected(tmp_path):
+    executable = _agent_browser_executable(
+        tmp_path / ".agent-browser" / "browsers" / "chrome-140.0.7339.82"
+    )
+    executable.parent.mkdir(parents=True)
+    executable.touch(mode=0o644)
+
+    assert bt_install._chromium_installed() is False
+
+
+@pytest.mark.linux_only
+def test_linux_agent_browser_build_requires_executable_permission(tmp_path):
+    _assert_non_executable_agent_browser_build_is_rejected(tmp_path)
+
+
+@pytest.mark.macos_only
+def test_macos_agent_browser_build_requires_executable_permission(tmp_path):
+    _assert_non_executable_agent_browser_build_is_rejected(tmp_path)

@@ -243,12 +243,14 @@ def _has_chromium_build(root: str) -> bool:
         executable_paths = (("chrome.exe",), ("chrome-win64", "chrome.exe"))
     else:
         executable_paths = ()
-    return any(
-        os.path.isfile(os.path.join(root, entry, *relative_path))
-        for entry in entries
-        if entry.startswith("chrome-")
-        for relative_path in executable_paths
-    )
+    for entry in entries:
+        if not entry.startswith("chrome-"):
+            continue
+        for relative_path in executable_paths:
+            executable = os.path.join(root, entry, *relative_path)
+            if os.path.isfile(executable) and (os.name == "nt" or os.access(executable, os.X_OK)):
+                return True
+    return False
 
 
 def _chromium_installed() -> bool:
