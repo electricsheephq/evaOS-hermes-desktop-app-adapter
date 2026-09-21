@@ -60,6 +60,26 @@ def test_named_session_returns_link_without_logging_it(
     browser_lifecycle._cleanup_inactive_browser_sessions()
 
 
+def test_browser_activity_does_not_cancel_live_view_hold(
+    monkeypatch, existing_named_session
+):
+    provider = _FakeBrowserbase()
+    monkeypatch.setattr("tools.browser_tool_cloud._get_cloud_provider", lambda: provider)
+    monkeypatch.setattr(live_view.time, "time", lambda: 1_000.0)
+
+    result = json.loads(live_view.browser_live_view(session="research", task_id="task-1"))
+    assert result["success"] is True
+    assert browser_tool._session_last_activity["bu-named-research"] == 1_900.0
+
+    monkeypatch.setattr(browser_lifecycle.time, "time", lambda: 1_100.0)
+    browser_lifecycle._update_session_activity("bu-named-research")
+    assert browser_tool._session_last_activity["bu-named-research"] == 1_900.0
+
+    browser_tool._session_last_activity["bu-named-research"] = 1_000.0
+    browser_lifecycle._update_session_activity("bu-named-research")
+    assert browser_tool._session_last_activity["bu-named-research"] == 1_100.0
+
+
 @pytest.mark.parametrize(
     "status,code,retryable",
     [
@@ -88,6 +108,32 @@ def test_provider_error_codes_are_typed(
     assert browser_tool._session_last_activity["bu-named-research"] == 123.0
 
 
+def test_provider_failure_removes_temporary_hold_when_activity_was_absent(
+    monkeypatch, existing_named_session
+):
+    error = CloudBrowserAPIError(
+        "debug request failed (code: browser_unavailable)",
+        status_code=503,
+        code="browser_unavailable",
+    )
+    browser_tool._session_last_activity.clear()
+    monkeypatch.setattr(live_view.time, "time", lambda: 1_000.0)
+
+    class _RaisingProvider(_FakeBrowserbase):
+        def get_live_view_url(self, session_id):
+            assert browser_tool._session_last_activity["bu-named-research"] == 1_900.0
+            raise error
+
+    monkeypatch.setattr(
+        "tools.browser_tool_cloud._get_cloud_provider", lambda: _RaisingProvider()
+    )
+
+    result = json.loads(live_view.browser_live_view(session="research"))
+
+    assert result["code"] == "browser_unavailable"
+    assert "bu-named-research" not in browser_tool._session_last_activity
+
+
 def test_missing_provider_session_is_evicted(monkeypatch, existing_named_session):
     error = CloudBrowserAPIError(
         "debug request failed (code: browser_session_not_found)",
@@ -99,11 +145,23 @@ def test_missing_provider_session_is_evicted(monkeypatch, existing_named_session
         "tools.browser_tool_cloud._get_cloud_provider",
         lambda: provider,
     )
+    supervisor = object()
+    browser_tool._active_sessions["bu-named-research"]["cdp_supervisor"] = supervisor
+    teardown_calls = []
+
+    def fake_teardown(key):
+        assert browser_tool._active_sessions[key]["cdp_supervisor"] is supervisor
+        teardown_calls.append(key)
+        browser_tool._active_sessions.pop(key, None)
+        browser_tool._session_last_activity.pop(key, None)
+
+    monkeypatch.setattr(browser_lifecycle, "_cleanup_single_browser_session", fake_teardown)
 
     first = json.loads(live_view.browser_live_view(session="research"))
 
     assert first["code"] == "browser_session_not_found"
     assert first["retryable"] is False
+    assert teardown_calls == ["bu-named-research"]
     assert "bu-named-research" not in browser_tool._active_sessions
     assert "bu-named-research" not in browser_tool._session_last_activity
 

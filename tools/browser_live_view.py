@@ -59,23 +59,60 @@ def browser_live_view(session: str = "", task_id: Optional[str] = None) -> str:
             code="browser_session_not_found",
             retryable=False,
         )
+    from tools import browser_tool
+
+    key = _backend_cache_key(task_id, session)
+    with browser_tool._cleanup_lock:
+        current = browser_tool._active_sessions.get(key)
+        if (
+            not isinstance(current, dict)
+            or str(current.get("bb_session_id") or "") != provider_session_id
+        ):
+            return tool_error(
+                "No active Browserbase session was found for that session name; start it with a browser tool first.",
+                code="browser_session_not_found",
+                retryable=False,
+            )
+        had_previous_activity = key in browser_tool._session_last_activity
+        previous_activity = browser_tool._session_last_activity.get(key)
+        held_until = max(
+            browser_tool._session_last_activity.get(key, 0.0),
+            time.time() + LIVE_VIEW_HOLD_SECONDS,
+        )
+        browser_tool._session_last_activity[key] = held_until
+
+    def restore_activity() -> None:
+        with browser_tool._cleanup_lock:
+            current = browser_tool._active_sessions.get(key)
+            current_activity = browser_tool._session_last_activity.get(key)
+            if current_activity != held_until:
+                return
+            if (
+                isinstance(current, dict)
+                and str(current.get("bb_session_id") or "") == provider_session_id
+                and had_previous_activity
+            ):
+                browser_tool._session_last_activity[key] = previous_activity
+            else:
+                browser_tool._session_last_activity.pop(key, None)
+
     try:
         url = str(provider.get_live_view_url(provider_session_id) or "")
     except Exception as exc:
+        restore_activity()
         code = str(getattr(exc, "code", "browser_live_view_failed"))
         status = getattr(exc, "status_code", None)
         if code == "browser_session_not_found":
-            from tools import browser_tool
+            from tools import browser_tool_lifecycle
 
-            key = _backend_cache_key(task_id, session)
             with browser_tool._cleanup_lock:
                 current = browser_tool._active_sessions.get(key)
-                if (
+                should_cleanup = (
                     isinstance(current, dict)
                     and str(current.get("bb_session_id") or "") == provider_session_id
-                ):
-                    browser_tool._active_sessions.pop(key, None)
-                    browser_tool._session_last_activity.pop(key, None)
+                )
+            if should_cleanup:
+                browser_tool_lifecycle._cleanup_single_browser_session(key)
         message = {
             "browser_session_not_found": "The Browserbase session no longer exists.",
             "browser_capacity": "browser capacity reached — retry shortly",
@@ -87,16 +124,12 @@ def browser_live_view(session: str = "", task_id: Optional[str] = None) -> str:
             retryable=status == 429 or (isinstance(status, int) and status >= 500),
         )
     if not url.startswith("https://"):
+        restore_activity()
         return tool_error(
             "Browserbase returned no secure live-view URL.",
             code="browser_invalid_response",
             retryable=False,
         )
-    from tools import browser_tool
-
-    key = _backend_cache_key(task_id, session)
-    with browser_tool._cleanup_lock:
-        browser_tool._session_last_activity[key] = time.time() + LIVE_VIEW_HOLD_SECONDS
     return tool_result(
         success=True,
         live_view_url=url,
