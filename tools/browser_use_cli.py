@@ -430,7 +430,7 @@ def _resolve_backend_cdp(env: dict, task_id: Optional[str], session_name: str = 
         return None
     try:
         from tools.browser_tool_cloud import _get_cloud_provider
-        from tools.browser_tool_session import _get_session_info
+        from tools.browser_tool_session import _get_session_info, _is_browser_capacity_error
         from tools.browser_tool_cdp import _get_cdp_override
     except Exception as e:  # pragma: no cover — stubbed browser_tool in tests
         logger.debug("browser_tool backend resolution unavailable: %s", e)
@@ -455,9 +455,15 @@ def _resolve_backend_cdp(env: dict, task_id: Optional[str], session_name: str = 
     try:
         session_info = _get_session_info(_backend_cache_key(task_id, session_name)) or {}
     except Exception as e:
-        code = str(getattr(e, "code", "provider_error"))
+        cause = getattr(e, "__cause__", None)
+        raw_code = getattr(e, "code", None)
+        if not raw_code and cause is not None:
+            raw_code = getattr(cause, "code", None)
+        code = str(raw_code or "provider_error")
         status = getattr(e, "status_code", None)
-        if code == "browser_capacity" or status == 429:
+        if status is None and cause is not None:
+            status = getattr(cause, "status_code", None)
+        if _is_browser_capacity_error(code, status):
             return _BrowserRouteError(
                 "browser capacity reached — retry shortly",
                 code="browser_capacity",
@@ -474,12 +480,18 @@ def _resolve_backend_cdp(env: dict, task_id: Optional[str], session_name: str = 
     if session_info.get("fallback_from_cloud"):
         code = str(session_info.get("fallback_error_code") or "provider_error")
         status = session_info.get("fallback_status_code")
-        if code == "browser_capacity" or status == 429:
+        if _is_browser_capacity_error(code, status):
             return _BrowserRouteError(
                 "browser capacity reached — retry shortly",
                 code="browser_capacity",
                 retryable=True,
             )
+        cdp = str(session_info.get("cdp_url") or "")
+        if cdp:
+            _set_cdp_env(env, cdp)
+            if session_name:
+                env[_PRIVATE_BROWSER_SENTINEL] = "1"
+            return None
         local_err = _resolve_managed_chromium_cdp(env, task_id, session_name)
         if local_err is None:
             return None
