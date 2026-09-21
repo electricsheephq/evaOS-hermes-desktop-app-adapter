@@ -263,4 +263,36 @@ describe('useVoiceConversation full-duplex barge-in', () => {
 
     expect(monitorCalls.length).toBe(armed)
   })
+
+  it('discards a transcription that resolves after the conversation ends', async () => {
+    const { hook, onSubmit, onTranscribeAudio } = renderConversation()
+    let resolveTranscript!: (value: string) => void
+    onTranscribeAudio.mockImplementationOnce(
+      () =>
+        new Promise(resolve => {
+          resolveTranscript = resolve
+        })
+    )
+    await act(async () => {
+      await hook.result.current.start()
+    })
+    await waitFor(() => expect(hook.result.current.status).toBe('listening'))
+    micHandle.stop.mockResolvedValueOnce({
+      audio: new Blob(['operator fixture'], { type: 'audio/webm' }),
+      durationMs: 900,
+      heardSpeech: true
+    })
+    await act(async () => {
+      hook.result.current.stopTurn()
+    })
+    await waitFor(() => expect(onTranscribeAudio).toHaveBeenCalledTimes(1))
+    await act(async () => {
+      await hook.result.current.end()
+    })
+    await act(async () => {
+      resolveTranscript('operator fixture')
+    })
+    expect(onSubmit).not.toHaveBeenCalled()
+    expect(hook.result.current.status).toBe('idle')
+  })
 })

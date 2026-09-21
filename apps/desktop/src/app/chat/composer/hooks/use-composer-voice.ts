@@ -9,7 +9,8 @@ import { CONVERSATION_LEASE, READ_ALOUD_LEASE, syncTtsLease } from '@/lib/tts-le
 import { clearWakeIndicator, syncWakeIndicatorWithVoice } from '@/lib/wake-indicator'
 import { $voiceConversationStartRequest, takeVoiceConversationStart } from '@/store/composer'
 import { resetBrowseState } from '@/store/composer-input-history'
-import { $gateway } from '@/store/gateway'
+import { $activeGatewayRoute, $gateway } from '@/store/gateway'
+import { $gatewayState } from '@/store/session'
 import { notify, notifyError } from '@/store/notifications'
 import { $autoSpeakReplies, $voiceStopPhrase, setAutoSpeakReplies } from '@/store/voice-prefs'
 import { resumeWakeAfterVoice } from '@/store/wake-word'
@@ -164,6 +165,35 @@ export function useComposerVoice({
     // to finish releasing the capture device (see wakePauseBarrierRef).
     beforeMicOpen: () => wakePauseBarrierRef.current ?? undefined
   })
+
+  // Stop synchronously at a routing boundary, before pending transcription
+  // promises can publish into the newly selected profile or connection.
+  useEffect(() => {
+    if (!voiceConversationActive) return
+    const stop = () => {
+      setVoiceConversationActive(false)
+      void conversation.end()
+    }
+    const subscriptions = [
+      $gateway.listen(stop),
+      $activeGatewayRoute.listen(stop),
+      $gatewayState.listen(state => {
+        if (state !== 'open') stop()
+      })
+    ]
+    return () => subscriptions.forEach(unsubscribe => unsubscribe())
+  }, [conversation.end, voiceConversationActive])
+
+  const voiceSessionRef = useRef(sessionId)
+  useEffect(() => {
+    // A draft acquiring its first durable session belongs to the same turn.
+    // Navigating away from an existing conversation ends its capture loop.
+    if (voiceConversationActive && ((voiceSessionRef.current && voiceSessionRef.current !== sessionId) || disabled)) {
+      setVoiceConversationActive(false)
+      void conversation.end()
+    }
+    voiceSessionRef.current = sessionId
+  }, [conversation.end, disabled, sessionId, voiceConversationActive])
 
   // eslint-disable-next-line no-restricted-syntax -- ownership token used only by unmount cleanup
   useEffect(() => {
