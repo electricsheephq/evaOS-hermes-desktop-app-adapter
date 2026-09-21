@@ -80,10 +80,10 @@ class _StalledSummaryWorker:
             attempt = len(self.routes)
         if attempt <= self.stall_attempts:
             # Connection open, zero tokens, zero fence progress.
-            # Keep the fake provider hold bounded well below the fixture's
-            # total ceiling so a heavily scheduled host cannot strand the
-            # fallback retry behind this test-only worker.
-            self.release.wait(timeout=0.2)
+            # Hold far longer than the 0.05 s idle budget (a descheduled host must
+            # still see a stall, not a late normal return) and below the fixture's
+            # total ceiling; every test sets ``release`` in its ``finally``.
+            self.release.wait(timeout=2.0)
             return ([{"role": "assistant", "content": "late"}], "late-prompt")
         if not fence.begin_commit():
             return ([{"role": "assistant", "content": "cancelled"}], "cancelled")
