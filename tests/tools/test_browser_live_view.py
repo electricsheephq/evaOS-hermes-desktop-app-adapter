@@ -47,7 +47,7 @@ def test_named_session_returns_link_without_logging_it(
 
     assert result["success"] is True
     assert result["live_view_url"] == "https://watch.example/session"
-    assert result["hold_seconds"] == 900
+    assert result["min_hold_seconds"] >= 900
     assert "type into the remote page themselves" in result["instruction"]
     assert provider.seen == ["provider-session-1"]
     assert result["live_view_url"] not in caplog.text
@@ -63,7 +63,6 @@ def test_named_session_returns_link_without_logging_it(
 @pytest.mark.parametrize(
     "status,code,retryable",
     [
-        (404, "browser_session_not_found", False),
         (429, "browser_capacity", True),
         (503, "browser_unavailable", True),
     ],
@@ -87,6 +86,32 @@ def test_provider_error_codes_are_typed(
     assert result["retryable"] is retryable
     assert "https://" not in result["error"]
     assert browser_tool._session_last_activity["bu-named-research"] == 123.0
+
+
+def test_missing_provider_session_is_evicted(monkeypatch, existing_named_session):
+    error = CloudBrowserAPIError(
+        "debug request failed (code: browser_session_not_found)",
+        status_code=404,
+        code="browser_session_not_found",
+    )
+    provider = _FakeBrowserbase(error)
+    monkeypatch.setattr(
+        "tools.browser_tool_cloud._get_cloud_provider",
+        lambda: provider,
+    )
+
+    first = json.loads(live_view.browser_live_view(session="research"))
+
+    assert first["code"] == "browser_session_not_found"
+    assert first["retryable"] is False
+    assert "bu-named-research" not in browser_tool._active_sessions
+    assert "bu-named-research" not in browser_tool._session_last_activity
+
+    second = json.loads(live_view.browser_live_view(session="research"))
+
+    assert second["code"] == "browser_session_not_found"
+    assert "No active Browserbase session" in second["error"]
+    assert provider.seen == ["provider-session-1"]
 
 
 def test_missing_named_session_does_not_create_one(monkeypatch):
@@ -119,4 +144,4 @@ def test_schema_explains_human_takeover():
     description = live_view.BROWSER_LIVE_VIEW_SCHEMA["description"]
     assert "login, MFA, or payment" in description
     assert "user types into the remote page themselves" in description
-    assert "kept open for 15 minutes" in description
+    assert "kept open for at least 15 minutes" in description

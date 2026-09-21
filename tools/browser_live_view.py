@@ -37,7 +37,7 @@ def _existing_session(task_id: Optional[str], session: str) -> Dict[str, Any]:
 
 
 def browser_live_view(session: str = "", task_id: Optional[str] = None) -> str:
-    """Return a secure live-view URL for an existing named/default browser session."""
+    """Return a secure live-view URL and keep its session open for at least 15 minutes."""
     if session and not _SESSION_RE.match(session):
         return tool_error(
             f"Invalid session name {session!r}: use 1-64 letters, digits, dashes, or underscores.",
@@ -64,6 +64,18 @@ def browser_live_view(session: str = "", task_id: Optional[str] = None) -> str:
     except Exception as exc:
         code = str(getattr(exc, "code", "browser_live_view_failed"))
         status = getattr(exc, "status_code", None)
+        if code == "browser_session_not_found":
+            from tools import browser_tool
+
+            key = _backend_cache_key(task_id, session)
+            with browser_tool._cleanup_lock:
+                current = browser_tool._active_sessions.get(key)
+                if (
+                    isinstance(current, dict)
+                    and str(current.get("bb_session_id") or "") == provider_session_id
+                ):
+                    browser_tool._active_sessions.pop(key, None)
+                    browser_tool._session_last_activity.pop(key, None)
         message = {
             "browser_session_not_found": "The Browserbase session no longer exists.",
             "browser_capacity": "browser capacity reached — retry shortly",
@@ -88,7 +100,7 @@ def browser_live_view(session: str = "", task_id: Optional[str] = None) -> str:
     return tool_result(
         success=True,
         live_view_url=url,
-        hold_seconds=LIVE_VIEW_HOLD_SECONDS,
+        min_hold_seconds=LIVE_VIEW_HOLD_SECONDS,
         instruction="Send this link to the user. They type into the remote page themselves.",
     )
 
@@ -99,7 +111,7 @@ BROWSER_LIVE_VIEW_SCHEMA = {
         "Get a live-view link for an existing Browserbase session without creating a browser. Use when the "
         "user asks to watch, or when a step needs the human to act in the page (login, MFA, or payment). "
         "Send the link and say plainly that the user types into the remote page themselves. The session is "
-        "kept open for 15 minutes after the link is issued; call this tool again to extend the hold."
+        "kept open for at least 15 minutes after the link is issued; call this tool again to extend the hold."
     ),
     "parameters": {
         "type": "object",
