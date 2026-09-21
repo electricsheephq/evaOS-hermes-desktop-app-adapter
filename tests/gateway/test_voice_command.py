@@ -639,13 +639,16 @@ class TestVoiceChannelCommands:
         mock_adapter._voice_text_channels = {111: 123}
         mock_adapter._voice_sources = {111: _bound_discord_source().to_dict()}
         mock_adapter._voice_channel_ids = {111: 456}
+        mock_adapter._voice_capture_binding_valid = MagicMock(return_value=True)
         mock_adapter._voice_clients = {111: SimpleNamespace(channel=SimpleNamespace(id=456))}
         mock_channel = AsyncMock()
         mock_adapter._client = MagicMock()
         mock_adapter._client.get_channel = MagicMock(return_value=mock_channel)
         mock_adapter.handle_message = AsyncMock()
         runner.adapters[Platform.DISCORD] = mock_adapter
-        await runner._handle_voice_channel_input(111, 42, "Hello from VC", adapter=mock_adapter)
+        await runner._handle_voice_channel_input(
+            111, 42, "Hello from VC", adapter=mock_adapter, capture_generation=1,
+        )
         mock_adapter.handle_message.assert_called_once()
         event = mock_adapter.handle_message.call_args[0][0]
         assert event.text == "Hello from VC"
@@ -661,13 +664,16 @@ class TestVoiceChannelCommands:
         mock_adapter._voice_text_channels = {111: 123}
         mock_adapter._voice_sources = {111: _bound_discord_source().to_dict()}
         mock_adapter._voice_channel_ids = {111: 456}
+        mock_adapter._voice_capture_binding_valid = MagicMock(return_value=True)
         mock_adapter._voice_clients = {111: SimpleNamespace(channel=SimpleNamespace(id=456))}
         mock_adapter._client = MagicMock()
         mock_adapter._client.get_channel = MagicMock(return_value=AsyncMock())
         mock_adapter.handle_message = AsyncMock()
         mock_adapter._resolve_channel_prompt = MagicMock(return_value="Be terse in #dev.")
         runner.adapters[Platform.DISCORD] = mock_adapter
-        await runner._handle_voice_channel_input(111, 42, "Hello from VC", adapter=mock_adapter)
+        await runner._handle_voice_channel_input(
+            111, 42, "Hello from VC", adapter=mock_adapter, capture_generation=1,
+        )
         mock_adapter._resolve_channel_prompt.assert_called_once_with("123")
         event = mock_adapter.handle_message.call_args[0][0]
         assert event.channel_prompt == "Be terse in #dev."
@@ -690,6 +696,7 @@ class TestVoiceChannelCommands:
         mock_adapter = AsyncMock()
         mock_adapter._voice_text_channels = {111: 123}
         mock_adapter._voice_channel_ids = {111: 456}
+        mock_adapter._voice_capture_binding_valid = MagicMock(return_value=True)
         mock_adapter._voice_clients = {111: SimpleNamespace(channel=SimpleNamespace(id=456))}
         mock_adapter._voice_sources = {111: bound_source.to_dict()}
         mock_channel = AsyncMock()
@@ -698,7 +705,9 @@ class TestVoiceChannelCommands:
         mock_adapter.handle_message = AsyncMock()
         runner.adapters[Platform.DISCORD] = mock_adapter
 
-        await runner._handle_voice_channel_input(111, 42, "Hello from VC", adapter=mock_adapter)
+        await runner._handle_voice_channel_input(
+            111, 42, "Hello from VC", adapter=mock_adapter, capture_generation=1,
+        )
 
         mock_adapter.handle_message.assert_called_once()
         event = mock_adapter.handle_message.call_args[0][0]
@@ -746,6 +755,7 @@ class TestDiscordVoiceChannelMethods:
         adapter._voice_text_channels = {}
         adapter._voice_sources = {}
         adapter._voice_channel_ids = {}
+        adapter._voice_binding_generations = {}
         adapter._voice_timeout_tasks = {}
         adapter._voice_receivers = {}
         adapter._voice_listen_tasks = {}
@@ -939,6 +949,7 @@ class TestDiscordVoiceChannelMethods:
         adapter._voice_text_channels[111] = 123
         adapter._voice_sources[111] = {"platform": "discord", "chat_id": "123"}
         adapter._voice_channel_ids[111] = 456
+        adapter._voice_binding_generations[111] = 1
         adapter._voice_clients[111] = SimpleNamespace(
             channel=SimpleNamespace(id=456), is_connected=lambda: True,
         )
@@ -952,7 +963,9 @@ class TestDiscordVoiceChannelMethods:
              patch("tools.voice_mode.is_whisper_hallucination", return_value=False):
             await adapter._process_voice_input(111, 42, pcm_data)
 
-        callback.assert_called_once_with(guild_id=111, user_id=42, transcript="Hello")
+        callback.assert_called_once_with(
+            guild_id=111, user_id=42, transcript="Hello", capture_generation=1,
+        )
 
 
         # Should not raise
@@ -2103,6 +2116,7 @@ class TestDiscordVoiceCurrentPathInvariants:
         adapter._voice_text_channels = {}
         adapter._voice_sources = {}
         adapter._voice_channel_ids = {}
+        adapter._voice_binding_generations = {}
         adapter._voice_timeout_tasks = {}
         adapter._voice_receivers = {}
         adapter._voice_listen_tasks = {}
@@ -2228,6 +2242,7 @@ class TestDiscordVoiceCurrentPathInvariants:
         adapter._voice_text_channels[111] = 123
         adapter._voice_sources[111] = source.to_dict()
         adapter._voice_channel_ids[111] = 456
+        adapter._voice_binding_generations[111] = 1
         adapter._voice_clients[111] = SimpleNamespace(
             channel=SimpleNamespace(id=456), is_connected=lambda: True,
         )
@@ -2236,7 +2251,9 @@ class TestDiscordVoiceCurrentPathInvariants:
         adapter.handle_message = AsyncMock()
         runner.adapters = {Platform.DISCORD: adapter}
 
-        await runner._handle_voice_channel_input(111, 42, private_words, adapter=adapter)
+        await runner._handle_voice_channel_input(
+            111, 42, private_words, adapter=adapter, capture_generation=1,
+        )
 
         channel.send.assert_not_awaited()
         adapter.handle_message.assert_awaited_once()
@@ -2257,5 +2274,106 @@ class TestDiscordVoiceCurrentPathInvariants:
 
         adapter.handle_message.reset_mock()
         adapter._voice_sources.clear()
-        await runner._handle_voice_channel_input(111, 42, "second synthetic phrase", adapter=adapter)
+        await runner._handle_voice_channel_input(
+            111, 42, "second synthetic phrase", adapter=adapter, capture_generation=1,
+        )
         adapter.handle_message.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_late_live_reply_is_discarded_after_leave_and_rejoin(self, tmp_path):
+        from gateway.config import Platform
+
+        adapter = self._adapter()
+        adapter._voice_clients[111] = SimpleNamespace(
+            channel=SimpleNamespace(id=456), is_connected=lambda: True,
+        )
+        source = _bound_discord_source()
+        adapter._set_voice_binding(111, 456, 123, source.to_dict())
+        generation = adapter._voice_binding_generations[111]
+        adapter.play_in_voice_channel = AsyncMock(return_value=True)
+        adapter.send_voice = AsyncMock()
+        runner = _make_runner(tmp_path)
+        runner.adapters = {Platform.DISCORD: adapter}
+        event = MessageEvent(
+            source=source, text="synthetic request", message_type=MessageType.VOICE,
+            raw_message=SimpleNamespace(
+                guild_id=111, guild=None, voice_capture_generation=generation,
+            ),
+        )
+
+        adapter._clear_voice_binding(111)
+        await runner._deliver_voice_reply(event, ["/tmp/late.ogg"])
+        adapter._set_voice_binding(111, 456, 123, source.to_dict())
+        await runner._deliver_voice_reply(event, ["/tmp/late.ogg"])
+
+        adapter.play_in_voice_channel.assert_not_awaited()
+        adapter.send_voice.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_ordinary_tts_attachment_remains_available_outside_live_voice(self):
+        from gateway.platforms.base import SendResult
+
+        adapter = self._adapter()
+        adapter.send_voice = AsyncMock(return_value=SendResult(success=True, message_id="m1"))
+
+        result = await adapter.play_tts("123", "/tmp/ordinary.ogg", metadata={"notify": True})
+
+        assert result.success is True
+        adapter.send_voice.assert_awaited_once_with(
+            chat_id="123", audio_path="/tmp/ordinary.ogg", metadata={"notify": True},
+        )
+
+    @pytest.mark.asyncio
+    async def test_fallback_notices_are_request_bound_and_transcript_free(self):
+        adapter = self._adapter()
+        channel = AsyncMock()
+        adapter._client.get_channel.return_value = channel
+        adapter._voice_clients[111] = SimpleNamespace(
+            channel=SimpleNamespace(id=456), is_connected=lambda: True,
+        )
+        source = _bound_discord_source()
+        adapter._set_voice_binding(111, 456, 123, source.to_dict())
+        generation = adapter._voice_binding_generations[111]
+        adapter._is_allowed_user = MagicMock(return_value=True)
+        adapter._voice_input_callback = AsyncMock()
+        private_words = "synthetic private spoken phrase"
+        status = {
+            "success": True,
+            "transcript": private_words,
+            "primary_provider": "primary.stt",
+            "fallback_active": True,
+            "fallback_provider": "fallback.stt",
+            "fallback_reason": private_words,
+            "primary_error": private_words,
+        }
+        with patch("plugins.platforms.discord.adapter.VoiceReceiver.pcm_to_wav"), patch(
+            "tools.transcription_tools.transcribe_audio", return_value=status,
+        ), patch("tools.voice_mode.is_whisper_hallucination", return_value=False):
+            await adapter._process_voice_input(111, 42, b"pcm")
+
+        notice = channel.send.await_args.args[0]
+        assert "fallback.stt" in notice and "primary.stt" in notice
+        assert private_words not in notice
+        adapter._voice_input_callback.assert_awaited_once_with(
+            guild_id=111, user_id=42, transcript=private_words,
+            capture_generation=generation,
+        )
+
+        channel.send.reset_mock()
+        adapter.play_in_voice_channel = AsyncMock(return_value=True)
+        await adapter._play_tts_file(
+            MessageEvent(
+                source=source, text="request", message_type=MessageType.VOICE,
+                raw_message=SimpleNamespace(
+                    guild_id=111, guild=None, voice_capture_generation=generation,
+                ),
+            ), "reply", "/tmp/reply.ogg", False, {}, lambda _result: None,
+            provider_status={
+                "fallback_active": True, "primary_provider": "primary.tts",
+                "fallback_provider": "fallback.tts", "primary_error": private_words,
+            },
+        )
+        assert private_words not in channel.send.await_args.args[0]
+        adapter.play_in_voice_channel.assert_awaited_once_with(
+            111, "/tmp/reply.ogg", capture_generation=generation,
+        )

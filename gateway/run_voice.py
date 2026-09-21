@@ -27,6 +27,9 @@ logger = logging.getLogger("gateway.run")  # log-record parity with the origin m
 # Adapter-side per-chat auto-TTS override sets (``/voice off`` vs explicit ``/voice on``/``tts``).
 _OFF_SET, _ON_SET = "_auto_tts_disabled_chats", "_auto_tts_enabled_chats"
 _VOICE_MODES = {"off", "voice_only", "all"}
+_VOICE_PROVIDER_STATUS_KEYS = (
+    "primary_provider", "fallback_active", "fallback_provider", "fallback_reason", "primary_error",
+)
 
 
 class GatewayVoiceMixin:
@@ -134,6 +137,16 @@ class GatewayVoiceMixin:
         if getattr(raw, "guild_id", None):  # slash command interaction
             return int(raw.guild_id)
         return raw.guild.id if getattr(raw, "guild", None) else None  # regular message
+
+    @classmethod
+    def _live_voice_request(cls, event: MessageEvent) -> Optional[Dict[str, int]]:
+        raw = getattr(event, "raw_message", None)
+        generation = getattr(raw, "voice_capture_generation", None)
+        guild_id = cls._get_guild_id(event)
+        try:
+            return {"guild_id": int(guild_id), "generation": int(generation)}
+        except (TypeError, ValueError):
+            return None
 
     async def _handle_voice_channel_join(self, event: MessageEvent) -> str:
         adapter = self._adapter_for_source(event.source)
@@ -243,7 +256,8 @@ class GatewayVoiceMixin:
         return source
 
     async def _handle_voice_channel_input(
-        self, guild_id: int, user_id: int, transcript: str, *, adapter=None
+        self, guild_id: int, user_id: int, transcript: str, *, adapter=None,
+        capture_generation: Optional[int] = None,
     ):
         """Handle transcribed voice from a voice channel. ``adapter`` captured the audio; under
         multiplexing each profile's bot dispatches through its own adapter, never the default's."""
@@ -256,6 +270,10 @@ class GatewayVoiceMixin:
             text_ch_id and voice_ch_id and vc
             and getattr(getattr(vc, "channel", None), "id", None) == voice_ch_id
         ):
+            return
+        binding_valid = getattr(adapter, "_voice_capture_binding_valid", None)
+        if capture_generation is None or not callable(binding_valid) or not binding_valid(
+                guild_id, generation=capture_generation):
             return
         source = self._voice_input_source(adapter, guild_id, user_id, text_ch_id)
         if source is None:
@@ -284,6 +302,8 @@ class GatewayVoiceMixin:
                     safe_text = transcript[:2000].replace("@everyone", "@\u200beveryone")
                     safe_text = safe_text.replace("@here", "@\u200bhere")
                     await channel.send(f"**[Voice]** <@{user_id}>: {safe_text}")
+        if not binding_valid(guild_id, generation=capture_generation):
+            return
         # Bound text channel's channel_prompt: voice input gets the same per-channel context.
         channel_prompt = None
         if callable(resolver := getattr(adapter, "_resolve_channel_prompt", None)):
@@ -294,7 +314,9 @@ class GatewayVoiceMixin:
         # _get_guild_id() extract guild_id so _send_voice_reply() plays audio in the voice channel.
         event = MessageEvent(
             source=source, text=transcript, message_type=MessageType.VOICE,
-            raw_message=SimpleNamespace(guild_id=guild_id, guild=None),
+            raw_message=SimpleNamespace(
+                guild_id=guild_id, guild=None, voice_capture_generation=capture_generation,
+            ),
             channel_prompt=channel_prompt)
         await adapter.handle_message(event)
 
@@ -363,7 +385,10 @@ class GatewayVoiceMixin:
                 logger.warning("Auto voice reply TTS failed: %s", result.get("error"))
                 return
             actual_paths = paths
-            await self._deliver_voice_reply(event, actual_paths)
+            provider_status = {
+                key: result[key] for key in _VOICE_PROVIDER_STATUS_KEYS if key in result
+            }
+            await self._deliver_voice_reply(event, actual_paths, provider_status=provider_status)
         except Exception as e:
             logger.warning("Auto voice reply failed: %s", e, exc_info=True)
         finally:
@@ -371,12 +396,34 @@ class GatewayVoiceMixin:
                 with suppress(OSError):
                     os.unlink(p)
 
-    async def _deliver_voice_reply(self, event: MessageEvent, audio_paths: List[str]) -> None:
+    async def _deliver_voice_reply(
+        self, event: MessageEvent, audio_paths: List[str], *, provider_status: Optional[Dict] = None,
+    ) -> None:
         """Play the files in the connected voice channel, else send them as voice messages."""
         adapter = self._adapter_for_source(event.source)
         guild_id = self._get_guild_id(event)
         play = getattr(adapter, "play_in_voice_channel", None)
         is_in_vc = getattr(adapter, "is_in_voice_channel", None)
+        live_request = self._live_voice_request(event)
+        if hasattr(getattr(event, "raw_message", None), "voice_capture_generation") and live_request is None:
+            return
+        if live_request is not None:
+            request_guild = live_request["guild_id"]
+            generation = live_request["generation"]
+            binding_valid = getattr(adapter, "_voice_capture_binding_valid", None)
+            if not callable(binding_valid) or not binding_valid(
+                    request_guild, generation=generation):
+                return
+            notify = getattr(adapter, "_send_voice_fallback_notice", None)
+            if callable(notify):
+                await notify(request_guild, generation, "Speech", provider_status)
+            if not callable(play):
+                return
+            for path in audio_paths:
+                if not binding_valid(request_guild, generation=generation):
+                    return
+                await play(request_guild, path, capture_generation=generation)
+            return
         if guild_id and callable(play) and callable(is_in_vc) and is_in_vc(guild_id):
             for path in audio_paths:
                 await play(guild_id, path)

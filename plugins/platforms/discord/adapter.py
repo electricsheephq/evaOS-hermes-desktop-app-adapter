@@ -1126,6 +1126,7 @@ class DiscordAdapter(DiscordMediaMixin, BasePlatformAdapter):
         self._voice_text_channels: Dict[int, int] = {}  # guild_id -> text_channel_id
         self._voice_sources: Dict[int, Dict[str, Any]] = {}  # guild_id -> linked text channel source metadata
         self._voice_channel_ids: Dict[int, int] = {}  # guild_id -> approved voice channel
+        self._voice_binding_generations: Dict[int, int] = {}  # invalidates late replies on leave/rejoin
         self._voice_timeout_tasks: Dict[int, asyncio.Task] = {}  # guild_id -> timeout task
         self._voice_timeout_seconds = self._load_voice_timeout()
         self._playback_timeout_seconds = self._load_playback_timeout()
@@ -3244,6 +3245,23 @@ class DiscordAdapter(DiscordMediaMixin, BasePlatformAdapter):
 
     async def play_tts(self, chat_id: str, audio_path: str, **kwargs) -> SendResult:
         """Play auto-TTS audio: in the guild's VC if joined, else as a file attachment."""
+        metadata = kwargs.get("metadata")
+        request = metadata.get("_hermes_live_voice_request") if isinstance(metadata, dict) else None
+        if request is not None:
+            try:
+                guild_id = int(request["guild_id"])
+                generation = int(request["generation"])
+            except (KeyError, TypeError, ValueError):
+                return SendResult(success=False, error="invalid live voice request")
+            if not self._voice_capture_binding_valid(guild_id, generation=generation):
+                return SendResult(success=False, error="stale live voice request")
+            await self._send_voice_fallback_notice(
+                guild_id, generation, "Speech", metadata.get("_hermes_voice_provider_status"),
+            )
+            success = await self.play_in_voice_channel(
+                guild_id, audio_path, capture_generation=generation,
+            )
+            return SendResult(success=success)
         for gid, text_ch_id in self._voice_text_channels.items():
             if str(text_ch_id) == str(chat_id) and self.is_in_voice_channel(gid):
                 logger.info("[%s] Playing TTS in voice channel (guild=%d)", self.name, gid)
@@ -3507,6 +3525,7 @@ class DiscordAdapter(DiscordMediaMixin, BasePlatformAdapter):
 
     def _set_voice_binding(self, guild_id: int, voice_channel_id: int,
                            text_channel_id: int, source: dict) -> None:
+        self._advance_voice_binding_generation(guild_id)
         self._voice_text_channels[guild_id] = int(text_channel_id)
         self._voice_sources[guild_id] = source
         if not isinstance(getattr(self, "_voice_channel_ids", None), dict):
@@ -3514,6 +3533,7 @@ class DiscordAdapter(DiscordMediaMixin, BasePlatformAdapter):
         self._voice_channel_ids[guild_id] = int(voice_channel_id)
 
     def _clear_voice_binding(self, guild_id: int) -> None:
+        self._advance_voice_binding_generation(guild_id)
         self._voice_text_channels.pop(guild_id, None)
         self._voice_sources.pop(guild_id, None)
         getattr(self, "_voice_channel_ids", {}).pop(guild_id, None)
@@ -3555,22 +3575,59 @@ class DiscordAdapter(DiscordMediaMixin, BasePlatformAdapter):
             self._voice_listen_loop(guild_id)
         )
 
-    def _voice_capture_binding_valid(self, guild_id: int) -> bool:
+    def _advance_voice_binding_generation(self, guild_id: int) -> int:
+        generations = getattr(self, "_voice_binding_generations", None)
+        if not isinstance(generations, dict):
+            generations = self._voice_binding_generations = {}
+        generation = int(generations.get(guild_id, 0)) + 1
+        generations[guild_id] = generation
+        return generation
+
+    def _voice_capture_binding_valid(self, guild_id: int, *, generation: Optional[int] = None) -> bool:
         vc = self._voice_clients.get(guild_id)
         source = self._voice_sources.get(guild_id)
         text_channel_id = self._voice_text_channels.get(guild_id)
         voice_channel_id = getattr(self, "_voice_channel_ids", {}).get(guild_id)
+        current_generation = getattr(self, "_voice_binding_generations", {}).get(guild_id)
         return bool(
             vc and source and text_channel_id and voice_channel_id
+            and (generation is None or current_generation == generation)
             and vc.is_connected()
             and getattr(getattr(vc, "channel", None), "id", None) == voice_channel_id
             and str(source.get("chat_id", "")) == str(text_channel_id)
             and str(source.get("platform", "")) == "discord"
         )
 
+    @staticmethod
+    def _voice_provider_label(value: Any) -> str:
+        """Return a short inert provider label; free-form provider errors never enter chat."""
+        if not isinstance(value, str):
+            return ""
+        return "".join(ch for ch in value[:40] if ch.isalnum() or ch in "._-")
+
+    async def _send_voice_fallback_notice(
+        self, guild_id: int, generation: int, operation: str, status: Any,
+    ) -> None:
+        """Report a request-local fallback only while its exact voice binding is current."""
+        if not isinstance(status, dict) or not status.get("fallback_active"):
+            return
+        if not self._voice_capture_binding_valid(guild_id, generation=generation):
+            return
+        fallback = self._voice_provider_label(status.get("fallback_provider"))
+        primary = self._voice_provider_label(status.get("primary_provider"))
+        provider_text = f" `{fallback}`" if fallback else ""
+        primary_text = f" after `{primary}` was unavailable" if primary else ""
+        channel_id = self._voice_text_channels.get(guild_id)
+        channel = self._client.get_channel(channel_id) if self._client and channel_id else None
+        if channel:
+            with suppress(Exception):
+                await channel.send(f"{operation} used fallback provider{provider_text}{primary_text}.")
+
     async def leave_voice_channel(self, guild_id: int) -> None:
         """Disconnect from the voice channel in a guild."""
         async with self._voice_locks.setdefault(guild_id, asyncio.Lock()):
+            # Invalidate this capture generation before any await; late work must fail closed.
+            self._clear_voice_binding(guild_id)
             receiver = self._voice_receivers.pop(guild_id, None)
             pending_inputs = []
             if receiver:
@@ -3600,11 +3657,15 @@ class DiscordAdapter(DiscordMediaMixin, BasePlatformAdapter):
             task = self._voice_timeout_tasks.pop(guild_id, None)
             if task:
                 task.cancel()
-            self._clear_voice_binding(guild_id)
 
-    async def play_in_voice_channel(self, guild_id: int, audio_path: str) -> bool:
+    async def play_in_voice_channel(
+        self, guild_id: int, audio_path: str, *, capture_generation: Optional[int] = None,
+    ) -> bool:
         """Play audio in the VC: via the mixer (layered over the ambient bed, ducking it)
         when installed, else the legacy one-shot FFmpegPCMAudio path."""
+        if capture_generation is not None and not self._voice_capture_binding_valid(
+                guild_id, generation=capture_generation):
+            return False
         vc = self._voice_clients.get(guild_id)
         if not vc or not vc.is_connected():
             return False
@@ -3612,11 +3673,17 @@ class DiscordAdapter(DiscordMediaMixin, BasePlatformAdapter):
         self._cancel_voice_timeout(guild_id)
         try:
             playback_timeout = await self._playback_timeout_for_audio(audio_path)
+            if capture_generation is not None and not self._voice_capture_binding_valid(
+                    guild_id, generation=capture_generation):
+                return False
             # ── Mixer path (overlap + ducking) ──────────────────────────────
             mixer = getattr(self, "_voice_mixers", {}).get(guild_id) if getattr(self, "_voice_mixers", None) else None
             if mixer is not None:
                 decode_to_pcm = _voice_mixer_module().decode_to_pcm
                 pcm = await asyncio.to_thread(decode_to_pcm, audio_path)
+                if capture_generation is not None and not self._voice_capture_binding_valid(
+                        guild_id, generation=capture_generation):
+                    return False
                 if pcm:
                     speech_gain = float(self._voice_fx_cfg.get("speech_gain", 1.0))
                     mixer.play_speech(self._lead_silence_bytes() + pcm, gain=speech_gain)
@@ -3637,6 +3704,9 @@ class DiscordAdapter(DiscordMediaMixin, BasePlatformAdapter):
             try:
                 wait_start = time.monotonic()
                 while vc.is_playing():
+                    if capture_generation is not None and not self._voice_capture_binding_valid(
+                            guild_id, generation=capture_generation):
+                        return False
                     if time.monotonic() - wait_start > playback_timeout:
                         logger.warning("Timed out waiting for previous playback to finish")
                         vc.stop()
@@ -3662,6 +3732,9 @@ class DiscordAdapter(DiscordMediaMixin, BasePlatformAdapter):
                     audio_path, executable=resolve_ffmpeg_executable(), **ffmpeg_opts,
                 )
                 source = discord.PCMVolumeTransformer(source, volume=1.0)
+                if capture_generation is not None and not self._voice_capture_binding_valid(
+                        guild_id, generation=capture_generation):
+                    return False
                 vc.play(source, after=_after)
                 try:
                     await asyncio.wait_for(done.wait(), timeout=playback_timeout)
@@ -3673,7 +3746,8 @@ class DiscordAdapter(DiscordMediaMixin, BasePlatformAdapter):
                 if receiver:
                     receiver.resume()
         finally:
-            self._reset_voice_timeout(guild_id)
+            if capture_generation is None or self._voice_capture_binding_valid(guild_id, generation=capture_generation):
+                self._reset_voice_timeout(guild_id)
 
     async def get_user_voice_channel(self, guild_id: int, user_id: str):
         """Return the voice channel the user is currently in, or None."""
@@ -3834,7 +3908,9 @@ class DiscordAdapter(DiscordMediaMixin, BasePlatformAdapter):
     async def _process_voice_input(self, guild_id: int, user_id: int, pcm_data: bytes):
         """Convert PCM -> WAV -> STT -> callback."""
         from tools.voice_mode import is_whisper_hallucination
-        if not self._voice_capture_binding_valid(guild_id):
+        generation = getattr(self, "_voice_binding_generations", {}).get(guild_id)
+        if generation is None or not self._voice_capture_binding_valid(
+                guild_id, generation=generation):
             return
         guild = self._client.get_guild(guild_id) if self._client is not None else None
         if not self._is_allowed_user(str(user_id), guild=guild, is_dm=False):
@@ -3851,8 +3927,11 @@ class DiscordAdapter(DiscordMediaMixin, BasePlatformAdapter):
             transcript = result.get("transcript", "").strip()
             if not transcript or is_whisper_hallucination(transcript):
                 return
-            if not self._voice_capture_binding_valid(guild_id):
+            if not self._voice_capture_binding_valid(guild_id, generation=generation):
                 return
+            await self._send_voice_fallback_notice(
+                guild_id, generation, "Voice transcription", result,
+            )
             logger.info(
                 "Voice input transcribed (guild=%d user=%d chars=%d)",
                 guild_id, user_id, len(transcript),
@@ -3860,6 +3939,7 @@ class DiscordAdapter(DiscordMediaMixin, BasePlatformAdapter):
             if self._voice_input_callback:
                 await self._voice_input_callback(
                     guild_id=guild_id, user_id=user_id, transcript=transcript,
+                    capture_generation=generation,
                 )
         except Exception as e:
             # Surface ffmpeg's captured stderr from CalledProcessError, else log just says "exit status N".
