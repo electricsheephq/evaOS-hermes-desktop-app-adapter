@@ -661,7 +661,11 @@ export function usePromptActions({
       const result = await transcribeAudio(dataUrl, audio.type, scope)
       assertCurrent()
       if (result.fallback_active) {
-        notify({ kind: 'warning', title: 'Fish Audio → Speaches', message: result.primary_error })
+        notify({
+          kind: 'warning',
+          title: 'Fish Audio → Speaches',
+          message: result.primary_error ?? 'Using local speech fallback.'
+        })
       }
 
       return result.transcript

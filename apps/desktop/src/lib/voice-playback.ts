@@ -587,7 +587,11 @@ async function playSpeechDataUrl(
 
   const audio = new Audio(response.data_url)
   if (response.fallback_active) {
-    notify({ kind: 'warning', title: 'Fish Audio → Speaches', message: response.primary_error })
+    notify({
+      kind: 'warning',
+      title: 'Fish Audio → Speaches',
+      message: response.primary_error ?? 'Using local speech fallback.'
+    })
   }
   currentAudio = audio
   setVoicePlaybackState(currentState('speaking', options, audio))
