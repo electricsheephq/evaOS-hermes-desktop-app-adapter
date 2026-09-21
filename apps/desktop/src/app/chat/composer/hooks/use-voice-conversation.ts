@@ -156,7 +156,9 @@ export function useVoiceConversation({
       try {
         const result = await handle.stop()
 
-        if (generation !== generationRef.current) {return}
+        if (generation !== generationRef.current) {
+          return
+        }
 
         if (!result || (!result.heardSpeech && !forceTranscribe) || !onTranscribeAudio) {
           if (enabledRef.current && !mutedRef.current && !busyRef.current && statusRef.current !== 'speaking') {
@@ -171,7 +173,9 @@ export function useVoiceConversation({
         try {
           const transcript = (await onTranscribeAudio(result.audio)).trim()
 
-          if (generation !== generationRef.current || !enabledRef.current) {return}
+          if (generation !== generationRef.current || !enabledRef.current) {
+            return
+          }
 
           if (!transcript) {
             if (enabledRef.current) {
@@ -198,9 +202,14 @@ export function useVoiceConversation({
           awaitingSpokenResponseRef.current = true
           dropSpeechSession()
           await onSubmit(transcript)
+          if (generation !== generationRef.current || !enabledRef.current) {
+            return
+          }
           setStatus('thinking')
         } catch (error) {
-          if (generation !== generationRef.current) {return}
+          if (generation !== generationRef.current) {
+            return
+          }
           notifyError(error, voiceCopy.transcriptionFailed)
 
           if (enabledRef.current && !mutedRef.current && !busyRef.current) {
@@ -210,7 +219,9 @@ export function useVoiceConversation({
           setStatus('idle')
         }
       } finally {
-        if (generation === generationRef.current) {turnClosingRef.current = false}
+        if (generation === generationRef.current) {
+          turnClosingRef.current = false
+        }
       }
     },
     [handle, onSubmit, onTranscribeAudio, voiceCopy.transcriptionFailed]
@@ -281,7 +292,9 @@ export function useVoiceConversation({
       clearTurnTimeout()
       turnTimeoutRef.current = window.setTimeout(() => void handleTurn(), 60_000)
     } catch (error) {
-      if (generation !== generationRef.current) {return}
+      if (generation !== generationRef.current) {
+        return
+      }
       notifyError(error, voiceCopy.couldNotStartSession)
       pendingStartRef.current = false
       setStatus('idle')
@@ -356,7 +369,9 @@ export function useVoiceConversation({
       try {
         const transcript = (await onTranscribeAudio(audio)).trim()
 
-        if (generation !== generationRef.current || !enabledRef.current) {return}
+        if (generation !== generationRef.current || !enabledRef.current) {
+          return
+        }
 
         if (!transcript) {
           resumeListening()
@@ -382,16 +397,23 @@ export function useVoiceConversation({
         while (busyRef.current && Date.now() < deadline) {
           await new Promise(resolve => window.setTimeout(resolve, 100))
 
-          if (generation !== generationRef.current || !enabledRef.current) {return}
+          if (generation !== generationRef.current || !enabledRef.current) {
+            return
+          }
         }
 
         awaitingSpokenResponseRef.current = true
         dropSpeechSession()
         consumePendingResponse()
         await onSubmit(transcript)
+        if (generation !== generationRef.current || !enabledRef.current) {
+          return
+        }
         setStatus('thinking')
       } catch (error) {
-        if (generation !== generationRef.current) {return}
+        if (generation !== generationRef.current) {
+          return
+        }
         notifyError(error, voiceCopy.transcriptionFailed)
         resumeListening()
       }
@@ -422,7 +444,9 @@ export function useVoiceConversation({
     stopBargeMonitorRef.current = monitorSpeechDuringPlayback({
       isPlaying: () => $voicePlayback.get().status === 'speaking',
       onSpeech: () => {
-        if (generation !== generationRef.current || !enabledRef.current) {return}
+        if (generation !== generationRef.current || !enabledRef.current) {
+          return
+        }
         bargeCapturePendingRef.current = true
         bargedRef.current = true
         markVoicePlaybackInterrupted()
@@ -435,7 +459,9 @@ export function useVoiceConversation({
         }
       },
       onUtterance: audio => {
-        if (generation !== generationRef.current || !enabledRef.current) {return}
+        if (generation !== generationRef.current || !enabledRef.current) {
+          return
+        }
         bargeCapturePendingRef.current = false
         stopBargeMonitorRef.current = null
         void submitCapturedUtterance(audio)

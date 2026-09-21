@@ -163,6 +163,55 @@ describe('useVoiceConversation full-duplex barge-in', () => {
     expect(micHandle.cancel).toHaveBeenCalledTimes(cancellations + 1)
   })
 
+  it.each(['ordinary', 'interruption'] as const)(
+    'keeps an ended conversation idle when a pending %s submission completes',
+    async mode => {
+      const { hook, onSubmit } = renderConversation()
+
+      if (mode === 'interruption') {
+        await enterThinking(hook)
+        await waitFor(() => expect(monitorCalls.length).toBeGreaterThan(0))
+      } else {
+        await act(async () => {
+          await hook.result.current.start()
+        })
+        await waitFor(() => expect(hook.result.current.status).toBe('listening'))
+      }
+
+      let finishSubmission!: () => void
+      const submission = new Promise<void>(resolve => {
+        finishSubmission = resolve
+      })
+      onSubmit.mockImplementationOnce(() => submission)
+      const previousSubmissions = onSubmit.mock.calls.length
+
+      if (mode === 'interruption') {
+        const monitor = monitorCalls.at(-1)
+        act(() => monitor?.onSpeech())
+        hook.rerender({ busy: false })
+        act(() => {
+          monitor?.onUtterance?.(new Blob(['x'], { type: 'audio/webm' }))
+        })
+      } else {
+        micHandle.stop.mockResolvedValueOnce({
+          audio: new Blob(['q'], { type: 'audio/webm' }),
+          durationMs: 900,
+          heardSpeech: true
+        })
+        act(() => hook.result.current.stopTurn())
+      }
+
+      await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(previousSubmissions + 1))
+      act(() => hook.result.current.end())
+      expect(hook.result.current.status).toBe('idle')
+      await act(async () => {
+        finishSubmission()
+        await submission
+      })
+      expect(hook.result.current.status).toBe('idle')
+    }
+  )
+
   it('arms the barge monitor during generation (before any reply audio exists)', async () => {
     const { hook } = renderConversation()
 
