@@ -157,6 +157,41 @@ class TestPluginDiscovery:
         assert loaded == [legitimate]
         assert caplog.text.count("managed plugin identity") == 1
 
+    def test_managed_entrypoint_survives_and_same_name_user_shadow_does_not(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        from hermes_cli import managed_scope
+        from hermes_cli import plugins as plugins_mod
+
+        managed_dir = tmp_path / "managed-scope"
+        managed_dir.mkdir()
+        (managed_dir / "config.yaml").write_text(
+            "plugins:\n  enabled: [managed-plugin]\n", encoding="utf-8"
+        )
+        monkeypatch.setenv("HERMES_MANAGED_DIR", str(managed_dir))
+        managed_scope.invalidate_managed_cache()
+        shadow = PluginManifest(
+            name="managed-plugin", key="managed-plugin", source="user",
+            path=str(tmp_path / "home" / "plugins" / "managed-plugin"),
+        )
+        entrypoint = PluginManifest(
+            name="managed-plugin", key="managed-plugin", source="entrypoint",
+            path="vendor.corp:register",
+        )
+        manager = PluginManager()
+        monkeypatch.setattr(manager, "_collect_directory_manifests", lambda: [shadow])
+        monkeypatch.setattr(manager, "_scan_entry_points", lambda: [entrypoint])
+        monkeypatch.setattr(plugins_mod, "_get_enabled_plugins", lambda: {"managed-plugin"})
+        monkeypatch.setattr(plugins_mod, "_get_disabled_plugins", lambda: set())
+        loaded = []
+        monkeypatch.setattr(manager, "_load_plugin", loaded.append)
+
+        with caplog.at_level(logging.WARNING):
+            manager.discover_and_load()
+
+        assert loaded == [entrypoint]
+        assert caplog.text.count("managed plugin identity") == 1
+
     def test_portable_probe_skips_managed_plugin_name_shadow(self, tmp_path, monkeypatch, caplog):
         from hermes_cli import managed_scope
 

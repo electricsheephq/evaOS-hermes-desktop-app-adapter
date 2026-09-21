@@ -10,9 +10,10 @@ from agent.skill_utils import parse_frontmatter
 from hermes_constants import get_hermes_home
 from hermes_cli.config import load_config_readonly
 from hermes_cli.mcp_security import validate_mcp_server_entry
+from hermes_cli.plugins_discovery import discover_entrypoint_manifests, scan_directory
 from tools.plugin_guard import scan_plugin
-from tools.skill_usage import is_bundled
 from tools.skills_guard import scan_skill
+from tools.skills_sync import _matches_origin_hash, _read_manifest
 
 
 def _clean(text: object, limit: int = 120) -> str:
@@ -40,18 +41,23 @@ def _skill_name(skill_md: Path) -> str:
 def _rows(home: Path) -> list[tuple[str, str, str, str]]:
     rows: list[tuple[str, str, str, str]] = []
     plugins_dir = home / "plugins"
-    if plugins_dir.is_dir():
-        for plugin_dir in sorted(p for p in plugins_dir.iterdir() if p.is_dir() and not p.name.startswith(".")):
-            result = scan_plugin(plugin_dir, source="installed")
-            rows.append((plugin_dir.name, "plugin", result.verdict, _top_findings(result.findings)))
+    for manifest in scan_directory(plugins_dir, "user"):
+        plugin_dir = Path(manifest.path)
+        result = scan_plugin(plugin_dir, source="installed")
+        rows.append((manifest.key or manifest.name, "plugin", result.verdict,
+                     _top_findings(result.findings)))
+    for manifest in discover_entrypoint_manifests():
+        rows.append((manifest.key or manifest.name, "plugin", "caution",
+                     "entry-point target cannot be statically scanned; review its package source"))
 
     skills_dir = home / "skills"
+    bundled = _read_manifest()
     if skills_dir.is_dir():
         for skill_md in sorted(skills_dir.rglob("SKILL.md")):
             if any(part.startswith(".") for part in skill_md.relative_to(skills_dir).parts):
                 continue
             name = _skill_name(skill_md)
-            if is_bundled(name):
+            if name in bundled and _matches_origin_hash(skill_md.parent, bundled[name]):
                 continue
             result = scan_skill(skill_md.parent, source="installed")
             rows.append((name, "skill", result.verdict, _top_findings(result.findings)))

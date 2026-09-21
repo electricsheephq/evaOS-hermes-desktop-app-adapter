@@ -231,18 +231,34 @@ def filter_managed_plugin_candidates(manifests: Iterable[Any], key_fn: Callable[
     reserved = set(_name_list(plugins.get("enabled"))) if isinstance(plugins, dict) else set()
     if not reserved:
         return list(manifests)
-    eligible = []
-    for manifest in manifests:
-        key = key_fn(manifest)
-        claims = {key, getattr(manifest, "name", "")}
+    candidates = list(manifests)
+
+    def _claims(manifest: Any) -> set[str]:
+        values = {key_fn(manifest), getattr(manifest, "name", "")}
         aliases = getattr(manifest, "aliases", ())
         if isinstance(aliases, str):
-            claims.add(aliases)
+            values.add(aliases)
         elif isinstance(aliases, (list, tuple, set)):
-            claims.update(alias for alias in aliases if isinstance(alias, str))
-        matched = reserved & claims
+            values.update(alias for alias in aliases if isinstance(alias, str))
+        return values
+
+    trusted = set()
+    for manifest in candidates:
+        matched = reserved & _claims(manifest)
         directory = Path(str(getattr(manifest, "path", "") or "")).name
-        if matched and directory not in {name.rsplit("/", 1)[-1] for name in matched}:
+        source = getattr(manifest, "source", "")
+        if source not in {"user", "project"} and (
+            source == "entrypoint" or directory in {name.rsplit("/", 1)[-1] for name in matched}
+        ):
+            trusted.update(matched)
+    eligible = []
+    for manifest in candidates:
+        matched = reserved & _claims(manifest)
+        directory = Path(str(getattr(manifest, "path", "") or "")).name
+        source = getattr(manifest, "source", "")
+        wrong_directory = directory not in {name.rsplit("/", 1)[-1] for name in matched}
+        shadowing_trusted = source in {"user", "project"} and bool(matched & trusted)
+        if matched and source != "entrypoint" and (wrong_directory or shadowing_trusted):
             logger.warning(
                 "Skipping plugin directory %s: it claims managed plugin identity %s",
                 directory or "<non-directory>", ", ".join(sorted(matched)),

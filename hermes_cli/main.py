@@ -2104,6 +2104,17 @@ def cmd_verify(args):
 def cmd_security(args):
     """Dispatch `hermes security <subcmd>`."""
     sub = getattr(args, "security_command", None)
+    if sub == "review":
+        import runpy
+
+        from hermes_constants import get_hermes_home
+
+        script = get_hermes_home() / "skills/devops/security-review/scripts/security_review.py"
+        if not script.is_file():
+            print("security-review skill is not installed for this profile", file=sys.stderr)
+            sys.exit(1)
+        runpy.run_path(str(script), run_name="__main__")
+        return
     if sub in ("audit", None):
         from hermes_cli.security_audit import cmd_security_audit
 

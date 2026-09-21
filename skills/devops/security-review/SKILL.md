@@ -2,7 +2,7 @@
 name: security-review
 description: Audit installed plugins, skills, and MCP servers.
 version: 1.0.0
-author: Hermes Agent
+author: Eva (@100yenadmin), Hermes Agent
 license: MIT
 platforms: [linux, macos, windows]
 metadata:
@@ -30,7 +30,7 @@ Audit profile-installed plugins, non-bundled skills, and configured MCP servers 
 Run the bundled script with `terminal`:
 
 ```text
-python "$HERMES_HOME/skills/devops/security-review/scripts/security_review.py"
+hermes security review
 ```
 
 Show the complete table to the user.
