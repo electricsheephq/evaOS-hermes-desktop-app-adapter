@@ -14,13 +14,13 @@ logger = logging.getLogger("run_agent")
 
 
 def _overflow_warning_moot_after_compaction(agent, preflight_tokens: int) -> bool:
-    """True when a compaction just succeeded and its result fits the model's context window.
+    """True when a compaction just succeeded and its result fits the effective input window.
 
     ``CONTEXT_OVERFLOW_BLOCKED_WARNING_TEMPLATE`` measures against the COMPRESSION THRESHOLD,
     which is a fraction of the window (35% on many models). A successful compaction arms the
-    anti-thrash breaker, so a result that is over the threshold but comfortably inside the window
+    anti-thrash breaker, so a result that is over the threshold but inside the effective input window
     told the user "The model may stop responding" about a context the model answers fine. Only a
-    result still at or past the window keeps that failure-class warning; the dedup key is left
+    result still at or past the effective input window keeps that failure-class warning; the dedup key is left
     unset by the caller so a genuinely over-window turn can still warn. Module-level and fully
     getattr-guarded: test doubles built via ``object.__new__``/``SimpleNamespace`` carry neither
     the method nor a compressor, and must keep today's behaviour.
@@ -31,12 +31,15 @@ def _overflow_warning_moot_after_compaction(agent, preflight_tokens: int) -> boo
     context_length = getattr(compressor, "context_length", None)
     if not isinstance(context_length, int) or context_length <= 0:
         return False
-    if preflight_tokens >= context_length:
+    from agent.context_compressor import _effective_input_window
+
+    effective_window = _effective_input_window(context_length, getattr(compressor, "max_tokens", None))
+    if preflight_tokens >= effective_window:
         return False
     logger.info(
         "Compaction ran; ~%s tokens is over the compression threshold but within the model's "
-        "%s-token context window — not warning about a stalled model.",
-        preflight_tokens, context_length,
+        "%s-token effective input window — not warning about a stalled model.",
+        preflight_tokens, effective_window,
     )
     return True
 

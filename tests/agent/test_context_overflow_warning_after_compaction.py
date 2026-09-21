@@ -4,9 +4,9 @@
 THRESHOLD, a fraction of the model's context window.  A successful compaction
 arms the anti-thrash breaker, so the very next preflight sees "over threshold +
 compression blocked" and told the user *"The model may stop responding"* about a
-context that fits the window with room to spare.
+context that fits the effective input window with room to spare.
 
-Only the still-at-or-past-the-window case keeps that failure-class warning.
+Only the still-at-or-past-the-effective-input-window case keeps that warning.
 """
 from __future__ import annotations
 
@@ -20,9 +20,10 @@ from agent.status_output import StatusOutputMixin
 class _Agent(StatusOutputMixin):
     """Minimal carrier for the two methods under test."""
 
-    def __init__(self, *, context_length: int, awaiting: bool):
+    def __init__(self, *, context_length: int, awaiting: bool, max_tokens: int | None = None):
         self.context_compressor = SimpleNamespace(
             context_length=context_length,
+            max_tokens=max_tokens,
             awaiting_real_usage_after_compression=awaiting,
         )
         self.warnings: list[str] = []
@@ -64,6 +65,24 @@ def test_warning_kept_when_the_result_is_still_at_the_window():
     assert len(agent.warnings) == 1
     assert "The model may stop responding" in agent.warnings[0]
     assert agent._last_ctx_overflow_warn == ("ctx_overflow_blocked", "ineffective")
+
+
+def test_warning_kept_when_result_exceeds_reserved_input_window():
+    agent = _Agent(context_length=100_000, max_tokens=20_000, awaiting=True)
+
+    agent._warn_context_overflow_blocked("ineffective", 90_000, _THRESHOLD)
+
+    assert len(agent.warnings) == 1
+    assert "The model may stop responding" in agent.warnings[0]
+
+
+def test_no_warning_when_result_fits_reserved_input_window():
+    agent = _Agent(context_length=100_000, max_tokens=20_000, awaiting=True)
+
+    agent._warn_context_overflow_blocked("ineffective", 70_000, _THRESHOLD)
+
+    assert agent.warnings == []
+    assert agent._last_ctx_overflow_warn is None
 
 
 def test_warning_kept_when_no_compaction_ran():

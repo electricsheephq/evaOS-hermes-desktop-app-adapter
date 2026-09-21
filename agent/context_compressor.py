@@ -1675,6 +1675,12 @@ Describe agent/tool work only as completed actions, state, or historical work.]"
 }
 
 
+def _effective_input_window(context_length: int, max_tokens: int | None = None) -> int:
+    """Return the provider's usable input window, preserving over-reservation fallback."""
+    effective_window = context_length - (max_tokens or 0)
+    return context_length if effective_window <= 0 else effective_window
+
+
 class ContextCompressor(SummaryDispatchMixin, MicroCompactionMixin, ContextEngine):
     """Default context engine: prune tool results, protect head/tail, summarize the middle
     with an LLM, and iteratively update the previous summary on later compactions."""
@@ -2277,9 +2283,7 @@ class ContextCompressor(SummaryDispatchMixin, MicroCompactionMixin, ContextEngin
         the degenerate-window check below both operate on the effective input budget. ``max_tokens=None``
         (provider default) conservatively assumes no reservation (full window).
         """
-        effective_window = context_length - (max_tokens or 0)
-        if effective_window <= 0:
-            effective_window = context_length
+        effective_window = _effective_input_window(context_length, max_tokens)
         pct_value = int(effective_window * threshold_percent)
         floored = max(pct_value, MINIMUM_CONTEXT_LENGTH)
         # The floor must not consume output headroom: cap at 85% when it is the binding term. Near-minimum windows
