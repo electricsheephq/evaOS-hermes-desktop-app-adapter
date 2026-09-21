@@ -111,12 +111,27 @@ describe('BrowserRealProfilePanel', () => {
     expect(mocks.notifyError).toHaveBeenCalled()
   })
 
-  it('disables the writer for a remote managed profile', () => {
+  it('disables enabling for a remote managed profile', () => {
     $connection.set({ mode: 'remote' } as NonNullable<ReturnType<typeof $connection.get>>)
     render(<BrowserRealProfilePanel />)
 
     expect(screen.getByRole('switch', { name: 'Use My Real Browser Profile' })).toHaveProperty('disabled', true)
     expect(screen.getByText('Available only when this profile uses the local runtime.')).toBeTruthy()
     expect(mocks.save).not.toHaveBeenCalled()
+  })
+
+  it('allows a remote managed profile to turn the setting off', async () => {
+    $connection.set({ mode: 'remote' } as NonNullable<ReturnType<typeof $connection.get>>)
+    mocks.loadedConfig = { browser: { use_real_profile: true } }
+    render(<BrowserRealProfilePanel />)
+    const toggle = screen.getByRole('switch', { name: 'Use My Real Browser Profile' })
+
+    expect(toggle).toHaveProperty('disabled', false)
+
+    await act(async () => {
+      fireEvent.click(toggle)
+    })
+
+    expect(mocks.save).toHaveBeenCalledWith({ browser: { use_real_profile: false } }, undefined)
   })
 })

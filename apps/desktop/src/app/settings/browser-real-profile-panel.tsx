@@ -53,7 +53,7 @@ export function BrowserRealProfilePanel({ profile }: BrowserRealProfilePanelProp
 
   const toggle = useCallback(
     async (on: boolean) => {
-      if (!config || remoteManagedProfile) {
+      if (!config || (remoteManagedProfile && on)) {
         return
       }
 
@@ -88,7 +88,7 @@ export function BrowserRealProfilePanel({ profile }: BrowserRealProfilePanelProp
     <ToggleRow
       checked={enabled}
       description={remoteManagedProfile ? copy.remoteDescription : copy.description}
-      disabled={remoteManagedProfile || busy || !config}
+      disabled={(remoteManagedProfile && !enabled) || busy || !config}
       label={copy.label}
       onChange={on => void toggle(on)}
     />
