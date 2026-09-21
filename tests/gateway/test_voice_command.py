@@ -2181,6 +2181,69 @@ class TestDiscordVoiceCurrentPathInvariants:
         assert len(completed[0][1]) == VoiceReceiver.BYTES_PER_SECOND
         assert len(receiver._buffers[100]) == 0
 
+    def test_unknown_non_dave_ssrc_is_dropped_before_decrypt(self):
+        import struct
+
+        from plugins.platforms.discord.adapter import VoiceReceiver
+
+        conn = MagicMock()
+        conn.secret_key = [1] * 32
+        conn.dave_session = None
+        conn.ssrc = 9999
+        conn.hook = None
+        vc = MagicMock()
+        vc._connection = conn
+        vc.user = SimpleNamespace(id=9999)
+        vc.channel.members = []
+        allowed = MagicMock(return_value=True)
+        receiver = VoiceReceiver(vc, is_user_allowed=allowed)
+        receiver.start()
+        decoder = receiver._decoders[100] = MagicMock()
+        packet = struct.pack(">BBHII", 0x80, 0x78, 1, 960, 100) + b"ciphertext" + b"\x00\x00\x00\x01"
+        nacl = ModuleType("nacl")
+        nacl_secret = ModuleType("nacl.secret")
+        nacl_secret.Aead = MagicMock()
+        nacl.secret = nacl_secret
+
+        with patch.dict(sys.modules, {"nacl": nacl, "nacl.secret": nacl_secret}):
+            receiver._on_packet(packet)
+
+        nacl_secret.Aead.assert_not_called()
+        decoder.decode.assert_not_called()
+        allowed.assert_not_called()
+
+        receiver.map_ssrc(100, 42)
+        nacl_secret.Aead.return_value.decrypt.return_value = b"opus"
+        decoder.decode.return_value = b"pcm"
+        with patch.dict(sys.modules, {"nacl": nacl, "nacl.secret": nacl_secret}):
+            receiver._on_packet(packet)
+        allowed.assert_called_once_with(42)
+        decoder.decode.assert_called_once_with(b"opus")
+
+    @pytest.mark.asyncio
+    async def test_transient_disconnect_keeps_listener_until_transport_refresh(self):
+        adapter = self._adapter()
+        vc = MagicMock()
+        vc.channel.id = 456
+        vc.is_connected.side_effect = [False, True, True]
+        adapter._voice_clients[111] = vc
+        adapter._set_voice_binding(111, 456, 123, _bound_discord_source().to_dict())
+        receiver = MagicMock()
+        receiver._running = True
+
+        def finish_after_refresh():
+            receiver._running = False
+            return []
+
+        receiver.check_silence.side_effect = finish_after_refresh
+        adapter._voice_receivers[111] = receiver
+
+        with patch("plugins.platforms.discord.adapter.asyncio.sleep", new=AsyncMock()):
+            await adapter._voice_listen_loop(111)
+
+        receiver.refresh_connection.assert_called_once_with()
+        assert vc.is_connected.call_count == 3
+
     @pytest.mark.asyncio
     async def test_voice_rejoin_rebinds_capture(self):
         from plugins.platforms.discord import adapter as discord_mod

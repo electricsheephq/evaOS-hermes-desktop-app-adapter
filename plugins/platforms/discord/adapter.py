@@ -822,7 +822,7 @@ class VoiceReceiver:
             user_id = self._ssrc_to_user.get(ssrc, 0)
         if not user_id and dave_session:
             user_id = self._infer_user_for_ssrc(ssrc)
-        if dave_session and not user_id:
+        if not user_id:
             return
         if user_id and self._is_user_allowed is not None:
             try:
@@ -3583,7 +3583,10 @@ class DiscordAdapter(DiscordMediaMixin, BasePlatformAdapter):
         generations[guild_id] = generation
         return generation
 
-    def _voice_capture_binding_valid(self, guild_id: int, *, generation: Optional[int] = None) -> bool:
+    def _voice_capture_binding_current(
+        self, guild_id: int, *, generation: Optional[int] = None,
+    ) -> bool:
+        """True while the logical capture binding is current, even during transport reconnect."""
         vc = self._voice_clients.get(guild_id)
         source = self._voice_sources.get(guild_id)
         text_channel_id = self._voice_text_channels.get(guild_id)
@@ -3592,10 +3595,18 @@ class DiscordAdapter(DiscordMediaMixin, BasePlatformAdapter):
         return bool(
             vc and source and text_channel_id and voice_channel_id
             and (generation is None or current_generation == generation)
-            and vc.is_connected()
-            and getattr(getattr(vc, "channel", None), "id", None) == voice_channel_id
             and str(source.get("chat_id", "")) == str(text_channel_id)
             and str(source.get("platform", "")) == "discord"
+        )
+
+    def _voice_capture_binding_valid(self, guild_id: int, *, generation: Optional[int] = None) -> bool:
+        if not self._voice_capture_binding_current(guild_id, generation=generation):
+            return False
+        vc = self._voice_clients.get(guild_id)
+        voice_channel_id = getattr(self, "_voice_channel_ids", {}).get(guild_id)
+        return bool(
+            vc.is_connected()
+            and getattr(getattr(vc, "channel", None), "id", None) == voice_channel_id
         )
 
     @staticmethod
@@ -3872,6 +3883,11 @@ class DiscordAdapter(DiscordMediaMixin, BasePlatformAdapter):
         try:
             while receiver._running:
                 await asyncio.sleep(0.2)
+                if not self._voice_capture_binding_current(guild_id):
+                    break
+                vc = self._voice_clients.get(guild_id)
+                if not vc or not vc.is_connected():
+                    continue
                 receiver.refresh_connection()
                 if not self._voice_capture_binding_valid(guild_id):
                     break
