@@ -1309,7 +1309,8 @@ def _enable_gateway_prompts() -> None:
 
 
 # Blocking bridges whose `*.respond` tolerates a late reply (allow_expired=True): on timeout the tool
-# returns empty, but a slow renderer could still answer and hit a raw 4009 — `.expire` tears the card down.
+# returns empty (or clarify's canonical sentinel), but a slow renderer could still answer and hit a raw
+# 4009 — `.expire` tears the card down.
 _EXPIRING_REQUESTS = frozenset({
     "secret.request", "sudo.request", "vault.unlock.request", "vault.save_login.request", "vault.code.request", "clarify.request",
     "terminal.read.request",
@@ -1382,6 +1383,9 @@ def _block(
         return json.dumps(result, ensure_ascii=False)
     if not answered and not answer_present and event in _EXPIRING_REQUESTS:
         expire()
+    if not answered and not answer_present and event == "clarify.request":
+        from tools.clarify_tool import TIMEOUT_RESPONSE
+        return TIMEOUT_RESPONSE
     return answer
 
 

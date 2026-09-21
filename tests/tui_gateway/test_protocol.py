@@ -331,9 +331,15 @@ def test_sensitive_prompt_timeout_emits_expiry(capture, event):
         "history_lock": threading.Lock(),
     }
     try:
-        assert server._block(event, "s1", {}, timeout=0) == ""
+        result = server._block(event, "s1", {}, timeout=0)
     finally:
         server._sessions.pop("s1", None)
+
+    if event == "clarify.request":
+        from tools.clarify_tool import TIMEOUT_RESPONSE
+        assert result == TIMEOUT_RESPONSE
+    else:
+        assert result == ""
 
     messages = [json.loads(line) for line in buf.getvalue().splitlines()]
     request, expiry = [message["params"] for message in messages]
@@ -341,6 +347,34 @@ def test_sensitive_prompt_timeout_emits_expiry(capture, event):
     assert expiry["type"] == event.removesuffix(".request") + ".expire"
     assert expiry["session_id"] == "s1"
     assert expiry["payload"]["request_id"] == request["payload"]["request_id"]
+
+
+def test_clarify_explicit_empty_response_remains_a_cancel(server):
+    """An explicit empty answer is distinct from an unanswered deadline."""
+    box = {}
+    thread = threading.Thread(
+        target=lambda: box.setdefault(
+            "answer", server._block("clarify.request", "s1", {}, timeout=5)
+        ),
+        daemon=True,
+    )
+    thread.start()
+    deadline = time.monotonic() + 2
+    rid = None
+    while time.monotonic() < deadline and rid is None:
+        with server._prompt_lock:
+            rid = next(iter(server._pending), None)
+        time.sleep(0.01)
+    assert rid
+
+    response = server.handle_request({
+        "id": "cancel", "method": "clarify.respond",
+        "params": {"request_id": rid, "answer": ""},
+    })
+    thread.join(timeout=5)
+
+    assert response["result"] == {"status": "ok"}
+    assert box["answer"] == ""
 
 
 @pytest.mark.parametrize(

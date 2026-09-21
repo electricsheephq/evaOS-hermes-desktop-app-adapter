@@ -10,7 +10,9 @@ from tools.clarify_tool import (
     MAX_CHOICES,
     MAX_QUESTIONS,
     CLARIFY_SCHEMA,
+    TIMEOUT_RESPONSE,
     _flatten_choice,
+    _is_timeout,
 )
 
 
@@ -78,6 +80,35 @@ class TestClarifyToolCallbackHandling:
         assert "error" in result
         assert "Failed to get user input" in result["error"]
         assert "User cancelled" in result["error"]
+
+    def test_timeout_guidance_reaches_model_and_stays_detectable(self):
+        """The canonical timeout text is both model guidance and the equality sentinel."""
+        result = json.loads(clarify_tool(
+            "May I continue?", callback=lambda question, choices: TIMEOUT_RESPONSE,
+        ))
+
+        assert result["user_response"] == TIMEOUT_RESPONSE
+        assert _is_timeout(result["user_response"])
+        assert TIMEOUT_RESPONSE.startswith(
+            "The user did not provide a response within the time limit. "
+        )
+        assert TIMEOUT_RESPONSE.count(".") == 2
+        for required in (
+            "safe to undo", "inside this conversation", "never send", "invite", "book",
+            "pay", "delete", "outside the conversation", "on a guess", "still waiting",
+            "ask again",
+        ):
+            assert required in TIMEOUT_RESPONSE
+
+    def test_multi_select_timeout_preserves_canonical_sentinel(self):
+        """Comma-rich timeout guidance must not be parsed as selected choices."""
+        result = json.loads(clarify_tool(
+            "Pick any", choices=["one", "two"], multi_select=True,
+            callback=lambda question, choices, multi_select=False: TIMEOUT_RESPONSE,
+        ))
+
+        assert result["user_response"] == TIMEOUT_RESPONSE
+        assert _is_timeout(result["user_response"])
 
 
     def test_user_response_stripped(self):
@@ -676,3 +707,17 @@ class TestRegistryBatchPassThrough:
         ))
         assert seen["questions"][0]["question"] == "Go?"
         assert result["responses"][0]["user_response"] == "yes"
+
+    def test_handler_batch_timeout_includes_canonical_guidance(self):
+        """The advertised questions shape must expose the timeout guidance to the model."""
+        from tools.registry import registry
+        entry = registry.get_entry("clarify")
+
+        result = json.loads(entry.handler(
+            {"questions": [{"question": "Go?"}]},
+            callback=lambda *args, **kwargs: TIMEOUT_RESPONSE,
+        ))
+
+        assert result["timed_out"] is True
+        assert result["timeout_guidance"] == TIMEOUT_RESPONSE
+        assert _is_timeout(result["timeout_guidance"])
