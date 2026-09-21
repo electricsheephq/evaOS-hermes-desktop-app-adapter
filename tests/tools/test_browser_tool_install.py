@@ -35,7 +35,7 @@ def _agent_browser_executable(build_dir):
     pytest.skip(f"agent-browser does not provide a Chrome install layout for {sys.platform}")
 
 
-def test_agent_browser_layout_is_detected(tmp_path):
+def _assert_agent_browser_layout_is_detected(tmp_path):
     executable = _agent_browser_executable(
         tmp_path / ".agent-browser" / "browsers" / "chrome-140.0.7339.82"
     )
@@ -44,6 +44,21 @@ def test_agent_browser_layout_is_detected(tmp_path):
     executable.chmod(0o755)
 
     assert bt_install._chromium_installed() is True
+
+
+@pytest.mark.linux_only
+def test_linux_agent_browser_layout_is_detected(tmp_path):
+    _assert_agent_browser_layout_is_detected(tmp_path)
+
+
+@pytest.mark.macos_only
+def test_macos_agent_browser_layout_is_detected(tmp_path):
+    _assert_agent_browser_layout_is_detected(tmp_path)
+
+
+@pytest.mark.windows_only
+def test_windows_agent_browser_layout_is_detected(tmp_path):
+    _assert_agent_browser_layout_is_detected(tmp_path)
 
 
 def test_playwright_layout_remains_detected(monkeypatch, tmp_path):
