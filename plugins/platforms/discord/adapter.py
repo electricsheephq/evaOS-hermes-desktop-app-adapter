@@ -686,13 +686,17 @@ class VoiceReceiver:
         """Stop listening and clean up."""
         self._running = False
         self._detach_connection()
+        self._clear_transport_epoch()
+        logger.info("VoiceReceiver stopped")
+
+    def _clear_transport_epoch(self) -> None:
+        """Discard audio and decoder identity that cannot cross a crypto/session epoch."""
         with self._lock:
             self._buffers.clear()
             self._last_packet_time.clear()
             self._ready_buffers.clear()
             self._decoders.clear()
             self._ssrc_to_user.clear()
-        logger.info("VoiceReceiver stopped")
 
     def _read_transport_state(self, conn) -> None:
         """Read the live crypto/session state; Discord may rotate it without replacing ``conn``."""
@@ -727,16 +731,19 @@ class VoiceReceiver:
         """Rebind a replaced voice transport and discard audio from the prior crypto epoch."""
         conn = self._vc._connection
         if conn is self._connection:
-            with suppress(Exception):
+            try:
+                previous = (self._secret_key, self._dave_session, self._bot_ssrc)
                 self._read_transport_state(conn)
+                current = (self._secret_key, self._dave_session, self._bot_ssrc)
+                if (previous[0] != current[0] or previous[1] is not current[1]
+                        or previous[2] != current[2]):
+                    self._clear_transport_epoch()
+                    logger.info("VoiceReceiver cleared state for refreshed crypto epoch")
+            except Exception:
+                logger.debug("VoiceReceiver transport state not ready; will retry", exc_info=True)
             return False
         self._detach_connection()
-        with self._lock:
-            self._buffers.clear()
-            self._last_packet_time.clear()
-            self._ready_buffers.clear()
-            self._decoders.clear()
-            self._ssrc_to_user.clear()
+        self._clear_transport_epoch()
         try:
             self._attach_connection(conn)
         except Exception:
@@ -3473,6 +3480,18 @@ class DiscordAdapter(DiscordMediaMixin, BasePlatformAdapter):
         mixers = getattr(self, "_voice_mixers", None)
         return bool(mixers) and mixers.get(guild_id) is not None
 
+    def _stop_voice_playback(self, guild_id: int, vc=None) -> None:
+        """Stop and detach every outgoing audio source before a voice binding changes."""
+        mixer = getattr(self, "_voice_mixers", {}).pop(guild_id, None)
+        if mixer is not None:
+            with suppress(Exception):
+                mixer.stop_speech()
+        vc = vc or self._voice_clients.get(guild_id)
+        if vc is not None:
+            with suppress(Exception):
+                if vc.is_playing():
+                    vc.stop()
+
     async def join_voice_channel(self, channel, *, text_channel_id: int = None, source: dict = None) -> bool:
         """Join a voice channel; returns True on success. ``text_channel_id`` stores the
         transcription-routing binding so programmatic joins work without ``/voice join``."""
@@ -3491,20 +3510,22 @@ class DiscordAdapter(DiscordMediaMixin, BasePlatformAdapter):
             if existing and existing.is_connected():
                 await self._stop_voice_capture(guild_id)
                 self._clear_voice_binding(guild_id)
-                if existing.channel.id == channel.id:
-                    if capture_approved:
-                        self._set_voice_binding(guild_id, channel.id, text_channel_id, source)
-                        self._start_voice_capture(guild_id, existing)
-                    self._reset_voice_timeout(guild_id)
-                    return True
-                await existing.move_to(channel)
+                self._stop_voice_playback(guild_id, existing)
+                if existing.channel.id != channel.id:
+                    await existing.move_to(channel)
                 if capture_approved:
                     self._set_voice_binding(guild_id, channel.id, text_channel_id, source)
                     self._start_voice_capture(guild_id, existing)
+                if getattr(self, "_voice_fx_cfg", {}).get("enabled"):
+                    try:
+                        await self._install_voice_mixer(guild_id, existing)
+                    except Exception as e:
+                        logger.warning("Voice mixer failed to restart: %s", e)
                 self._reset_voice_timeout(guild_id)
                 return True
             await self._stop_voice_capture(guild_id)
             self._clear_voice_binding(guild_id)
+            self._stop_voice_playback(guild_id, existing)
             vc = await channel.connect()
             self._voice_clients[guild_id] = vc
             self._reset_voice_timeout(guild_id)
