@@ -334,6 +334,7 @@ def _text_to_speech_single(
     Command providers resolve BEFORE built-in dispatch, but built-in names short-circuit so
     ``tts.providers.openai.command`` can't shadow OpenAI. Plugins fire only for names that are
     neither; a None return falls through to built-in dispatch (unknown -> Edge default)."""
+    provider_metadata: Dict[str, Any] = {}
     try:
         if command_provider_config is not None:
             logger.info("Generating speech with command TTS provider '%s'...", provider)
@@ -346,7 +347,7 @@ def _text_to_speech_single(
         # bottom. The dispatcher itself enforces built-ins-always-win + command-wins-over-plugin
         # defensively.
         elif provider not in BUILTIN_TTS_PROVIDERS and (
-            _plugin_path := _dispatch_to_plugin_provider(text, file_str, provider, tts_config)
+            _plugin_path := _dispatch_to_plugin_provider(text, file_str, provider, tts_config, provider_metadata)
         ) is not None:
             file_str = _plugin_path
         else:
@@ -365,6 +366,7 @@ def _text_to_speech_single(
         return json.dumps({
             "success": True, "file_path": file_str, "media_tag": _media_tag([file_str], voice_compatible),
             "provider": provider, "voice_compatible": voice_compatible,
+            **provider_metadata,
         }, ensure_ascii=False)
     except ValueError as e:
         return _tool_failure("TTS configuration error", provider, e)
@@ -453,12 +455,15 @@ def text_to_speech_tool(
             encoded_paths, str(delivery_base), delivery_profile, voice_compatible=voice_compatible)
         for path in final_paths:
             logger.info("TTS audio saved: %s (%s bytes, provider: %s)", path, f"{os.path.getsize(path):,}", provider)
+        from tools.tts_tool_plugins import voice_provider_metadata
+        status = next((r for r in chunk_results if r.get("fallback_active")), chunk_results[0])
         return json.dumps({
             "success": True, "file_path": final_paths[0], "file_paths": final_paths,
             "media_tag": _media_tag(final_paths, voice_compatible),
             "provider": chunk_results[0].get("provider", provider), "voice_compatible": voice_compatible,
             "chunk_count": len(chunks), "delivery_file_count": len(final_paths),
             "combined_chunks": bool(combined_chunks),
+            **voice_provider_metadata(status),
             "delivery_profile": {
                 "platform": delivery_profile.platform, "max_file_bytes": delivery_profile.max_file_bytes,
                 "target_file_bytes": delivery_profile.target_file_bytes},

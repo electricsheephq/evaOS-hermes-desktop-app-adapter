@@ -134,7 +134,13 @@ async def transcribe_audio_upload(
     return {
         "ok": True, "transcript": str(result.get("transcript") or "").strip(),
         "provider": result.get("provider"),
+        **_voice_provider_metadata(result),
     }
+
+
+def _voice_provider_metadata(result):
+    from tools.tts_tool_plugins import voice_provider_metadata
+    return voice_provider_metadata(result)
 
 
 @router.get("/api/audio/voice-config")
@@ -301,6 +307,7 @@ async def speak_text(payload: TTSSpeakRequest, profile: Optional[str] = None):
     return {
         "ok": True, "data_url": f"data:{mime_type};base64,{encoded}", "mime_type": mime_type,
         "provider": result.get("provider"),
+        **_voice_provider_metadata(result),
     }
 
 
