@@ -643,51 +643,108 @@ class VoiceReceiver:
     MIN_SPEECH_DURATION = 0.5  # minimum seconds to process (skip noise)
     SAMPLE_RATE = 48000        # Discord native rate
     CHANNELS = 2               # Discord sends stereo
+    BYTES_PER_SECOND = SAMPLE_RATE * CHANNELS * 2
+    DEFAULT_MAX_BUFFER_SECONDS = 30
 
-    def __init__(self, voice_client, allowed_user_ids: set = None):
+    def __init__(self, voice_client, allowed_user_ids: set = None,
+                 max_buffer_seconds: int = DEFAULT_MAX_BUFFER_SECONDS,
+                 is_user_allowed: Optional[Callable[[int], bool]] = None):
         self._vc = voice_client
         self._allowed_user_ids = allowed_user_ids or set()
+        self._is_user_allowed = is_user_allowed
         self._running = False
+        self._connection = None
         self._secret_key: Optional[bytes] = None
         self._dave_session = None
         self._bot_ssrc: int = 0
         self._ssrc_to_user: Dict[int, int] = {}
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._buffers: Dict[int, bytearray] = defaultdict(bytearray)
         self._last_packet_time: Dict[int, float] = {}
+        self._max_buffer_bytes = max(1, int(max_buffer_seconds)) * self.BYTES_PER_SECOND
+        self._ready_buffers: set[int] = set()
         # Opus decoder per SSRC (each user needs own decoder state)
         self._decoders: Dict[int, object] = {}
         # Pause flag: don't capture while bot is playing TTS
         self._paused = False
         # Debug logging counter (instance-level to avoid cross-instance races)
         self._packet_debug_count = 0
+        self._hook_connection = None
+        self._hook_wrapper = None
+        self._original_hook = None
 
     # --- Lifecycle ---
 
     def start(self):
         """Start listening for voice packets."""
         conn = self._vc._connection
-        self._secret_key = bytes(conn.secret_key)
-        self._dave_session = conn.dave_session
-        self._bot_ssrc = conn.ssrc
-        self._install_speaking_hook(conn)
-        conn.add_socket_listener(self._on_packet)
+        self._attach_connection(conn)
         self._running = True
         logger.info("VoiceReceiver started (bot_ssrc=%d)", self._bot_ssrc)
 
     def stop(self):
         """Stop listening and clean up."""
         self._running = False
-        try:
-            self._vc._connection.remove_socket_listener(self._on_packet)
-        except Exception:
-            pass
+        self._detach_connection()
         with self._lock:
             self._buffers.clear()
             self._last_packet_time.clear()
+            self._ready_buffers.clear()
             self._decoders.clear()
             self._ssrc_to_user.clear()
         logger.info("VoiceReceiver stopped")
+
+    def _read_transport_state(self, conn) -> None:
+        """Read the live crypto/session state; Discord may rotate it without replacing ``conn``."""
+        self._secret_key = bytes(conn.secret_key)
+        self._dave_session = conn.dave_session
+        self._bot_ssrc = conn.ssrc
+
+    def _attach_connection(self, conn) -> None:
+        self._connection = conn
+        self._read_transport_state(conn)
+        self._install_speaking_hook(conn)
+        conn.add_socket_listener(self._on_packet)
+
+    def _detach_connection(self) -> None:
+        conn = self._connection
+        if conn is None:
+            return
+        with suppress(Exception):
+            conn.remove_socket_listener(self._on_packet)
+        if conn is self._hook_connection and getattr(conn, "hook", None) is self._hook_wrapper:
+            conn.hook = self._original_hook
+        with suppress(Exception):
+            from discord.utils import MISSING
+            if getattr(conn, "ws", MISSING) is not MISSING and conn.ws._hook is self._hook_wrapper:
+                conn.ws._hook = self._original_hook
+        self._connection = None
+        self._hook_connection = None
+        self._hook_wrapper = None
+        self._original_hook = None
+
+    def refresh_connection(self) -> bool:
+        """Rebind a replaced voice transport and discard audio from the prior crypto epoch."""
+        conn = self._vc._connection
+        if conn is self._connection:
+            with suppress(Exception):
+                self._read_transport_state(conn)
+            return False
+        self._detach_connection()
+        with self._lock:
+            self._buffers.clear()
+            self._last_packet_time.clear()
+            self._ready_buffers.clear()
+            self._decoders.clear()
+            self._ssrc_to_user.clear()
+        try:
+            self._attach_connection(conn)
+        except Exception:
+            self._detach_connection()
+            logger.debug("VoiceReceiver transport not ready; will retry", exc_info=True)
+            return False
+        logger.info("VoiceReceiver rebound to current transport (bot_ssrc=%d)", self._bot_ssrc)
+        return True
 
     def pause(self):
         self._paused = True
@@ -704,7 +761,7 @@ class VoiceReceiver:
     def _install_speaking_hook(self, conn):
         """Wrap the voice websocket hook to capture SPEAKING events (op 5); ``conn.hook`` is
         re-passed on each (re)connect, so wrap it on the state AND the live websocket."""
-        original_hook = conn.hook
+        original_hook = getattr(conn.hook, "_hermes_voice_original_hook", conn.hook)
         receiver_self = self
 
         async def wrapped_hook(ws, msg):
@@ -717,6 +774,10 @@ class VoiceReceiver:
                     receiver_self.map_ssrc(int(ssrc), int(user_id))
             if original_hook:
                 await original_hook(ws, msg)
+        wrapped_hook._hermes_voice_original_hook = original_hook
+        self._hook_connection = conn
+        self._hook_wrapper = wrapped_hook
+        self._original_hook = original_hook
         conn.hook = wrapped_hook
         try:
             from discord.utils import MISSING
@@ -730,6 +791,15 @@ class VoiceReceiver:
 
     def _on_packet(self, data: bytes):
         if not self._running or self._paused:
+            return
+        conn = self._vc._connection
+        if conn is not self._connection:
+            return  # the event-loop listener refresh owns transport replacement
+        try:
+            secret_key = bytes(conn.secret_key)
+            dave_session = conn.dave_session
+            bot_ssrc = conn.ssrc
+        except Exception:
             return
         self._packet_debug_count += 1
         if self._packet_debug_count <= 5:
@@ -746,8 +816,20 @@ class VoiceReceiver:
             return
         first_byte = data[0]
         _, _, seq, timestamp, ssrc = struct.unpack_from(">BBHII", data, 0)
-        if ssrc == self._bot_ssrc:
+        if ssrc == bot_ssrc:
             return
+        with self._lock:
+            user_id = self._ssrc_to_user.get(ssrc, 0)
+        if not user_id and dave_session:
+            user_id = self._infer_user_for_ssrc(ssrc)
+        if dave_session and not user_id:
+            return
+        if user_id and self._is_user_allowed is not None:
+            try:
+                if not self._is_user_allowed(user_id):
+                    return
+            except Exception:
+                return
         # Calculate dynamic RTP header size (RFC 9335 / rtpsize mode)
         cc = first_byte & 0x0F  # CSRC count
         has_extension = bool(first_byte & 0x10)  # extension bit
@@ -778,7 +860,7 @@ class VoiceReceiver:
         encrypted = bytes(payload_with_nonce[:-4])
         try:
             import nacl.secret  # noqa: E402 — delayed import, only in voice path
-            box = nacl.secret.Aead(self._secret_key)
+            box = nacl.secret.Aead(secret_key)
             decrypted = box.decrypt(encrypted, header, bytes(nonce))
         except Exception as e:
             if self._packet_debug_count <= 10:
@@ -805,34 +887,39 @@ class VoiceReceiver:
             if not decrypted:
                 return
         # --- DAVE E2EE decrypt ---
-        if self._dave_session:
-            with self._lock:
-                user_id = self._ssrc_to_user.get(ssrc, 0)
-            if user_id:
-                try:
-                    import davey
-                    decrypted = self._dave_session.decrypt(
-                        user_id, davey.MediaType.audio, decrypted
-                    )
-                except Exception as e:
-                    # Unencrypted passthrough — use NaCl-decrypted data as-is
-                    if "Unencrypted" not in str(e):
-                        if self._packet_debug_count <= 10:
-                            logger.warning("DAVE decrypt failed for ssrc=%d: %s", ssrc, e)
-                        return
-            # Unknown SSRC (no SPEAKING yet): skip DAVE, try Opus directly; user_id arrives with SPEAKING.
+        if dave_session:
+            try:
+                import davey
+                decrypted = dave_session.decrypt(user_id, davey.MediaType.audio, decrypted)
+            except Exception as e:
+                # Unencrypted passthrough — use NaCl-decrypted data as-is.
+                if "Unencrypted" not in str(e):
+                    if self._packet_debug_count <= 10:
+                        logger.warning("DAVE decrypt failed for ssrc=%d: %s", ssrc, e)
+                    return
         try:
             if ssrc not in self._decoders:
                 self._decoders[ssrc] = discord.opus.Decoder()
             pcm = self._decoders[ssrc].decode(decrypted)
-            with self._lock:
-                self._buffers[ssrc].extend(pcm)
-                self._last_packet_time[ssrc] = time.monotonic()
+            self._buffer_pcm(ssrc, pcm)
         except Exception as e:
             with self._lock:
                 self._decoders.pop(ssrc, None)
             logger.debug("Opus decode error for SSRC %s; reset decoder: %s", ssrc, e)
             return
+
+    def _buffer_pcm(self, ssrc: int, pcm: bytes) -> None:
+        """Append decoded PCM up to the configured ceiling, then mark it ready to flush."""
+        with self._lock:
+            if ssrc in self._ready_buffers:
+                return
+            buf = self._buffers[ssrc]
+            remaining = self._max_buffer_bytes - len(buf)
+            if remaining > 0:
+                buf.extend(pcm[:remaining])
+                self._last_packet_time[ssrc] = time.monotonic()
+            if len(buf) >= self._max_buffer_bytes:
+                self._ready_buffers.add(ssrc)
 
     # --- Silence detection ---
 
@@ -847,11 +934,14 @@ class VoiceReceiver:
             allowed = self._allowed_user_ids
             candidates = [
                 m.id for m in channel.members
-                if m.id != bot_id and (not allowed or str(m.id) in allowed)
+                if m.id != bot_id
+                and (not allowed or "*" in allowed or str(m.id) in allowed)
+                and (self._is_user_allowed is None or self._is_user_allowed(m.id))
             ]
             if len(candidates) == 1:
                 uid = candidates[0]
-                self._ssrc_to_user[ssrc] = uid
+                with self._lock:
+                    self._ssrc_to_user[ssrc] = uid
                 logger.info("Auto-mapped ssrc=%d -> user=%d (sole allowed member)", ssrc, uid)
                 return uid
         except Exception:
@@ -871,7 +961,8 @@ class VoiceReceiver:
                 buf = self._buffers[ssrc]
                 # 48kHz, 16-bit, stereo = 192000 bytes/sec
                 buf_duration = len(buf) / (self.SAMPLE_RATE * self.CHANNELS * 2)
-                if silence_duration >= self.SILENCE_THRESHOLD and buf_duration >= self.MIN_SPEECH_DURATION:
+                at_hard_limit = ssrc in self._ready_buffers
+                if (at_hard_limit or silence_duration >= self.SILENCE_THRESHOLD) and buf_duration >= self.MIN_SPEECH_DURATION:
                     user_id = ssrc_user_map.get(ssrc, 0)
                     if not user_id:
                         # SSRC unmapped (SPEAKING missing after rejoin) — infer from channel.
@@ -880,10 +971,12 @@ class VoiceReceiver:
                         completed.append((user_id, bytes(buf)))
                     self._buffers[ssrc] = bytearray()
                     self._last_packet_time.pop(ssrc, None)
+                    self._ready_buffers.discard(ssrc)
                 elif silence_duration >= self.SILENCE_THRESHOLD * 2:
                     # Stale buffer with no valid user — discard
                     self._buffers.pop(ssrc, None)
                     self._last_packet_time.pop(ssrc, None)
+                    self._ready_buffers.discard(ssrc)
         return completed
 
     def flush_pending(self) -> list:
@@ -902,6 +995,7 @@ class VoiceReceiver:
                         completed.append((user_id, bytes(buf)))
                 self._buffers.pop(ssrc, None)
                 self._last_packet_time.pop(ssrc, None)
+                self._ready_buffers.discard(ssrc)
         return completed
 
     # --- PCM -> WAV conversion (for Whisper STT) ---
@@ -1001,6 +1095,7 @@ class DiscordAdapter(DiscordMediaMixin, BasePlatformAdapter):
 
     # Voice auto-disconnect after N idle seconds (discord.voice_channel_inactivity_timeout_seconds; 0 off).
     VOICE_TIMEOUT = 300
+    VOICE_INPUT_MAX_SECONDS = 30
     # Minimum wait for one voice playback; the effective limit scales with clip duration.
     PLAYBACK_TIMEOUT = 120
     PLAYBACK_TIMEOUT_PADDING = 30
@@ -1030,9 +1125,11 @@ class DiscordAdapter(DiscordMediaMixin, BasePlatformAdapter):
         self._pending_text_batch_tasks: Dict[str, asyncio.Task] = {}
         self._voice_text_channels: Dict[int, int] = {}  # guild_id -> text_channel_id
         self._voice_sources: Dict[int, Dict[str, Any]] = {}  # guild_id -> linked text channel source metadata
+        self._voice_channel_ids: Dict[int, int] = {}  # guild_id -> approved voice channel
         self._voice_timeout_tasks: Dict[int, asyncio.Task] = {}  # guild_id -> timeout task
         self._voice_timeout_seconds = self._load_voice_timeout()
         self._playback_timeout_seconds = self._load_playback_timeout()
+        self._voice_input_max_seconds = self.VOICE_INPUT_MAX_SECONDS
         self._voice_receivers: Dict[int, VoiceReceiver] = {}  # guild_id -> VoiceReceiver
         self._voice_listen_tasks: Dict[int, asyncio.Task] = {}  # guild_id -> listen loop
         self._voice_input_callback: Optional[Callable] = None  # set by run.py
@@ -3364,29 +3461,40 @@ class DiscordAdapter(DiscordMediaMixin, BasePlatformAdapter):
         if not self._client or not DISCORD_AVAILABLE:
             return False
         guild_id = channel.guild.id
+        source_chat_id = str(source.get("chat_id", "")) if isinstance(source, dict) else ""
+        source_platform = str(source.get("platform", "")) if isinstance(source, dict) else ""
+        capture_approved = (
+            text_channel_id is not None
+            and source_chat_id == str(text_channel_id)
+            and source_platform == "discord"
+        )
         async with self._voice_locks.setdefault(guild_id, asyncio.Lock()):
             existing = self._voice_clients.get(guild_id)
             if existing and existing.is_connected():
+                await self._stop_voice_capture(guild_id)
+                self._clear_voice_binding(guild_id)
                 if existing.channel.id == channel.id:
+                    if capture_approved:
+                        self._set_voice_binding(guild_id, channel.id, text_channel_id, source)
+                        self._start_voice_capture(guild_id, existing)
                     self._reset_voice_timeout(guild_id)
                     return True
                 await existing.move_to(channel)
+                if capture_approved:
+                    self._set_voice_binding(guild_id, channel.id, text_channel_id, source)
+                    self._start_voice_capture(guild_id, existing)
                 self._reset_voice_timeout(guild_id)
                 return True
+            await self._stop_voice_capture(guild_id)
+            self._clear_voice_binding(guild_id)
             vc = await channel.connect()
             self._voice_clients[guild_id] = vc
             self._reset_voice_timeout(guild_id)
-            if text_channel_id is not None:
-                self._voice_text_channels[guild_id] = text_channel_id
-            if source is not None:
-                self._voice_sources[guild_id] = source
+            if capture_approved:
+                self._set_voice_binding(guild_id, channel.id, text_channel_id, source)
             try:
-                receiver = VoiceReceiver(vc, allowed_user_ids=self._allowed_user_ids)
-                receiver.start()
-                self._voice_receivers[guild_id] = receiver
-                self._voice_listen_tasks[guild_id] = asyncio.ensure_future(
-                    self._voice_listen_loop(guild_id)
-                )
+                if capture_approved:
+                    self._start_voice_capture(guild_id, vc)
             except Exception as e:
                 logger.warning("Voice receiver failed to start: %s", e)
             # Mixer is best-effort; failure falls back to one-shot FFmpegPCMAudio playback.
@@ -3396,6 +3504,69 @@ class DiscordAdapter(DiscordMediaMixin, BasePlatformAdapter):
                 except Exception as e:
                     logger.warning("Voice mixer failed to start: %s", e)
             return True
+
+    def _set_voice_binding(self, guild_id: int, voice_channel_id: int,
+                           text_channel_id: int, source: dict) -> None:
+        self._voice_text_channels[guild_id] = int(text_channel_id)
+        self._voice_sources[guild_id] = source
+        if not isinstance(getattr(self, "_voice_channel_ids", None), dict):
+            self._voice_channel_ids = {}
+        self._voice_channel_ids[guild_id] = int(voice_channel_id)
+
+    def _clear_voice_binding(self, guild_id: int) -> None:
+        self._voice_text_channels.pop(guild_id, None)
+        self._voice_sources.pop(guild_id, None)
+        getattr(self, "_voice_channel_ids", {}).pop(guild_id, None)
+
+    async def _stop_voice_capture(self, guild_id: int) -> None:
+        """Stop the installed receiver/listener generation without touching the voice client."""
+        receiver = self._voice_receivers.get(guild_id)
+        listen_task = self._voice_listen_tasks.get(guild_id)
+        if receiver:
+            receiver.stop()
+        if listen_task:
+            listen_task.cancel()
+            if isinstance(listen_task, asyncio.Future) and listen_task is not asyncio.current_task():
+                with suppress(asyncio.CancelledError):
+                    await listen_task
+        if self._voice_receivers.get(guild_id) is receiver:
+            self._voice_receivers.pop(guild_id, None)
+        if self._voice_listen_tasks.get(guild_id) is listen_task:
+            self._voice_listen_tasks.pop(guild_id, None)
+
+    def _start_voice_capture(self, guild_id: int, vc) -> None:
+        """Start one receiver after the exact voice/text/source tuple has been installed."""
+        if guild_id in self._voice_receivers or not self._voice_capture_binding_valid(guild_id):
+            return
+        guild = self._client.get_guild(guild_id) if self._client is not None else None
+        receiver = VoiceReceiver(
+            vc,
+            allowed_user_ids=self._allowed_user_ids,
+            max_buffer_seconds=getattr(
+                self, "_voice_input_max_seconds", self.VOICE_INPUT_MAX_SECONDS,
+            ),
+            is_user_allowed=lambda user_id: self._is_allowed_user(
+                str(user_id), guild=guild, is_dm=False,
+            ),
+        )
+        receiver.start()
+        self._voice_receivers[guild_id] = receiver
+        self._voice_listen_tasks[guild_id] = asyncio.ensure_future(
+            self._voice_listen_loop(guild_id)
+        )
+
+    def _voice_capture_binding_valid(self, guild_id: int) -> bool:
+        vc = self._voice_clients.get(guild_id)
+        source = self._voice_sources.get(guild_id)
+        text_channel_id = self._voice_text_channels.get(guild_id)
+        voice_channel_id = getattr(self, "_voice_channel_ids", {}).get(guild_id)
+        return bool(
+            vc and source and text_channel_id and voice_channel_id
+            and vc.is_connected()
+            and getattr(getattr(vc, "channel", None), "id", None) == voice_channel_id
+            and str(source.get("chat_id", "")) == str(text_channel_id)
+            and str(source.get("platform", "")) == "discord"
+        )
 
     async def leave_voice_channel(self, guild_id: int) -> None:
         """Disconnect from the voice channel in a guild."""
@@ -3408,6 +3579,9 @@ class DiscordAdapter(DiscordMediaMixin, BasePlatformAdapter):
             listen_task = self._voice_listen_tasks.pop(guild_id, None)
             if listen_task:
                 listen_task.cancel()
+                if isinstance(listen_task, asyncio.Future) and listen_task is not asyncio.current_task():
+                    with suppress(asyncio.CancelledError):
+                        await listen_task
             guild = self._client.get_guild(guild_id) if self._client is not None else None
             for user_id, pcm_data in pending_inputs:
                 if self._is_allowed_user(str(user_id), guild=guild, is_dm=False):
@@ -3426,8 +3600,7 @@ class DiscordAdapter(DiscordMediaMixin, BasePlatformAdapter):
             task = self._voice_timeout_tasks.pop(guild_id, None)
             if task:
                 task.cancel()
-            self._voice_text_channels.pop(guild_id, None)
-            self._voice_sources.pop(guild_id, None)
+            self._clear_voice_binding(guild_id)
 
     async def play_in_voice_channel(self, guild_id: int, audio_path: str) -> bool:
         """Play audio in the VC: via the mixer (layered over the ambient bed, ducking it)
@@ -3625,6 +3798,9 @@ class DiscordAdapter(DiscordMediaMixin, BasePlatformAdapter):
         try:
             while receiver._running:
                 await asyncio.sleep(0.2)
+                receiver.refresh_connection()
+                if not self._voice_capture_binding_valid(guild_id):
+                    break
                 now = time.monotonic()
                 if now - last_keepalive >= self._KEEPALIVE_INTERVAL:
                     last_keepalive = now
@@ -3647,10 +3823,22 @@ class DiscordAdapter(DiscordMediaMixin, BasePlatformAdapter):
             pass
         except Exception as e:
             logger.error("Voice listen loop error: %s", e, exc_info=True)
+        finally:
+            receiver.stop()
+            current_task = asyncio.current_task()
+            if self._voice_receivers.get(guild_id) is receiver:
+                self._voice_receivers.pop(guild_id, None)
+            if self._voice_listen_tasks.get(guild_id) is current_task:
+                self._voice_listen_tasks.pop(guild_id, None)
 
     async def _process_voice_input(self, guild_id: int, user_id: int, pcm_data: bytes):
         """Convert PCM -> WAV -> STT -> callback."""
         from tools.voice_mode import is_whisper_hallucination
+        if not self._voice_capture_binding_valid(guild_id):
+            return
+        guild = self._client.get_guild(guild_id) if self._client is not None else None
+        if not self._is_allowed_user(str(user_id), guild=guild, is_dm=False):
+            return
         tmp_f = tempfile.NamedTemporaryFile(suffix=".wav", prefix="vc_listen_", delete=False)
         wav_path = tmp_f.name
         tmp_f.close()
@@ -3663,7 +3851,12 @@ class DiscordAdapter(DiscordMediaMixin, BasePlatformAdapter):
             transcript = result.get("transcript", "").strip()
             if not transcript or is_whisper_hallucination(transcript):
                 return
-            logger.info("Voice input from user %d: %s", user_id, transcript[:100])
+            if not self._voice_capture_binding_valid(guild_id):
+                return
+            logger.info(
+                "Voice input transcribed (guild=%d user=%d chars=%d)",
+                guild_id, user_id, len(transcript),
+            )
             if self._voice_input_callback:
                 await self._voice_input_callback(
                     guild_id=guild_id, user_id=user_id, transcript=transcript,

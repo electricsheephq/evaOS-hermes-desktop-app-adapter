@@ -3,13 +3,14 @@
 import asyncio
 import importlib.util
 import json
+import logging
 import os
 import queue
 import sys
 import threading
 import time
 import pytest
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 
@@ -54,6 +55,20 @@ _ensure_discord_mock()
 
 from gateway.platforms.base import SessionSource
 from gateway.platforms.event import MessageEvent, MessageType
+
+
+def _bound_discord_source(chat_id: str = "123", profile: str = None):
+    """Synthetic source metadata for the exact Discord text destination under test."""
+    from gateway.config import Platform
+
+    source = SessionSource(
+        chat_id=chat_id,
+        user_id="requester",
+        platform=Platform.DISCORD,
+        chat_type="channel",
+        profile=profile,
+    )
+    return source
 
 
 # ---------------------------------------------------------------------------
@@ -376,6 +391,7 @@ class TestDiscordPlayTtsSkip:
         adapter._voice_locks = {}
         adapter._voice_text_channels = {}
         adapter._voice_sources = {}
+        adapter._voice_channel_ids = {}
         adapter._voice_timeout_tasks = {}
         adapter._voice_receivers = {}
         adapter._voice_listen_tasks = {}
@@ -570,8 +586,11 @@ class TestVoiceChannelCommands:
         assert "joined" in result.lower()
         assert "General" in result
         assert runner._voice_mode["discord:123"] == "all"
-        assert mock_adapter._voice_sources[111]["chat_id"] == "123"
-        assert mock_adapter._voice_sources[111]["chat_type"] == "group"
+        mock_adapter.join_voice_channel.assert_awaited_once_with(
+            mock_channel,
+            text_channel_id=123,
+            source=event.source.to_dict(),
+        )
 
 
     @pytest.mark.asyncio
@@ -618,13 +637,15 @@ class TestVoiceChannelCommands:
         from gateway.config import Platform
         mock_adapter = AsyncMock()
         mock_adapter._voice_text_channels = {111: 123}
-        mock_adapter._voice_sources = {}
+        mock_adapter._voice_sources = {111: _bound_discord_source().to_dict()}
+        mock_adapter._voice_channel_ids = {111: 456}
+        mock_adapter._voice_clients = {111: SimpleNamespace(channel=SimpleNamespace(id=456))}
         mock_channel = AsyncMock()
         mock_adapter._client = MagicMock()
         mock_adapter._client.get_channel = MagicMock(return_value=mock_channel)
         mock_adapter.handle_message = AsyncMock()
         runner.adapters[Platform.DISCORD] = mock_adapter
-        await runner._handle_voice_channel_input(111, 42, "Hello from VC")
+        await runner._handle_voice_channel_input(111, 42, "Hello from VC", adapter=mock_adapter)
         mock_adapter.handle_message.assert_called_once()
         event = mock_adapter.handle_message.call_args[0][0]
         assert event.text == "Hello from VC"
@@ -638,13 +659,15 @@ class TestVoiceChannelCommands:
         from gateway.config import Platform
         mock_adapter = AsyncMock()
         mock_adapter._voice_text_channels = {111: 123}
-        mock_adapter._voice_sources = {}
+        mock_adapter._voice_sources = {111: _bound_discord_source().to_dict()}
+        mock_adapter._voice_channel_ids = {111: 456}
+        mock_adapter._voice_clients = {111: SimpleNamespace(channel=SimpleNamespace(id=456))}
         mock_adapter._client = MagicMock()
         mock_adapter._client.get_channel = MagicMock(return_value=AsyncMock())
         mock_adapter.handle_message = AsyncMock()
         mock_adapter._resolve_channel_prompt = MagicMock(return_value="Be terse in #dev.")
         runner.adapters[Platform.DISCORD] = mock_adapter
-        await runner._handle_voice_channel_input(111, 42, "Hello from VC")
+        await runner._handle_voice_channel_input(111, 42, "Hello from VC", adapter=mock_adapter)
         mock_adapter._resolve_channel_prompt.assert_called_once_with("123")
         event = mock_adapter.handle_message.call_args[0][0]
         assert event.channel_prompt == "Be terse in #dev."
@@ -666,6 +689,8 @@ class TestVoiceChannelCommands:
 
         mock_adapter = AsyncMock()
         mock_adapter._voice_text_channels = {111: 123}
+        mock_adapter._voice_channel_ids = {111: 456}
+        mock_adapter._voice_clients = {111: SimpleNamespace(channel=SimpleNamespace(id=456))}
         mock_adapter._voice_sources = {111: bound_source.to_dict()}
         mock_channel = AsyncMock()
         mock_adapter._client = MagicMock()
@@ -673,7 +698,7 @@ class TestVoiceChannelCommands:
         mock_adapter.handle_message = AsyncMock()
         runner.adapters[Platform.DISCORD] = mock_adapter
 
-        await runner._handle_voice_channel_input(111, 42, "Hello from VC")
+        await runner._handle_voice_channel_input(111, 42, "Hello from VC", adapter=mock_adapter)
 
         mock_adapter.handle_message.assert_called_once()
         event = mock_adapter.handle_message.call_args[0][0]
@@ -720,10 +745,12 @@ class TestDiscordVoiceChannelMethods:
         adapter._voice_locks = {}
         adapter._voice_text_channels = {}
         adapter._voice_sources = {}
+        adapter._voice_channel_ids = {}
         adapter._voice_timeout_tasks = {}
         adapter._voice_receivers = {}
         adapter._voice_listen_tasks = {}
         adapter._voice_input_callback = None
+        adapter._voice_input_max_seconds = 30
         adapter._allowed_user_ids = set()
         adapter._running = True
         return adapter
@@ -909,6 +936,13 @@ class TestDiscordVoiceChannelMethods:
         callback = AsyncMock()
         adapter._voice_input_callback = callback
         adapter._allowed_user_ids = set()
+        adapter._voice_text_channels[111] = 123
+        adapter._voice_sources[111] = {"platform": "discord", "chat_id": "123"}
+        adapter._voice_channel_ids[111] = 456
+        adapter._voice_clients[111] = SimpleNamespace(
+            channel=SimpleNamespace(id=456), is_connected=lambda: True,
+        )
+        adapter._is_allowed_user = MagicMock(return_value=True)
 
         pcm_data = b"\x00" * 96000
 
@@ -1445,6 +1479,7 @@ class TestVoiceChannelAwareness:
         adapter._voice_locks = {}
         adapter._voice_text_channels = {}
         adapter._voice_sources = {}
+        adapter._voice_channel_ids = {}
         adapter._voice_receivers = {}
         adapter._client = MagicMock()
         adapter._client.user = SimpleNamespace(id=99999, name="HermesBot")
@@ -1719,6 +1754,7 @@ class TestVoiceTTSPlayback:
         adapter._voice_locks = {}
         adapter._voice_text_channels = {}
         adapter._voice_sources = {}
+        adapter._voice_channel_ids = {}
         adapter._voice_receivers = {}
         return adapter
 
@@ -1825,14 +1861,19 @@ class TestUDPKeepalive:
         adapter._voice_locks = {}
         adapter._voice_text_channels = {}
         adapter._voice_sources = {}
+        adapter._voice_channel_ids = {}
         adapter._voice_receivers = {}
         adapter._voice_listen_tasks = {}
 
         # Mock VC and receiver
         mock_vc = MagicMock()
         mock_vc.is_connected.return_value = True
+        mock_vc.channel.id = 456
         mock_conn = MagicMock()
         adapter._voice_clients[111] = mock_vc
+        adapter._voice_text_channels[111] = 123
+        adapter._voice_sources[111] = {"platform": "discord", "chat_id": "123"}
+        adapter._voice_channel_ids[111] = 456
         mock_vc._connection = mock_conn
 
         from plugins.platforms.discord.adapter import VoiceReceiver
@@ -2043,3 +2084,178 @@ class TestPcmToWav:
             assert w.getframerate() == 16000
             # 48kHz -> 16kHz is a 3x decimation of a 1s clip.
             assert w.getnframes() == 16000
+
+
+class TestDiscordVoiceCurrentPathInvariants:
+    """Privacy and recovery contracts for the active Discord voice path."""
+
+    @staticmethod
+    def _adapter():
+        from gateway.config import Platform, PlatformConfig
+        from plugins.platforms.discord.adapter import DiscordAdapter
+
+        adapter = object.__new__(DiscordAdapter)
+        adapter.platform = Platform.DISCORD
+        adapter.config = PlatformConfig(enabled=True, token="synthetic-token")
+        adapter._client = MagicMock()
+        adapter._voice_clients = {}
+        adapter._voice_locks = {}
+        adapter._voice_text_channels = {}
+        adapter._voice_sources = {}
+        adapter._voice_channel_ids = {}
+        adapter._voice_timeout_tasks = {}
+        adapter._voice_receivers = {}
+        adapter._voice_listen_tasks = {}
+        adapter._voice_input_callback = None
+        adapter._voice_input_max_seconds = 30
+        adapter._allowed_user_ids = set()
+        adapter._reset_voice_timeout = MagicMock()
+        return adapter
+
+    def test_voice_receiver_uses_live_transport_state_bounds_pcm(self):
+        import struct
+
+        from plugins.platforms.discord.adapter import VoiceReceiver
+
+        assert (
+            VoiceReceiver.DEFAULT_MAX_BUFFER_SECONDS * VoiceReceiver.BYTES_PER_SECOND
+            == 5_760_000
+        )
+
+        old_dave = MagicMock()
+        new_dave = MagicMock()
+        new_dave.decrypt.return_value = b"opus"
+        conn = MagicMock()
+        conn.secret_key = [1] * 32
+        conn.dave_session = old_dave
+        conn.ssrc = 9999
+        conn.hook = None
+        vc = MagicMock()
+        vc._connection = conn
+        vc.user = SimpleNamespace(id=9999)
+        vc.channel = SimpleNamespace(members=[])
+        receiver = VoiceReceiver(vc, max_buffer_seconds=1)
+        receiver.start()
+        receiver.map_ssrc(100, 42)
+        decoder = MagicMock()
+        decoder.decode.return_value = b"\x00" * 3840
+        receiver._decoders[100] = decoder
+
+        conn.secret_key = [2] * 32
+        conn.dave_session = new_dave
+        packet = struct.pack(">BBHII", 0x80, 0x78, 1, 960, 100) + b"ciphertext" + b"\x00\x00\x00\x01"
+        davey = SimpleNamespace(MediaType=SimpleNamespace(audio="audio"))
+        nacl = ModuleType("nacl")
+        nacl_secret = ModuleType("nacl.secret")
+        nacl_secret.Aead = MagicMock()
+        nacl_secret.Aead.return_value.decrypt.return_value = b"transport"
+        nacl.secret = nacl_secret
+        with patch.dict(sys.modules, {
+            "davey": davey, "nacl": nacl, "nacl.secret": nacl_secret,
+        }):
+            receiver._on_packet(packet)
+
+        nacl_secret.Aead.assert_called_once_with(bytes([2] * 32))
+        new_dave.decrypt.assert_called_once()
+        old_dave.decrypt.assert_not_called()
+
+        receiver._buffer_pcm(100, b"\x01" * 250_000)
+        assert len(receiver._buffers[100]) == VoiceReceiver.BYTES_PER_SECOND
+        completed = receiver.check_silence()
+        assert len(completed) == 1
+        assert completed[0][0] == 42
+        assert len(completed[0][1]) == VoiceReceiver.BYTES_PER_SECOND
+        assert len(receiver._buffers[100]) == 0
+
+    @pytest.mark.asyncio
+    async def test_voice_rejoin_rebinds_capture(self):
+        from plugins.platforms.discord import adapter as discord_mod
+
+        adapter = self._adapter()
+        channel = MagicMock()
+        channel.guild.id = 111
+        channel.id = 456
+        existing = MagicMock()
+        existing.is_connected.return_value = True
+        existing.channel.id = 456
+        adapter._voice_clients[111] = existing
+        old_receiver = MagicMock()
+        old_receiver._running = True
+        old_task = MagicMock()
+        adapter._voice_receivers[111] = old_receiver
+        adapter._voice_listen_tasks[111] = old_task
+        adapter._voice_text_channels[111] = 123
+        adapter._voice_sources[111] = {"platform": "discord", "chat_id": "123"}
+        adapter._voice_channel_ids[111] = 456
+        adapter._start_voice_capture = MagicMock()
+
+        source = _bound_discord_source(chat_id="999").to_dict()
+        with patch.object(discord_mod, "DISCORD_AVAILABLE", True):
+            result = await adapter.join_voice_channel(
+                channel, text_channel_id=999, source=source,
+            )
+
+        assert result is True
+        old_receiver.stop.assert_called_once()
+        old_task.cancel.assert_called_once()
+        assert adapter._voice_text_channels[111] == 999
+        assert adapter._voice_sources[111] == source
+        assert adapter._voice_channel_ids[111] == 456
+        adapter._start_voice_capture.assert_called_once_with(111, existing)
+
+    @pytest.mark.asyncio
+    async def test_voice_input_privacy_binding_echo_logs(self, tmp_path, caplog):
+        from gateway.config import Platform
+
+        adapter = self._adapter()
+        adapter._voice_input_callback = AsyncMock()
+        private_words = "synthetic private spoken phrase"
+        caplog.set_level(logging.INFO)
+
+        with patch("plugins.platforms.discord.adapter.VoiceReceiver.pcm_to_wav"), patch(
+            "tools.transcription_tools.transcribe_audio",
+            return_value={"success": True, "transcript": private_words},
+        ) as transcribe, patch(
+            "tools.voice_mode.is_whisper_hallucination", return_value=False,
+        ):
+            await adapter._process_voice_input(111, 42, b"pcm")
+        transcribe.assert_not_called()
+
+        runner = _make_runner(tmp_path)
+        runner.config = SimpleNamespace(stt_echo_transcripts=False)
+        runner._profile_adapters = {}
+        source = _bound_discord_source()
+        adapter._voice_text_channels[111] = 123
+        adapter._voice_sources[111] = source.to_dict()
+        adapter._voice_channel_ids[111] = 456
+        adapter._voice_clients[111] = SimpleNamespace(
+            channel=SimpleNamespace(id=456), is_connected=lambda: True,
+        )
+        channel = AsyncMock()
+        adapter._client.get_channel.return_value = channel
+        adapter.handle_message = AsyncMock()
+        runner.adapters = {Platform.DISCORD: adapter}
+
+        await runner._handle_voice_channel_input(111, 42, private_words, adapter=adapter)
+
+        channel.send.assert_not_awaited()
+        adapter.handle_message.assert_awaited_once()
+        assert private_words not in caplog.text
+
+        caplog.clear()
+        runner._hmwa_resolve_session = AsyncMock(side_effect=RuntimeError("stop after log"))
+        voice_event = MessageEvent(
+            source=source, text=private_words, message_type=MessageType.VOICE,
+        )
+        voice_event.reply_to_message_id = "synthetic-reply"
+        voice_event.reply_to_text = "synthetic private quoted phrase"
+        with pytest.raises(RuntimeError, match="stop after log"):
+            await runner._handle_message_with_agent(voice_event, source, "voice-key", 0)
+        assert private_words not in caplog.text
+        assert voice_event.reply_to_text not in caplog.text
+        assert "[voice redacted]" in caplog.text
+
+        adapter.handle_message.reset_mock()
+        adapter._voice_sources.clear()
+        await runner._handle_voice_channel_input(111, 42, "second synthetic phrase", adapter=adapter)
+        adapter.handle_message.assert_not_awaited()
