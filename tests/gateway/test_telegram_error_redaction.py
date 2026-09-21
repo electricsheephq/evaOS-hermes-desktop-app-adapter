@@ -236,3 +236,39 @@ async def test_polling_other_error_redacts_token_in_log(monkeypatch, caplog):
     assert _SECRET_TOKEN not in logged
     assert "***" in logged
     assert "Telegram polling error" in logged
+
+
+@pytest.mark.asyncio
+async def test_polling_other_error_record_carries_no_raw_traceback(monkeypatch, caplog):
+    """The non-network branch must not attach the raw exception to the record.
+
+    ``exc_info=True`` put the unredacted exception and its traceback on the
+    LogRecord itself. A redacting formatter masks the rendered output, but any
+    handler or formatter without one prints the record as-is — including the
+    ``api.telegram.org/bot<TOKEN>/...`` URL the exception text carries.
+    """
+    import logging
+
+    adapter = _make_connected_adapter()
+    callback = await _capture_polling_error_callback(adapter, monkeypatch)
+    monkeypatch.setattr(adapter, "_looks_like_polling_conflict", lambda _e: False)
+    monkeypatch.setattr(adapter, "_looks_like_network_error", lambda _e: False)
+
+    with caplog.at_level("ERROR"):
+        # Inside a live ``except`` block: this is where ``exc_info=True`` finds an
+        # exception to attach, so it is the only shape that reproduces the leak.
+        try:
+            raise RuntimeError(f"Bad Request: {_SECRET_POLL_URL}")
+        except RuntimeError as exc:
+            callback(exc)
+
+    records = [r for r in caplog.records if "Telegram polling error" in r.getMessage()]
+    assert len(records) == 1
+    record = records[0]
+
+    assert not record.exc_info
+    rendered = logging.Formatter("%(levelname)s %(message)s").format(record)
+    assert _SECRET_TOKEN not in rendered
+    assert _SECRET_POLL_URL not in rendered
+    assert "RuntimeError" in rendered
+    assert "***" in rendered
