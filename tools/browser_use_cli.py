@@ -84,6 +84,16 @@ _URL_RE = re.compile(r"https?://[^\s'\"\\)]+", re.IGNORECASE)
 _FHS_BIN_DIRS = ("/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin", "/sbin", "/bin")
 
 
+class _BrowserRouteError(str):
+    """String-compatible routing failure carrying structured tool-error fields."""
+
+    def __new__(cls, message: str, *, code: str = "browser_backend_error", retryable: bool = False):
+        obj = super().__new__(cls, message)
+        obj.code = code
+        obj.retryable = retryable
+        return obj
+
+
 def _quiet(fn: Callable[[], Any], default: Any, log_prefix: str = "") -> Any:
     """``fn()``, or ``default`` on any exception (debug-logged when ``log_prefix`` is set)."""
     try:
@@ -442,18 +452,56 @@ def _resolve_backend_cdp(env: dict, task_id: Optional[str], session_name: str = 
         return None
 
     provider_name = type(provider).__name__
-    err = _export_session_cdp(
-        env, _get_session_info, _backend_cache_key(task_id, session_name),
-        lambda e: (f"Cloud browser provider {provider_name} failed to provide a session: {e}. "
-                   "Fix the provider configuration or switch backends via `hermes tools` → Browser Automation."),
-        f"Cloud browser provider {provider_name} returned no CDP endpoint, so Browser Use mode "
-        "cannot drive it. Switch to the built-in browser tools for this provider.",
-    )
+    try:
+        session_info = _get_session_info(_backend_cache_key(task_id, session_name)) or {}
+    except Exception as e:
+        code = str(getattr(e, "code", "provider_error"))
+        status = getattr(e, "status_code", None)
+        if code == "browser_capacity" or status == 429:
+            return _BrowserRouteError(
+                "browser capacity reached — retry shortly",
+                code="browser_capacity",
+                retryable=True,
+            )
+        return _BrowserRouteError(
+            f"Cloud browser provider {provider_name} failed to provide a session: {e} "
+            f"(code: {code}). Fix the provider configuration or switch backends via "
+            "`hermes tools` → Browser Automation.",
+            code=code,
+            retryable=status == 429 or (isinstance(status, int) and status >= 500),
+        )
+
+    if session_info.get("fallback_from_cloud"):
+        code = str(session_info.get("fallback_error_code") or "provider_error")
+        status = session_info.get("fallback_status_code")
+        if code == "browser_capacity" or status == 429:
+            return _BrowserRouteError(
+                "browser capacity reached — retry shortly",
+                code="browser_capacity",
+                retryable=True,
+            )
+        local_err = _resolve_managed_chromium_cdp(env, task_id, session_name)
+        if local_err is None:
+            return None
+        return _BrowserRouteError(
+            f"Cloud browser provider {provider_name} returned no CDP endpoint after a create failure "
+            f"(code: {code}). {local_err}",
+            code=code,
+            retryable=isinstance(status, int) and status >= 500,
+        )
+
+    cdp = str(session_info.get("cdp_url") or "")
+    if not cdp:
+        return _BrowserRouteError(
+            f"Cloud browser provider {provider_name} returned no CDP endpoint, so Browser Use mode "
+            "cannot drive it. Switch to the built-in browser tools for this provider.",
+        )
+    _set_cdp_env(env, cdp)
     # A provider browser keyed bu-named-<name> is exclusive to this session — the
     # own-tab preamble would just leak a blank tab into it.
-    if err is None and session_name:
+    if session_name:
         env[_PRIVATE_BROWSER_SENTINEL] = "1"
-    return err
+    return None
 
 
 def _resolve_real_profile_cdp(env: dict, force_local: bool) -> Optional[str]:
@@ -604,7 +652,11 @@ def browser_exec(code: str, session: str = "", timeout_s: int = _DEFAULT_TIMEOUT
         env["BU_NAME"] = session
     route_err = _route_backend(env, session, task_id, bool(local))
     if route_err:
-        return tool_error(route_err)
+        return tool_error(
+            route_err,
+            code=getattr(route_err, "code", "browser_backend_error"),
+            retryable=bool(getattr(route_err, "retryable", False)),
+        )
     _attach_vault_supervisor(env, task_id)
 
     # SHARED browser (/browser connect CDP override): pin each named session to its own tab (see

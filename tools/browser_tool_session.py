@@ -228,6 +228,8 @@ def _create_cloud_session_or_fallback(task_id: str, provider) -> Dict[str, Any]:
             session_info["cdp_url"] = _cdp._resolve_cdp_override(str(session_info["cdp_url"]))
         return session_info
     except Exception as e:
+        if getattr(e, "code", None) == "browser_capacity" or getattr(e, "status_code", None) == 429:
+            raise
         provider_name = type(provider).__name__
         _bt.logger.warning("Cloud provider %s failed (%s); attempting fallback to local Chromium for task %s",
                            provider_name, e, task_id, exc_info=True)
@@ -238,7 +240,9 @@ def _create_cloud_session_or_fallback(task_id: str, provider) -> Dict[str, Any]:
                                f"fallback also failed ({local_error})") from e
         if isinstance(session_info, dict):  # mark degraded for observability
             session_info = {**session_info, "fallback_from_cloud": True, "fallback_reason": str(e),
-                            "fallback_provider": provider_name}
+                            "fallback_provider": provider_name,
+                            "fallback_error_code": str(getattr(e, "code", "provider_error")),
+                            "fallback_status_code": getattr(e, "status_code", None)}
         return session_info
 
 

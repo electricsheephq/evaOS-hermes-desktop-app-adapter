@@ -222,10 +222,25 @@ class TestRealProfileCdpLaunch:
     def test_non_chromium_default_fails_closed(self):
         self._reset()
         with patch.object(bt_cloud, "_use_real_profile", return_value=True), \
-             patch("hermes_cli.browser_connect.detect_default_chromium", return_value=None):
+             patch("hermes_cli.browser_connect.detect_default_chromium", return_value=None), \
+             patch.object(bt_real_profile, "_has_local_desktop_browser_profile", return_value=True):
             cdp, err = bt_real_profile._real_profile_cdp()
         assert cdp is None
         assert err and "not a supported Chromium" in err
+
+    def test_no_desktop_profile_warns_once_and_uses_normal_backend(self, caplog):
+        self._reset()
+        with patch.object(bt_cloud, "_use_real_profile", return_value=True), \
+             patch("hermes_cli.browser_connect.detect_default_chromium", return_value=None), \
+             patch.object(bt_real_profile, "_has_local_desktop_browser_profile", return_value=False):
+            first = bt_real_profile._real_profile_cdp()
+            second = bt_real_profile._real_profile_cdp()
+
+        assert first == (None, None)
+        assert second == (None, None)
+        warnings = [record for record in caplog.records if record.levelname == "WARNING"]
+        assert len(warnings) == 1
+        assert "no desktop Chromium profile" in warnings[0].getMessage()
 
     def test_snapshot_failure_fails_closed(self):
         self._reset()
