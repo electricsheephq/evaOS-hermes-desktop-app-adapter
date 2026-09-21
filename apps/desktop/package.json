@@ -248,6 +248,7 @@
     ],
     "asar": true,
     "afterSign": "scripts/notarize.mjs",
+    "afterAllArtifactBuild": "scripts/after-all-artifact-build.mjs",
     "asarUnpack": [
       "**/*.node",
       "**/prebuilds/**",

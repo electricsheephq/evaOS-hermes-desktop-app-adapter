@@ -67,6 +67,12 @@ export interface ReloadPolicyDecision {
   surfaceError?: boolean
 }
 
+export type ChildProcessGoneRecoveryAction = 'log-only' | 'reload' | 'error-page'
+
+export interface ChildProcessGoneRecoveryDecision {
+  action: ChildProcessGoneRecoveryAction
+}
+
 export interface FailedLoadDetails {
   /** Electron `did-fail-load` errorCode (negative Chromium codes, e.g. -3 = ERR_ABORTED). */
   errorCode?: number | string | undefined
@@ -119,6 +125,14 @@ const DEFAULT_RELOAD_WINDOW_MS = 60_000
 const DEFAULT_RELOAD_MAX = 3
 
 const RECOVERABLE_REASONS = new Set(['crashed', 'oom'])
+const CHILD_PROCESS_RECOVERABLE_REASONS = new Set([
+  'crashed',
+  'oom',
+  'killed',
+  'abnormal-exit',
+  'launch-failed',
+  'integrity-failure'
+])
 
 function safeNow(now: (() => number) | undefined): number {
   return typeof now === 'function' ? now() : Date.now()
@@ -138,6 +152,38 @@ export function pushReloadTime(times: number[], now: number): number[] {
   times.push(now)
 
   return times
+}
+
+/**
+ * Decide how the main window should react when Electron loses a child
+ * process. Windows keeps its existing GPU-sandbox relaunch owner, while other
+ * platforms reuse the renderer lifecycle's shared rolling reload budget.
+ */
+export function decideChildProcessGoneRecovery(details: {
+  type?: string
+  reason?: string
+  platform: NodeJS.Platform
+  isMainWindowUsable: boolean
+  recentReloadTimes: number[]
+  reloadWindowMs?: number
+  reloadMax?: number
+  now?: () => number
+}): ChildProcessGoneRecoveryDecision {
+  if (
+    details.platform === 'win32' ||
+    details.type !== 'GPU' ||
+    !details.isMainWindowUsable ||
+    !CHILD_PROCESS_RECOVERABLE_REASONS.has(String(details.reason || ''))
+  ) {
+    return { action: 'log-only' }
+  }
+
+  const windowMs = details.reloadWindowMs ?? DEFAULT_RELOAD_WINDOW_MS
+  const max = details.reloadMax ?? DEFAULT_RELOAD_MAX
+  const now = safeNow(details.now)
+  const recent = pruneReloadTimes(details.recentReloadTimes, now, windowMs)
+
+  return recent.length >= max ? { action: 'error-page' } : { action: 'reload' }
 }
 
 /**

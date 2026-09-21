@@ -4023,6 +4023,7 @@ test('the in-app picker lists the directory over the desktop session and drops r
   assert.deepEqual(calls, [
     { body: { action: 'list_internal_support_clients', directory_only: true }, desktopSession: 'desktop-token' }
   ])
+  assert.equal(result.clients.some(client => client.display_name === 'Not assignable'), true)
   assert.deepEqual(result, {
     ok: true,
     is_admin: true,
@@ -4032,6 +4033,12 @@ test('the in-app picker lists the directory over the desktop session and drops r
         customer_vm_id: SUPPORT_VM_ID,
         display_name: 'Acme Corp',
         profiles: [{ profile_id: 'main', display_name: 'Fixture Agent' }]
+      },
+      {
+        customer_account_id: SUPPORT_ACCOUNT_ID,
+        customer_vm_id: SUPPORT_VM_ID,
+        display_name: 'Not assignable',
+        profiles: [{ profile_id: 'main', display_name: 'A' }]
       }
     ]
   })

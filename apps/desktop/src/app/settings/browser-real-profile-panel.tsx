@@ -1,8 +1,10 @@
+import { useStore } from '@nanostores/react'
 import { useCallback, useState } from 'react'
 
 import { type ProfileScope, saveHermesConfigRecord } from '@/hermes'
 import { useI18n } from '@/i18n'
 import { notify, notifyError } from '@/store/notifications'
+import { $connection } from '@/store/session'
 
 import { hermesConfigCacheWriter, useHermesConfigRecord } from '../hooks/use-config-record'
 
@@ -45,12 +47,15 @@ export function BrowserRealProfilePanel({ profile }: BrowserRealProfilePanelProp
   const { data: config } = useHermesConfigRecord(profile)
   const setConfig = hermesConfigCacheWriter(profile)
   const [busy, setBusy] = useState(false)
+  const connection = useStore($connection)
+  const enableAllowed = connection?.mode === 'local'
+  const remoteManagedProfile = connection?.mode === 'remote'
 
   const enabled = readUseRealProfile(config)
 
   const toggle = useCallback(
     async (on: boolean) => {
-      if (!config) {
+      if (!config || (on && !enableAllowed)) {
         return
       }
 
@@ -78,14 +83,14 @@ export function BrowserRealProfilePanel({ profile }: BrowserRealProfilePanelProp
         setBusy(false)
       }
     },
-    [config, copy, profile, setConfig]
+    [config, copy, enableAllowed, profile, setConfig]
   )
 
   return (
     <ToggleRow
       checked={enabled}
-      description={copy.description}
-      disabled={busy || !config}
+      description={remoteManagedProfile ? copy.remoteDescription : copy.description}
+      disabled={(!enabled && !enableAllowed) || busy || !config}
       label={copy.label}
       onChange={on => void toggle(on)}
     />

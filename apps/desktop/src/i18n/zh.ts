@@ -1809,6 +1809,7 @@ export const zh: Translations = {
         label: '使用我的真实浏览器配置文件',
         description:
           '将默认浏览器的登录信息和 Cookie 复制到托管快照中，代理使用该快照进行浏览。绝不会直接打开你的真实配置文件。将应用于新会话。',
+        remoteDescription: '仅当此配置文件使用本地运行时才可用。',
         enabledTitle: '真实配置文件浏览：已开启',
         enabledMessage: '新会话将使用默认浏览器配置文件的快照进行浏览。',
         disabledTitle: '真实配置文件浏览：已关闭',

@@ -4,7 +4,7 @@ Scope: a fork patch release `YYYY.M.D-es.N` on the paired runtime pin. Every ste
 
 0. **Preconditions.** Adapter `main` at the intended sha; every PR merged through the exact-head barrier; private-token grep on the release diff = 0; credential doctor ok (signing identity + notary profile promptless); release worktree detached at the sha with `npm ci` under the pinned node major; the `apps/desktop/package.json` version bump stays UNCOMMITTED.
 1. **Build** `npm run dist:mac:arm64:release`; record dmg/zip byte sizes.
-2. **Notarize + staple the DMG by hand** (electron-builder skips it), THEN `npm run release:refresh-and-verify:mac` — the refresh must run after the staple (it regenerates blockmaps and the yml sha/size).
+2. **Notarize + staple:** the build hook notarizes and staples the DMG when credentials are present, THEN `npm run release:refresh-and-verify:mac` remains mandatory because stapling changes the DMG bytes (the refresh regenerates blockmaps and the yml sha/size).
 3. **Updater notes ≤ ~400 chars:** edit `releaseNotes` in `latest-mac.yml` after the refresh (the changelog "Unreleased" block otherwise embeds thousands of chars), then `npm run release:verify:mac`.
 4. **Verify chain:** codesign app + dmg, stapler validate app + dmg, spctl = Notarized Developer ID; `CFBundleShortVersionString` readback; dmg bytes == yml size; yml newer than the dmg; `SHA256SUMS` for every asset.
 5. **Isolated boot smoke** with its own user-data dir: 0 `decrypt-failed` / `Uncaught` beyond the allowlist. `callback-noncanonical-install` is EXPECTED on a side copy.

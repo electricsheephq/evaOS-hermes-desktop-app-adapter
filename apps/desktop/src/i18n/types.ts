@@ -1451,6 +1451,7 @@ export interface Translations {
       browserRealProfile: {
         label: string
         description: string
+        remoteDescription: string
         enabledTitle: string
         enabledMessage: string
         disabledTitle: string
