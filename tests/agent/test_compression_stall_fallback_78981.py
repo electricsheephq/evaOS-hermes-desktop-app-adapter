@@ -43,6 +43,10 @@ CHAIN_ENTRY = {
     "timeout": 45,
 }
 
+_WORKER_HOLD_SECONDS = 30.0
+_FIXTURE_CEILING_SECONDS = 5.0
+assert _WORKER_HOLD_SECONDS > _FIXTURE_CEILING_SECONDS
+
 
 def _patch_chain(chain):
     """Pin auxiliary.compression config without touching the real config.yaml."""
@@ -80,10 +84,11 @@ class _StalledSummaryWorker:
             attempt = len(self.routes)
         if attempt <= self.stall_attempts:
             # Connection open, zero tokens, zero fence progress.
-            # Hold far longer than the 0.05 s idle budget (a descheduled host must
-            # still see a stall, not a late normal return) and below the fixture's
-            # total ceiling; every test sets ``release`` in its ``finally``.
-            self.release.wait(timeout=2.0)
+            # The hold must outlast every ceiling used in this file (the largest is
+            # 5.0 s), so the worker cannot return normally before the host aborts it.
+            # It stays bounded only so a missed release cannot hang interpreter exit;
+            # every test sets ``release`` in its ``finally``.
+            self.release.wait(timeout=_WORKER_HOLD_SECONDS)
             return ([{"role": "assistant", "content": "late"}], "late-prompt")
         if not fence.begin_commit():
             return ([{"role": "assistant", "content": "cancelled"}], "cancelled")
@@ -93,7 +98,15 @@ class _StalledSummaryWorker:
             fence.finish_commit()
 
 
-def _run(worker, *, chain, timeouts, messages, idle=0.05, ceiling=5.0):
+def _run(
+    worker,
+    *,
+    chain,
+    timeouts,
+    messages,
+    idle=0.05,
+    ceiling=_FIXTURE_CEILING_SECONDS,
+):
     with _patch_chain(chain):
         return run_compress_context_with_progress_timeout(
             worker=worker,
@@ -155,7 +168,7 @@ def test_retry_runs_on_a_host_published_fence():
                 messages=original,
                 system_prompt_fallback="degraded-prompt",
                 idle_timeout_seconds=0.05,
-                total_ceiling_seconds=5.0,
+                total_ceiling_seconds=_FIXTURE_CEILING_SECONDS,
                 new_fence=_new_fence,
             )
     finally:
@@ -185,7 +198,7 @@ def test_hard_interrupt_suppresses_the_fallback_attempt():
                 messages=original,
                 system_prompt_fallback="degraded-prompt",
                 idle_timeout_seconds=0.05,
-                total_ceiling_seconds=5.0,
+                total_ceiling_seconds=_FIXTURE_CEILING_SECONDS,
                 on_timeout=lambda *args: timeouts.append(args),
                 telemetry_agent=agent,
             )
