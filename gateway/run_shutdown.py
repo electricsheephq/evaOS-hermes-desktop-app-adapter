@@ -1344,9 +1344,23 @@ class GatewayShutdownMixin:
         )
 
     def _wedged_agent_count(self) -> int:
-        """Running chat agents with no activity for ``agent.gateway_timeout`` (0 when disabled).
+        """Work units the restart wait may skip: chat agents idle past ``agent.gateway_timeout`` and
+        cron runs older than the scheduler's stale-inflight allowance (#115469).
 
-        Cron/API work has no activity clock and pending sentinels are brand-new, so neither counts;
+        API work has no activity clock and pending sentinels are brand-new, so neither counts.
+        """
+        return self._wedged_chat_agent_count() + self._wedged_cron_job_count()
+
+    def _wedged_cron_job_count(self) -> int:
+        """Cron runs past ``cron.scheduler.get_wedged_job_ids``'s allowance; 0 if cron can't import."""
+        try:
+            from cron.scheduler import get_wedged_job_ids
+            return len(get_wedged_job_ids())
+        except Exception:
+            return 0
+
+    def _wedged_chat_agent_count(self) -> int:
+        """Running chat agents with no activity for ``agent.gateway_timeout`` (0 when disabled);
         an unreadable activity summary means "not wedged".
         """
         from gateway.run import _AGENT_PENDING_SENTINEL, _float_env

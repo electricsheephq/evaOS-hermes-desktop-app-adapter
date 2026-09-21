@@ -2896,10 +2896,14 @@ class TelegramAdapter(BasePlatformAdapter):
                 self._disarm_ptb_retry_loop()
                 self._spawn_polling_recovery(loop, self._handle_polling_conflict(error))
             elif self._looks_like_network_error(error):
-                logger.warning("[%s] Telegram network _redact_telegram_error_text(error), scheduling reconnect: %s", self.name, error)
+                logger.warning("[%s] Telegram network error, scheduling reconnect: %s", self.name, _redact_telegram_error_text(error))
                 self._spawn_polling_recovery(loop, self._handle_polling_network_error(error))
             else:
-                logger.error("[%s] Telegram polling _redact_telegram_error_text(error): %s", self.name, error, exc_info=True)
+                # No exc_info: the record would carry the RAW exception and traceback (the Bot API URL
+                # holds the live token) for every handler whose formatter lacks redaction. The class
+                # name keeps the diagnostic value the traceback carried.
+                logger.error("[%s] Telegram polling error (%s): %s", self.name,
+                             type(error).__name__, _redact_telegram_error_text(error))
 
         self._polling_error_callback_ref = _polling_error_callback  # reused by _handle_polling_conflict
         polling_started = await self._start_polling_resilient(
