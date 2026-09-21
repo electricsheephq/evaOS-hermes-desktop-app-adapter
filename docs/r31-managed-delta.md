@@ -181,6 +181,7 @@ commits; the whole PR range is squashed into one commit here, with a
 | 116743 | `48378d12ca` | `tools/kanban_tools.py`, `tests/tools/test_kanban_tools.py`, `tests/hermes_cli/test_kanban_notify.py` |
 | 116999 | `2b18b8855b` | `cron/scheduler.py`, `gateway/run_shutdown.py`, `tests/gateway/test_restart_drain.py`, `website/docs/getting-started/updating.md` |
 | 117039 | `6630c05e5f` | `tools/browser_tool_session.py`, `tests/tools/test_browser_suspect_recycle.py` |
+| WAL lifecycle follow-up (`274fd56dca`) | `52f5d8f951` | `hermes_state.py`, `hermes_state_dbfile.py`, `hermes_state_lockguard.py`, `tests/hermes_state/test_wal_lock_guard_lifecycle.py` |
 
 Own fixes in the same release:
 
@@ -189,6 +190,8 @@ Own fixes in the same release:
 | Telegram polling-error log redaction | `22b50023c0` | `plugins/platforms/telegram/adapter.py`, `tests/gateway/test_telegram_error_redaction.py` |
 | Typed `4030` refusal for an out-of-scope profile on the ws path | `1108e3353e` | `tui_gateway/server.py`, `tests/tui_gateway/test_managed_profile_scope_rpc_refusal.py` |
 | No stall warning when compaction already cleared the model window | `4b3997e751` | `agent/status_output.py`, `tests/agent/test_context_overflow_warning_after_compaction.py` |
+| Atomic browser-supervisor self-removal | `77f26c1a58` | `tools/browser_supervisor.py`, `tests/tools/test_browser_supervisor_reconnect.py` |
+| Effective input-window warning correction | `34ac06417e` | `agent/context_compressor.py`, `agent/status_output.py`, `tests/agent/test_context_overflow_warning_after_compaction.py` |
 
 Not picked, and why: **110213** and **115983** and **116712** and **113789** each
 need upstream code this pin does not carry — 110213 wants the
