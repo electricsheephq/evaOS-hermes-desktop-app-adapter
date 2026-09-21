@@ -11,7 +11,7 @@ import { $voiceConversationStartRequest, takeVoiceConversationStart } from '@/st
 import { resetBrowseState } from '@/store/composer-input-history'
 import { $activeGatewayRoute, $gateway } from '@/store/gateway'
 import { notify, notifyError } from '@/store/notifications'
-import { $activeSessionId, $gatewayState } from '@/store/session'
+import { $activeSessionId, $gatewayState, $introSeed } from '@/store/session'
 import { $autoSpeakReplies, $voiceStopPhrase, setAutoSpeakReplies } from '@/store/voice-prefs'
 import { resumeWakeAfterVoice } from '@/store/wake-word'
 
@@ -44,6 +44,7 @@ interface UseComposerVoiceArgs {
 
 interface VoiceSessionOwnership {
   createdRuntimeSessionId: string | null
+  primaryDraftGeneration: number | null
   startingRuntimeSessionId: string | null
 }
 
@@ -99,13 +100,20 @@ export function useComposerVoice({
     () => (target === 'main' ? $activeSessionId.get() : (sessionId ?? null)),
     [sessionId, target]
   )
+  const ownsCurrentSession = useCallback(
+    (ownership: VoiceSessionOwnership) =>
+      ownership.primaryDraftGeneration === (target === 'main' ? $introSeed.get() : null) &&
+      ownsRuntimeSession(ownership, currentRuntimeSessionId()),
+    [currentRuntimeSessionId, target]
+  )
   const startVoiceConversation = useCallback(() => {
     voiceSessionOwnershipRef.current = {
       createdRuntimeSessionId: null,
+      primaryDraftGeneration: target === 'main' ? $introSeed.get() : null,
       startingRuntimeSessionId: currentRuntimeSessionId()
     }
     setVoiceConversationActive(true)
-  }, [currentRuntimeSessionId])
+  }, [currentRuntimeSessionId, target])
   const stopVoiceConversation = useCallback(() => {
     voiceSessionOwnershipRef.current = null
     setVoiceConversationActive(false)
@@ -160,7 +168,7 @@ export function useComposerVoice({
     // The async recorder may finish after this composer lost its session. Read
     // the primary session from its authority instead of the render that began
     // handle.stop(); a tile keeps using its own pinned runtime prop.
-    if (!ownership || !ownsRuntimeSession(ownership, currentRuntimeSessionId())) {
+    if (!ownership || !ownsCurrentSession(ownership)) {
       stopVoiceConversation()
 
       return
@@ -181,6 +189,7 @@ export function useComposerVoice({
         // replaced voice loop granting continuity to a newer conversation.
         if (
           activeOwnership !== ownership ||
+          !ownsCurrentSession(ownership) ||
           ownership.startingRuntimeSessionId !== null ||
           currentRuntimeSessionId() !== null
         ) {
@@ -242,8 +251,11 @@ export function useComposerVoice({
         }
       })
     ]
+    if (target === 'main') {
+      subscriptions.push($introSeed.listen(stop))
+    }
     return () => subscriptions.forEach(unsubscribe => unsubscribe())
-  }, [conversation.end, stopVoiceConversation, voiceConversationActive])
+  }, [conversation.end, stopVoiceConversation, target, voiceConversationActive])
 
   useEffect(() => {
     if (!voiceConversationActive) {
@@ -252,11 +264,11 @@ export function useComposerVoice({
 
     const ownership = voiceSessionOwnershipRef.current
 
-    if (disabled || !ownership || !ownsRuntimeSession(ownership, currentRuntimeSessionId())) {
+    if (disabled || !ownership || !ownsCurrentSession(ownership)) {
       stopVoiceConversation()
       void conversation.end()
     }
-  }, [conversation.end, currentRuntimeSessionId, disabled, stopVoiceConversation, voiceConversationActive])
+  }, [conversation.end, disabled, ownsCurrentSession, stopVoiceConversation, voiceConversationActive])
 
   // eslint-disable-next-line no-restricted-syntax -- ownership token used only by unmount cleanup
   useEffect(() => {

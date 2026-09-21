@@ -1,7 +1,7 @@
 import { act, cleanup, renderHook, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { setActiveSessionId } from '@/store/session'
+import { setActiveSessionId, setIntroSeed } from '@/store/session'
 
 import type { ChatBarProps } from '../types'
 
@@ -86,6 +86,7 @@ describe('useComposerVoice session ownership', () => {
   afterEach(() => {
     cleanup()
     setActiveSessionId(null)
+    setIntroSeed(0)
     mocks.conversationArgs = null
     vi.clearAllMocks()
   })
@@ -104,6 +105,21 @@ describe('useComposerVoice session ownership', () => {
     await act(async () => pendingSubmit('draft audio'))
 
     expect(onSubmit).not.toHaveBeenCalled()
+    expect(mocks.conversation.end).toHaveBeenCalled()
+  })
+
+  it('drops pending audio when a new draft replaces another null-runtime draft', async () => {
+    const onSubmit = vi.fn(async () => true)
+    const hook = renderVoice(null, onSubmit)
+
+    act(() => hook.result.current.startConversation())
+    const pendingSubmit = mocks.conversationArgs!.onSubmit
+
+    act(() => setIntroSeed(seed => seed + 1))
+    await act(async () => pendingSubmit('old draft audio'))
+
+    expect(onSubmit).not.toHaveBeenCalled()
+    expect(hook.result.current.voiceConversationActive).toBe(false)
     expect(mocks.conversation.end).toHaveBeenCalled()
   })
 
