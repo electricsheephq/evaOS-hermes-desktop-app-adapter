@@ -6,6 +6,7 @@ tool module stays importable without the plugin machinery).
 
 from __future__ import annotations
 
+import inspect
 import logging
 from typing import Any, Dict, Optional
 
@@ -31,7 +32,27 @@ def _lookup_plugin_provider(key: str, *, discover: bool = True, retry: bool = Fa
     return plugin_provider
 
 
-def _dispatch_to_plugin_provider(text: str, output_path: str, provider: str, tts_config: Dict[str, Any]) -> Optional[str]:
+def voice_provider_metadata(result: Dict[str, Any]) -> Dict[str, Any]:
+    """Copy only content-free per-request provider status into public envelopes."""
+    import re
+    safe = {}
+    for key in ("primary_provider", "fallback_provider"):
+        value = result.get(key)
+        if isinstance(value, str) and re.fullmatch(r"[a-z0-9_-]{1,64}", value):
+            safe[key] = value
+    if isinstance(result.get("fallback_active"), bool):
+        safe["fallback_active"] = result["fallback_active"]
+    reason = result.get("fallback_reason")
+    messages = {"credential": "Fish Audio authorization is unavailable",
+                "quota": "Fish Audio quota is unavailable",
+                "availability": "Fish Audio is temporarily unavailable"}
+    if isinstance(reason, str) and reason in messages:
+        safe.update(fallback_reason=reason, primary_error=messages[reason])
+    return safe
+
+
+def _dispatch_to_plugin_provider(text: str, output_path: str, provider: str, tts_config: Dict[str, Any],
+                                 result_metadata: Optional[Dict[str, Any]] = None) -> Optional[str]:
     """Route to a plugin-registered TTS provider; None means "fall through".
 
     Invariants re-checked here so a caller refactor can't break them: built-in names never reach
@@ -61,11 +82,25 @@ def _dispatch_to_plugin_provider(text: str, output_path: str, provider: str, tts
     voice, model, speed = cfg.get("voice"), cfg.get("model"), cfg.get("speed")
     fmt = cfg.get("output_format", DEFAULT_COMMAND_TTS_OUTPUT_FORMAT)
     logger.info("Generating speech with plugin TTS provider '%s'...", key)
+    metadata: Dict[str, Any] = {}
+    metadata_kwargs: Dict[str, Any] = {}
+    try:
+        parameters = inspect.signature(plugin_provider.synthesize).parameters
+    except (TypeError, ValueError):
+        parameters = {}  # Preserve the old call for opaque legacy implementations.
+    metadata_parameter = parameters.get("result_metadata")
+    if any(p.kind == inspect.Parameter.VAR_KEYWORD for p in parameters.values()) or (
+        metadata_parameter is not None and metadata_parameter.kind in {
+            inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY}
+    ):
+        metadata_kwargs["result_metadata"] = metadata
     written = plugin_provider.synthesize(
         text, output_path, voice=voice if isinstance(voice, str) and voice else None,
         model=model if isinstance(model, str) and model else None,
         speed=float(speed) if isinstance(speed, (int, float)) else None,
-        format=str(fmt).lower() if fmt else "mp3")
+        format=str(fmt).lower() if fmt else "mp3", **metadata_kwargs)
+    if result_metadata is not None:
+        result_metadata.update(voice_provider_metadata(metadata))
     return written if isinstance(written, str) and written else output_path
 
 

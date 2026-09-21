@@ -46,7 +46,8 @@ const micHandle = {
 }
 
 vi.mock('./use-mic-recorder', () => ({
-  useMicRecorder: () => ({ handle: micHandle, level: 0, recording: false })
+  // The real recorder returns a new handle on every render.
+  useMicRecorder: () => ({ handle: { ...micHandle }, level: 0, recording: false })
 }))
 
 vi.mock('@/i18n', () => ({
@@ -143,6 +144,75 @@ describe('useVoiceConversation full-duplex barge-in', () => {
   })
 
   afterEach(cleanup)
+
+  it('keeps capture active across renders and cancels it on unmount', async () => {
+    const { hook } = renderConversation()
+
+    await act(async () => {
+      await hook.result.current.start()
+    })
+    await waitFor(() => expect(hook.result.current.status).toBe('listening'))
+    const cancellations = micHandle.cancel.mock.calls.length
+
+    hook.rerender({ busy: false })
+
+    expect(hook.result.current.status).toBe('listening')
+    expect(micHandle.cancel).toHaveBeenCalledTimes(cancellations)
+
+    hook.unmount()
+    expect(micHandle.cancel).toHaveBeenCalledTimes(cancellations + 1)
+  })
+
+  it.each(['ordinary', 'interruption'] as const)(
+    'keeps an ended conversation idle when a pending %s submission completes',
+    async mode => {
+      const { hook, onSubmit } = renderConversation()
+
+      if (mode === 'interruption') {
+        await enterThinking(hook)
+        await waitFor(() => expect(monitorCalls.length).toBeGreaterThan(0))
+      } else {
+        await act(async () => {
+          await hook.result.current.start()
+        })
+        await waitFor(() => expect(hook.result.current.status).toBe('listening'))
+      }
+
+      let finishSubmission!: () => void
+      const submission = new Promise<void>(resolve => {
+        finishSubmission = resolve
+      })
+      onSubmit.mockImplementationOnce(() => submission)
+      const previousSubmissions = onSubmit.mock.calls.length
+
+      if (mode === 'interruption') {
+        const monitor = monitorCalls.at(-1)
+        act(() => monitor?.onSpeech())
+        hook.rerender({ busy: false })
+        act(() => {
+          monitor?.onUtterance?.(new Blob(['x'], { type: 'audio/webm' }))
+        })
+      } else {
+        micHandle.stop.mockResolvedValueOnce({
+          audio: new Blob(['q'], { type: 'audio/webm' }),
+          durationMs: 900,
+          heardSpeech: true
+        })
+        act(() => hook.result.current.stopTurn())
+      }
+
+      await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(previousSubmissions + 1))
+      await act(async () => {
+        await hook.result.current.end()
+      })
+      expect(hook.result.current.status).toBe('idle')
+      await act(async () => {
+        finishSubmission()
+        await submission
+      })
+      expect(hook.result.current.status).toBe('idle')
+    }
+  )
 
   it('arms the barge monitor during generation (before any reply audio exists)', async () => {
     const { hook } = renderConversation()
@@ -262,5 +332,37 @@ describe('useVoiceConversation full-duplex barge-in', () => {
     hook.rerender({ busy: true })
 
     expect(monitorCalls.length).toBe(armed)
+  })
+
+  it('discards a transcription that resolves after the conversation ends', async () => {
+    const { hook, onSubmit, onTranscribeAudio } = renderConversation()
+    let resolveTranscript!: (value: string) => void
+    onTranscribeAudio.mockImplementationOnce(
+      () =>
+        new Promise(resolve => {
+          resolveTranscript = resolve
+        })
+    )
+    await act(async () => {
+      await hook.result.current.start()
+    })
+    await waitFor(() => expect(hook.result.current.status).toBe('listening'))
+    micHandle.stop.mockResolvedValueOnce({
+      audio: new Blob(['operator fixture'], { type: 'audio/webm' }),
+      durationMs: 900,
+      heardSpeech: true
+    })
+    await act(async () => {
+      hook.result.current.stopTurn()
+    })
+    await waitFor(() => expect(onTranscribeAudio).toHaveBeenCalledTimes(1))
+    await act(async () => {
+      await hook.result.current.end()
+    })
+    await act(async () => {
+      resolveTranscript('operator fixture')
+    })
+    expect(onSubmit).not.toHaveBeenCalled()
+    expect(hook.result.current.status).toBe('idle')
   })
 })

@@ -14,6 +14,11 @@ export interface SessionCreateOverrides {
   title?: string
 }
 
+/** Local renderer callback for a consumer that must recognize the exact
+ * runtime session minted by its own create. This is never serialized into the
+ * `session.create` request. */
+export type RuntimeSessionCreatedCallback = (runtimeSessionId: string) => void
+
 export interface SessionSeedMessage {
   content: string
   display_kind?: 'hidden'

@@ -35,6 +35,11 @@ import { $sessionStates } from '@/store/session-states'
 
 import type { ClientSessionState } from '../../../types'
 import { sessionContextDrift } from '../session-context-drift'
+import type {
+  RuntimeSessionCreatedCallback,
+  SessionCreateOverrides,
+  SessionSeedMessage
+} from '../use-session-actions/create-overrides'
 import { resolveSessionProfile } from '../use-session-actions/utils'
 
 import { finalizeInterruptedMessages } from './rewind'
@@ -58,7 +63,12 @@ interface SubmitPromptDeps {
   activeSessionIdRef: MutableRefObject<string | null>
   busyRef: MutableRefObject<boolean>
   copy: Translations['desktop']
-  createBackendSessionForSend: (preview?: string | null) => Promise<string | null>
+  createBackendSessionForSend: (
+    preview?: string | null,
+    seedMessages?: SessionSeedMessage[],
+    createOverrides?: SessionCreateOverrides,
+    onRuntimeSessionCreated?: RuntimeSessionCreatedCallback
+  ) => Promise<string | null>
   getRoutedStoredSessionId: () => null | string
   getRuntimeIdForStoredSession: (storedSessionId: string) => null | string
   getRouteToken: () => string
@@ -659,7 +669,12 @@ export function useSubmitPrompt(deps: SubmitPromptDeps) {
 
       if (!sessionId) {
         try {
-          sessionId = await createBackendSessionForSend(bubbleText)
+          sessionId = await createBackendSessionForSend(
+            bubbleText,
+            undefined,
+            undefined,
+            options?.onRuntimeSessionCreated
+          )
         } catch (err) {
           dropOptimistic(null)
           releaseBusy()

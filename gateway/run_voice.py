@@ -27,6 +27,9 @@ logger = logging.getLogger("gateway.run")  # log-record parity with the origin m
 # Adapter-side per-chat auto-TTS override sets (``/voice off`` vs explicit ``/voice on``/``tts``).
 _OFF_SET, _ON_SET = "_auto_tts_disabled_chats", "_auto_tts_enabled_chats"
 _VOICE_MODES = {"off", "voice_only", "all"}
+_VOICE_PROVIDER_STATUS_KEYS = (
+    "primary_provider", "fallback_active", "fallback_provider", "fallback_reason", "primary_error",
+)
 
 
 class GatewayVoiceMixin:
@@ -135,6 +138,16 @@ class GatewayVoiceMixin:
             return int(raw.guild_id)
         return raw.guild.id if getattr(raw, "guild", None) else None  # regular message
 
+    @classmethod
+    def _live_voice_request(cls, event: MessageEvent) -> Optional[Dict[str, int]]:
+        raw = getattr(event, "raw_message", None)
+        generation = getattr(raw, "voice_capture_generation", None)
+        guild_id = cls._get_guild_id(event)
+        try:
+            return {"guild_id": int(guild_id), "generation": int(generation)}
+        except (TypeError, ValueError):
+            return None
+
     async def _handle_voice_channel_join(self, event: MessageEvent) -> str:
         adapter = self._adapter_for_source(event.source)
         if not hasattr(adapter, "join_voice_channel"):
@@ -157,7 +170,11 @@ class GatewayVoiceMixin:
             adapter._voice_mode_getter = lambda chat_id: self._voice_mode.get(
                 self._voice_key(Platform.DISCORD, str(chat_id), profile=voice_profile), "off")
         try:
-            success = await adapter.join_voice_channel(voice_channel)
+            success = await adapter.join_voice_channel(
+                voice_channel,
+                text_channel_id=int(event.source.chat_id),
+                source=event.source.to_dict(),
+            )
         except Exception as e:
             logger.warning("Failed to join voice channel: %s", e)
             adapter._voice_input_callback = None
@@ -168,9 +185,6 @@ class GatewayVoiceMixin:
         if not success:
             adapter._voice_input_callback = None
             return "Failed to join voice channel. Check bot permissions (Connect + Speak)."
-        adapter._voice_text_channels[guild_id] = int(event.source.chat_id)
-        if hasattr(adapter, "_voice_sources"):
-            adapter._voice_sources[guild_id] = event.source.to_dict()
         self._apply_voice_mode(adapter, self._voice_key_for_source(event.source),
                                event.source.chat_id, "all")
         return (f"Joined voice channel **{voice_channel.name}**.\n"
@@ -203,13 +217,15 @@ class GatewayVoiceMixin:
                               profile=getattr(adapter, "_owner_profile", None))
         self._apply_voice_mode(adapter, key, chat_id, "off")
 
-    def _is_duplicate_voice_transcript(self, guild_id: int, user_id: int, transcript: str) -> bool:
+    def _is_duplicate_voice_transcript(
+        self, guild_id: int, user_id: int, transcript: str, *, adapter, profile: Optional[str],
+    ) -> bool:
         """Suppress repeated STT outputs for one recent utterance (voice capture can emit it twice a
         few seconds apart -> a second queued run and overlapping spoken replies)."""
         normalized = re.sub(r"[^\w\s]", "", re.sub(r"\s+", " ", transcript).strip().lower())
         if not normalized:
             return False
-        now, key = time.monotonic(), (guild_id, user_id)
+        now, key = time.monotonic(), (id(adapter), profile or "default", guild_id, user_id)
         if not isinstance(recent_store := getattr(self, "_recent_voice_transcripts", None), dict):
             recent_store = self._recent_voice_transcripts = {}
         recent = [(ts, txt) for ts, txt in recent_store.get(key, []) if now - ts <= 12.0]
@@ -221,30 +237,47 @@ class GatewayVoiceMixin:
         recent_store[key] = (recent + [(now, normalized)])[-5:]
         return False
 
-    @staticmethod
-    def _voice_input_source(adapter, guild_id: int, user_id: int, text_ch_id) -> SessionSource:
-        """Bound text channel's own source when available (voice shares the text conversation's
-        session), else a synthetic one."""
-        if source_data := getattr(adapter, "_voice_sources", {}).get(guild_id):
+    def _voice_input_source(
+        self, adapter, guild_id: int, user_id: int, text_ch_id,
+    ) -> Optional[SessionSource]:
+        """Return the exact stored source only while it still resolves to the capturing adapter."""
+        source_data = getattr(adapter, "_voice_sources", {}).get(guild_id)
+        if not isinstance(source_data, dict):
+            return None
+        try:
             source = SessionSource.from_dict(source_data)
-            source.user_id = source.user_name = str(user_id)
-            return source
-        return SessionSource(
-            platform=Platform.DISCORD, chat_id=str(text_ch_id), user_id=str(user_id),
-            user_name=str(user_id), chat_type="channel",
-            profile=getattr(adapter, "_owner_profile", None))
+        except (TypeError, ValueError, KeyError):
+            return None
+        if source.platform != Platform.DISCORD or source.chat_id != str(text_ch_id):
+            return None
+        if self._adapter_for_source(source) is not adapter:
+            return None
+        source.user_id = source.user_name = str(user_id)
+        return source
 
     async def _handle_voice_channel_input(
-        self, guild_id: int, user_id: int, transcript: str, *, adapter=None
+        self, guild_id: int, user_id: int, transcript: str, *, adapter=None,
+        capture_generation: Optional[int] = None,
     ):
         """Handle transcribed voice from a voice channel. ``adapter`` captured the audio; under
         multiplexing each profile's bot dispatches through its own adapter, never the default's."""
         if adapter is None:
-            adapter = self.adapters.get(Platform.DISCORD)
+            return
         text_ch_id = adapter._voice_text_channels.get(guild_id) if adapter else None
-        if not text_ch_id:
+        voice_ch_id = getattr(adapter, "_voice_channel_ids", {}).get(guild_id)
+        vc = getattr(adapter, "_voice_clients", {}).get(guild_id)
+        if not (
+            text_ch_id and voice_ch_id and vc
+            and getattr(getattr(vc, "channel", None), "id", None) == voice_ch_id
+        ):
+            return
+        binding_valid = getattr(adapter, "_voice_capture_binding_valid", None)
+        if capture_generation is None or not callable(binding_valid) or not binding_valid(
+                guild_id, generation=capture_generation):
             return
         source = self._voice_input_source(adapter, guild_id, user_id, text_ch_id)
+        if source is None:
+            return
         # Validate the session owner against the current allowlist before auto-resuming. A session created
         # before TELEGRAM_ALLOWED_USERS (or equivalent) was configured, or before the owner was removed from
         # it, must not silently receive a full agent response on gateway restart just because it has a
@@ -252,17 +285,25 @@ class GatewayVoiceMixin:
         if not self._is_user_authorized(source):
             logger.debug("Unauthorized voice input from user %d, ignoring", user_id)
             return
-        if self._is_duplicate_voice_transcript(guild_id, user_id, transcript):
-            logger.info("Suppressing duplicate voice transcript for guild=%s user=%s: %s",
-                        guild_id, user_id, transcript[:100])
+        profile = self._adapter_profile_for_source(source)
+        if self._is_duplicate_voice_transcript(
+            guild_id, user_id, transcript, adapter=adapter, profile=profile,
+        ):
+            logger.info(
+                "Suppressing duplicate voice transcript (guild=%s user=%s chars=%d)",
+                guild_id, user_id, len(transcript),
+            )
             return
         # Echo the transcript into the text channel (after auth, with mention sanitization).
-        with suppress(Exception):
-            channel = adapter._client.get_channel(text_ch_id)
-            if channel:
-                safe_text = transcript[:2000].replace("@everyone", "@\u200beveryone")
-                safe_text = safe_text.replace("@here", "@\u200bhere")
-                await channel.send(f"**[Voice]** <@{user_id}>: {safe_text}")
+        if self._should_echo_stt_transcripts():
+            with suppress(Exception):
+                channel = adapter._client.get_channel(text_ch_id)
+                if channel:
+                    safe_text = transcript[:2000].replace("@everyone", "@\u200beveryone")
+                    safe_text = safe_text.replace("@here", "@\u200bhere")
+                    await channel.send(f"**[Voice]** <@{user_id}>: {safe_text}")
+        if not binding_valid(guild_id, generation=capture_generation):
+            return
         # Bound text channel's channel_prompt: voice input gets the same per-channel context.
         channel_prompt = None
         if callable(resolver := getattr(adapter, "_resolve_channel_prompt", None)):
@@ -273,7 +314,9 @@ class GatewayVoiceMixin:
         # _get_guild_id() extract guild_id so _send_voice_reply() plays audio in the voice channel.
         event = MessageEvent(
             source=source, text=transcript, message_type=MessageType.VOICE,
-            raw_message=SimpleNamespace(guild_id=guild_id, guild=None),
+            raw_message=SimpleNamespace(
+                guild_id=guild_id, guild=None, voice_capture_generation=capture_generation,
+            ),
             channel_prompt=channel_prompt)
         await adapter.handle_message(event)
 
@@ -312,7 +355,7 @@ class GatewayVoiceMixin:
         return not (is_voice_input and not already_sent)
 
     def _should_echo_stt_transcripts(self) -> bool:
-        return bool(getattr(self.config, "stt_echo_transcripts", True))
+        return bool(getattr(getattr(self, "config", None), "stt_echo_transcripts", True))
 
     async def _send_voice_reply(self, event: MessageEvent, text: str) -> None:
         """Generate TTS audio and send as a voice message before the text reply. The TTS tool
@@ -342,7 +385,10 @@ class GatewayVoiceMixin:
                 logger.warning("Auto voice reply TTS failed: %s", result.get("error"))
                 return
             actual_paths = paths
-            await self._deliver_voice_reply(event, actual_paths)
+            provider_status = {
+                key: result[key] for key in _VOICE_PROVIDER_STATUS_KEYS if key in result
+            }
+            await self._deliver_voice_reply(event, actual_paths, provider_status=provider_status)
         except Exception as e:
             logger.warning("Auto voice reply failed: %s", e, exc_info=True)
         finally:
@@ -350,12 +396,34 @@ class GatewayVoiceMixin:
                 with suppress(OSError):
                     os.unlink(p)
 
-    async def _deliver_voice_reply(self, event: MessageEvent, audio_paths: List[str]) -> None:
+    async def _deliver_voice_reply(
+        self, event: MessageEvent, audio_paths: List[str], *, provider_status: Optional[Dict] = None,
+    ) -> None:
         """Play the files in the connected voice channel, else send them as voice messages."""
         adapter = self._adapter_for_source(event.source)
         guild_id = self._get_guild_id(event)
         play = getattr(adapter, "play_in_voice_channel", None)
         is_in_vc = getattr(adapter, "is_in_voice_channel", None)
+        live_request = self._live_voice_request(event)
+        if hasattr(getattr(event, "raw_message", None), "voice_capture_generation") and live_request is None:
+            return
+        if live_request is not None:
+            request_guild = live_request["guild_id"]
+            generation = live_request["generation"]
+            binding_valid = getattr(adapter, "_voice_capture_binding_valid", None)
+            if not callable(binding_valid) or not binding_valid(
+                    request_guild, generation=generation):
+                return
+            notify = getattr(adapter, "_send_voice_fallback_notice", None)
+            if callable(notify):
+                await notify(request_guild, generation, "Speech", provider_status)
+            if not callable(play):
+                return
+            for path in audio_paths:
+                if not binding_valid(request_guild, generation=generation):
+                    return
+                await play(request_guild, path, capture_generation=generation)
+            return
         if guild_id and callable(play) and callable(is_in_vc) and is_in_vc(guild_id):
             for path in audio_paths:
                 await play(guild_id, path)

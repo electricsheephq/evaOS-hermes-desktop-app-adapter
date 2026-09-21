@@ -138,7 +138,12 @@ import type { ClientSessionState, SidebarNavItem } from '../../../types'
 import { sessionContextDrift } from '../session-context-drift'
 import { singleFlightSessionResume } from '../use-prompt-actions/single-flight-resume'
 
-import { sessionCreateOverrideParams, type SessionCreateOverrides, type SessionSeedMessage } from './create-overrides'
+import {
+  type RuntimeSessionCreatedCallback,
+  sessionCreateOverrideParams,
+  type SessionCreateOverrides,
+  type SessionSeedMessage
+} from './create-overrides'
 import { pendingClarifyToolPayload, restorePendingClarifyFromSnapshot } from './restore-pending-clarify'
 import {
   createPersistedDisplayTranscriptProvenance,
@@ -541,7 +546,8 @@ export function useSessionActions({
       // an override — point $newChatProfile at it first (selectProfile-style)
       // so the create lands on that profile's own backend and every later
       // ambient RPC follows.
-      createOverrides?: SessionCreateOverrides
+      createOverrides?: SessionCreateOverrides,
+      onRuntimeSessionCreated?: RuntimeSessionCreatedCallback
     ): Promise<string | null> => {
       const startingStoredSessionId = selectedStoredSessionIdRef.current
       const startingRouteToken = getRouteToken()
@@ -659,6 +665,12 @@ export function useSessionActions({
 
           return null
         }
+
+        // The create belongs to this draft only after the existing route and
+        // selection drift guard passes. Publish the exact runtime id before
+        // navigation or selection changes so local consumers can distinguish
+        // this re-home from a user opening an existing conversation.
+        onRuntimeSessionCreated?.(created.session_id)
 
         resetViewSync()
         activeSessionIdRef.current = created.session_id

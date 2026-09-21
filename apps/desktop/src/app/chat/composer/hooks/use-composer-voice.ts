@@ -9,8 +9,9 @@ import { CONVERSATION_LEASE, READ_ALOUD_LEASE, syncTtsLease } from '@/lib/tts-le
 import { clearWakeIndicator, syncWakeIndicatorWithVoice } from '@/lib/wake-indicator'
 import { $voiceConversationStartRequest, takeVoiceConversationStart } from '@/store/composer'
 import { resetBrowseState } from '@/store/composer-input-history'
-import { $gateway } from '@/store/gateway'
+import { $activeGatewayRoute, $gateway } from '@/store/gateway'
 import { notify, notifyError } from '@/store/notifications'
+import { $activeSessionId, $gatewayState, $introSeed } from '@/store/session'
 import { $autoSpeakReplies, $voiceStopPhrase, setAutoSpeakReplies } from '@/store/voice-prefs'
 import { resumeWakeAfterVoice } from '@/store/wake-word'
 
@@ -39,6 +40,19 @@ interface UseComposerVoiceArgs {
   /** This composer's focus-bus key — voice toggles targeting another
    *  composer (or the active one, when not us) are ignored. */
   target: ComposerTarget
+}
+
+interface VoiceSessionOwnership {
+  createdRuntimeSessionId: string | null
+  primaryDraftGeneration: number | null
+  startingRuntimeSessionId: string | null
+}
+
+function ownsRuntimeSession(ownership: VoiceSessionOwnership, runtimeSessionId: string | null): boolean {
+  return (
+    runtimeSessionId === ownership.startingRuntimeSessionId ||
+    (ownership.startingRuntimeSessionId === null && runtimeSessionId === ownership.createdRuntimeSessionId)
+  )
 }
 
 /**
@@ -80,6 +94,30 @@ export function useComposerVoice({
     onTranscript: insertText,
     onTranscribeAudio
   })
+
+  const voiceSessionOwnershipRef = useRef<VoiceSessionOwnership | null>(null)
+  const currentRuntimeSessionId = useCallback(
+    () => (target === 'main' ? $activeSessionId.get() : (sessionId ?? null)),
+    [sessionId, target]
+  )
+  const ownsCurrentSession = useCallback(
+    (ownership: VoiceSessionOwnership) =>
+      ownership.primaryDraftGeneration === (target === 'main' ? $introSeed.get() : null) &&
+      ownsRuntimeSession(ownership, currentRuntimeSessionId()),
+    [currentRuntimeSessionId, target]
+  )
+  const startVoiceConversation = useCallback(() => {
+    voiceSessionOwnershipRef.current = {
+      createdRuntimeSessionId: null,
+      primaryDraftGeneration: target === 'main' ? $introSeed.get() : null,
+      startingRuntimeSessionId: currentRuntimeSessionId()
+    }
+    setVoiceConversationActive(true)
+  }, [currentRuntimeSessionId, target])
+  const stopVoiceConversation = useCallback(() => {
+    voiceSessionOwnershipRef.current = null
+    setVoiceConversationActive(false)
+  }, [])
 
   /** Auto-speak selector: the latest unspoken reply only — a backlog collapses to the newest. */
   const pendingResponse = () => {
@@ -125,6 +163,17 @@ export function useComposerVoice({
   }
 
   const submitVoiceTurn = async (text: string) => {
+    const ownership = voiceSessionOwnershipRef.current
+
+    // The async recorder may finish after this composer lost its session. Read
+    // the primary session from its authority instead of the render that began
+    // handle.stop(); a tile keeps using its own pinned runtime prop.
+    if (!ownership || !ownsCurrentSession(ownership)) {
+      stopVoiceConversation()
+
+      return
+    }
+
     if (busy) {
       return
     }
@@ -132,7 +181,24 @@ export function useComposerVoice({
     triggerHaptic('submit')
     resetBrowseState(sessionId)
     clearDraft()
-    await onSubmit(text)
+    await onSubmit(text, {
+      onRuntimeSessionCreated: runtimeSessionId => {
+        const activeOwnership = voiceSessionOwnershipRef.current
+
+        // Object identity prevents a late create callback from a stopped or
+        // replaced voice loop granting continuity to a newer conversation.
+        if (
+          activeOwnership !== ownership ||
+          !ownsCurrentSession(ownership) ||
+          ownership.startingRuntimeSessionId !== null ||
+          currentRuntimeSessionId() !== null
+        ) {
+          return
+        }
+
+        ownership.createdRuntimeSessionId = runtimeSessionId
+      }
+    })
   }
 
   const wakePausedRef = useRef(false)
@@ -147,7 +213,7 @@ export function useComposerVoice({
     busy,
     consumePendingResponse,
     enabled: voiceConversationActive,
-    onFatalError: () => setVoiceConversationActive(false),
+    onFatalError: stopVoiceConversation,
     // Speaking over the model mid-generation interrupts the in-flight turn —
     // the same seam as the Stop button — so the interjection becomes the next
     // turn instead of waiting behind a reply the user already rejected.
@@ -156,7 +222,7 @@ export function useComposerVoice({
     // hands-free conversation. Flipping the flag is the authoritative off
     // switch — the enabled=false prop + effect below drive conversation.end()
     // teardown (mic close, wake re-arm).
-    onStopWord: () => setVoiceConversationActive(false),
+    onStopWord: stopVoiceConversation,
     onSubmit: submitVoiceTurn,
     onTranscribeAudio,
     pendingResponse: pendingTurnResponse,
@@ -164,6 +230,45 @@ export function useComposerVoice({
     // to finish releasing the capture device (see wakePauseBarrierRef).
     beforeMicOpen: () => wakePauseBarrierRef.current ?? undefined
   })
+
+  // Stop synchronously at a routing boundary, before pending transcription
+  // promises can publish into the newly selected profile or connection.
+  useEffect(() => {
+    if (!voiceConversationActive) {
+      return
+    }
+
+    const stop = () => {
+      stopVoiceConversation()
+      void conversation.end()
+    }
+    const subscriptions = [
+      $gateway.listen(stop),
+      $activeGatewayRoute.listen(stop),
+      $gatewayState.listen(state => {
+        if (state !== 'open') {
+          stop()
+        }
+      })
+    ]
+    if (target === 'main') {
+      subscriptions.push($introSeed.listen(stop))
+    }
+    return () => subscriptions.forEach(unsubscribe => unsubscribe())
+  }, [conversation.end, stopVoiceConversation, target, voiceConversationActive])
+
+  useEffect(() => {
+    if (!voiceConversationActive) {
+      return
+    }
+
+    const ownership = voiceSessionOwnershipRef.current
+
+    if (disabled || !ownership || !ownsCurrentSession(ownership)) {
+      stopVoiceConversation()
+      void conversation.end()
+    }
+  }, [conversation.end, disabled, ownsCurrentSession, stopVoiceConversation, voiceConversationActive])
 
   // eslint-disable-next-line no-restricted-syntax -- ownership token used only by unmount cleanup
   useEffect(() => {
@@ -194,12 +299,12 @@ export function useComposerVoice({
     }
 
     if (voiceConversationActive) {
-      setVoiceConversationActive(false)
+      stopVoiceConversation()
       void conversation.end()
     } else {
-      setVoiceConversationActive(true)
+      startVoiceConversation()
     }
-  }, [conversation, disabled, voiceConversationActive])
+  }, [conversation, disabled, startVoiceConversation, stopVoiceConversation, voiceConversationActive])
 
   useEffect(
     () => onComposerVoiceToggleRequest(toggled => toggled === target && toggleVoiceConversation()),
@@ -208,9 +313,9 @@ export function useComposerVoice({
 
   useEffect(() => {
     if (target === 'main' && !disabled && takeVoiceConversationStart(voiceStartRequest) && !voiceConversationActive) {
-      setVoiceConversationActive(true)
+      startVoiceConversation()
     }
-  }, [disabled, target, voiceConversationActive, voiceStartRequest])
+  }, [disabled, startVoiceConversation, target, voiceConversationActive, voiceStartRequest])
 
   const resumeWakeIfPaused = useCallback(() => {
     if (!wakePausedRef.current) {
@@ -295,12 +400,12 @@ export function useComposerVoice({
 
   // Explicit start/end for the on-screen conversation controls (the hotkey uses
   // the gated toggle above).
-  const startConversation = useCallback(() => setVoiceConversationActive(true), [])
+  const startConversation = startVoiceConversation
 
   const endConversation = useCallback(() => {
-    setVoiceConversationActive(false)
+    stopVoiceConversation()
     void conversation.end()
-  }, [conversation])
+  }, [conversation, stopVoiceConversation])
 
   const handleToggleAutoSpeak = useCallback(() => {
     void setAutoSpeakReplies(!$autoSpeakReplies.get()).catch(error =>

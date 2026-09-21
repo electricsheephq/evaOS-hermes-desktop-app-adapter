@@ -16,13 +16,21 @@ export interface ConfigSchemaResponse {
   fields: Record<string, ConfigFieldSchema>
 }
 
-export interface AudioTranscriptionResponse {
+export interface VoiceProviderStatus {
+  primary_provider?: string
+  fallback_active?: boolean
+  fallback_provider?: string
+  fallback_reason?: 'credential' | 'quota' | 'availability'
+  primary_error?: string
+}
+
+export interface AudioTranscriptionResponse extends VoiceProviderStatus {
   ok: boolean
   provider?: string
   transcript: string
 }
 
-export interface AudioSpeakResponse {
+export interface AudioSpeakResponse extends VoiceProviderStatus {
   ok: boolean
   data_url: string
   mime_type: string

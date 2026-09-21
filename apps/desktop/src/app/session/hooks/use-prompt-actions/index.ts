@@ -3,7 +3,8 @@ import { JsonRpcGatewayError } from '@hermes/shared'
 import { useStore } from '@nanostores/react'
 import { type MutableRefObject, useCallback, useEffect, useRef } from 'react'
 
-import { transcribeAudio } from '@/hermes'
+import { capabilityScoped } from '@/api/client'
+import { getApiRequestConnection, getApiRequestProfile, transcribeAudio } from '@/hermes'
 import { useI18n } from '@/i18n'
 import { stripAnsi } from '@/lib/ansi'
 import { type ChatMessage, textPart } from '@/lib/chat-messages'
@@ -50,6 +51,11 @@ import type {
   ImageAttachResponse,
   SessionRedirectResponse
 } from '../../../types'
+import type {
+  RuntimeSessionCreatedCallback,
+  SessionCreateOverrides,
+  SessionSeedMessage
+} from '../use-session-actions/create-overrides'
 
 import {
   appendMidTurnUserMessage,
@@ -229,7 +235,12 @@ interface PromptActionsOptions {
   activeSessionIdRef: MutableRefObject<string | null>
   busyRef: MutableRefObject<boolean>
   branchCurrentSession: () => Promise<boolean>
-  createBackendSessionForSend: (preview?: string | null) => Promise<string | null>
+  createBackendSessionForSend: (
+    preview?: string | null,
+    seedMessages?: SessionSeedMessage[],
+    createOverrides?: SessionCreateOverrides,
+    onRuntimeSessionCreated?: RuntimeSessionCreatedCallback
+  ) => Promise<string | null>
   getRoutedStoredSessionId: () => null | string
   getRuntimeIdForStoredSession: (storedSessionId: string) => null | string
   getRouteToken: () => string
@@ -628,6 +639,19 @@ export function usePromptActions({
       if (!sttEnabled) {
         throw new Error(copy.sttDisabled)
       }
+      const connection = getApiRequestConnection()
+      const profile = getApiRequestProfile()
+      const scope = capabilityScoped()
+      const session = selectedStoredSessionIdRef.current
+      const assertCurrent = () => {
+        if (
+          connection !== getApiRequestConnection() ||
+          profile !== getApiRequestProfile() ||
+          session !== selectedStoredSessionIdRef.current
+        ) {
+          throw new DOMException('Voice conversation changed', 'AbortError')
+        }
+      }
 
       // Client-direct first: mic audio goes straight to the profile's STT
       // provider (config + key fetched from the connected gateway), cutting
@@ -636,13 +660,23 @@ export function usePromptActions({
       // Provider REJECTIONS surface — re-running the same request through
       // the relay would fail identically, just slower.
       const direct = await transcribeAudioClientDirect(audio)
+      assertCurrent()
 
       if (direct !== null) {
         return direct
       }
 
       const dataUrl = await blobToDataUrl(audio)
-      const result = await transcribeAudio(dataUrl, audio.type)
+      assertCurrent()
+      const result = await transcribeAudio(dataUrl, audio.type, scope)
+      assertCurrent()
+      if (result.fallback_active) {
+        notify({
+          kind: 'warning',
+          title: 'Fish Audio → Speaches',
+          message: result.primary_error ?? 'Using local speech fallback.'
+        })
+      }
 
       return result.transcript
     },

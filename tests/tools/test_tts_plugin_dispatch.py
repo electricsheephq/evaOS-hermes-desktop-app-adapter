@@ -37,6 +37,56 @@ from agent.tts_provider import TTSProvider
 from tools import tts_tool
 
 
+def test_provider_status_is_request_scoped_and_sanitized(tmp_path, monkeypatch):
+    import json
+    from pathlib import Path
+    from tools import tts_tool_plugins
+
+    class StatusProvider(_FakeTTSProvider):
+        def synthesize(self, text, output_path, **kw):
+            kw["result_metadata"].update(primary_provider="fish-audio", fallback_active=text == "fallback")
+            if text == "fallback":
+                kw["result_metadata"].update(fallback_provider="evaos-speaches-loopback",
+                    fallback_reason="quota", primary_error="unsafe provider body", api_key="fixture-secret")
+            Path(output_path).write_bytes(b"synthetic audio")
+            return output_path
+
+    provider = StatusProvider(name="status-test")
+    monkeypatch.setattr(tts_tool_plugins, "_lookup_plugin_provider", lambda *a, **kw: provider)
+    results = []
+    for text in ("fallback", "primary"):
+        results.append(json.loads(tts_tool._text_to_speech_single(text, str(tmp_path / f"{text}.mp3"),
+            provider="status-test", tts_config={}, command_provider_config=None, want_opus=False, instructions=None)))
+    assert results[0]["success"] and results[1]["success"]
+    assert results[0]["fallback_active"] is True
+    assert results[0]["primary_error"] == "Fish Audio quota is unavailable"
+    assert "fixture-secret" not in json.dumps(results) and "unsafe provider body" not in json.dumps(results)
+    assert results[1]["fallback_active"] is False
+    assert "fallback_provider" not in results[1]
+
+
+def test_optional_status_preserves_narrow_provider_signature(monkeypatch):
+    from tools import tts_tool_plugins
+
+    class NarrowProvider:
+        calls = 0
+
+        def synthesize(self, text, output_path, *, voice=None, model=None, speed=None, format="mp3"):
+            self.calls += 1
+            assert (text, voice, model, speed, format) == ("fixture", "voice", "model", 1.0, "mp3")
+            return output_path
+
+    provider = NarrowProvider()
+    monkeypatch.setattr(tts_tool_plugins, "_lookup_plugin_provider", lambda *a, **kw: provider)
+    metadata = {}
+    result = tts_tool_plugins._dispatch_to_plugin_provider(
+        "fixture", "/unused/fixture.mp3", "narrow-fixture",
+        {"voice": "voice", "model": "model", "speed": 1.0}, result_metadata=metadata)
+    assert result == "/unused/fixture.mp3"
+    assert provider.calls == 1
+    assert metadata == {}
+
+
 class _FakeTTSProvider(TTSProvider):
     def __init__(
         self,
