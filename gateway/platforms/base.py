@@ -4027,7 +4027,8 @@ class BasePlatformAdapter(ABC):
                     try:
                         _tts_caption_delivered |= await self._play_tts_file(
                             event, text_content, _tts_path, _tts_index == 0, _final_thread_metadata,
-                            _record_delivery, provider_status=_tts_provider_status)
+                            _record_delivery,
+                            provider_status=_tts_provider_status if _tts_index == 0 else None)
                     finally:
                         with contextlib.suppress(OSError):
                             os.remove(_tts_path)
