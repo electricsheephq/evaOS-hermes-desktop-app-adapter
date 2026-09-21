@@ -499,7 +499,7 @@ def _resolve_backend_cdp(env: dict, task_id: Optional[str], session_name: str = 
             f"Cloud browser provider {provider_name} returned no CDP endpoint after a create failure "
             f"(code: {code}). {local_err}",
             code=code,
-            retryable=isinstance(status, int) and status >= 500,
+            retryable=status == 429 or (isinstance(status, int) and status >= 500),
         )
 
     cdp = str(session_info.get("cdp_url") or "")
@@ -542,6 +542,9 @@ def _resolve_real_profile_cdp(env: dict, force_local: bool) -> Optional[str]:
     cdp, err = _real_profile_cdp()
     if cdp and not err:
         _set_cdp_env(env, cdp)
+    elif force_local and not err:
+        return ("local=true needs a desktop browser profile on this host and none exists; omit `local` "
+                "to use the configured browser backend.")
     return err or None
 
 

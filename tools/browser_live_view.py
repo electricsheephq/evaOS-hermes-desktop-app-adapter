@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import time
 from typing import Any, Dict, Optional
 
 from tools.browser_use_cli import _SESSION_RE, _backend_cache_key
 from tools.registry import registry, tool_error, tool_result
+
+LIVE_VIEW_HOLD_SECONDS = 900
 
 
 def _live_view_provider():
@@ -77,9 +80,15 @@ def browser_live_view(session: str = "", task_id: Optional[str] = None) -> str:
             code="browser_invalid_response",
             retryable=False,
         )
+    from tools import browser_tool
+
+    key = _backend_cache_key(task_id, session)
+    with browser_tool._cleanup_lock:
+        browser_tool._session_last_activity[key] = time.time() + LIVE_VIEW_HOLD_SECONDS
     return tool_result(
         success=True,
         live_view_url=url,
+        hold_seconds=LIVE_VIEW_HOLD_SECONDS,
         instruction="Send this link to the user. They type into the remote page themselves.",
     )
 
@@ -89,7 +98,8 @@ BROWSER_LIVE_VIEW_SCHEMA = {
     "description": (
         "Get a live-view link for an existing Browserbase session without creating a browser. Use when the "
         "user asks to watch, or when a step needs the human to act in the page (login, MFA, or payment). "
-        "Send the link and say plainly that the user types into the remote page themselves."
+        "Send the link and say plainly that the user types into the remote page themselves. The session is "
+        "kept open for 15 minutes after the link is issued; call this tool again to extend the hold."
     ),
     "parameters": {
         "type": "object",

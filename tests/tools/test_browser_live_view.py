@@ -6,6 +6,7 @@ import pytest
 import model_tools
 import tools.browser_live_view as live_view
 import tools.browser_tool as browser_tool
+import tools.browser_tool_lifecycle as browser_lifecycle
 from plugins.browser._common import CloudBrowserAPIError
 from tools.registry import registry
 
@@ -31,6 +32,7 @@ def existing_named_session(monkeypatch):
         "_active_sessions",
         {"bu-named-research": {"bb_session_id": "provider-session-1"}},
     )
+    monkeypatch.setattr(browser_tool, "_session_last_activity", {"bu-named-research": 123.0})
 
 
 def test_named_session_returns_link_without_logging_it(
@@ -38,15 +40,24 @@ def test_named_session_returns_link_without_logging_it(
 ):
     provider = _FakeBrowserbase()
     monkeypatch.setattr("tools.browser_tool_cloud._get_cloud_provider", lambda: provider)
+    monkeypatch.setattr(live_view.time, "time", lambda: 1_000.0)
 
     with caplog.at_level(logging.DEBUG):
         result = json.loads(live_view.browser_live_view(session="research", task_id="task-1"))
 
     assert result["success"] is True
     assert result["live_view_url"] == "https://watch.example/session"
+    assert result["hold_seconds"] == 900
     assert "type into the remote page themselves" in result["instruction"]
     assert provider.seen == ["provider-session-1"]
     assert result["live_view_url"] not in caplog.text
+    assert browser_tool._session_last_activity["bu-named-research"] == 1_900.0
+
+    monkeypatch.setattr(browser_lifecycle.time, "time", lambda: 1_300.0)
+    monkeypatch.setattr(
+        browser_lifecycle, "cleanup_browser", lambda task_id: pytest.fail(task_id)
+    )
+    browser_lifecycle._cleanup_inactive_browser_sessions()
 
 
 @pytest.mark.parametrize(
@@ -75,6 +86,7 @@ def test_provider_error_codes_are_typed(
     assert result["code"] == code
     assert result["retryable"] is retryable
     assert "https://" not in result["error"]
+    assert browser_tool._session_last_activity["bu-named-research"] == 123.0
 
 
 def test_missing_named_session_does_not_create_one(monkeypatch):
@@ -107,3 +119,4 @@ def test_schema_explains_human_takeover():
     description = live_view.BROWSER_LIVE_VIEW_SCHEMA["description"]
     assert "login, MFA, or payment" in description
     assert "user types into the remote page themselves" in description
+    assert "kept open for 15 minutes" in description

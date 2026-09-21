@@ -514,6 +514,33 @@ class TestBrowserExecLocalArg:
         assert err == "chrome exited"
         assert "BU_CDP_URL" not in env
 
+    def test_force_local_without_profile_returns_tool_error_before_provider(self):
+        import tools.browser_use_cli as bu
+        with patch.object(bu, "_real_profile_consented", return_value=True), \
+             patch.object(bu, "_find_cli", return_value=["browser-use"]), \
+             patch.object(bu, "_base_subprocess_env", return_value={}), \
+             patch("tools.browser_tool_cdp._get_cdp_override_raw", return_value=""), \
+             patch("tools.browser_tool_cloud._get_cloud_provider") as provider_lookup, \
+             patch("tools.browser_tool_real_profile._real_profile_cdp", return_value=(None, None)):
+            result = json.loads(bu.browser_exec("print(1)", local=True))
+        assert result["error"] == (
+            "local=true needs a desktop browser profile on this host and none exists; omit `local` "
+            "to use the configured browser backend."
+        )
+        provider_lookup.assert_not_called()
+
+    def test_unforced_local_backend_without_profile_stays_inert(self):
+        import tools.browser_use_cli as bu
+        env = self._env()
+        with patch.object(bu, "_real_profile_consented", return_value=True), \
+             patch.object(bu, "_read_browser_cfg", return_value={}), \
+             patch("tools.browser_tool_cdp._get_cdp_override_raw", return_value=""), \
+             patch("tools.browser_tool_cloud._get_cloud_provider", return_value=None), \
+             patch("tools.browser_tool_real_profile._real_profile_cdp", return_value=(None, None)):
+            err = bu._resolve_real_profile_cdp(env, force_local=False)
+        assert err is None
+        assert env == {}
+
     def test_explicit_bu_env_override_wins(self):
         import tools.browser_use_cli as bu
         env = {"BU_CDP_WS": "ws://operator-override"}

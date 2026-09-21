@@ -627,6 +627,32 @@ class TestBackendCdpResolution:
         assert result["code"] == "browser_unavailable"
         assert result["retryable"] is True
 
+    def test_rate_limited_degraded_record_stays_retryable_when_local_fallback_fails(
+        self, monkeypatch
+    ):
+        monkeypatch.setattr("tools.browser_tool_cdp._get_cdp_override", lambda: "")
+        monkeypatch.setattr(bt_cloud, "_get_cloud_provider", lambda: object())
+        monkeypatch.setattr(
+            bt_session,
+            "_get_session_info",
+            lambda task_id: {
+                "cdp_url": None,
+                "fallback_from_cloud": True,
+                "fallback_error_code": "rate_limited",
+                "fallback_status_code": 429,
+            },
+        )
+        monkeypatch.setattr(
+            bu_cli,
+            "_resolve_managed_chromium_cdp",
+            lambda env, task_id, session_name="": "managed Chromium failed",
+        )
+
+        err = bu_cli._resolve_backend_cdp(self._env(), "t1")
+
+        assert err.code == "rate_limited"
+        assert err.retryable is True
+
     def test_other_provider_failure_includes_code_not_body(self, monkeypatch):
         from plugins.browser._common import CloudBrowserAPIError
 
