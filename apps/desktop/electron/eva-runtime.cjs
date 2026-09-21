@@ -180,17 +180,12 @@ function reconcileSupportLeases(leases, delegatedSupport) {
 }
 
 // Directory rows are broker-authored: keep only the fields the picker renders,
-// bounded, and only rows that can actually be started (assignment allowed, a VM
-// and ≥1 profile), exactly as the dashboard picker filters them. A row the
-// broker marks unassignable must never reach the operator's list. The caps
-// count rows KEPT, so unusable rows cannot crowd startable ones out of the list.
+// bounded, and only rows with a VM and ≥1 profile. The caps count rows KEPT, so
+// unusable rows cannot crowd startable ones out of the list.
 function normalizeSupportClients(rows) {
   const clients = []
   for (const row of Array.isArray(rows) ? rows : []) {
     if (clients.length >= SUPPORT_CLIENTS_MAX) break
-    // `!== false` and not `=== true`: a broker that predates the field still
-    // lists, exactly like the dashboard's `assignment_allowed !== false`.
-    if (row?.assignment_allowed === false) continue
     const customerAccountId = normalizeSupportUuid(row?.customer_account_id)
     const customerVmId = normalizeSupportUuid(row?.customer_vm_id)
     if (!customerAccountId || !customerVmId) continue
