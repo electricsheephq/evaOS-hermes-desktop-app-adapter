@@ -30,6 +30,7 @@ from typing import Any, Callable, Dict, List, Mapping, Optional, Set, Tuple, Uni
 from hermes_constants import get_hermes_home, hermes_home_key
 from registration_lifecycle import replacement_coordinator
 from utils import env_var_enabled
+from hermes_cli import managed_scope
 from hermes_cli.config import load_config_readonly
 from hermes_cli.middleware import VALID_MIDDLEWARE
 from hermes_cli.plugin_capabilities import plugin_capability_granted
@@ -1304,6 +1305,7 @@ class PluginManager(PluginLoaderMixin, PluginDispatchMixin, PluginLedgerMixin):
         ep_manifests = self._scan_entry_points()
         logger.debug("  entrypoints: %d manifest(s)", len(ep_manifests))
         manifests.extend(ep_manifests)
+        manifests = managed_scope.filter_managed_plugin_candidates(manifests, manifest_key)
         disabled = _get_disabled_plugins()
         enabled = _get_enabled_plugins()  # None = opt-in default (nothing enabled)
         stale_relay_keys = legacy_relay_plugin_keys(enabled)
@@ -1404,7 +1406,10 @@ class PluginManager(PluginLoaderMixin, PluginDispatchMixin, PluginLedgerMixin):
         disabled = _names(plugins_config.get("disabled", []))
         if not enabled:
             return False
-        for lookup_key, manifest in {manifest_key(m): m for m in self._collect_directory_manifests()}.items():
+        manifests = managed_scope.filter_managed_plugin_candidates(
+            self._collect_directory_manifests(), manifest_key
+        )
+        for lookup_key, manifest in {manifest_key(m): m for m in manifests}.items():
             names = {lookup_key, manifest.name}
             if not manifest.portable or names & disabled or not names & enabled:
                 continue

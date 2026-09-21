@@ -122,6 +122,75 @@ def _make_plugin_dir(base: Path, name: str, *, register_body: str = "pass",
 class TestPluginDiscovery:
     """Tests for plugin discovery from directories and entry points."""
 
+    def test_managed_plugin_directory_wins_over_manifest_name_shadow(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        from hermes_cli import managed_scope
+        from hermes_cli import plugins as plugins_mod
+
+        managed_dir = tmp_path / "managed-scope"
+        managed_dir.mkdir()
+        (managed_dir / "config.yaml").write_text(
+            "plugins:\n  enabled: [managed-plugin]\n", encoding="utf-8"
+        )
+        monkeypatch.setenv("HERMES_MANAGED_DIR", str(managed_dir))
+        managed_scope.invalidate_managed_cache()
+        legitimate = PluginManifest(
+            name="managed-plugin", key="managed-plugin", source="bundled",
+            path=str(tmp_path / "bundled" / "managed-plugin"),
+        )
+        shadow = PluginManifest(
+            name="managed-plugin", key="zz-x", source="user",
+            path=str(tmp_path / "home" / "plugins" / "zz-x"),
+        )
+        manager = PluginManager()
+        monkeypatch.setattr(manager, "_collect_directory_manifests", lambda: [legitimate, shadow])
+        monkeypatch.setattr(manager, "_scan_entry_points", lambda: [])
+        monkeypatch.setattr(plugins_mod, "_get_enabled_plugins", lambda: {"managed-plugin"})
+        monkeypatch.setattr(plugins_mod, "_get_disabled_plugins", lambda: set())
+        loaded = []
+        monkeypatch.setattr(manager, "_load_plugin", loaded.append)
+
+        with caplog.at_level(logging.WARNING):
+            manager.discover_and_load()
+
+        assert loaded == [legitimate]
+        assert caplog.text.count("managed plugin identity") == 1
+
+    def test_portable_probe_skips_managed_plugin_name_shadow(self, tmp_path, monkeypatch, caplog):
+        from hermes_cli import managed_scope
+
+        managed_dir = tmp_path / "managed-scope"
+        managed_dir.mkdir()
+        (managed_dir / "config.yaml").write_text(
+            "plugins:\n  enabled: [managed-plugin]\n", encoding="utf-8"
+        )
+        monkeypatch.setenv("HERMES_MANAGED_DIR", str(managed_dir))
+        managed_scope.invalidate_managed_cache()
+        legitimate = PluginManifest(
+            name="managed-plugin", key="managed-plugin", source="bundled", portable=True,
+            path=str(tmp_path / "bundled" / "managed-plugin"),
+        )
+        shadow = PluginManifest(
+            name="managed-plugin", key="zz-x", source="user", portable=True,
+            path=str(tmp_path / "home" / "plugins" / "zz-x"),
+        )
+        manager = PluginManager()
+        monkeypatch.setattr(manager, "_collect_directory_manifests", lambda: [legitimate, shadow])
+        seen = []
+        monkeypatch.setattr(
+            "hermes_cli.agent_plugins._discover_mcp",
+            lambda path, *_args, **_kwargs: seen.append(path) or None,
+        )
+
+        with caplog.at_level(logging.WARNING):
+            assert manager.has_enabled_portable_mcp(
+                {"plugins": {"enabled": ["managed-plugin"]}}
+            ) is False
+
+        assert seen == [Path(legitimate.path)]
+        assert caplog.text.count("managed plugin identity") == 1
+
     def test_removed_relay_plugin_identity_cannot_be_reloaded(
         self, monkeypatch, caplog
     ):
