@@ -37,7 +37,7 @@ import type { ChatMessage } from '@/lib/chat-messages'
 import { NEW_SESSION_TITLE, sessionTitle } from '@/lib/chat-runtime'
 import { transcribeAudioClientDirect } from '@/lib/voice-client-direct'
 import { notifyVoiceFallback } from '@/lib/voice-fallback-notice'
-import { captureVoiceOwnerScope } from '@/lib/voice-session-owner'
+import { captureVoiceOwnerScope, useSessionVoiceOwner } from '@/lib/voice-session-owner'
 import { createComposerAttachmentScope, draftTitleFor } from '@/store/composer'
 import { $pinnedSessionIds, pinSession, unpinSession } from '@/store/layout'
 import { $activeGatewayProfile } from '@/store/profile'
@@ -53,7 +53,7 @@ import {
   sessionPinId
 } from '@/store/session'
 import { isSessionRemovalPending } from '@/store/session-removal'
-import { requestForSessionProfile } from '@/store/session-request-router'
+import { requestForSessionProfile, type SessionOwnerRoute } from '@/store/session-request-router'
 import {
   $sessionStates,
   $sessionTileDelegateRevision,
@@ -161,6 +161,25 @@ function buildTileView(storedSessionId: string): SessionView {
 // tiles have no pin/delete affordance, and transcription needs no per-tile state.
 const noop = () => undefined
 
+/** Explicit tile identity disambiguates collisions; inferred owners must fail closed. */
+export function tileVoiceOwner(
+  explicitOwner: SessionOwnerRoute | undefined,
+  inferredOwner: OwnerScope,
+  legacyOwner: SessionOwnerRoute | undefined
+): OwnerScope {
+  if (explicitOwner) {
+    return { connectionId: explicitOwner.connectionId, profile: explicitOwner.targetProfile || explicitOwner.profile }
+  }
+
+  if (inferredOwner.voiceOwnerUnavailable || inferredOwner.connectionId || inferredOwner.profile) {
+    return inferredOwner
+  }
+
+  return legacyOwner
+    ? { connectionId: legacyOwner.connectionId, profile: legacyOwner.targetProfile || legacyOwner.profile }
+    : {}
+}
+
 export const tileTranscribeAudio = async (
   audio: Blob,
   owner: OwnerScope,
@@ -216,6 +235,14 @@ function TileChat({
     return tileOwnerRoute(tiles, rows, storedSessionId)
   }, [cronRows, messagingRows, sessionRows, storedSessionId, tiles])
 
+  const inferredVoiceOwner = useSessionVoiceOwner(storedSessionId)
+
+  const voiceOwner = tileVoiceOwner(
+    tiles.find(tile => tile.storedSessionId === storedSessionId)?.ownerRoute,
+    inferredVoiceOwner,
+    ownerRoute
+  )
+
   const requestTileGateway = useCallback(
     <T,>(method: string, params?: Record<string, unknown>, timeoutMs?: number, signal?: AbortSignal): Promise<T> =>
       requestForSessionProfile<T>(ownerRoute, requestGateway, method, params, timeoutMs, signal),
@@ -241,15 +268,16 @@ function TileChat({
       $awaitingInput: sessionAwaitingInput(runtimeId),
       $messages: view.$messages,
       attachments,
-      connectionId: ownerRoute?.connectionId || undefined,
-      profile: ownerRoute?.targetProfile || ownerRoute?.profile || undefined,
+      connectionId: voiceOwner.connectionId,
+      profile: voiceOwner.profile,
+      voiceOwnerUnavailable: voiceOwner.voiceOwnerUnavailable,
       target: `tile:${storedSessionId}`
     }),
     [
       attachments,
-      ownerRoute?.connectionId,
-      ownerRoute?.profile,
-      ownerRoute?.targetProfile,
+      voiceOwner.connectionId,
+      voiceOwner.profile,
+      voiceOwner.voiceOwnerUnavailable,
       runtimeId,
       storedSessionId,
       view.$messages
@@ -274,7 +302,8 @@ function TileChat({
         audio,
         {
           connectionId: scope.connectionId,
-          profile: scope.profile
+          profile: scope.profile,
+          voiceOwnerUnavailable: scope.voiceOwnerUnavailable
         },
         () => {
           if (!voiceMounted.current || voiceOwnerRef.current !== scope) {
