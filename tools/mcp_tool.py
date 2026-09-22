@@ -319,7 +319,7 @@ class MCPServerTask(MCPServerRunMixin, MCPServerTransportMixin, MCPServerHealthM
         "_recycled_reason", "initialize_result", "_ping_unsupported", "_list_cache_meta",
         "_reconnect_retries", "_session_proven", "_was_parked", "_inflight_tasks", "_reconnecting",
         "_suspect_reason", "_teardown_race", "_permanent_grace_used", "_stdio_child_pids",
-        "_ever_connected")
+        "_ever_connected", "_parked_log_key")
 
     def __init__(self, name: str, registration_home: Optional[str] = None):
         self.name = name
@@ -356,6 +356,15 @@ class MCPServerTask(MCPServerRunMixin, MCPServerTransportMixin, MCPServerHealthM
         self._ever_connected: bool = False
         # True from park until proven healthy again; logs the revival once.
         self._was_parked: bool = False
+        # The failure this parked episode has already logged, or None. The timed self-probe re-fails
+        # every _PARKED_RETRY_INTERVAL and must not repeat the WARNING (#337); every permanent park
+        # re-probes on that timer -- a 401, a 403, an OAuth setup failure, a bad command -- so the
+        # latch covers the park, not one error class. It holds the failure's key rather than a flag
+        # so a DIFFERENT permanent failure still warns: after a login succeeds, the next probe can
+        # hit a new blocker, and that diagnosis must not be hidden under the old episode. Cleared
+        # when the session is PROVEN (keepalive or a tool call), not at the handshake -- a server
+        # that connects and drops again is exactly the flapping case this latch is for.
+        self._parked_log_key: Optional[str] = None
         # In-flight RPC tasks so a deliberate teardown fails them fast; _reconnecting is True
         # during that teardown so _track_inflight_rpc turns the cancel into a retryable error.
         # In-flight RPC bookkeeping (#48069 salvage): user-visible requests registered while running so a

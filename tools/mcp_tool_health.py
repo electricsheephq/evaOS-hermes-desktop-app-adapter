@@ -204,6 +204,9 @@ class MCPServerHealthMixin:
             return
         self._session_proven = True
         self._reconnect_retries = 0
+        # The parked-episode log latch ends here too, not at the handshake: a server that connects
+        # and drops again keeps its episode, so a flapping permanent failure stays deduped (#337).
+        self._clear_parked_log()
         if self._was_parked:
             self._was_parked = False
             logger.warning("MCP server '%s': revived — session healthy again after "

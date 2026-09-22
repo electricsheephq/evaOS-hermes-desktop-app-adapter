@@ -445,16 +445,52 @@ class MCPServerRunMixin:
         await self._backoff_sleep(budget)
         return not self._shutdown_event.is_set()
 
+    @staticmethod
+    def _parked_log_key_for(root: BaseException) -> str:
+        """The identity of a parked failure for log dedup: its type, plus an HTTP status when there
+        is one so a 401 and a 403 are different episodes rather than one."""
+        status = getattr(getattr(root, "response", None), "status_code", None)
+        return f"{type(root).__name__}:{status}" if status is not None else type(root).__name__
+
+    def _claim_parked_log(self, key: str) -> bool:
+        """True for the FIRST park of an episode AND whenever the failure CHANGES, False while the
+        server stays parked on the same unusable condition; :meth:`_clear_parked_log` re-arms it.
+        Instance-scoped like ``_was_parked`` rather than a module-level set: the episode belongs to
+        this task, and two multiplex profiles can hold the same server name in one process."""
+        if self._parked_log_key == key:
+            return False
+        self._parked_log_key = key
+        return True
+
+    def _clear_parked_log(self) -> None:
+        """End the parked episode: the next permanent failure is a new one and logs in full."""
+        self._parked_log_key = None
+
     async def _on_initial_connect_error(self, exc: Exception, root: BaseException,
                                         failure_class: str, budget: "_RetryBudget") -> bool:
         if failure_class == "permanent":
             # Deterministic failure (bad command, non-MCP URL, 401/403): park at once; auth
             # failures park (not return) so the task can pick up fresh tokens later.
-            detail = (f"authentication, parking until credentials change; re-authenticate with "
-                      f"`hermes mcp login {self.name}`" if _errors._is_auth_error(root)
-                      else "connection with a permanent error, parking without retries")
-            logger.warning("MCP server '%s' failed initial %s (state: connecting → parked): %s: %s",
-                           self.name, detail, type(root).__name__, root)
+            # The park is TIMED (_park), so a condition the probe cannot change re-fails on every
+            # wake: one identical WARNING per _PARKED_RETRY_INTERVAL for as long as the server stays
+            # parked (#337, measured at 24/hour on one profile). That is true of every permanent
+            # park -- 401, 403, an OAuth setup failure, a bad command -- so the episode latch is on
+            # the park, not on one error class. The first failure of an episode is a WARNING; the
+            # re-probes are DEBUG.
+            if _errors._is_auth_error(root):
+                # Describe what the code does -- the old wording promised a credential-change wait
+                # the park does not implement -- and keep the remedy conditional: _is_auth_error is
+                # any 401, which includes a server holding a static header key in config.yaml, where
+                # `hermes mcp login` is not the fix.
+                detail = (f"authentication, parking; re-probing every {_core._PARKED_RETRY_INTERVAL}s — if this "
+                          f"server signs in interactively, run `hermes mcp login {self.name}` and the next "
+                          f"probe picks the new credentials up; a static key is corrected in the config")
+            else:
+                detail = (f"connection with a permanent error, parking without retries; re-probing every "
+                          f"{_core._PARKED_RETRY_INTERVAL}s")
+            log = logger.warning if self._claim_parked_log(self._parked_log_key_for(root)) else logger.debug
+            log("MCP server '%s' failed initial %s (state: connecting → parked): %s: %s",
+                self.name, detail, type(root).__name__, root)
             return await self._park_initial_failure(exc, "after permanent initial failure", budget)
         budget.initial_retries += 1
         if budget.initial_retries > _core._MAX_INITIAL_CONNECT_RETRIES:
@@ -485,8 +521,12 @@ class MCPServerRunMixin:
             self._reconnect_retries, budget.backoff = 0, 1.0
             await asyncio.sleep(_jittered(1.0))
             return not self._shutdown_event.is_set()
-        # Deterministic failure on a working server: park now.
-        logger.warning(
+        # Deterministic failure on a working server: park now. It re-fails on every timed self-probe
+        # exactly as it does on the initial-connect path, so it logs once per parked episode too
+        # (#337) — this is the path a server reaches after it HAS connected, and a real session is
+        # what re-arms the latch.
+        log = logger.warning if self._claim_parked_log(self._parked_log_key_for(root)) else logger.debug
+        log(
             "MCP server '%s' hit a permanent error, parking without retries; will self-probe every %ds "
             "(state: connected → parked): %s: %s", self.name, _core._PARKED_RETRY_INTERVAL, type(root).__name__, root)
         return await self._park_and_rearm("from parked state (permanent error)", budget)
