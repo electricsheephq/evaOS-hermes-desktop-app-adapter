@@ -117,6 +117,8 @@ class MCPServerTransportMixin:
         await self._discover_tools()
         self._ready.set()
         self._ever_connected = True
+        # A real session ends any parked-auth episode: the next auth failure is new (#337).
+        self._clear_parked_auth_log()
         _core._reset_server_error(self.name)
         # Session is live again: clear any breaker state from a prior outage so the first call after
         # recovery isn't gated on a stale consecutive-failure count (#16788).
