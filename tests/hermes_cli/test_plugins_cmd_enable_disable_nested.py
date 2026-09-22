@@ -41,6 +41,22 @@ def nested_plugin_env(tmp_path):
     return tmp_path
 
 
+@pytest.fixture
+def managed_plugin_policy(tmp_path, monkeypatch):
+    from hermes_cli import managed_scope
+
+    managed_dir = tmp_path / "managed"
+    managed_dir.mkdir()
+    (managed_dir / "config.yaml").write_text(
+        "plugins:\n  enabled: [required]\n  disabled: [blocked]\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HERMES_MANAGED_DIR", str(managed_dir))
+    managed_scope.invalidate_managed_cache()
+    yield
+    managed_scope.invalidate_managed_cache()
+
+
 # ---------------------------------------------------------------------------
 # _resolve_plugin_key
 # ---------------------------------------------------------------------------
@@ -84,6 +100,43 @@ class TestResolvePluginKey:
 
 
 class TestEnableDisableNested:
+    def test_enable_managed_denied_reports_effective_state(
+        self, monkeypatch, capsys, managed_plugin_policy
+    ):
+        from hermes_cli import plugins_cmd
+
+        monkeypatch.setattr(
+            plugins_cmd,
+            "_resolve_plugin_key_and_source",
+            lambda _name: ("blocked", "bundled"),
+        )
+        monkeypatch.setattr(plugins_cmd, "_get_enabled_set", lambda: set())
+        monkeypatch.setattr(plugins_cmd, "_get_disabled_set", lambda: {"blocked"})
+        monkeypatch.setattr(plugins_cmd, "_discover_all_plugins", lambda: [])
+        monkeypatch.setattr(plugins_cmd, "_save_plugin_sets", lambda *_args: None)
+
+        plugins_cmd.cmd_enable("blocked")
+
+        output = capsys.readouterr().out
+        assert "is denied by managed policy; it stays disabled" in output
+        assert "enabled. Takes effect" not in output
+
+    def test_disable_managed_required_reports_effective_state(
+        self, monkeypatch, capsys, managed_plugin_policy
+    ):
+        from hermes_cli import plugins_cmd
+
+        monkeypatch.setattr(plugins_cmd, "_resolve_plugin_key", lambda _name: "required")
+        monkeypatch.setattr(plugins_cmd, "_get_enabled_set", lambda: {"required"})
+        monkeypatch.setattr(plugins_cmd, "_get_disabled_set", lambda: set())
+        monkeypatch.setattr(plugins_cmd, "_save_plugin_sets", lambda *_args: None)
+
+        plugins_cmd.cmd_disable("required")
+
+        output = capsys.readouterr().out
+        assert "is required by managed policy; it stays enabled" in output
+        assert "disabled. Takes effect" not in output
+
     @patch("hermes_cli.plugins.get_bundled_plugins_dir")
     @patch("hermes_cli.plugins_cmd._plugins_dir")
     @patch("hermes_cli.plugins_cmd._save_disabled_set")
