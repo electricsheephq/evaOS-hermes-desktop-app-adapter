@@ -100,6 +100,30 @@ class TestResolvePluginKey:
 
 
 class TestEnableDisableNested:
+    def test_disable_then_enable_persists_profile_selection(
+        self, tmp_path, monkeypatch, managed_plugin_policy
+    ):
+        from hermes_cli import plugins, plugins_cmd
+        from hermes_cli.config import read_raw_config
+
+        home = tmp_path / "home"
+        home.mkdir()
+        (home / "config.yaml").write_text(
+            "plugins:\n  enabled: [example]\n  disabled: []\n",
+            encoding="utf-8",
+        )
+        bundled = tmp_path / "bundled"
+        _make_plugin_dir(bundled, "example", {"name": "example", "version": "1.0.0"})
+        monkeypatch.setenv("HERMES_HOME", str(home))
+        monkeypatch.setattr(plugins, "get_bundled_plugins_dir", lambda: bundled)
+
+        plugins_cmd.cmd_disable("example")
+        plugins_cmd.cmd_enable("example")
+
+        saved = read_raw_config()["plugins"]
+        assert "example" in saved["enabled"]
+        assert "example" not in saved["disabled"]
+
     def test_enable_managed_denied_reports_effective_state(
         self, monkeypatch, capsys, managed_plugin_policy
     ):
