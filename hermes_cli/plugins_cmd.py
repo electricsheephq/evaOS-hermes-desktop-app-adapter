@@ -917,8 +917,12 @@ def _save_enabled_set(enabled: set) -> None:
 
 
 def _save_plugin_sets(enabled: set, disabled: set) -> None:
-    _save_enabled_set(enabled)
-    _save_disabled_set(disabled)
+    from hermes_cli.config import load_config, save_config
+    config = load_config()
+    plugins = config.setdefault("plugins", {})
+    plugins["enabled"] = sorted(enabled)
+    plugins["disabled"] = sorted(disabled)
+    save_config(config)
 
 
 _BASIC_AUTH_PLUGIN_KEYS = frozenset({"basic", "dashboard_auth/basic"})
