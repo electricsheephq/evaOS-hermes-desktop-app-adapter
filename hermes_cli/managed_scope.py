@@ -253,11 +253,13 @@ def _operator_owned(manifest: Any) -> bool:
     source = getattr(manifest, "source", "")
     if source == "entrypoint" or source not in {"user", "project"}:
         return True
+    if os.name != "posix":
+        return False
     path = getattr(manifest, "path", None)
     if not path:
         return False
     try:
-        return os.stat(path).st_uid == 0
+        return os.lstat(path).st_uid == 0
     except OSError:
         return False
 
