@@ -11,6 +11,7 @@ export function notifyVoiceFallback(reason?: string) {
         : reason === 'availability'
           ? 'fallbackAvailability'
           : 'fallbackGeneric'
+
   notify({
     kind: 'warning',
     title: translateNow('notifications.voice.fallbackTitle'),

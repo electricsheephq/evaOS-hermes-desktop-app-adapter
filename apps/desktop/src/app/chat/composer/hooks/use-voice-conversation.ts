@@ -210,14 +210,17 @@ export function useVoiceConversation({
           awaitingSpokenResponseRef.current = true
           dropSpeechSession()
           await onSubmit(transcript)
+
           if (generation !== generationRef.current || !enabledRef.current) {
             return
           }
+
           setStatus('thinking')
         } catch (error) {
           if (generation !== generationRef.current) {
             return
           }
+
           notifyError(error, voiceCopy.transcriptionFailed)
 
           if (enabledRef.current && !mutedRef.current && !busyRef.current) {
@@ -303,6 +306,7 @@ export function useVoiceConversation({
       if (generation !== generationRef.current) {
         return
       }
+
       notifyError(error, voiceCopy.couldNotStartSession)
       pendingStartRef.current = false
       setStatus('idle')
@@ -414,14 +418,17 @@ export function useVoiceConversation({
         dropSpeechSession()
         consumePendingResponse()
         await onSubmit(transcript)
+
         if (generation !== generationRef.current || !enabledRef.current) {
           return
         }
+
         setStatus('thinking')
       } catch (error) {
         if (generation !== generationRef.current) {
           return
         }
+
         notifyError(error, voiceCopy.transcriptionFailed)
         resumeListening()
       }
@@ -455,6 +462,7 @@ export function useVoiceConversation({
         if (generation !== generationRef.current || !enabledRef.current) {
           return
         }
+
         bargeCapturePendingRef.current = true
         bargedRef.current = true
         markVoicePlaybackInterrupted()
@@ -470,6 +478,7 @@ export function useVoiceConversation({
         if (generation !== generationRef.current || !enabledRef.current) {
           return
         }
+
         bargeCapturePendingRef.current = false
         stopBargeMonitorRef.current = null
         void submitCapturedUtterance(audio)

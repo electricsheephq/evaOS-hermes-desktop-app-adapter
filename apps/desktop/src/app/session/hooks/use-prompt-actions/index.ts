@@ -13,8 +13,8 @@ import { sanitizeComposerInput } from '@/lib/composer-input-sanitize'
 import { triggerHaptic } from '@/lib/haptics'
 import { setMutableRef } from '@/lib/mutable-ref'
 import { normalize } from '@/lib/text'
-import { notifyVoiceFallback } from '@/lib/voice-fallback-notice'
 import { transcribeAudioClientDirect } from '@/lib/voice-client-direct'
+import { notifyVoiceFallback } from '@/lib/voice-fallback-notice'
 import { clearClarifyRequest } from '@/store/clarify'
 import {
   $composerAttachments,
@@ -641,21 +641,25 @@ export function usePromptActions({
       if (!sttEnabled) {
         throw new Error(copy.sttDisabled)
       }
+
       const connection = getApiRequestConnection()
       const profile = getApiRequestProfile()
       const session = selectedStoredSessionIdRef.current
+
       const owner = session
         ? getSessionOwnerHint(session, {
             connectionId: connection || 'local',
             profile: profile || 'default'
           })
         : undefined
+
       const scope = owner
         ? capabilityScoped({
             connectionId: owner.connectionId,
             profile: owner.targetProfile || owner.profile
           })
         : capabilityScoped()
+
       const assertCurrent = () => {
         if (
           connection !== getApiRequestConnection() ||
@@ -683,6 +687,7 @@ export function usePromptActions({
       assertCurrent()
       const result = await transcribeAudio(dataUrl, audio.type, scope)
       assertCurrent()
+
       if (result.fallback_active) {
         notifyVoiceFallback(result.fallback_reason)
       }

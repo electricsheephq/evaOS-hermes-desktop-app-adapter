@@ -20,8 +20,6 @@ import { atom, computed } from 'nanostores'
 import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from 'react'
 
 import type { OwnerScope } from '@/api/client'
-import { notifyVoiceFallback } from '@/lib/voice-fallback-notice'
-
 import { useGatewayRequest } from '@/app/gateway/hooks/use-gateway-request'
 import { useModelControls } from '@/app/session/hooks/use-model-controls'
 import { blobToDataUrl } from '@/app/session/hooks/use-prompt-actions/utils'
@@ -39,6 +37,7 @@ import { useI18n } from '@/i18n'
 import type { ChatMessage } from '@/lib/chat-messages'
 import { NEW_SESSION_TITLE, sessionTitle } from '@/lib/chat-runtime'
 import { transcribeAudioClientDirect } from '@/lib/voice-client-direct'
+import { notifyVoiceFallback } from '@/lib/voice-fallback-notice'
 import { createComposerAttachmentScope, draftTitleFor } from '@/store/composer'
 import { $pinnedSessionIds, pinSession, unpinSession } from '@/store/layout'
 import { $activeGatewayProfile } from '@/store/profile'
@@ -181,7 +180,11 @@ export const tileTranscribeAudio = async (
   assertCurrent()
   const result = await transcribeAudio(dataUrl, audio.type, owner)
   assertCurrent()
-  if (result.fallback_active) notifyVoiceFallback(result.fallback_reason)
+
+  if (result.fallback_active) {
+    notifyVoiceFallback(result.fallback_reason)
+  }
+
   return result.transcript
 }
 
@@ -255,12 +258,15 @@ function TileChat({
   const voiceOwnerRef = useRef(scope)
   voiceOwnerRef.current = scope
   const voiceMounted = useRef(true)
+  // eslint-disable-next-line no-restricted-syntax -- mount lifetime guard, not reactive state mirrored into a ref
   useEffect(() => {
     voiceMounted.current = true
+
     return () => {
       voiceMounted.current = false
     }
   }, [])
+
   const transcribeTileAudio = useCallback(
     (audio: Blob) =>
       tileTranscribeAudio(

@@ -116,16 +116,19 @@ export function useComposerVoice({
   })
 
   const voiceSessionOwnershipRef = useRef<VoiceSessionOwnership | null>(null)
+
   const currentRuntimeSessionId = useCallback(
     () => (target === 'main' ? $activeSessionId.get() : (sessionId ?? null)),
     [sessionId, target]
   )
+
   const ownsCurrentSession = useCallback(
     (ownership: VoiceSessionOwnership) =>
       ownership.primaryDraftGeneration === (target === 'main' ? $introSeed.get() : null) &&
       ownsRuntimeSession(ownership, currentRuntimeSessionId()),
     [currentRuntimeSessionId, target]
   )
+
   const startVoiceConversation = useCallback(() => {
     voiceSessionOwnershipRef.current = {
       createdRuntimeSessionId: null,
@@ -134,6 +137,7 @@ export function useComposerVoice({
     }
     setVoiceConversationActive(true)
   }, [currentRuntimeSessionId, target])
+
   const stopVoiceConversation = useCallback(() => {
     voiceSessionOwnershipRef.current = null
     setVoiceConversationActive(false)
@@ -262,6 +266,7 @@ export function useComposerVoice({
       stopVoiceConversation()
       void conversation.end()
     }
+
     const subscriptions = [
       $gateway.listen(stop),
       $activeGatewayRoute.listen(stop),
@@ -271,9 +276,11 @@ export function useComposerVoice({
         }
       })
     ]
+
     if (target === 'main') {
       subscriptions.push($introSeed.listen(stop))
     }
+
     return () => subscriptions.forEach(unsubscribe => unsubscribe())
   }, [conversation.end, stopVoiceConversation, target, voiceConversationActive])
 

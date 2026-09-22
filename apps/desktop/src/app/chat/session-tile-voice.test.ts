@@ -1,7 +1,9 @@
 import { afterEach, expect, it, vi } from 'vitest'
+
 import { transcribeAudio } from '@/hermes'
 import { transcribeAudioClientDirect } from '@/lib/voice-client-direct'
 import { notifyVoiceFallback } from '@/lib/voice-fallback-notice'
+
 import { tileTranscribeAudio } from './session-tile'
 
 vi.mock('@/lib/voice-client-direct', () => ({ transcribeAudioClientDirect: vi.fn(async () => null) }))

@@ -590,9 +590,11 @@ async function playSpeechDataUrl(
   }
 
   const audio = new Audio(response.data_url)
+
   if (response.fallback_active) {
     notifyVoiceFallback(response.fallback_reason)
   }
+
   currentAudio = audio
   setVoicePlaybackState(currentState('speaking', options, audio))
 
