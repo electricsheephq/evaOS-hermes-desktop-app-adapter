@@ -204,18 +204,26 @@ async def _spin_until(predicate, timeout=10.0):
 
 
 async def _stop(task, run_task):
+    """Shut the run loop down. An unexpected exception from it FAILS the test: these tests are the
+    regression proof for a long-lived loop, and swallowing its crash would show green while the
+    server task dies in production."""
     task._shutdown_event.set()
     task._reconnect_event.set()
     try:
         await asyncio.wait_for(run_task, timeout=15)
-    except (asyncio.TimeoutError, asyncio.CancelledError, Exception):
+    except (asyncio.TimeoutError, asyncio.CancelledError):
         run_task.cancel()
 
 
 def _park_logs(caplog, exc_name="OAuthNonInteractiveError"):
-    """Every park log naming that failure, in order."""
+    """Every park log naming that failure, in order.
+
+    Matched on the state transition, not the word "parking": the suspect path logs "…instead of
+    parking (state: connected → suspect)" for the same exception, and counting that as a park
+    inflates every assertion here.
+    """
     return [r for r in caplog.records
-            if "parking" in r.getMessage() and exc_name in r.getMessage()]
+            if "\u2192 parked)" in r.getMessage() and exc_name in r.getMessage()]
 
 
 @pytest.mark.no_isolate
@@ -244,8 +252,13 @@ def test_auth_parked_server_logs_its_detail_once_per_episode(monkeypatch, tmp_pa
 
 
 @pytest.mark.no_isolate
-def test_auth_park_after_a_real_session_logs_again(monkeypatch, tmp_path, caplog):
-    """The dedup is per episode: a server that connects and then loses auth warns again."""
+def test_auth_park_after_a_PROVEN_session_logs_again(monkeypatch, tmp_path, caplog):
+    """The dedup is per episode, and an episode ends when the session is PROVEN.
+
+    A handshake that drops moments later does not end it -- that is the flapping case the latch
+    exists for -- so the test proves the session the way production does, through
+    ``_mark_session_proven`` (keepalive or a tool call).
+    """
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
 
     async def _scenario():
@@ -256,6 +269,9 @@ def test_auth_park_after_a_real_session_logs_again(monkeypatch, tmp_path, caplog
             # Credentials arrive out of band; the next self-probe connects.
             state["auth_ok"] = True
             assert await _spin_until(lambda: task.session is not None), "never revived"
+            # Production proves a session on a keepalive interval or a tool call; do the same here
+            # rather than relying on the handshake, which deliberately no longer clears the latch.
+            task._mark_session_proven()
             # ...and are revoked again.
             state["auth_ok"] = False
             parked_before = state["parked"]
@@ -349,7 +365,7 @@ def test_oauth_setup_warning_follows_the_episode_latch(monkeypatch, tmp_path, ca
             with pytest.raises(RuntimeError):
                 task._build_oauth_auth("https://example.invalid/mcp", {})
             # The park that follows each failure claims the latch the first time.
-            task._claim_parked_log()
+            task._claim_parked_log("OAuthPark")
 
     setup_logs = [r for r in caplog.records if "MCP OAuth setup failed" in r.getMessage()]
     assert len(setup_logs) == 3, f"expected one log per probe, got {len(setup_logs)}"
@@ -364,3 +380,37 @@ def test_oauth_setup_warning_follows_the_episode_latch(monkeypatch, tmp_path, ca
             task._build_oauth_auth("https://example.invalid/mcp", {})
     assert [r for r in caplog.records if "MCP OAuth setup failed" in r.getMessage()][-1].levelno == \
         logging.WARNING
+
+
+def test_a_changed_permanent_failure_warns_again(monkeypatch, tmp_path):
+    """The latch holds the failure's identity, not a flag.
+
+    After a login succeeds the next probe can hit a different blocker before any session is proven.
+    A boolean latch would hide that new, actionable diagnosis under the old episode until the server
+    happened to connect; keying on the failure keeps it at WARNING.
+    """
+    from tools.mcp_tool import MCPServerTask
+
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    task = MCPServerTask("changing")
+
+    class _Resp:
+        def __init__(self, code):
+            self.status_code = code
+
+    class _HTTPish(Exception):
+        def __init__(self, code):
+            super().__init__(f"HTTP {code}")
+            self.response = _Resp(code)
+
+    k = task._parked_log_key_for
+    assert k(_HTTPish(401)) != k(_HTTPish(403)), "a 401 and a 403 are different episodes"
+    assert k(FileNotFoundError(2, "no such file")) == "FileNotFoundError"
+
+    first = k(_HTTPish(401))
+    assert task._claim_parked_log(first) is True, "the episode's first failure logs"
+    assert task._claim_parked_log(first) is False, "the same failure re-probing does not"
+    assert task._claim_parked_log(k(_HTTPish(403))) is True, "a changed failure logs again"
+    assert task._claim_parked_log(k(_HTTPish(403))) is False
+    task._clear_parked_log()
+    assert task._claim_parked_log(k(_HTTPish(403))) is True, "a proven session re-arms the latch"
