@@ -445,19 +445,26 @@ class MCPServerRunMixin:
         await self._backoff_sleep(budget)
         return not self._shutdown_event.is_set()
 
-    def _claim_parked_log(self) -> bool:
-        """True for the FIRST park of an episode, False while the server stays parked on the same
-        unusable condition; :meth:`_clear_parked_log` re-arms it. Instance-scoped like
-        ``_was_parked`` rather than a module-level set: the episode belongs to this task, and two
-        multiplex profiles can hold the same server name in one process."""
-        if self._parked_episode_logged:
+    @staticmethod
+    def _parked_log_key_for(root: BaseException) -> str:
+        """The identity of a parked failure for log dedup: its type, plus an HTTP status when there
+        is one so a 401 and a 403 are different episodes rather than one."""
+        status = getattr(getattr(root, "response", None), "status_code", None)
+        return f"{type(root).__name__}:{status}" if status is not None else type(root).__name__
+
+    def _claim_parked_log(self, key: str) -> bool:
+        """True for the FIRST park of an episode AND whenever the failure CHANGES, False while the
+        server stays parked on the same unusable condition; :meth:`_clear_parked_log` re-arms it.
+        Instance-scoped like ``_was_parked`` rather than a module-level set: the episode belongs to
+        this task, and two multiplex profiles can hold the same server name in one process."""
+        if self._parked_log_key == key:
             return False
-        self._parked_episode_logged = True
+        self._parked_log_key = key
         return True
 
     def _clear_parked_log(self) -> None:
         """End the parked episode: the next permanent failure is a new one and logs in full."""
-        self._parked_episode_logged = False
+        self._parked_log_key = None
 
     async def _on_initial_connect_error(self, exc: Exception, root: BaseException,
                                         failure_class: str, budget: "_RetryBudget") -> bool:
@@ -481,7 +488,7 @@ class MCPServerRunMixin:
             else:
                 detail = (f"connection with a permanent error, parking without retries; re-probing every "
                           f"{_core._PARKED_RETRY_INTERVAL}s")
-            log = logger.warning if self._claim_parked_log() else logger.debug
+            log = logger.warning if self._claim_parked_log(self._parked_log_key_for(root)) else logger.debug
             log("MCP server '%s' failed initial %s (state: connecting → parked): %s: %s",
                 self.name, detail, type(root).__name__, root)
             return await self._park_initial_failure(exc, "after permanent initial failure", budget)
@@ -518,7 +525,7 @@ class MCPServerRunMixin:
         # exactly as it does on the initial-connect path, so it logs once per parked episode too
         # (#337) — this is the path a server reaches after it HAS connected, and a real session is
         # what re-arms the latch.
-        log = logger.warning if self._claim_parked_log() else logger.debug
+        log = logger.warning if self._claim_parked_log(self._parked_log_key_for(root)) else logger.debug
         log(
             "MCP server '%s' hit a permanent error, parking without retries; will self-probe every %ds "
             "(state: connected → parked): %s: %s", self.name, _core._PARKED_RETRY_INTERVAL, type(root).__name__, root)

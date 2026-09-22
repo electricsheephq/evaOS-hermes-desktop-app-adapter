@@ -117,8 +117,6 @@ class MCPServerTransportMixin:
         await self._discover_tools()
         self._ready.set()
         self._ever_connected = True
-        # A real session ends any parked episode: the next permanent failure is new (#337).
-        self._clear_parked_log()
         _core._reset_server_error(self.name)
         # Session is live again: clear any breaker state from a prior outage so the first call after
         # recovery isn't gated on a stale consecutive-failure count (#16788).
@@ -342,7 +340,7 @@ class MCPServerTransportMixin:
             # self-probe, before the park is logged, so this warning repeats on the same interval
             # (#337: two WARNINGs per cycle were measured, not one). Follow the episode latch
             # without claiming it, so the park message below still carries the episode's WARNING.
-            log = logger.debug if self._parked_episode_logged else logger.warning
+            log = logger.debug if self._parked_log_key is not None else logger.warning
             log("MCP OAuth setup failed for '%s': %s", self.name, exc)
             raise
 
