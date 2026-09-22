@@ -340,6 +340,7 @@ def test_non_auth_permanent_park_also_logs_once_per_episode(monkeypatch, tmp_pat
         "the non-auth park message must say the probe repeats: " + warnings[0].getMessage())
 
 
+@pytest.mark.no_isolate
 def test_oauth_setup_warning_follows_the_episode_latch(monkeypatch, tmp_path, caplog):
     """`_build_oauth_auth` fails before the park is logged, on every probe.
 
@@ -382,6 +383,7 @@ def test_oauth_setup_warning_follows_the_episode_latch(monkeypatch, tmp_path, ca
         logging.WARNING
 
 
+@pytest.mark.no_isolate
 def test_a_changed_permanent_failure_warns_again(monkeypatch, tmp_path):
     """The latch holds the failure's identity, not a flag.
 
