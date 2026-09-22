@@ -245,6 +245,11 @@ def _probe_permanent_park(monkeypatch, caplog, exc_factory=None, exc_name="OAuth
             await _stop(task, run_task)
 
     asyncio.run(_scenario())
+    # The REAL loop's park is what sets the key that _build_oauth_auth's level reads; asserting it
+    # here composes the two halves, so the oauth case below is not the only thing standing behind
+    # that line. Without this, a park that stopped claiming the latch would leave the oauth driver
+    # passing on a state production never reaches.
+    assert task._parked_log_key is not None, "a real park must claim the latch the log level reads"
     return _park_logs(caplog, exc_name)
 
 
@@ -270,8 +275,11 @@ def _probe_oauth_setup(monkeypatch, caplog):
         for _ in range(3):
             with pytest.raises(RuntimeError):
                 task._build_oauth_auth("https://example.invalid/mcp", {})
-            # The park that follows each failure claims the latch the first time.
-            task._claim_parked_log("OAuthPark")
+            # Stand in for the park that follows each failure. This is the ONE staged transition in
+            # these tests, and it is staged because reaching _build_oauth_auth through the loop needs
+            # the HTTP transport; that the real park performs this exact claim is asserted in
+            # _probe_permanent_park above, so the two together cover the production sequence.
+            task._claim_parked_log(task._parked_log_key_for(RuntimeError("no cached tokens")))
 
     return [r for r in caplog.records if "MCP OAuth setup failed" in r.getMessage()]
 
