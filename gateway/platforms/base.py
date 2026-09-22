@@ -3563,8 +3563,9 @@ class BasePlatformAdapter(ABC):
         if not cmd and event.allow_gateway_control:
             try:
                 from tools import clarify_gateway as _clarify_mod
+                _clarify_session_key = self._session_store._generate_session_key(event.source)
                 _has_text_clarify = _clarify_mod.get_pending_for_session(
-                    session_key, include_choice_prompts=True) is not None
+                    _clarify_session_key, include_choice_prompts=True) is not None
             except Exception:
                 _has_text_clarify = False
             if _has_text_clarify:
