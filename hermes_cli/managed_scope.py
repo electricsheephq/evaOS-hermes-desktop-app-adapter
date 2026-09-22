@@ -278,11 +278,6 @@ def filter_managed_plugin_candidates(manifests: Iterable[Any], key_fn: Callable[
 
     def _claims(manifest: Any) -> set[str]:
         values = {str(key_fn(manifest)), str(getattr(manifest, "name", ""))}
-        aliases = getattr(manifest, "aliases", ())
-        if isinstance(aliases, str):
-            values.add(aliases)
-        elif isinstance(aliases, (list, tuple, set)):
-            values.update(str(alias) for alias in aliases)
         return values
 
     classified = [
