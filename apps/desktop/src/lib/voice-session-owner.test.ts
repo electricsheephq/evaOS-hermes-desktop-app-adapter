@@ -1,0 +1,42 @@
+import { afterEach, expect, it, vi } from 'vitest'
+
+import { assertVoiceOwnerAvailable, ownerScoped } from '@/api/client'
+import { setApiRequestConnection, setApiRequestProfile } from '@/hermes'
+import { _resetSessionOwnerHintsForTests, setSessionOwnerHint } from '@/store/session'
+
+import { fetchVoiceClientConfig } from './voice-client-direct'
+import { resolveSpeakStreamUrl } from './voice-playback'
+import { sessionVoiceOwner } from './voice-session-owner'
+
+afterEach(() => {
+  _resetSessionOwnerHintsForTests()
+  setApiRequestConnection(null)
+  setApiRequestProfile(null)
+  Reflect.deleteProperty(window, 'hermesDesktop')
+})
+
+it.each([
+  ['gw-other', 'default'],
+  ['gw-active', 'bot']
+])('uses stored owner %s/%s while chrome remains active/default', (connectionId, profile) => {
+  setApiRequestConnection('gw-active')
+  setApiRequestProfile('default')
+  setSessionOwnerHint('bot-session', { connectionId, profile, mode: 'remote' })
+  expect(ownerScoped(sessionVoiceOwner('bot-session'))).toEqual({ connectionId, profile })
+})
+
+it('rejects ambiguous ownership before configuration, credentials or speech routing', async () => {
+  for (const connectionId of ['gw-one', 'gw-two'])
+    {setSessionOwnerHint('same-id', { connectionId, profile: 'default', mode: 'remote' })}
+
+  const api = vi.fn()
+  const getConnection = vi.fn()
+  Object.defineProperty(window, 'hermesDesktop', { configurable: true, value: { api, getConnection } })
+  const owner = sessionVoiceOwner('same-id')
+  expect(() => assertVoiceOwnerAvailable(owner)).toThrow(/owner could not be resolved/)
+  expect(() => ownerScoped(owner)).toThrow(/owner could not be resolved/)
+  await expect(fetchVoiceClientConfig(owner)).rejects.toThrow(/owner could not be resolved/)
+  await expect(resolveSpeakStreamUrl(owner)).rejects.toThrow(/owner could not be resolved/)
+  expect(api).not.toHaveBeenCalled()
+  expect(getConnection).not.toHaveBeenCalled()
+})

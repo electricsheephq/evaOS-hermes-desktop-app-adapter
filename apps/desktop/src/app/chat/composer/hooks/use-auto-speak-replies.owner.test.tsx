@@ -5,6 +5,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { setApiRequestConnection, setApiRequestProfile } from '@/hermes'
 import { clearVoiceClientConfigCache } from '@/lib/voice-client-direct'
+import { sessionVoiceOwner } from '@/lib/voice-session-owner'
+import { _resetSessionOwnerHintsForTests, setSessionOwnerHint } from '@/store/session'
 import { $autoSpeakReplies } from '@/store/voice-prefs'
 
 import { ComposerScopeProvider, MAIN_COMPOSER_SCOPE } from '../scope'
@@ -21,6 +23,7 @@ vi.mock('@/store/notifications', () => ({ notifyError: vi.fn() }))
 describe('useAutoSpeakReplies — owner-routed synthesis', () => {
   afterEach(() => {
     cleanup()
+    _resetSessionOwnerHintsForTests()
     $autoSpeakReplies.set(false)
     setApiRequestConnection(null)
     setApiRequestProfile(null)
@@ -28,60 +31,68 @@ describe('useAutoSpeakReplies — owner-routed synthesis', () => {
     Reflect.deleteProperty(window, 'hermesDesktop')
   })
 
-  it.each(['default', 'bot-adam'])(
-    'synthesizes owner %s through its gateway while the primary differs',
-    async profile => {
-      const api = vi.fn(async ({ path }: { path: string }) =>
-        path.startsWith('/api/audio/voice-config') ? { ok: false } : { audio: '' }
-      )
+  it.each([
+    ['default', 'main'],
+    ['bot-adam', 'main'],
+    ['default', 'tile'],
+    ['bot-adam', 'tile']
+  ])('synthesizes owner %s in %s through its gateway while the primary differs', async (profile, surface) => {
+    const api = vi.fn(async ({ path }: { path: string }) =>
+      path.startsWith('/api/audio/voice-config') ? { ok: false } : { audio: '' }
+    )
 
-      Object.defineProperty(window, 'hermesDesktop', { configurable: true, value: { api } })
-      setApiRequestConnection('gw-active')
-      setApiRequestProfile('default')
-      $autoSpeakReplies.set(true)
+    Object.defineProperty(window, 'hermesDesktop', { configurable: true, value: { api } })
+    setApiRequestConnection('gw-active')
+    setApiRequestProfile('default')
+    $autoSpeakReplies.set(true)
 
-      const $messages = atom<never[]>([])
-      let reply: null | { id: string; pending: boolean; text: string } = null
+    setSessionOwnerHint('bot-session', { connectionId: 'gw-bots', profile, mode: 'remote' })
+    const $messages = atom<never[]>([])
+    let reply: null | { id: string; pending: boolean; text: string } = null
 
-      const wrapper = ({ children }: { children: ReactNode }) => (
-        <ComposerScopeProvider
-          value={{ ...MAIN_COMPOSER_SCOPE, $messages, connectionId: 'gw-bots', profile, target: 'tile:bot' }}
-        >
-          {children}
-        </ComposerScopeProvider>
-      )
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <ComposerScopeProvider
+        value={{
+          ...MAIN_COMPOSER_SCOPE,
+          $messages,
+          ...(surface === 'main' ? sessionVoiceOwner('bot-session') : { connectionId: 'gw-bots', profile }),
+          target: surface === 'main' ? 'main' : 'tile:bot'
+        }}
+      >
+        {children}
+      </ComposerScopeProvider>
+    )
 
-      renderHook(
-        () =>
-          useAutoSpeakReplies({
-            conversationActive: false,
-            failureLabel: 'failed',
-            markSpoken: () => {
-              reply = null
-            },
-            pendingReply: () => reply,
-            sessionId: 'bot-session'
-          }),
-        { wrapper }
-      )
+    renderHook(
+      () =>
+        useAutoSpeakReplies({
+          conversationActive: false,
+          failureLabel: 'failed',
+          markSpoken: () => {
+            reply = null
+          },
+          pendingReply: () => reply,
+          sessionId: 'bot-session'
+        }),
+      { wrapper }
+    )
 
-      reply = { id: 'm1', pending: false, text: 'Hello from Adam.' }
-      $messages.set([])
+    reply = { id: 'm1', pending: false, text: 'Hello from Adam.' }
+    $messages.set([])
 
-      await vi.waitFor(() =>
-        expect(api.mock.calls.map(([request]) => (request as { path: string }).path)).toContain('/api/audio/speak')
-      )
+    await vi.waitFor(() =>
+      expect(api.mock.calls.map(([request]) => (request as { path: string }).path)).toContain('/api/audio/speak')
+    )
 
-      const scopes = new Set(
-        api.mock.calls.map(([request]) => {
-          const { connectionId, profile } = request as { connectionId?: string; profile?: string }
+    const scopes = new Set(
+      api.mock.calls.map(([request]) => {
+        const { connectionId, profile } = request as { connectionId?: string; profile?: string }
 
-          return `${connectionId}::${profile}`
-        })
-      )
+        return `${connectionId}::${profile}`
+      })
+    )
 
-      // voice-config AND the speak POST — every leg names the Bot's owner.
-      expect(scopes).toEqual(new Set([`gw-bots::${profile}`]))
-    }
-  )
+    // voice-config AND the speak POST — every leg names the Bot's owner.
+    expect(scopes).toEqual(new Set([`gw-bots::${profile}`]))
+  })
 })

@@ -1,4 +1,4 @@
-import { type OwnerScope, ownerScoped } from '@/api/client'
+import { assertVoiceOwnerAvailable, type OwnerScope, ownerScoped } from '@/api/client'
 import { getApiRequestConnection, getApiRequestProfile, hermesApi } from '@/hermes'
 
 /**
@@ -74,6 +74,7 @@ export function clearVoiceClientConfigCache(): void {
 }
 
 export async function fetchVoiceClientConfig(owner?: OwnerScope): Promise<null | VoiceClientConfig> {
+  assertVoiceOwnerAvailable(owner)
   const key = scopeKey(owner)
 
   if (cached && cached.key === key && Date.now() - cached.at < CONFIG_TTL_MS) {

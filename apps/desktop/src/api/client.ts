@@ -112,14 +112,23 @@ export function profileScoped(profile?: null | string): { profile?: string } {
  *  the ambient scope; an explicit connection — `'local'` included — overrides
  *  the ambient tag `hermesApi` spreads underneath (as capabilityScoped does). */
 export interface OwnerScope {
+  voiceOwnerUnavailable?: boolean
   connectionId?: null | string
   profile?: null | string
 }
 
 export function ownerScoped(owner?: OwnerScope): { connectionId?: string; priority?: 'foreground'; profile?: string } {
+  assertVoiceOwnerAvailable(owner)
+
   return {
     ...profileScoped(owner?.profile || undefined),
     ...(owner?.connectionId ? { connectionId: owner.connectionId } : {})
+  }
+}
+
+export function assertVoiceOwnerAvailable(owner?: OwnerScope): void {
+  if (owner?.voiceOwnerUnavailable) {
+    throw new Error('Voice session owner could not be resolved')
   }
 }
 

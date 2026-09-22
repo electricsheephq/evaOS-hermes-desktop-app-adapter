@@ -66,9 +66,9 @@ export function useVoiceConversation({
   // The scope's session owner (a Bot's own connection + profile) picks the TTS
   // voice; a ref keeps the long-lived turn closures below reading the current
   // value.
-  const { connectionId: ownerConnectionId, profile: ownerProfile } = useComposerScope()
-  const ownerRef = useRef({ connectionId: ownerConnectionId, profile: ownerProfile })
-  ownerRef.current = { connectionId: ownerConnectionId, profile: ownerProfile }
+  const { connectionId: ownerConnectionId, profile: ownerProfile, voiceOwnerUnavailable } = useComposerScope()
+  const ownerRef = useRef({ connectionId: ownerConnectionId, profile: ownerProfile, voiceOwnerUnavailable })
+  ownerRef.current = { connectionId: ownerConnectionId, profile: ownerProfile, voiceOwnerUnavailable }
   const [status, setStatus] = useState<ConversationStatus>('idle')
   const [muted, setMuted] = useState(false)
   const turnTimeoutRef = useRef<number | null>(null)

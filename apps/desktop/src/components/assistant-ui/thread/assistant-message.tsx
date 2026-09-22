@@ -739,7 +739,7 @@ const ReadAloudButton: FC<{ getText: () => string; messageId: string }> = ({ get
   const view = useSessionView()
   const sessionId = useStore(view.$runtimeId)
   // A Bot chat's session owns its own (connection, profile) → its own TTS voice.
-  const { connectionId, profile } = useComposerScope()
+  const { connectionId, profile, voiceOwnerUnavailable } = useComposerScope()
 
   const readAloudStatus =
     voicePlayback.source === 'read-aloud' && voicePlayback.messageId === messageId ? voicePlayback.status : 'idle'
@@ -758,12 +758,21 @@ const ReadAloudButton: FC<{ getText: () => string; messageId: string }> = ({ get
     }
 
     try {
-      await playSpeechText(text, { connectionId, messageId, profile, source: 'read-aloud' })
+      await playSpeechText(text, { connectionId, messageId, profile, voiceOwnerUnavailable, source: 'read-aloud' })
       markAssistantIdSpoken(sessionId, view.$messages.get(), messageId)
     } catch (error) {
       notifyError(error, copy.readAloudFailed)
     }
-  }, [connectionId, copy.readAloudFailed, getText, messageId, profile, sessionId, view.$messages])
+  }, [
+    connectionId,
+    copy.readAloudFailed,
+    getText,
+    messageId,
+    profile,
+    sessionId,
+    view.$messages,
+    voiceOwnerUnavailable
+  ])
 
   return (
     <TooltipIconButton

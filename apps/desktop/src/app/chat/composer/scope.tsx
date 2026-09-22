@@ -20,6 +20,7 @@ import type { ComposerTarget } from './focus'
  * differs per surface.
  */
 export interface ComposerScope {
+  voiceOwnerUnavailable?: boolean
   /** This scope's "turn parked on user input" edge — gates Esc-to-stop. */
   $awaitingInput: ReadableAtom<boolean>
   attachments: ComposerAttachmentScope

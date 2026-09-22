@@ -26,6 +26,7 @@ import { useIncrementalExternalStoreRuntime } from '@/lib/incremental-external-s
 import { modelOptionsQueryKey, requestModelOptions } from '@/lib/model-options'
 import { useStoreSelector } from '@/lib/use-session-slice'
 import { cn } from '@/lib/utils'
+import { sessionVoiceOwner } from '@/lib/voice-session-owner'
 import { migrateSessionDraft } from '@/store/composer'
 import { migrateQueuedPrompts, parkQueuedPrompts } from '@/store/composer-queue'
 import { $introSplash } from '@/store/intro-splash'
@@ -256,8 +257,7 @@ function ChatRuntimeBoundary({
     ? getSessionOwnerHint(storedId, connectionId ? { connectionId, profile: activeProfile } : undefined)
     : undefined
 
-  const ownerConnection = ownerRoute?.connectionId
-  const ownerProfile = ownerRoute?.targetProfile || ownerRoute?.profile
+  const { connectionId: ownerConnection, profile: ownerProfile, voiceOwnerUnavailable } = sessionVoiceOwner(storedId)
 
   // A Bot chat opened IN PLACE in the main pane (openStoredBotChat) keeps the
   // active profile, so the ambient scope carries no owner. Publish the session
@@ -267,10 +267,10 @@ function ChatRuntimeBoundary({
 
   const composerScope = useMemo(
     () =>
-      parentScope.profile || !ownerProfile
+      parentScope.profile || (!ownerProfile && !voiceOwnerUnavailable)
         ? parentScope
-        : { ...parentScope, connectionId: ownerConnection || undefined, profile: ownerProfile },
-    [ownerConnection, ownerProfile, parentScope]
+        : { ...parentScope, connectionId: ownerConnection || undefined, profile: ownerProfile, voiceOwnerUnavailable },
+    [ownerConnection, ownerProfile, parentScope, voiceOwnerUnavailable]
   )
 
   const storeMessages = useMessagesWhileVisible(view.$messages)
