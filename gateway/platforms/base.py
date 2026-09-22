@@ -3561,21 +3561,32 @@ class BasePlatformAdapter(ABC):
         # blocked on Event.wait, message must reach the resolver before being a new turn.
         # See #4926.
         if not cmd and event.allow_gateway_control:
+            # The waiter is registered under the key the gateway resolver rebuilds
+            # (SessionStore, after the profile stamp).  The adapter's own key can differ:
+            # the store reads the gateway-wide isolation flags while the adapter reads its
+            # own ``config.extra``.  Probe BOTH -- a miss queues the answer and the turn
+            # blocks until the clarify times out, which is the bug this guards.
+            _clarify_hit_key = None
             try:
                 from tools import clarify_gateway as _clarify_mod
-                # The waiter is registered under the SessionStore key; adapters used without a
-                # store (tests, tooling) keep the adapter-level key they always used.
-                _clarify_store = getattr(self, "_session_store", None)
-                _clarify_session_key = (
-                    _clarify_store._generate_session_key(event.source)
-                    if _clarify_store is not None else session_key
-                )
-                _has_text_clarify = _clarify_mod.get_pending_for_session(
-                    _clarify_session_key, include_choice_prompts=True) is not None
+                if _clarify_mod.get_pending_for_session(
+                        session_key, include_choice_prompts=True) is not None:
+                    _clarify_hit_key = session_key
+                else:
+                    _clarify_store = getattr(self, "_session_store", None)
+                    _store_key = (
+                        _clarify_store._generate_session_key(event.source)
+                        if _clarify_store is not None else None
+                    )
+                    if (_store_key and _store_key != session_key
+                            and _clarify_mod.get_pending_for_session(
+                                _store_key, include_choice_prompts=True) is not None):
+                        _clarify_hit_key = _store_key
             except Exception:
-                _has_text_clarify = False
-            if _has_text_clarify:
-                logger.debug("[%s] Routing message to clarify text-intercept for %s", self.name, session_key)
+                logger.debug("[%s] Clarify bypass probe failed", self.name, exc_info=True)
+            if _clarify_hit_key is not None:
+                logger.debug("[%s] Routing message to clarify text-intercept for %s (event key %s)",
+                             self.name, _clarify_hit_key, session_key)
                 try:
                     await self._dispatch_inline_reply(event)
                 except Exception as e:

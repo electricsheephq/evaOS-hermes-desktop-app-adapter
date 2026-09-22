@@ -94,8 +94,6 @@ async def test_active_session_routes_typed_choice_clarify_reply_to_runner_not_bu
         group_sessions_per_user=adapter.config.extra.get("group_sessions_per_user", True),
         thread_sessions_per_user=adapter.config.extra.get("thread_sessions_per_user", False),
     )
-    adapter._session_store = MagicMock()
-    adapter._session_store._generate_session_key.return_value = session_key
     adapter._active_sessions[session_key] = asyncio.Event()
     cm.register("clarify-1", session_key, "Pick one", ["A", "B"])
 
@@ -145,7 +143,6 @@ async def test_active_session_bypass_uses_profile_namespaced_key_under_multiplex
         thread_sessions_per_user=adapter.config.extra.get("thread_sessions_per_user", False),
     )
     assert profile_namespaced_key != legacy_key
-    session_store._generate_session_key.return_value = profile_namespaced_key
 
     adapter._active_sessions[profile_namespaced_key] = asyncio.Event()
     # The runner registers the pending clarify under its own
