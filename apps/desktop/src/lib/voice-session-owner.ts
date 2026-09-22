@@ -1,10 +1,15 @@
+import { useStore } from '@nanostores/react'
+
 import { assertVoiceOwnerAvailable, capabilityScoped, type OwnerScope } from '@/api/client'
-import { getSessionOwnerHints } from '@/store/session'
+import { $sessionOwnerHintsSnapshot, getSessionOwnerHints } from '@/store/session'
+import type { SessionOwnerRoute } from '@/store/session-request-router'
 
 /** In-place Bot chats retain ambient chrome; only the session identifies their owner. */
 export function sessionVoiceOwner(sessionId: null | string): OwnerScope {
-  const owners = sessionId ? getSessionOwnerHints(sessionId) : []
+  return voiceOwnerFromHints(sessionId ? getSessionOwnerHints(sessionId) : [])
+}
 
+function voiceOwnerFromHints(owners: SessionOwnerRoute[]): OwnerScope {
   if (owners.length > 1) {
     return { voiceOwnerUnavailable: true }
   }
@@ -15,9 +20,18 @@ export function sessionVoiceOwner(sessionId: null | string): OwnerScope {
 }
 
 /** Capture ambient routing for a fresh draft, but never for an ambiguous stored owner. */
-export function sessionVoiceRequestScope(sessionId: null | string): OwnerScope {
-  const owner = sessionVoiceOwner(sessionId)
+export function captureVoiceOwnerScope(owner: OwnerScope): OwnerScope {
   assertVoiceOwnerAvailable(owner)
 
   return capabilityScoped(owner.connectionId || owner.profile ? owner : undefined)
+}
+
+export function sessionVoiceRequestScope(sessionId: null | string): OwnerScope {
+  return captureVoiceOwnerScope(sessionVoiceOwner(sessionId))
+}
+
+export function useSessionVoiceOwner(sessionId: null | string): OwnerScope {
+  const hints = useStore($sessionOwnerHintsSnapshot)
+
+  return voiceOwnerFromHints(hints.filter(hint => hint.id === sessionId).map(hint => hint.route))
 }

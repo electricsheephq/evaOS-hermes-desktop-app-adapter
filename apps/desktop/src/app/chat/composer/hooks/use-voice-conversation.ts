@@ -580,6 +580,7 @@ export function useVoiceConversation({
       // words to a mic re-open. Usually already live (armed at submit).
       ensureBargeMonitor()
 
+      let feedTimer: number | undefined
       void (async () => {
         const session = await startSpeechStream({ ...ownerRef.current, source: 'voice-conversation' })
 
@@ -630,7 +631,7 @@ export function useVoiceConversation({
 
         // Timer-driven feed: reply text flows into the session at delta rate
         // regardless of React render cadence.
-        const feedTimer = window.setInterval(() => feedSpeechSession(responseId), 150)
+        feedTimer = window.setInterval(() => feedSpeechSession(responseId), 150)
         feedSpeechSession(responseId)
 
         const outcome = await session.done
@@ -648,9 +649,18 @@ export function useVoiceConversation({
 
         awaitingSpokenResponseRef.current = false
         settleAfterSpeech(bargedRef.current)
-      })()
+      })().catch(error => {
+        window.clearInterval(feedTimer)
+
+        if (responseIdRef.current !== responseId) {return}
+        stopVoicePlayback()
+        dropSpeechSession()
+        awaitingSpokenResponseRef.current = false
+        notifyError(error, voiceCopy.playbackFailed)
+        settleAfterSpeech(false, true)
+      })
     },
-    [awaitFallbackSpeech, ensureBargeMonitor, feedSpeechSession, settleAfterSpeech]
+    [awaitFallbackSpeech, ensureBargeMonitor, feedSpeechSession, settleAfterSpeech, voiceCopy.playbackFailed]
   )
 
   const start = useCallback(async () => {

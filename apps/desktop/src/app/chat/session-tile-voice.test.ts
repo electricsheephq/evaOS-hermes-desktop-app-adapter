@@ -1,6 +1,6 @@
 import { afterEach, expect, it, vi } from 'vitest'
 
-import { transcribeAudio } from '@/hermes'
+import { setApiRequestConnection, setApiRequestProfile, transcribeAudio } from '@/hermes'
 import { transcribeAudioClientDirect } from '@/lib/voice-client-direct'
 import { notifyVoiceFallback } from '@/lib/voice-fallback-notice'
 
@@ -12,7 +12,11 @@ vi.mock('@/hermes', async importOriginal => ({
   ...(await importOriginal<object>()),
   transcribeAudio: vi.fn(async () => ({ transcript: 'fixture', fallback_active: true, fallback_reason: 'quota' }))
 }))
-afterEach(() => vi.clearAllMocks())
+afterEach(() => {
+  vi.clearAllMocks()
+  setApiRequestConnection(null)
+  setApiRequestProfile(null)
+})
 it('keeps both recognition paths on the tile owner and localizes fallback', async () => {
   const owner = { connectionId: 'secondary', profile: 'default' }
   const audio = new Blob(['fixture'], { type: 'audio/webm' })
@@ -29,4 +33,14 @@ it('discards stale direct results before calling the relay', async () => {
   ).rejects.toMatchObject({ name: 'AbortError' })
   expect(transcribeAudio).not.toHaveBeenCalled()
   expect(notifyVoiceFallback).not.toHaveBeenCalled()
+})
+
+it('captures the ambient gateway and profile for an untagged legacy tile', async () => {
+  setApiRequestConnection('secondary')
+  setApiRequestProfile('research')
+  const audio = new Blob(['fixture'], { type: 'audio/webm' })
+  await tileTranscribeAudio(audio, {})
+  const scope = { connectionId: 'secondary', profile: 'research' }
+  expect(transcribeAudioClientDirect).toHaveBeenCalledWith(audio, scope)
+  expect(transcribeAudio).toHaveBeenCalledWith(expect.any(String), 'audio/webm', scope)
 })

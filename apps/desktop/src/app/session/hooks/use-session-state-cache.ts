@@ -10,6 +10,7 @@ import { setMutableRef } from '@/lib/mutable-ref'
 import {
   $activeSessionId,
   $messages,
+  copySessionOwnerHints,
   setActiveSessionStoredIdRotation,
   setCurrentFastMode,
   setCurrentModel,
@@ -165,6 +166,10 @@ export function useSessionStateCache({
           // updater is a no-op — fire it here so the route-follow effect still
           // tracks compression without needing a dummy state write.
           if (existing.storedSessionId && existing.storedSessionId !== storedSessionId) {
+            if (storedSessionId) {
+              copySessionOwnerHints(existing.storedSessionId, storedSessionId)
+            }
+
             runtimeIdByStoredSessionIdRef.current.delete(existing.storedSessionId)
 
             // A rotation event needs a real next id — a null/cleared stored id

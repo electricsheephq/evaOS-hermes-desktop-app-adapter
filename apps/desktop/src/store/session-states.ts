@@ -45,6 +45,7 @@ import {
   $selectedStoredSessionId,
   $sessions,
   clearReadBaseline,
+  copySessionOwnerHints,
   getSessionOwnerHint,
   knownSessionOwner,
   lineageAliases,
@@ -448,6 +449,8 @@ function handleTransition(previous: ClientSessionState | null, next: ClientSessi
   // runtime id, so a fast A -> B switch while A is still busy does not get
   // pulled back to A's new tip (#86106).
   if (previous?.storedSessionId && next.storedSessionId && previous.storedSessionId !== next.storedSessionId) {
+    copySessionOwnerHints(previous.storedSessionId, next.storedSessionId)
+
     if (runtimeId === $activeSessionId.get() && isSessionInForeground(previous.storedSessionId)) {
       setActiveSessionStoredIdRotation({
         nextStoredSessionId: next.storedSessionId,

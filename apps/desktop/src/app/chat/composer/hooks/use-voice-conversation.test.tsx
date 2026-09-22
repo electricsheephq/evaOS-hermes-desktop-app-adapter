@@ -2,6 +2,8 @@ import { act, cleanup, renderHook, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { BargeMonitorCallbacks } from '@/lib/voice-barge-in'
+import { startSpeechStream } from '@/lib/voice-playback'
+import { notifyError } from '@/store/notifications'
 
 import type { MicRecording } from './use-mic-recorder'
 import { useVoiceConversation } from './use-voice-conversation'
@@ -76,7 +78,13 @@ interface HookProps {
   busy: boolean
 }
 
-function renderConversation(overrides: { onInterrupt?: () => void; transcript?: string } = {}) {
+function renderConversation(
+  overrides: {
+    onInterrupt?: () => void
+    transcript?: string
+    pendingResponse?: () => { id: string; text: string; pending: boolean } | null
+  } = {}
+) {
   const onInterrupt = overrides.onInterrupt ?? vi.fn()
 
   // Mirrors the real app: submitting a turn makes the agent busy.
@@ -106,7 +114,7 @@ function renderConversation(overrides: { onInterrupt?: () => void; transcript?: 
         onStopWord,
         onSubmit,
         onTranscribeAudio,
-        pendingResponse: () => null
+        pendingResponse: overrides.pendingResponse ?? (() => null)
       }),
     { initialProps: { busy: false } }
   )
@@ -145,6 +153,18 @@ describe('useVoiceConversation full-duplex barge-in', () => {
 
   afterEach(cleanup)
 
+  it('settles a rejected live speech setup instead of remaining speaking', async () => {
+    let response: { id: string; text: string; pending: boolean } | null = null
+    const { hook } = renderConversation({ pendingResponse: () => response })
+    await enterThinking(hook)
+    vi.mocked(startSpeechStream).mockRejectedValueOnce(new Error('Voice session owner could not be resolved'))
+    response = { id: 'owner-rejected', text: 'fixture', pending: true }
+    hook.rerender({ busy: false })
+    await waitFor(() => expect(notifyError).toHaveBeenCalledWith(expect.any(Error), 'playback failed'))
+    expect(hook.result.current.status).toBe('idle')
+    expect(stopMonitor).toHaveBeenCalled()
+  })
+
   it('keeps capture active across renders and cancels it on unmount', async () => {
     const { hook } = renderConversation()
 
@@ -179,9 +199,11 @@ describe('useVoiceConversation full-duplex barge-in', () => {
       }
 
       let finishSubmission!: () => void
+
       const submission = new Promise<void>(resolve => {
         finishSubmission = resolve
       })
+
       onSubmit.mockImplementationOnce(() => submission)
       const previousSubmissions = onSubmit.mock.calls.length
 

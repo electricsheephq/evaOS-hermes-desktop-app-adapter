@@ -1,3 +1,4 @@
+import { act, cleanup, renderHook } from '@testing-library/react'
 import { afterEach, expect, it, vi } from 'vitest'
 
 import { assertVoiceOwnerAvailable, ownerScoped } from '@/api/client'
@@ -6,9 +7,10 @@ import { _resetSessionOwnerHintsForTests, setSessionOwnerHint } from '@/store/se
 
 import { clearVoiceClientConfigCache, fetchVoiceClientConfig } from './voice-client-direct'
 import { resolveSpeakStreamUrl } from './voice-playback'
-import { sessionVoiceOwner, sessionVoiceRequestScope } from './voice-session-owner'
+import { sessionVoiceOwner, sessionVoiceRequestScope, useSessionVoiceOwner } from './voice-session-owner'
 
 afterEach(() => {
+  cleanup()
   _resetSessionOwnerHintsForTests()
   clearVoiceClientConfigCache()
   setApiRequestConnection(null)
@@ -56,4 +58,13 @@ it('captures the fresh draft route for both configuration and relay transcriptio
   for (const [request] of api.mock.calls as unknown as [{ connectionId: string; profile: string }][]) {
     expect(request).toMatchObject({ connectionId: 'gw-secondary', profile: 'research' })
   }
+})
+
+it('reacts to a late owner hint and ambiguity without an unrelated render', () => {
+  const hook = renderHook(() => useSessionVoiceOwner('late-bot'))
+  expect(hook.result.current).toEqual({})
+  act(() => setSessionOwnerHint('late-bot', { connectionId: 'gw-one', profile: 'bot', mode: 'remote' }))
+  expect(hook.result.current).toEqual({ connectionId: 'gw-one', profile: 'bot' })
+  act(() => setSessionOwnerHint('late-bot', { connectionId: 'gw-two', profile: 'bot', mode: 'remote' }))
+  expect(hook.result.current).toEqual({ voiceOwnerUnavailable: true })
 })

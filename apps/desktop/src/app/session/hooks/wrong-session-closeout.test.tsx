@@ -26,12 +26,15 @@ import {
   $activeSessionId,
   $activeSessionStoredIdRotation,
   $selectedStoredSessionId,
+  _resetSessionOwnerHintsForTests,
+  getSessionOwnerHint,
   setActiveSessionId,
   setActiveSessionStoredIdRotation,
   setAwaitingResponse,
   setBusy,
   setMessages,
   setSelectedStoredSessionId,
+  setSessionOwnerHint,
   setSessions
 } from '@/store/session'
 import { $focusedStoredSessionId, $sessionTiles, clearAllSessionStates } from '@/store/session-states'
@@ -93,6 +96,7 @@ function Harness() {
 
 afterEach(() => {
   cleanup()
+  _resetSessionOwnerHintsForTests()
   clearAllSessionStates()
   setActiveSessionStoredIdRotation(null)
   setActiveSessionId(null)
@@ -120,6 +124,7 @@ it('a background chat’s delayed stored-id rotation never moves the user off th
     })) as SessionInfo[]
   )
   // A is the primary: selection, HashRouter route and active runtime all name it.
+  setSessionOwnerHint('stored-A', { connectionId: 'bot-gateway', profile: 'bot', mode: 'remote' })
   routedStoredId = 'stored-A'
   window.history.pushState({}, '', '/#/stored-A')
   setSelectedStoredSessionId('stored-A')
@@ -161,12 +166,14 @@ it('a background chat’s delayed stored-id rotation never moves the user off th
   // The rotation still re-keys A's own binding; only the foreground move is
   // suppressed.
   expect(handle.cache.runtimeIdByStoredSessionIdRef.current.get('stored-A-next')).toBe('rt-A')
+  expect(getSessionOwnerHint('stored-A-next')).toMatchObject({ connectionId: 'bot-gateway', profile: 'bot' })
   expect(handle.cache.runtimeIdByStoredSessionIdRef.current.has('stored-A')).toBe(false)
   expect(requestGatewayForAgent).not.toHaveBeenCalled()
   expect(requestGatewayForProfile).not.toHaveBeenCalled()
 })
 
 it('a delayed rotation preserves a reserved page even while the old chat remains selected', async () => {
+  setSessionOwnerHint('stored-A', { connectionId: 'bot-gateway', profile: 'bot', mode: 'remote' })
   routedStoredId = 'stored-A'
   window.history.pushState({}, '', '/#/stored-A')
   setSelectedStoredSessionId('stored-A')
@@ -189,4 +196,5 @@ it('a delayed rotation preserves a reserved page even while the old chat remains
   expect($activeSessionStoredIdRotation.get()).toBeNull()
   expect($selectedStoredSessionId.get()).toBe('stored-A')
   expect(handle.cache.runtimeIdByStoredSessionIdRef.current.get('stored-A-next')).toBe('rt-A')
+  expect(getSessionOwnerHint('stored-A-next')).toMatchObject({ connectionId: 'bot-gateway', profile: 'bot' })
 })

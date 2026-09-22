@@ -1,3 +1,4 @@
+import { useStore } from '@nanostores/react'
 /**
  * SESSION TILES — a stored session rendered as a layout-tree pane BESIDE the
  * main thread (multi-session tiling). A tile IS the real chat surface: the
@@ -13,8 +14,6 @@
  * the pane (tab Close) removes the tile + its zone; tiles persist across
  * restarts and re-resume on boot.
  */
-
-import { useStore } from '@nanostores/react'
 import { useQueryClient } from '@tanstack/react-query'
 import { atom, computed } from 'nanostores'
 import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from 'react'
@@ -38,6 +37,7 @@ import type { ChatMessage } from '@/lib/chat-messages'
 import { NEW_SESSION_TITLE, sessionTitle } from '@/lib/chat-runtime'
 import { transcribeAudioClientDirect } from '@/lib/voice-client-direct'
 import { notifyVoiceFallback } from '@/lib/voice-fallback-notice'
+import { captureVoiceOwnerScope } from '@/lib/voice-session-owner'
 import { createComposerAttachmentScope, draftTitleFor } from '@/store/composer'
 import { $pinnedSessionIds, pinSession, unpinSession } from '@/store/layout'
 import { $activeGatewayProfile } from '@/store/profile'
@@ -169,7 +169,8 @@ export const tileTranscribeAudio = async (
   // Client-direct first (profile's own STT provider, no gateway audio hop);
   // relay when the provider is not client-callable. Same ladder as the main
   // composer's transcribeVoiceAudio.
-  const direct = await transcribeAudioClientDirect(audio, owner)
+  const scope = captureVoiceOwnerScope(owner)
+  const direct = await transcribeAudioClientDirect(audio, scope)
   assertCurrent()
 
   if (direct !== null) {
@@ -178,7 +179,7 @@ export const tileTranscribeAudio = async (
 
   const dataUrl = await blobToDataUrl(audio)
   assertCurrent()
-  const result = await transcribeAudio(dataUrl, audio.type, owner)
+  const result = await transcribeAudio(dataUrl, audio.type, scope)
   assertCurrent()
 
   if (result.fallback_active) {
