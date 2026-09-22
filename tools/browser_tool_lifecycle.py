@@ -434,7 +434,9 @@ def _update_session_activity(task_id: str):
     See #86402.
     """
     with _bt._cleanup_lock:
-        _bt._session_last_activity[task_id] = time.time()
+        _bt._session_last_activity[task_id] = max(
+            _bt._session_last_activity.get(task_id, 0.0), time.time()
+        )
         _bt._session_owner_homes.setdefault(task_id, str(get_hermes_home()))
 
 

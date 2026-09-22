@@ -522,6 +522,158 @@ class TestBackendCdpResolution:
         err = bu_cli._resolve_backend_cdp(self._env(), "t1")
         assert err and "api down" in err
 
+    @pytest.mark.parametrize(
+        ("provider_code", "expected_code", "is_capacity"),
+        [
+            ("browser_capacity", "browser_capacity", True),
+            ("", "browser_capacity", True),
+            ("rate_limited", "rate_limited", False),
+        ],
+    )
+    def test_429_failure_classification(
+        self, monkeypatch, tmp_path, provider_code, expected_code, is_capacity
+    ):
+        from plugins.browser._common import CloudBrowserAPIError
+
+        capacity = CloudBrowserAPIError(
+            f"Failed to create Browserbase session: HTTP 429 (code: {provider_code})",
+            status_code=429,
+            code=provider_code,
+        )
+        monkeypatch.setattr("tools.browser_tool_cdp._get_cdp_override", lambda: "")
+        monkeypatch.setattr(bt_cloud, "_get_cloud_provider", lambda: object())
+        monkeypatch.setattr(
+            bt_session,
+            "_get_session_info",
+            lambda task_id: (_ for _ in ()).throw(capacity),
+        )
+        cli = _fake_cli(tmp_path, "cat > /dev/null\necho should-not-run\n")
+        monkeypatch.setattr(bu_cli, "_find_cli", lambda: [cli])
+
+        result = json.loads(bu_cli.browser_exec("print(1)", task_id="t1"))
+
+        assert result["code"] == expected_code
+        assert result["retryable"] is True
+        assert (result["error"] == "browser capacity reached — retry shortly") is is_capacity
+
+    def test_degraded_cloud_record_uses_managed_chromium(
+        self, monkeypatch, _fake_managed_chromium
+    ):
+        monkeypatch.setattr("tools.browser_tool_cdp._get_cdp_override", lambda: "")
+        monkeypatch.setattr(bt_cloud, "_get_cloud_provider", lambda: object())
+        monkeypatch.setattr(
+            bt_session,
+            "_get_session_info",
+            lambda task_id: {
+                "cdp_url": None,
+                "fallback_from_cloud": True,
+                "fallback_error_code": "browser_unavailable",
+                "fallback_status_code": 503,
+            },
+        )
+        env = self._env()
+
+        assert bu_cli._resolve_backend_cdp(env, "t1") is None
+        assert env["BU_CDP_WS"] == "ws://127.0.0.1:47000/devtools/browser/t1"
+        assert _fake_managed_chromium == [("t1", "get", ("cdp-url",))]
+
+    def test_degraded_cloud_record_reuses_existing_cdp(
+        self, monkeypatch, _fake_managed_chromium
+    ):
+        monkeypatch.setattr("tools.browser_tool_cdp._get_cdp_override", lambda: "")
+        monkeypatch.setattr(bt_cloud, "_get_cloud_provider", lambda: object())
+        monkeypatch.setattr(
+            bt_session,
+            "_get_session_info",
+            lambda task_id: {
+                "cdp_url": "ws://127.0.0.1:9222/devtools/browser/fallback",
+                "fallback_from_cloud": True,
+                "fallback_error_code": "browser_unavailable",
+                "fallback_status_code": 503,
+            },
+        )
+        env = self._env()
+
+        assert bu_cli._resolve_backend_cdp(env, "t1", session_name="named") is None
+        assert env["BU_CDP_WS"] == "ws://127.0.0.1:9222/devtools/browser/fallback"
+        assert env[bu_cli._PRIVATE_BROWSER_SENTINEL] == "1"
+        assert not _fake_managed_chromium
+
+    def test_local_fallback_failure_preserves_provider_metadata(
+        self, monkeypatch, tmp_path
+    ):
+        from plugins.browser._common import CloudBrowserAPIError
+
+        provider_error = CloudBrowserAPIError(
+            "Failed to create Browserbase session: HTTP 503 (code: browser_unavailable)",
+            status_code=503,
+            code="browser_unavailable",
+        )
+
+        def fallback_failure(task_id):
+            try:
+                raise provider_error
+            except CloudBrowserAPIError as error:
+                raise RuntimeError("cloud create and local fallback failed") from error
+
+        monkeypatch.setattr("tools.browser_tool_cdp._get_cdp_override", lambda: "")
+        monkeypatch.setattr(bt_cloud, "_get_cloud_provider", lambda: object())
+        monkeypatch.setattr(bt_session, "_get_session_info", fallback_failure)
+        cli = _fake_cli(tmp_path, "cat > /dev/null\necho should-not-run\n")
+        monkeypatch.setattr(bu_cli, "_find_cli", lambda: [cli])
+
+        result = json.loads(bu_cli.browser_exec("print(1)", task_id="t1"))
+
+        assert result["code"] == "browser_unavailable"
+        assert result["retryable"] is True
+
+    def test_rate_limited_degraded_record_stays_retryable_when_local_fallback_fails(
+        self, monkeypatch
+    ):
+        monkeypatch.setattr("tools.browser_tool_cdp._get_cdp_override", lambda: "")
+        monkeypatch.setattr(bt_cloud, "_get_cloud_provider", lambda: object())
+        monkeypatch.setattr(
+            bt_session,
+            "_get_session_info",
+            lambda task_id: {
+                "cdp_url": None,
+                "fallback_from_cloud": True,
+                "fallback_error_code": "rate_limited",
+                "fallback_status_code": 429,
+            },
+        )
+        monkeypatch.setattr(
+            bu_cli,
+            "_resolve_managed_chromium_cdp",
+            lambda env, task_id, session_name="": "managed Chromium failed",
+        )
+
+        err = bu_cli._resolve_backend_cdp(self._env(), "t1")
+
+        assert err.code == "rate_limited"
+        assert err.retryable is True
+
+    def test_other_provider_failure_includes_code_not_body(self, monkeypatch):
+        from plugins.browser._common import CloudBrowserAPIError
+
+        def boom(task_id):
+            raise CloudBrowserAPIError(
+                "Failed to create Browserbase session: HTTP 503 (code: browser_unavailable)",
+                status_code=503,
+                code="browser_unavailable",
+            )
+
+        monkeypatch.setattr("tools.browser_tool_cdp._get_cdp_override", lambda: "")
+        monkeypatch.setattr(bt_cloud, "_get_cloud_provider", lambda: object())
+        monkeypatch.setattr(bt_session, "_get_session_info", boom)
+
+        err = bu_cli._resolve_backend_cdp(self._env(), "t1")
+
+        assert err and "browser_unavailable" in err
+        assert err.code == "browser_unavailable"
+        assert err.retryable is True
+        assert "upstream body" not in err
+
     def test_provider_without_cdp_returns_error(self, monkeypatch):
 
         monkeypatch.setattr("tools.browser_tool_cdp._get_cdp_override", lambda: "")

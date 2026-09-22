@@ -30,6 +30,15 @@ _CHROMIUM_MISSING_DOCKER_HINT = ("Chromium browser is missing. You're running in
 _CHROMIUM_MISSING_HINT = f"Chromium browser is missing. Install it with: {_CHROMIUM_INSTALL}"
 
 
+def _is_browser_capacity_error(code: Any, status_code: Any) -> bool:
+    """Return whether provider metadata identifies transient browser capacity."""
+    normalized_code = str(code or "").strip()
+    return normalized_code == "browser_capacity" or (
+        status_code == 429
+        and normalized_code in {"", "http_429", "provider_error"}
+    )
+
+
 def _needs_chromium_sandbox_bypass() -> bool:
     """True when Chromium needs --no-sandbox to start reliably (root, Docker, AppArmor userns)."""
     if hasattr(os, "geteuid") and os.geteuid() == 0:
@@ -228,6 +237,10 @@ def _create_cloud_session_or_fallback(task_id: str, provider) -> Dict[str, Any]:
             session_info["cdp_url"] = _cdp._resolve_cdp_override(str(session_info["cdp_url"]))
         return session_info
     except Exception as e:
+        if _is_browser_capacity_error(
+            getattr(e, "code", None), getattr(e, "status_code", None)
+        ):
+            raise
         provider_name = type(provider).__name__
         _bt.logger.warning("Cloud provider %s failed (%s); attempting fallback to local Chromium for task %s",
                            provider_name, e, task_id, exc_info=True)
@@ -238,7 +251,9 @@ def _create_cloud_session_or_fallback(task_id: str, provider) -> Dict[str, Any]:
                                f"fallback also failed ({local_error})") from e
         if isinstance(session_info, dict):  # mark degraded for observability
             session_info = {**session_info, "fallback_from_cloud": True, "fallback_reason": str(e),
-                            "fallback_provider": provider_name}
+                            "fallback_provider": provider_name,
+                            "fallback_error_code": str(getattr(e, "code", "provider_error")),
+                            "fallback_status_code": getattr(e, "status_code", None)}
         return session_info
 
 

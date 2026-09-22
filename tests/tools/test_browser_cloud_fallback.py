@@ -42,6 +42,45 @@ class TestCloudProviderRuntimeFallback:
         assert session["features"]["local"] is True
         assert session["cdp_url"] is None
 
+    def test_capacity_error_is_retryable_instead_of_cached_as_local(self, monkeypatch):
+        """Capacity must escape so the next tool retry attempts cloud creation again."""
+        from plugins.browser._common import CloudBrowserAPIError
+
+        _reset_session_state(monkeypatch)
+        provider = Mock()
+        provider.create_session.side_effect = CloudBrowserAPIError(
+            "Failed to create Browserbase session: HTTP 429 (code: browser_capacity)",
+            status_code=429,
+            code="browser_capacity",
+        )
+        monkeypatch.setattr(bt_cloud, "_get_cloud_provider", lambda: provider)
+        monkeypatch.setattr("tools.browser_tool_cdp._get_cdp_override", lambda: None)
+
+        with pytest.raises(CloudBrowserAPIError) as raised:
+            bt_session._get_session_info("task-capacity")
+
+        assert raised.value.code == "browser_capacity"
+        assert "task-capacity" not in browser_tool._active_sessions
+
+    def test_provider_rate_limit_falls_back_to_local(self, monkeypatch):
+        """A provider-specific 429 code is not relabeled as browser capacity."""
+        from plugins.browser._common import CloudBrowserAPIError
+
+        _reset_session_state(monkeypatch)
+        provider = Mock()
+        provider.create_session.side_effect = CloudBrowserAPIError(
+            "Failed to create Browserbase session: HTTP 429 (code: rate_limited)",
+            status_code=429,
+            code="rate_limited",
+        )
+        monkeypatch.setattr(bt_cloud, "_get_cloud_provider", lambda: provider)
+        monkeypatch.setattr("tools.browser_tool_cdp._get_cdp_override", lambda: None)
+
+        session = bt_session._get_session_info("task-rate-limited")
+
+        assert session["fallback_from_cloud"] is True
+        assert session["fallback_error_code"] == "rate_limited"
+
 
     def test_no_provider_uses_local_directly(self, monkeypatch):
         """When no cloud provider is configured, local mode is used with no fallback markers."""
