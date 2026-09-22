@@ -2,6 +2,7 @@
 
 import asyncio
 import concurrent.futures
+import threading
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -12,6 +13,7 @@ from gateway.platforms.base import (
     SendResult,
 )
 from gateway.platforms.event import MessageEvent, MessageType
+from gateway.run import GatewayRunner
 from gateway.run_inbound import GatewayInboundMixin
 from gateway.run_turn_runner import TurnRunner
 from gateway.session import SessionSource, SessionStore, build_session_key
@@ -36,6 +38,15 @@ class _ClarifyBypassAdapter(BasePlatformAdapter):
 
 
 class _ClarifyInbound(GatewayInboundMixin):
+    """The real inbound mixin with the gateway's own key resolver bound in, so the reply is
+    keyed by production code; a test that passes the key in cannot see the two disagree."""
+
+    _session_key_for_source = GatewayRunner._session_key_for_source
+
+    def __init__(self, session_store, config):
+        self.session_store = session_store
+        self.config = config
+
     @staticmethod
     def _pending_event_audio_paths(event):
         return []
@@ -166,21 +177,21 @@ async def test_discord_reply_resolves_waiter_registered_under_store_session_key(
     from tools import clarify_gateway as cm
 
     event = _event("the requested detail", platform=Platform.DISCORD, chat_type="group")
-    store = SessionStore(
-        sessions_dir=tmp_path / "sessions",
-        config=GatewayConfig(group_sessions_per_user=False),
-    )
+    gateway_config = GatewayConfig(group_sessions_per_user=False)
+    store = SessionStore(sessions_dir=tmp_path / "sessions", config=gateway_config)
     adapter = _ClarifyBypassAdapter(Platform.DISCORD)
     adapter.set_session_store(store)
     adapter_key = adapter._event_session_key(event)
     store_key = store._generate_session_key(event.source)
     assert adapter_key != store_key
 
-    inbound = _ClarifyInbound()
+    inbound = _ClarifyInbound(store, gateway_config)
+    assert inbound._session_key_for_source(event.source) == store_key
 
     async def _handle_inbound(delivered_event):
         return await inbound._hm_clarify_reply(
-            delivered_event, delivered_event.source, store_key,
+            delivered_event, delivered_event.source,
+            inbound._session_key_for_source(delivered_event.source),
         )
 
     adapter._message_handler = _handle_inbound
@@ -195,7 +206,19 @@ async def test_discord_reply_resolves_waiter_registered_under_store_session_key(
     runner = TurnRunner(MagicMock(), ctx)
     monkeypatch.setattr(runner, "_close_native_stream_boundary", lambda *args, **kwargs: True)
     monkeypatch.setattr(runner, "_stream_consumer", lambda: None)
-    monkeypatch.setattr(cm, "get_clarify_timeout", lambda: 0.25)
+    monkeypatch.setattr(cm, "get_clarify_timeout", lambda: 5.0)
+
+    # Event-based sync: the waiter registers on a worker thread, and polling for it with a
+    # short bound turns executor scheduling latency into a false failure.
+    registered = threading.Event()
+    _real_register = cm.register
+
+    def _register(*args, **kwargs):
+        entry = _real_register(*args, **kwargs)
+        registered.set()
+        return entry
+
+    monkeypatch.setattr(cm, "register", _register)
 
     def _schedule(coro, _failure_message):
         coro.close()
@@ -205,12 +228,9 @@ async def test_discord_reply_resolves_waiter_registered_under_store_session_key(
 
     monkeypatch.setattr(runner, "_schedule", _schedule)
     waiter = asyncio.create_task(asyncio.to_thread(runner._clarify_callback_sync, "What detail?", None))
-    for _ in range(100):
-        if cm.get_pending_for_session(store_key) is not None:
-            break
-        await asyncio.sleep(0.01)
-    else:
+    if not await asyncio.to_thread(registered.wait, 3.0):
         pytest.fail("run-turn path did not register the clarify waiter")
+    assert cm.get_pending_for_session(store_key) is not None
 
     await adapter.handle_message(event)
 
