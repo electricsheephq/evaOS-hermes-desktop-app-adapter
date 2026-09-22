@@ -4,7 +4,7 @@ description: Audit installed plugins, skills, and MCP servers.
 version: 1.0.0
 author: Eva (@100yenadmin), Hermes Agent
 license: MIT
-platforms: [linux, macos, windows]
+platforms: [linux, macos]
 metadata:
   hermes:
     tags: [security, plugins, skills, mcp]
@@ -56,7 +56,7 @@ To add an MCP server non-interactively after review, use:
 printf 'y\n' | hermes mcp add <name> --command … --args …
 ```
 
-A new plugin or server is available from the next session. The user can run `/reload-mcp` to re-read MCP servers in the current session; there is no plugin reload command, so use `/new` or `/reset` for plugins. Run `/reload-skills` to re-scan installed skills.
+A newly installed or enabled plugin is picked up only when the Hermes agent and gateway processes restart — ask your operator. `/reload-mcp` re-reads MCP servers and `/reload-skills` re-scans skills in the current session; neither reloads plugins.
 
 ## Pitfalls
 

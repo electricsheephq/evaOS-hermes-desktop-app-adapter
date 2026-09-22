@@ -8,6 +8,11 @@ from types import SimpleNamespace
 import pytest
 
 
+def test_security_review_documents_plugin_restart():
+    skill_text = Path("skills/devops/security-review/SKILL.md").read_text(encoding="utf-8")
+    assert "/reset" not in skill_text and "restart" in skill_text
+
+
 def test_security_review_reports_clean_and_dangerous_plugins(tmp_path):
     home = tmp_path / "home"
     clean = home / "plugins" / "clean-plugin"
