@@ -16,9 +16,10 @@ from pathlib import Path
 from typing import Any, Optional
 
 from hermes_constants import get_hermes_home
+from hermes_cli import managed_scope
 from hermes_cli._subprocess_compat import noninteractive_git_env
 from hermes_cli.cli_output import line_input
-from hermes_cli.config import cfg_get
+from hermes_cli.config import cfg_get, read_raw_config
 from hermes_cli.plugin_capabilities import _child_dict
 from hermes_cli.secret_prompt import masked_secret_prompt
 from utils import atomic_write_text
@@ -916,8 +917,12 @@ def _save_enabled_set(enabled: set) -> None:
 
 
 def _save_plugin_sets(enabled: set, disabled: set) -> None:
-    _save_enabled_set(enabled)
-    _save_disabled_set(disabled)
+    from hermes_cli.config import load_config, save_config
+    config = load_config()
+    plugins = config.setdefault("plugins", {})
+    plugins["enabled"] = sorted(enabled)
+    plugins["disabled"] = sorted(disabled)
+    save_config(config)
 
 
 _BASIC_AUTH_PLUGIN_KEYS = frozenset({"basic", "dashboard_auth/basic"})
@@ -1024,7 +1029,11 @@ def cmd_enable(name: str, allow_tool_override: Optional[bool] = None) -> None:
         if manifest_name is not None:
             disabled.discard(manifest_name)
         _save_plugin_sets(enabled, disabled)
-        console.print(f"[green]✓[/green] Plugin [bold]{key}[/bold] enabled. Takes effect on next session.")
+        profile = read_raw_config()
+        selection = managed_scope.compose_plugin_selection(profile, managed_scope.expand_managed_config())
+        console.print(
+            f"[yellow]⊘[/yellow] Plugin [bold]{key}[/bold] is denied by managed policy; it stays disabled."
+            if selection and key in selection["disabled"] else f"[green]✓[/green] Plugin [bold]{key}[/bold] enabled. Takes effect when the Hermes agent and gateway processes restart (managed agents: ask your operator).")
 
     # Built-in tool override is a privileged grant; bundled plugins are trusted.
     if source == "bundled":
@@ -1198,8 +1207,11 @@ def cmd_disable(name: str) -> None:
     _discard_key_and_leaf(enabled, key)
     disabled.add(key)
     _save_plugin_sets(enabled, disabled)
+    profile = read_raw_config()
+    selection = managed_scope.compose_plugin_selection(profile, managed_scope.expand_managed_config())
     console.print(
-        f"[yellow]\u2298[/yellow] Plugin [bold]{key}[/bold] disabled. Takes effect on next session.")
+        f"[yellow]![/yellow] Plugin [bold]{key}[/bold] is required by managed policy; it stays enabled."
+        if selection and key in selection["enabled"] else f"[yellow]\u2298[/yellow] Plugin [bold]{key}[/bold] disabled. Takes effect when the Hermes agent and gateway processes restart (managed agents: ask your operator).")
 
 
 def _read_manifest_info(d: Path, prefix: str):

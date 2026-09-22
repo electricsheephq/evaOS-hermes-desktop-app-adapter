@@ -14,7 +14,7 @@ import os
 import re
 import threading
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Any, Callable, Dict, Iterable, Optional
 
 import yaml
 
@@ -153,6 +153,157 @@ def expand_managed_config(config: Optional[dict] = None) -> dict:
     return _expand_env_vars(managed, env=env)
 
 
+_PLUGIN_LIST_KEYS = ("enabled", "disabled")
+
+
+def _name_list(value: Any) -> list[str]:
+    return [str(item) for item in value] if isinstance(value, list) else []
+
+
+def _ordered_union(*values: Iterable[str]) -> list[str]:
+    return list(dict.fromkeys(item for value in values for item in value))
+
+
+def compose_plugin_selection(profile_config: dict, managed_config: dict) -> Optional[dict[str, list[str]]]:
+    """Compose the two managed plugin lists without making other managed lists additive."""
+    managed_plugins = managed_config.get("plugins") if isinstance(managed_config, dict) else None
+    if not isinstance(managed_plugins, dict) or not any(key in managed_plugins for key in _PLUGIN_LIST_KEYS):
+        return None
+    profile_plugins = profile_config.get("plugins") if isinstance(profile_config, dict) else None
+    profile_plugins = profile_plugins if isinstance(profile_plugins, dict) else {}
+    managed_enabled = _name_list(managed_plugins.get("enabled"))
+    managed_disabled = _name_list(managed_plugins.get("disabled"))
+    managed_enabled_set = set(managed_enabled)
+    profile_disabled = _name_list(profile_plugins.get("disabled"))
+    ignored_profile_denies = [name for name in profile_disabled if name in managed_enabled_set]
+    if ignored_profile_denies:
+        logger.warning(
+            "Ignoring profile plugin disable for managed-enabled identity %s",
+            ", ".join(ignored_profile_denies),
+        )
+    effective_profile_disabled = [
+        name for name in profile_disabled if name not in managed_enabled_set
+    ]
+    denied = set(managed_disabled) | set(effective_profile_disabled)
+    return {
+        "enabled": [
+            name for name in _ordered_union(managed_enabled, _name_list(profile_plugins.get("enabled")))
+            if name not in denied
+        ],
+        "disabled": _ordered_union(managed_disabled, effective_profile_disabled),
+    }
+
+
+def plugin_selection_for_save(
+    config: dict, managed_config: dict, persisted_config: dict, *, preserve_missing: bool
+) -> dict:
+    """Recover profile-owned plugin lists from an effective managed configuration."""
+    managed_plugins = managed_config.get("plugins") if isinstance(managed_config, dict) else None
+    if not isinstance(managed_plugins, dict) or not any(key in managed_plugins for key in _PLUGIN_LIST_KEYS):
+        return config
+    candidate_plugins = config.get("plugins") if isinstance(config.get("plugins"), dict) else {}
+    persisted_plugins = (
+        persisted_config.get("plugins") if isinstance(persisted_config.get("plugins"), dict) else {}
+    )
+    managed_enabled = set(_name_list(managed_plugins.get("enabled")))
+    managed_disabled = set(_name_list(managed_plugins.get("disabled")))
+    candidate_enabled = _name_list(candidate_plugins.get("enabled"))
+    enabled_present = "enabled" in candidate_plugins
+    if not enabled_present and preserve_missing:
+        candidate_enabled = _name_list(persisted_plugins.get("enabled"))
+    candidate_disabled = _name_list(candidate_plugins.get("disabled"))
+    disabled_present = "disabled" in candidate_plugins
+    if not disabled_present and preserve_missing:
+        candidate_disabled = _name_list(persisted_plugins.get("disabled"))
+    persisted_enabled = (
+        _name_list(persisted_plugins.get("enabled"))
+        if enabled_present or preserve_missing else []
+    )
+    persisted_disabled = (
+        _name_list(persisted_plugins.get("disabled"))
+        if disabled_present or preserve_missing else []
+    )
+    enabled_set, disabled_set = set(candidate_enabled), set(candidate_disabled)
+    profile_enabled = [
+        name for name in persisted_enabled if name in enabled_set or name in managed_disabled
+    ]
+    profile_enabled = _ordered_union(
+        profile_enabled,
+        (name for name in candidate_enabled if name not in managed_enabled),
+    )
+    profile_disabled = [
+        name for name in persisted_disabled
+        if name in disabled_set or name in managed_enabled
+    ]
+    profile_disabled = _ordered_union(
+        profile_disabled,
+        (name for name in candidate_disabled if name not in managed_disabled),
+    )
+    result = copy.deepcopy(config)
+    if not isinstance(result.get("plugins"), dict):
+        result["plugins"] = {}
+    result["plugins"].update(
+        {"enabled": profile_enabled, "disabled": profile_disabled}
+    )
+    return result
+
+
+def _operator_owned(manifest: Any) -> bool:
+    """Return whether a plugin candidate is owned outside the profile/project boundary."""
+    source = getattr(manifest, "source", "")
+    if source == "entrypoint" or source not in {"user", "project"}:
+        return True
+    if os.name != "posix":
+        return False
+    path = getattr(manifest, "path", None)
+    if not path:
+        return False
+    try:
+        return os.lstat(path).st_uid == 0
+    except OSError:
+        return False
+
+
+def filter_managed_plugin_candidates(manifests: Iterable[Any], key_fn: Callable[[Any], str]) -> list[Any]:
+    """Keep operator-owned candidates ahead of profile/project shadows of managed identities."""
+    managed = expand_managed_config(load_managed_config())
+    plugins = managed.get("plugins") if isinstance(managed, dict) else None
+    reserved = (
+        set(_name_list(plugins.get("enabled"))) | set(_name_list(plugins.get("disabled")))
+        if isinstance(plugins, dict) else set()
+    )
+    if not reserved:
+        return list(manifests)
+    candidates = list(manifests)
+
+    def _claims(manifest: Any) -> set[str]:
+        values = {str(key_fn(manifest)), str(getattr(manifest, "name", ""))}
+        return values
+
+    classified = [
+        (manifest, _claims(manifest), _operator_owned(manifest))
+        for manifest in candidates
+    ]
+    operator_claims = {
+        identity
+        for _manifest, claims, owned in classified
+        if owned and claims & reserved
+        for identity in claims
+    }
+    eligible = []
+    for manifest, claims, owned in classified:
+        directory = Path(str(getattr(manifest, "path", "") or "")).name
+        matched = claims & operator_claims
+        if not owned and matched:
+            logger.warning(
+                "Skipping plugin directory %s: it claims managed plugin identity %s",
+                directory or "<non-directory>", ", ".join(sorted(matched)),
+            )
+            continue
+        eligible.append(manifest)
+    return eligible
+
+
 def apply_managed_overlay(config: dict) -> dict:
     """Overlay administrator-pinned config values on top of an already-built dict.
 
@@ -175,7 +326,11 @@ def apply_managed_overlay(config: dict) -> dict:
         if isinstance(managed_expanded.get("model"), str):
             managed_expanded = dict(managed_expanded)
             managed_expanded["model"] = {"default": managed_expanded["model"]}
-        return _deep_merge(config, managed_expanded)
+        merged = _deep_merge(config, managed_expanded)
+        selection = compose_plugin_selection(config, managed_expanded)
+        if selection is not None:
+            merged.setdefault("plugins", {}).update(selection)
+        return merged
     except Exception:  # noqa: BLE001 — overlay must never break a caller
         logger.warning("managed scope: failed to apply config overlay", exc_info=True)
         return config

@@ -82,3 +82,16 @@ def test_gateway_env_bridge_honors_managed(homes, monkeypatch):
     raw = yaml.safe_load((home / "config.yaml").read_text())
     bridged = managed_scope.apply_managed_overlay(raw)
     assert bridged.get("timezone") == "Asia/Tokyo"
+
+
+def test_gateway_enabled_only_consumer_cannot_see_managed_denied_plugin(homes, monkeypatch):
+    home, managed = homes
+    _seed(
+        home,
+        managed,
+        user="plugins:\n  enabled: [teams_pipeline]\n",
+        mgd="plugins:\n  disabled: [teams_pipeline]\n",
+    )
+    from gateway import run as gateway_run
+
+    assert gateway_run._teams_pipeline_plugin_enabled() is False
