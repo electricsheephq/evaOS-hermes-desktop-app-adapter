@@ -19,7 +19,7 @@
 import { type GatewayEvent, LOCAL_CONNECTION_ID, registryBackendScopeKey } from '@hermes/shared'
 import { atom, computed } from 'nanostores'
 
-import { routeSessionId } from '@/app/routes'
+import { isNewChatRoute, routeSessionId } from '@/app/routes'
 import type { ClientSessionState } from '@/app/types'
 import { findGroupOfPane, type LayoutNode } from '@/components/pane-shell/tree/model'
 import {
@@ -389,7 +389,7 @@ export function getRecentlySettledSessionIds(now: number = Date.now()): string[]
 }
 
 /** The session id the live HashRouter route names, or null when the route has
- *  no session opinion (new-chat draft, reserved/overlay/contributed page, or
+ *  no session id (new-chat draft, reserved/overlay/contributed page, or
  *  no hash at all). Desktop mounts HashRouter, so the app route lives in
  *  `location.hash` (`#/stored-A`); `location.pathname` is always the
  *  document's own path and never carries the session segment. */
@@ -422,6 +422,11 @@ export function isSessionInForeground(storedSessionId: string): boolean {
   }
 
   const routed = windowRouteSessionId()
+  const route = typeof window === 'undefined' ? '' : window.location.hash.replace(/^#/, '')
+
+  if (routed === null && route && !isNewChatRoute(route)) {
+    return false
+  }
 
   if (routed !== null && !foregroundIds.has(routed)) {
     return false

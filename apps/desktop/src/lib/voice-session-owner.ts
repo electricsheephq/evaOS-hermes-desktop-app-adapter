@@ -1,12 +1,23 @@
-import type { OwnerScope } from '@/api/client'
+import { assertVoiceOwnerAvailable, capabilityScoped, type OwnerScope } from '@/api/client'
 import { getSessionOwnerHints } from '@/store/session'
 
 /** In-place Bot chats retain ambient chrome; only the session identifies their owner. */
 export function sessionVoiceOwner(sessionId: null | string): OwnerScope {
   const owners = sessionId ? getSessionOwnerHints(sessionId) : []
 
-  if (owners.length > 1) {return { voiceOwnerUnavailable: true }}
+  if (owners.length > 1) {
+    return { voiceOwnerUnavailable: true }
+  }
+
   const owner = owners[0]
 
   return owner ? { connectionId: owner.connectionId, profile: owner.targetProfile || owner.profile } : {}
+}
+
+/** Capture ambient routing for a fresh draft, but never for an ambiguous stored owner. */
+export function sessionVoiceRequestScope(sessionId: null | string): OwnerScope {
+  const owner = sessionVoiceOwner(sessionId)
+  assertVoiceOwnerAvailable(owner)
+
+  return capabilityScoped(owner.connectionId || owner.profile ? owner : undefined)
 }

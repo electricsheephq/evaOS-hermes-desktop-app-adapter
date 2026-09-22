@@ -165,3 +165,28 @@ it('a background chat’s delayed stored-id rotation never moves the user off th
   expect(requestGatewayForAgent).not.toHaveBeenCalled()
   expect(requestGatewayForProfile).not.toHaveBeenCalled()
 })
+
+it('a delayed rotation preserves a reserved page even while the old chat remains selected', async () => {
+  routedStoredId = 'stored-A'
+  window.history.pushState({}, '', '/#/stored-A')
+  setSelectedStoredSessionId('stored-A')
+  setActiveSessionId('rt-A')
+  render(<Harness />)
+  act(() => {
+    handle.cache.updateSessionState('rt-A', state => state, 'stored-A')
+  })
+  act(() => {
+    routedStoredId = null
+    window.history.pushState({}, '', '/#/settings')
+  })
+  expect($focusedStoredSessionId.get()).toBe('stored-A')
+  act(() => {
+    handle.cache.updateSessionState('rt-A', state => state, 'stored-A-next')
+  })
+  await act(async () => undefined)
+  expect(navigate).not.toHaveBeenCalled()
+  expect(window.location.hash).toBe('#/settings')
+  expect($activeSessionStoredIdRotation.get()).toBeNull()
+  expect($selectedStoredSessionId.get()).toBe('stored-A')
+  expect(handle.cache.runtimeIdByStoredSessionIdRef.current.get('stored-A-next')).toBe('rt-A')
+})

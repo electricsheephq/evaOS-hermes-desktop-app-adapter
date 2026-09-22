@@ -90,6 +90,17 @@ describe('fetchVoiceClientConfig', () => {
     ])
   })
 
+  it('separates an ambient primary route from an explicit local pin', async () => {
+    const api = mockDesktopApi({ ok: true, stt: relay, tts: relay })
+    setApiRequestConnection(null)
+    setApiRequestProfile('default')
+    await fetchVoiceClientConfig()
+    await fetchVoiceClientConfig({ connectionId: 'local', profile: 'default' })
+    expect(api).toHaveBeenCalledTimes(2)
+    expect(api.mock.calls[0][0]).not.toHaveProperty('connectionId')
+    expect(api.mock.calls[1][0]).toMatchObject({ connectionId: 'local', profile: 'default' })
+  })
+
   it('resolves null on an older backend without the endpoint', async () => {
     Object.defineProperty(window, 'hermesDesktop', {
       configurable: true,

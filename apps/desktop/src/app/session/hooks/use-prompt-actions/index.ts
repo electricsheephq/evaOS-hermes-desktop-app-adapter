@@ -3,8 +3,6 @@ import { JsonRpcGatewayError } from '@hermes/shared'
 import { useStore } from '@nanostores/react'
 import { type MutableRefObject, useCallback, useEffect, useRef } from 'react'
 
-import { assertVoiceOwnerAvailable } from '@/api/client'
-import { capabilityScoped } from '@/api/client'
 import { getApiRequestConnection, getApiRequestProfile, transcribeAudio } from '@/hermes'
 import { useI18n } from '@/i18n'
 import { stripAnsi } from '@/lib/ansi'
@@ -16,7 +14,7 @@ import { setMutableRef } from '@/lib/mutable-ref'
 import { normalize } from '@/lib/text'
 import { transcribeAudioClientDirect } from '@/lib/voice-client-direct'
 import { notifyVoiceFallback } from '@/lib/voice-fallback-notice'
-import { sessionVoiceOwner } from '@/lib/voice-session-owner'
+import { sessionVoiceRequestScope } from '@/lib/voice-session-owner'
 import { clearClarifyRequest } from '@/store/clarify'
 import {
   $composerAttachments,
@@ -647,9 +645,7 @@ export function usePromptActions({
       const profile = getApiRequestProfile()
       const session = selectedStoredSessionIdRef.current
 
-      const owner = sessionVoiceOwner(session)
-      assertVoiceOwnerAvailable(owner)
-      const scope = capabilityScoped(owner)
+      const scope = sessionVoiceRequestScope(session)
 
       const assertCurrent = () => {
         if (

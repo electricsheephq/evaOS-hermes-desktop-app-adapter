@@ -1,15 +1,16 @@
 import { afterEach, expect, it, vi } from 'vitest'
 
 import { assertVoiceOwnerAvailable, ownerScoped } from '@/api/client'
-import { setApiRequestConnection, setApiRequestProfile } from '@/hermes'
+import { setApiRequestConnection, setApiRequestProfile, transcribeAudio } from '@/hermes'
 import { _resetSessionOwnerHintsForTests, setSessionOwnerHint } from '@/store/session'
 
-import { fetchVoiceClientConfig } from './voice-client-direct'
+import { clearVoiceClientConfigCache, fetchVoiceClientConfig } from './voice-client-direct'
 import { resolveSpeakStreamUrl } from './voice-playback'
-import { sessionVoiceOwner } from './voice-session-owner'
+import { sessionVoiceOwner, sessionVoiceRequestScope } from './voice-session-owner'
 
 afterEach(() => {
   _resetSessionOwnerHintsForTests()
+  clearVoiceClientConfigCache()
   setApiRequestConnection(null)
   setApiRequestProfile(null)
   Reflect.deleteProperty(window, 'hermesDesktop')
@@ -26,8 +27,9 @@ it.each([
 })
 
 it('rejects ambiguous ownership before configuration, credentials or speech routing', async () => {
-  for (const connectionId of ['gw-one', 'gw-two'])
-    {setSessionOwnerHint('same-id', { connectionId, profile: 'default', mode: 'remote' })}
+  for (const connectionId of ['gw-one', 'gw-two']) {
+    setSessionOwnerHint('same-id', { connectionId, profile: 'default', mode: 'remote' })
+  }
 
   const api = vi.fn()
   const getConnection = vi.fn()
@@ -39,4 +41,19 @@ it('rejects ambiguous ownership before configuration, credentials or speech rout
   await expect(resolveSpeakStreamUrl(owner)).rejects.toThrow(/owner could not be resolved/)
   expect(api).not.toHaveBeenCalled()
   expect(getConnection).not.toHaveBeenCalled()
+})
+
+it('captures the fresh draft route for both configuration and relay transcription', async () => {
+  setApiRequestConnection('gw-secondary')
+  setApiRequestProfile('research')
+  const api = vi.fn(async () => ({ ok: false }))
+  Object.defineProperty(window, 'hermesDesktop', { configurable: true, value: { api } })
+  const scope = sessionVoiceRequestScope(null)
+  await fetchVoiceClientConfig(scope)
+  await transcribeAudio('data:audio/wav;base64,AA==', 'audio/wav', scope)
+  expect(api).toHaveBeenCalledTimes(2)
+
+  for (const [request] of api.mock.calls as unknown as [{ connectionId: string; profile: string }][]) {
+    expect(request).toMatchObject({ connectionId: 'gw-secondary', profile: 'research' })
+  }
 })

@@ -1,4 +1,4 @@
-import { assertVoiceOwnerAvailable, type OwnerScope, ownerScoped } from '@/api/client'
+import { assertVoiceOwnerAvailable, type OwnerScope, ownerScoped, profileScopeKey } from '@/api/client'
 import { getApiRequestConnection, getApiRequestProfile, hermesApi } from '@/hermes'
 
 /**
@@ -64,7 +64,10 @@ let inflight: { key: string; promise: Promise<null | VoiceClientConfig> } | null
 // `owner` is the speaking session's (connection, profile) — a Bot chat runs
 // on its own profile, on its own gateway; missing halves → the active scope.
 function scopeKey(owner?: OwnerScope): string {
-  return `${owner?.connectionId || getApiRequestConnection() || 'local'}::${owner?.profile || getApiRequestProfile() || 'default'}`
+  return profileScopeKey({
+    connectionId: owner?.connectionId || getApiRequestConnection(),
+    profile: owner?.profile || getApiRequestProfile()
+  })
 }
 
 /** Drop cached credentials (used by tests; scope changes rotate the key). */
