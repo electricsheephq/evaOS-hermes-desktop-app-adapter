@@ -3563,7 +3563,13 @@ class BasePlatformAdapter(ABC):
         if not cmd and event.allow_gateway_control:
             try:
                 from tools import clarify_gateway as _clarify_mod
-                _clarify_session_key = self._session_store._generate_session_key(event.source)
+                # The waiter is registered under the SessionStore key; adapters used without a
+                # store (tests, tooling) keep the adapter-level key they always used.
+                _clarify_store = getattr(self, "_session_store", None)
+                _clarify_session_key = (
+                    _clarify_store._generate_session_key(event.source)
+                    if _clarify_store is not None else session_key
+                )
                 _has_text_clarify = _clarify_mod.get_pending_for_session(
                     _clarify_session_key, include_choice_prompts=True) is not None
             except Exception:
