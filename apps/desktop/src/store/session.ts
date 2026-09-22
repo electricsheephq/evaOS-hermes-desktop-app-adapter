@@ -904,6 +904,7 @@ export const $sessionResumeRequest = atom<SessionResumeRequest | null>(null)
 // them when a connection is removed from the registry.
 const SESSION_OWNER_HINT_LIMIT = 256
 const SESSION_OWNER_HINTS_KEY = 'hermes.desktop.sessionOwnerHints.v1'
+export const $sessionOwnerHintsSnapshot = atom<ReadonlyArray<{ id: string; route: SessionOwnerRoute }>>([])
 const sessionOwnerHints = new Map<string, { id: string; route: SessionOwnerRoute }>()
 
 function sessionOwnerHintKey(sessionId: string, route: Pick<SessionOwnerRoute, 'connectionId' | 'profile'>): string {
@@ -920,6 +921,7 @@ function normalizeOwnerRoute(route: SessionOwnerRoute): SessionOwnerRoute {
 }
 
 function persistSessionOwnerHints(): void {
+  $sessionOwnerHintsSnapshot.set([...sessionOwnerHints.values()])
   writeJson(
     SESSION_OWNER_HINTS_KEY,
     sessionOwnerHints.size === 0 ? null : [...sessionOwnerHints.values()].map(entry => [entry.id, entry.route])
@@ -989,6 +991,7 @@ export function hydrateSessionOwnerHints(): void {
 }
 
 hydrateSessionOwnerHints()
+$sessionOwnerHintsSnapshot.set([...sessionOwnerHints.values()])
 
 export function setSessionOwnerHint(sessionId: string, route: SessionOwnerRoute): void {
   if (rememberSessionOwnerHint(sessionId, route)) {
@@ -1063,9 +1066,17 @@ export function sessionOwnerRouteFromRow(
 /** @internal Tests: forget every in-memory hint (storage untouched unless asked). */
 export function _resetSessionOwnerHintsForTests({ storage = false }: { storage?: boolean } = {}): void {
   sessionOwnerHints.clear()
+  $sessionOwnerHintsSnapshot.set([...sessionOwnerHints.values()])
 
   if (storage) {
     writeJson(SESSION_OWNER_HINTS_KEY, null)
+  }
+}
+
+/** Preserve hidden-session ownership when compression creates a continuation. */
+export function copySessionOwnerHints(previousId: string, nextId: string): void {
+  for (const owner of getSessionOwnerHints(previousId)) {
+    setSessionOwnerHint(nextId, owner)
   }
 }
 

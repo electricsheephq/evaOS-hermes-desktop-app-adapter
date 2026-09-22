@@ -195,6 +195,11 @@ export const zhHant = defineLocale({
       codeSkewRestartRequired: '更新後此後端仍在執行舊程式碼。請重新啟動以載入新程式碼。'
     },
     voice: {
+      fallbackTitle: '正在使用本機語音備援服務',
+      fallbackCredential: 'Fish Audio 憑證無法使用或遭到拒絕。正在使用本機 Speaches。',
+      fallbackQuota: 'Fish Audio 配額或帳務問題阻止了本次請求。正在使用本機 Speaches。',
+      fallbackAvailability: 'Fish Audio 暫時無法使用。正在使用本機 Speaches。',
+      fallbackGeneric: '本次請求使用本機 Speaches。',
       configureSpeechToText: '設定語音轉文字後即可使用語音模式。',
       couldNotStartSession: '無法啟動語音工作階段',
       microphoneAccessDenied: '麥克風存取被拒絕。',

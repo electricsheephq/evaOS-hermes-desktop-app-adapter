@@ -77,6 +77,30 @@ describe('fetchVoiceClientConfig', () => {
     expect(api).toHaveBeenCalledTimes(2)
   })
 
+  it('isolates identical profile names across owner gateways and recognition', async () => {
+    const api = mockDesktopApi({ ok: true, stt: relay, tts: relay })
+    setApiRequestConnection('primary')
+    setApiRequestProfile('default')
+    await fetchVoiceClientConfig({ connectionId: 'secondary', profile: 'default' })
+    await fetchVoiceClientConfig({ connectionId: 'secondary', profile: 'default' })
+    await transcribeAudioClientDirect(new Blob(['fixture']), { connectionId: 'third', profile: 'default' })
+    expect(api.mock.calls.map(([request]) => request)).toEqual([
+      expect.objectContaining({ connectionId: 'secondary', profile: 'default' }),
+      expect.objectContaining({ connectionId: 'third', profile: 'default' })
+    ])
+  })
+
+  it('separates an ambient primary route from an explicit local pin', async () => {
+    const api = mockDesktopApi({ ok: true, stt: relay, tts: relay })
+    setApiRequestConnection(null)
+    setApiRequestProfile('default')
+    await fetchVoiceClientConfig()
+    await fetchVoiceClientConfig({ connectionId: 'local', profile: 'default' })
+    expect(api).toHaveBeenCalledTimes(2)
+    expect(api.mock.calls[0][0]).not.toHaveProperty('connectionId')
+    expect(api.mock.calls[1][0]).toMatchObject({ connectionId: 'local', profile: 'default' })
+  })
+
   it('resolves null on an older backend without the endpoint', async () => {
     Object.defineProperty(window, 'hermesDesktop', {
       configurable: true,

@@ -235,6 +235,11 @@ export const zh: Translations = {
       codeSkewRestartRequired: '更新后此后端仍在运行旧代码。请重启以加载新代码。'
     },
     voice: {
+      fallbackTitle: '正在使用本地语音备用服务',
+      fallbackCredential: 'Fish Audio 凭据不可用或被拒绝。正在使用本地 Speaches。',
+      fallbackQuota: 'Fish Audio 配额或计费问题阻止了本次请求。正在使用本地 Speaches。',
+      fallbackAvailability: 'Fish Audio 暂时不可用。正在使用本地 Speaches。',
+      fallbackGeneric: '本次请求使用本地 Speaches。',
       configureSpeechToText: '配置语音转文字后即可使用语音模式。',
       couldNotStartSession: '无法启动语音会话',
       microphoneAccessDenied: '麦克风访问被拒绝。',
@@ -307,7 +312,8 @@ export const zh: Translations = {
     start: '打开所选客户智能体',
     starting: '正在打开客户智能体…',
     started: '已授予支持访问。正在重新加载…',
-    signInRequired: '请重新登录 Electric Sheep 以选择支持目标。如果刚登录后仍然出现此提示，说明应用内支持所需的 Electric Sheep 更新尚未部署。',
+    signInRequired:
+      '请重新登录 Electric Sheep 以选择支持目标。如果刚登录后仍然出现此提示，说明应用内支持所需的 Electric Sheep 更新尚未部署。',
     signIn: '登录 Electric Sheep',
     signingIn: '请在浏览器中完成 Electric Sheep 登录…',
     forbidden: '此账户未获授权进行委托支持。',

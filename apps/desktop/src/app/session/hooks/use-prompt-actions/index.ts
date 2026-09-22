@@ -3,7 +3,6 @@ import { JsonRpcGatewayError } from '@hermes/shared'
 import { useStore } from '@nanostores/react'
 import { type MutableRefObject, useCallback, useEffect, useRef } from 'react'
 
-import { capabilityScoped } from '@/api/client'
 import { getApiRequestConnection, getApiRequestProfile, transcribeAudio } from '@/hermes'
 import { useI18n } from '@/i18n'
 import { stripAnsi } from '@/lib/ansi'
@@ -14,6 +13,8 @@ import { triggerHaptic } from '@/lib/haptics'
 import { setMutableRef } from '@/lib/mutable-ref'
 import { normalize } from '@/lib/text'
 import { transcribeAudioClientDirect } from '@/lib/voice-client-direct'
+import { notifyVoiceFallback } from '@/lib/voice-fallback-notice'
+import { sessionVoiceRequestScope } from '@/lib/voice-session-owner'
 import { clearClarifyRequest } from '@/store/clarify'
 import {
   $composerAttachments,
@@ -639,10 +640,13 @@ export function usePromptActions({
       if (!sttEnabled) {
         throw new Error(copy.sttDisabled)
       }
+
       const connection = getApiRequestConnection()
       const profile = getApiRequestProfile()
-      const scope = capabilityScoped()
       const session = selectedStoredSessionIdRef.current
+
+      const scope = sessionVoiceRequestScope(session)
+
       const assertCurrent = () => {
         if (
           connection !== getApiRequestConnection() ||
@@ -659,7 +663,7 @@ export function usePromptActions({
       // (local whisper, command providers, older backend) → relay unchanged.
       // Provider REJECTIONS surface — re-running the same request through
       // the relay would fail identically, just slower.
-      const direct = await transcribeAudioClientDirect(audio)
+      const direct = await transcribeAudioClientDirect(audio, scope)
       assertCurrent()
 
       if (direct !== null) {
@@ -670,12 +674,9 @@ export function usePromptActions({
       assertCurrent()
       const result = await transcribeAudio(dataUrl, audio.type, scope)
       assertCurrent()
+
       if (result.fallback_active) {
-        notify({
-          kind: 'warning',
-          title: 'Fish Audio → Speaches',
-          message: result.primary_error ?? 'Using local speech fallback.'
-        })
+        notifyVoiceFallback(result.fallback_reason)
       }
 
       return result.transcript

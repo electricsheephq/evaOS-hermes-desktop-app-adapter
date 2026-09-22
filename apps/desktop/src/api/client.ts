@@ -106,6 +106,32 @@ export function profileScoped(profile?: null | string): { profile?: string } {
   return selected ? { profile: selected } : {}
 }
 
+/** A session's OWNER as a request scope: a profile belongs to ONE gateway, so
+ *  a Bot on another connection is (its connection, its profile) — never the
+ *  active connection with the Bot's profile name. Missing halves fall back to
+ *  the ambient scope; an explicit connection — `'local'` included — overrides
+ *  the ambient tag `hermesApi` spreads underneath (as capabilityScoped does). */
+export interface OwnerScope {
+  voiceOwnerUnavailable?: boolean
+  connectionId?: null | string
+  profile?: null | string
+}
+
+export function ownerScoped(owner?: OwnerScope): { connectionId?: string; priority?: 'foreground'; profile?: string } {
+  assertVoiceOwnerAvailable(owner)
+
+  return {
+    ...profileScoped(owner?.profile || undefined),
+    ...(owner?.connectionId ? { connectionId: owner.connectionId } : {})
+  }
+}
+
+export function assertVoiceOwnerAvailable(owner?: OwnerScope): void {
+  if (owner?.voiceOwnerUnavailable) {
+    throw new Error('Voice session owner could not be resolved')
+  }
+}
+
 /** Profile that profile-scoped REST/WS calls should target (null → primary).
  *  Read-only twin of setApiRequestProfile for modules (e.g. voice playback)
  *  that build their own connection URLs and must stay on the same backend. */

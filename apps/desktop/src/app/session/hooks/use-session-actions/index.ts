@@ -113,6 +113,7 @@ import {
   dropSessionState,
   focusOpenSession,
   holdSessionOwnerUntilForeground,
+  isSessionInForeground,
   openSessionTile,
   patchSessionTile,
   publishSessionState,
@@ -414,7 +415,8 @@ export function useSessionActions({
     if (
       activeSessionIdRef.current !== storedIdRotation.runtimeSessionId ||
       selectedStoredSessionId !== storedIdRotation.previousStoredSessionId ||
-      (routedStoredSessionId !== null && routedStoredSessionId !== storedIdRotation.previousStoredSessionId)
+      (routedStoredSessionId !== null && routedStoredSessionId !== storedIdRotation.previousStoredSessionId) ||
+      !isSessionInForeground(storedIdRotation.previousStoredSessionId)
     ) {
       return
     }

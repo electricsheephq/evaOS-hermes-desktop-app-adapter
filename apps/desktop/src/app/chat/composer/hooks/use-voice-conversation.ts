@@ -14,6 +14,8 @@ import { isVoiceStopCommand } from '@/lib/voice-stop-word'
 import { notify, notifyError } from '@/store/notifications'
 import { $voicePlayback } from '@/store/voice-playback'
 
+import { useComposerScope } from '../scope'
+
 import { useMicRecorder } from './use-mic-recorder'
 
 export type ConversationStatus = 'idle' | 'listening' | 'transcribing' | 'thinking' | 'speaking'
@@ -61,6 +63,12 @@ export function useVoiceConversation({
   const voiceCopy = t.notifications.voice
   const { handle, level } = useMicRecorder(voiceCopy)
   const micHandleRef = useRef(handle)
+  // The scope's session owner (a Bot's own connection + profile) picks the TTS
+  // voice; a ref keeps the long-lived turn closures below reading the current
+  // value.
+  const { connectionId: ownerConnectionId, profile: ownerProfile, voiceOwnerUnavailable } = useComposerScope()
+  const ownerRef = useRef({ connectionId: ownerConnectionId, profile: ownerProfile, voiceOwnerUnavailable })
+  ownerRef.current = { connectionId: ownerConnectionId, profile: ownerProfile, voiceOwnerUnavailable }
   const [status, setStatus] = useState<ConversationStatus>('idle')
   const [muted, setMuted] = useState(false)
   const turnTimeoutRef = useRef<number | null>(null)
@@ -202,14 +210,17 @@ export function useVoiceConversation({
           awaitingSpokenResponseRef.current = true
           dropSpeechSession()
           await onSubmit(transcript)
+
           if (generation !== generationRef.current || !enabledRef.current) {
             return
           }
+
           setStatus('thinking')
         } catch (error) {
           if (generation !== generationRef.current) {
             return
           }
+
           notifyError(error, voiceCopy.transcriptionFailed)
 
           if (enabledRef.current && !mutedRef.current && !busyRef.current) {
@@ -295,6 +306,7 @@ export function useVoiceConversation({
       if (generation !== generationRef.current) {
         return
       }
+
       notifyError(error, voiceCopy.couldNotStartSession)
       pendingStartRef.current = false
       setStatus('idle')
@@ -406,14 +418,17 @@ export function useVoiceConversation({
         dropSpeechSession()
         consumePendingResponse()
         await onSubmit(transcript)
+
         if (generation !== generationRef.current || !enabledRef.current) {
           return
         }
+
         setStatus('thinking')
       } catch (error) {
         if (generation !== generationRef.current) {
           return
         }
+
         notifyError(error, voiceCopy.transcriptionFailed)
         resumeListening()
       }
@@ -447,6 +462,7 @@ export function useVoiceConversation({
         if (generation !== generationRef.current || !enabledRef.current) {
           return
         }
+
         bargeCapturePendingRef.current = true
         bargedRef.current = true
         markVoicePlaybackInterrupted()
@@ -462,6 +478,7 @@ export function useVoiceConversation({
         if (generation !== generationRef.current || !enabledRef.current) {
           return
         }
+
         bargeCapturePendingRef.current = false
         stopBargeMonitorRef.current = null
         void submitCapturedUtterance(audio)
@@ -523,7 +540,7 @@ export function useVoiceConversation({
         // this is a safety net for read-aloud-style entries into the loop.
         ensureBargeMonitor()
 
-        const playback = playSpeechText(response.text, { source: 'voice-conversation' })
+        const playback = playSpeechText(response.text, { ...ownerRef.current, source: 'voice-conversation' })
         // playSpeechText performs its normal cleanup synchronously before
         // returning. Capture the sequence after that internal increment so
         // only a later, external stop suppresses the next listen cycle.
@@ -563,8 +580,9 @@ export function useVoiceConversation({
       // words to a mic re-open. Usually already live (armed at submit).
       ensureBargeMonitor()
 
+      let feedTimer: number | undefined
       void (async () => {
-        const session = await startSpeechStream({ source: 'voice-conversation' })
+        const session = await startSpeechStream({ ...ownerRef.current, source: 'voice-conversation' })
 
         // The session may resolve after the loop moved on (barge, disable).
         if (responseIdRef.current !== responseId) {
@@ -613,7 +631,7 @@ export function useVoiceConversation({
 
         // Timer-driven feed: reply text flows into the session at delta rate
         // regardless of React render cadence.
-        const feedTimer = window.setInterval(() => feedSpeechSession(responseId), 150)
+        feedTimer = window.setInterval(() => feedSpeechSession(responseId), 150)
         feedSpeechSession(responseId)
 
         const outcome = await session.done
@@ -631,9 +649,18 @@ export function useVoiceConversation({
 
         awaitingSpokenResponseRef.current = false
         settleAfterSpeech(bargedRef.current)
-      })()
+      })().catch(error => {
+        window.clearInterval(feedTimer)
+
+        if (responseIdRef.current !== responseId) {return}
+        stopVoicePlayback()
+        dropSpeechSession()
+        awaitingSpokenResponseRef.current = false
+        notifyError(error, voiceCopy.playbackFailed)
+        settleAfterSpeech(false, true)
+      })
     },
-    [awaitFallbackSpeech, ensureBargeMonitor, feedSpeechSession, settleAfterSpeech]
+    [awaitFallbackSpeech, ensureBargeMonitor, feedSpeechSession, settleAfterSpeech, voiceCopy.playbackFailed]
   )
 
   const start = useCallback(async () => {

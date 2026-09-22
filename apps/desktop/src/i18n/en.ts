@@ -242,6 +242,11 @@ export const en: Translations = {
       codeSkewRestartRequired: 'This backend is running old code after an update. Restart it to load the new code.'
     },
     voice: {
+      fallbackTitle: 'Using local voice fallback',
+      fallbackCredential: 'Fish Audio credentials are unavailable or were rejected. Using local Speaches.',
+      fallbackQuota: 'Fish Audio quota or billing prevented this request. Using local Speaches.',
+      fallbackAvailability: 'Fish Audio is temporarily unavailable. Using local Speaches.',
+      fallbackGeneric: 'Using local Speaches for this request.',
       configureSpeechToText: 'Configure speech-to-text to use voice mode.',
       couldNotStartSession: 'Could not start voice session',
       microphoneAccessDenied: 'Microphone access denied.',

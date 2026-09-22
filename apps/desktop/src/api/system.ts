@@ -13,7 +13,7 @@ import type {
   MemoryStatusResponse
 } from '@/types/hermes'
 
-import { capabilityScoped, hermesApi, type ProfileScope, profileScoped } from './client'
+import { capabilityScoped, hermesApi, type OwnerScope, ownerScoped, type ProfileScope, profileScoped } from './client'
 
 export const AUDIO_SPEAK_MIN_REQUEST_TIMEOUT_MS = 180_000
 export const AUDIO_SPEAK_MAX_REQUEST_TIMEOUT_MS = 600_000
@@ -188,9 +188,11 @@ export function transcribeAudio(
   })
 }
 
-export function speakText(text: string): Promise<AudioSpeakResponse> {
+// `owner` = the speaking session's (connection, profile) — a Bot's own TTS
+// voice on its own gateway; omitted halves → the active scope.
+export function speakText(text: string, owner?: OwnerScope): Promise<AudioSpeakResponse> {
   return hermesApi<AudioSpeakResponse>({
-    ...profileScoped(),
+    ...ownerScoped(owner),
     path: '/api/audio/speak',
     method: 'POST',
     body: { text },

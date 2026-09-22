@@ -26,6 +26,7 @@ import { useIncrementalExternalStoreRuntime } from '@/lib/incremental-external-s
 import { modelOptionsQueryKey, requestModelOptions } from '@/lib/model-options'
 import { useStoreSelector } from '@/lib/use-session-slice'
 import { cn } from '@/lib/utils'
+import { useSessionVoiceOwner } from '@/lib/voice-session-owner'
 import { migrateSessionDraft } from '@/store/composer'
 import { migrateQueuedPrompts, parkQueuedPrompts } from '@/store/composer-queue'
 import { $introSplash } from '@/store/intro-splash'
@@ -61,7 +62,12 @@ import { ChatSwapOverlay, ChatSyncBadge } from './chat-swap-overlay'
 import { ChatBar, ChatBarFallback } from './composer'
 import { requestComposerInsert } from './composer/focus'
 import { droppedFileInlineRefs } from './composer/inline-refs'
-import { ComposerSurfaceProvider, useComposerScope, useComposerSurfaceId } from './composer/scope'
+import {
+  ComposerScopeProvider,
+  ComposerSurfaceProvider,
+  useComposerScope,
+  useComposerSurfaceId
+} from './composer/scope'
 import type { ChatBarState } from './composer/types'
 import { type DroppedFile, partitionDroppedFiles } from './hooks/use-composer-actions'
 import { type DragKind, useFileDropZone } from './hooks/use-file-drop-zone'
@@ -242,6 +248,31 @@ function ChatRuntimeBoundary({
 }: ChatRuntimeBoundaryProps) {
   const view = useSessionView()
   const runtimeId = useStore(view.$runtimeId)
+  const storedId = useStore(view.$storedId)
+  const connection = useStore($connection)
+  const activeProfile = useStore($activeGatewayProfile)
+  const connectionId = connection?.connectionId || (connection?.mode === 'local' ? 'local' : '')
+
+  const ownerRoute = storedId
+    ? getSessionOwnerHint(storedId, connectionId ? { connectionId, profile: activeProfile } : undefined)
+    : undefined
+
+  const { connectionId: ownerConnection, profile: ownerProfile, voiceOwnerUnavailable } = useSessionVoiceOwner(storedId)
+
+  // A Bot chat opened IN PLACE in the main pane (openStoredBotChat) keeps the
+  // active profile, so the ambient scope carries no owner. Publish the session
+  // owner hint's (connection, profile) here so voice playback speaks with the
+  // Bot's own voice; a tile's scope already names its owner and is kept as is.
+  const parentScope = useComposerScope()
+
+  const composerScope = useMemo(
+    () =>
+      parentScope.profile || (!ownerProfile && !voiceOwnerUnavailable)
+        ? parentScope
+        : { ...parentScope, connectionId: ownerConnection || undefined, profile: ownerProfile, voiceOwnerUnavailable },
+    [ownerConnection, ownerProfile, parentScope, voiceOwnerUnavailable]
+  )
+
   const storeMessages = useMessagesWhileVisible(view.$messages)
   const messages = suppressMessages ? NO_MESSAGES : storeMessages
 
@@ -284,17 +315,8 @@ function ChatRuntimeBoundary({
 
   const runtimeMessageRepository = useRuntimeMessageRepository(windowedMessages)
 
-  const storedId = useStore(view.$storedId)
-  const connection = useStore($connection)
-  const activeProfile = useStore($activeGatewayProfile)
-  // Subscribed (not read imperatively) so the "Show earlier" affordance
-  // appears/retires as tail hydrations and backfill pages record their state.
+  // Subscribed so the backfill affordance follows tail hydration state.
   const transcriptTailStates = useStore($transcriptTailBySessionId)
-  const connectionId = connection?.connectionId || (connection?.mode === 'local' ? 'local' : '')
-
-  const ownerRoute = storedId
-    ? getSessionOwnerHint(storedId, connectionId ? { connectionId, profile: activeProfile } : undefined)
-    : undefined
 
   const tailProfile = ownerRoute
     ? { connectionId: ownerRoute.connectionId, profile: ownerRoute.targetProfile || ownerRoute.profile }
@@ -354,9 +376,11 @@ function ChatRuntimeBoundary({
   })
 
   return (
-    <TranscriptWindowProvider value={transcriptWindow}>
-      <AssistantRuntimeProvider runtime={runtime}>{children}</AssistantRuntimeProvider>
-    </TranscriptWindowProvider>
+    <ComposerScopeProvider value={composerScope}>
+      <TranscriptWindowProvider value={transcriptWindow}>
+        <AssistantRuntimeProvider runtime={runtime}>{children}</AssistantRuntimeProvider>
+      </TranscriptWindowProvider>
+    </ComposerScopeProvider>
   )
 }
 

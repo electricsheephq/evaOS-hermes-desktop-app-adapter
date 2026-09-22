@@ -1,3 +1,4 @@
+import { useStore } from '@nanostores/react'
 /**
  * SESSION TILES — a stored session rendered as a layout-tree pane BESIDE the
  * main thread (multi-session tiling). A tile IS the real chat surface: the
@@ -13,12 +14,11 @@
  * the pane (tab Close) removes the tile + its zone; tiles persist across
  * restarts and re-resume on boot.
  */
-
-import { useStore } from '@nanostores/react'
 import { useQueryClient } from '@tanstack/react-query'
 import { atom, computed } from 'nanostores'
 import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from 'react'
 
+import type { OwnerScope } from '@/api/client'
 import { useGatewayRequest } from '@/app/gateway/hooks/use-gateway-request'
 import { useModelControls } from '@/app/session/hooks/use-model-controls'
 import { blobToDataUrl } from '@/app/session/hooks/use-prompt-actions/utils'
@@ -36,6 +36,8 @@ import { useI18n } from '@/i18n'
 import type { ChatMessage } from '@/lib/chat-messages'
 import { NEW_SESSION_TITLE, sessionTitle } from '@/lib/chat-runtime'
 import { transcribeAudioClientDirect } from '@/lib/voice-client-direct'
+import { notifyVoiceFallback } from '@/lib/voice-fallback-notice'
+import { captureVoiceOwnerScope, useSessionVoiceOwner } from '@/lib/voice-session-owner'
 import { createComposerAttachmentScope, draftTitleFor } from '@/store/composer'
 import { $pinnedSessionIds, pinSession, unpinSession } from '@/store/layout'
 import { $activeGatewayProfile } from '@/store/profile'
@@ -51,7 +53,7 @@ import {
   sessionPinId
 } from '@/store/session'
 import { isSessionRemovalPending } from '@/store/session-removal'
-import { requestForSessionProfile } from '@/store/session-request-router'
+import { requestForSessionProfile, type SessionOwnerRoute } from '@/store/session-request-router'
 import {
   $sessionStates,
   $sessionTileDelegateRevision,
@@ -159,17 +161,51 @@ function buildTileView(storedSessionId: string): SessionView {
 // tiles have no pin/delete affordance, and transcription needs no per-tile state.
 const noop = () => undefined
 
-const tileTranscribeAudio = async (audio: Blob) => {
+/** Explicit tile identity disambiguates collisions; inferred owners must fail closed. */
+export function tileVoiceOwner(
+  explicitOwner: SessionOwnerRoute | undefined,
+  inferredOwner: OwnerScope,
+  legacyOwner: SessionOwnerRoute | undefined
+): OwnerScope {
+  if (explicitOwner) {
+    return { connectionId: explicitOwner.connectionId, profile: explicitOwner.targetProfile || explicitOwner.profile }
+  }
+
+  if (inferredOwner.voiceOwnerUnavailable || inferredOwner.connectionId || inferredOwner.profile) {
+    return inferredOwner
+  }
+
+  return legacyOwner
+    ? { connectionId: legacyOwner.connectionId, profile: legacyOwner.targetProfile || legacyOwner.profile }
+    : {}
+}
+
+export const tileTranscribeAudio = async (
+  audio: Blob,
+  owner: OwnerScope,
+  assertCurrent: () => void = () => undefined
+) => {
   // Client-direct first (profile's own STT provider, no gateway audio hop);
   // relay when the provider is not client-callable. Same ladder as the main
   // composer's transcribeVoiceAudio.
-  const direct = await transcribeAudioClientDirect(audio)
+  const scope = captureVoiceOwnerScope(owner)
+  const direct = await transcribeAudioClientDirect(audio, scope)
+  assertCurrent()
 
   if (direct !== null) {
     return direct
   }
 
-  return (await transcribeAudio(await blobToDataUrl(audio), audio.type)).transcript
+  const dataUrl = await blobToDataUrl(audio)
+  assertCurrent()
+  const result = await transcribeAudio(dataUrl, audio.type, scope)
+  assertCurrent()
+
+  if (result.fallback_active) {
+    notifyVoiceFallback(result.fallback_reason)
+  }
+
+  return result.transcript
 }
 
 function TileChat({
@@ -199,6 +235,14 @@ function TileChat({
     return tileOwnerRoute(tiles, rows, storedSessionId)
   }, [cronRows, messagingRows, sessionRows, storedSessionId, tiles])
 
+  const inferredVoiceOwner = useSessionVoiceOwner(storedSessionId)
+
+  const voiceOwner = tileVoiceOwner(
+    tiles.find(tile => tile.storedSessionId === storedSessionId)?.ownerRoute,
+    inferredVoiceOwner,
+    ownerRoute
+  )
+
   const requestTileGateway = useCallback(
     <T,>(method: string, params?: Record<string, unknown>, timeoutMs?: number, signal?: AbortSignal): Promise<T> =>
       requestForSessionProfile<T>(ownerRoute, requestGateway, method, params, timeoutMs, signal),
@@ -224,9 +268,50 @@ function TileChat({
       $awaitingInput: sessionAwaitingInput(runtimeId),
       $messages: view.$messages,
       attachments,
+      connectionId: voiceOwner.connectionId,
+      profile: voiceOwner.profile,
+      voiceOwnerUnavailable: voiceOwner.voiceOwnerUnavailable,
       target: `tile:${storedSessionId}`
     }),
-    [attachments, runtimeId, storedSessionId, view.$messages]
+    [
+      attachments,
+      voiceOwner.connectionId,
+      voiceOwner.profile,
+      voiceOwner.voiceOwnerUnavailable,
+      runtimeId,
+      storedSessionId,
+      view.$messages
+    ]
+  )
+
+  const voiceOwnerRef = useRef(scope)
+  voiceOwnerRef.current = scope
+  const voiceMounted = useRef(true)
+  // eslint-disable-next-line no-restricted-syntax -- mount lifetime guard, not reactive state mirrored into a ref
+  useEffect(() => {
+    voiceMounted.current = true
+
+    return () => {
+      voiceMounted.current = false
+    }
+  }, [])
+
+  const transcribeTileAudio = useCallback(
+    (audio: Blob) =>
+      tileTranscribeAudio(
+        audio,
+        {
+          connectionId: scope.connectionId,
+          profile: scope.profile,
+          voiceOwnerUnavailable: scope.voiceOwnerUnavailable
+        },
+        () => {
+          if (!voiceMounted.current || voiceOwnerRef.current !== scope) {
+            throw new DOMException('Voice conversation changed', 'AbortError')
+          }
+        }
+      ),
+    [scope]
   )
 
   // Tile actions must keep the persisted owner route. The ambient gateway hook
@@ -324,7 +409,7 @@ function TileChat({
           onSubmit={actions.submitText}
           onThreadMessagesChange={actions.handleThreadMessagesChange}
           onToggleSelectedPin={noop}
-          onTranscribeAudio={tileTranscribeAudio}
+          onTranscribeAudio={transcribeTileAudio}
           requestModelOptionsForOwner={requestTileGateway}
         />
       </ComposerScopeProvider>

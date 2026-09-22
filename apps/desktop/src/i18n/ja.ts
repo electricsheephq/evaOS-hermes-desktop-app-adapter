@@ -203,6 +203,12 @@ export const ja = defineLocale({
         'アップデート後、このバックエンドは古いコードのままです。再起動して新しいコードを読み込んでください。'
     },
     voice: {
+      fallbackTitle: 'ローカル音声を代替使用中',
+      fallbackCredential: 'Fish Audio の認証情報が利用できないか、拒否されました。ローカルの Speaches を使用します。',
+      fallbackQuota:
+        'Fish Audio の利用枠または請求の問題でリクエストできませんでした。ローカルの Speaches を使用します。',
+      fallbackAvailability: 'Fish Audio は一時的に利用できません。ローカルの Speaches を使用します。',
+      fallbackGeneric: 'このリクエストにはローカルの Speaches を使用します。',
       configureSpeechToText: '音声モードを使用するには音声認識を設定してください。',
       couldNotStartSession: '音声セッションを開始できませんでした',
       microphoneAccessDenied: 'マイクへのアクセスが拒否されました。',
