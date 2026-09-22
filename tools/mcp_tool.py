@@ -319,7 +319,7 @@ class MCPServerTask(MCPServerRunMixin, MCPServerTransportMixin, MCPServerHealthM
         "_recycled_reason", "initialize_result", "_ping_unsupported", "_list_cache_meta",
         "_reconnect_retries", "_session_proven", "_was_parked", "_inflight_tasks", "_reconnecting",
         "_suspect_reason", "_teardown_race", "_permanent_grace_used", "_stdio_child_pids",
-        "_ever_connected", "_parked_auth_logged")
+        "_ever_connected", "_parked_episode_logged")
 
     def __init__(self, name: str, registration_home: Optional[str] = None):
         self.name = name
@@ -356,10 +356,12 @@ class MCPServerTask(MCPServerRunMixin, MCPServerTransportMixin, MCPServerHealthM
         self._ever_connected: bool = False
         # True from park until proven healthy again; logs the revival once.
         self._was_parked: bool = False
-        # True once this parked-auth episode has logged its detail; the timed self-probe re-fails
-        # every _PARKED_RETRY_INTERVAL and must not repeat the WARNING (#337). Cleared on a real
-        # reconnect so a later, genuinely new auth failure is logged in full.
-        self._parked_auth_logged: bool = False
+        # True once this parked episode has logged its detail; the timed self-probe re-fails every
+        # _PARKED_RETRY_INTERVAL and must not repeat the WARNING (#337). Every permanent park
+        # re-probes on that timer -- a 401, a 403, an OAuth setup failure, a bad command -- so the
+        # latch covers the park, not one error class. Cleared on a real session so a later,
+        # genuinely new failure is logged in full.
+        self._parked_episode_logged: bool = False
         # In-flight RPC tasks so a deliberate teardown fails them fast; _reconnecting is True
         # during that teardown so _track_inflight_rpc turns the cancel into a retryable error.
         # In-flight RPC bookkeeping (#48069 salvage): user-visible requests registered while running so a

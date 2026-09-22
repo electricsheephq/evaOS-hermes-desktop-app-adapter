@@ -117,8 +117,8 @@ class MCPServerTransportMixin:
         await self._discover_tools()
         self._ready.set()
         self._ever_connected = True
-        # A real session ends any parked-auth episode: the next auth failure is new (#337).
-        self._clear_parked_auth_log()
+        # A real session ends any parked episode: the next permanent failure is new (#337).
+        self._clear_parked_log()
         _core._reset_server_error(self.name)
         # Session is live again: clear any breaker state from a prior outage so the first call after
         # recovery isn't gated on a stale consecutive-failure count (#16788).
@@ -338,7 +338,12 @@ class MCPServerTransportMixin:
             from tools.mcp_oauth_manager import get_manager
             return get_manager().get_or_build_provider(self.name, url, config.get("oauth"))
         except Exception as exc:
-            logger.warning("MCP OAuth setup failed for '%s': %s", self.name, exc)
+            # An `auth: oauth` server with no usable cached tokens fails HERE on every timed
+            # self-probe, before the park is logged, so this warning repeats on the same interval
+            # (#337: two WARNINGs per cycle were measured, not one). Follow the episode latch
+            # without claiming it, so the park message below still carries the episode's WARNING.
+            log = logger.debug if self._parked_episode_logged else logger.warning
+            log("MCP OAuth setup failed for '%s': %s", self.name, exc)
             raise
 
     def _sse_transport(self, url: str, headers: dict, connect_timeout: float,

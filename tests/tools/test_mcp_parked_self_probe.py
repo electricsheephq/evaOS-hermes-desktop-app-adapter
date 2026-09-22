@@ -148,9 +148,10 @@ def test_parked_server_self_probes_and_revives(monkeypatch, tmp_path):
 
 # ── Parked-auth log hygiene (#337) ───────────────────────────────────────────
 
-def _auth_park_task(monkeypatch, name="authless"):
-    """A task whose transport fails the initial connect with an auth error.
+def _auth_park_task(monkeypatch, name="authless", exc_factory=None):
+    """A task whose transport fails the initial connect with a permanent error.
 
+    Defaults to an auth error; ``exc_factory`` swaps in any other permanent one.
     Flip ``state["auth_ok"]`` to let the next probe establish a session. Returns
     ``(task, state)``; ``state["parked"]`` counts parks.
     """
@@ -159,6 +160,11 @@ def _auth_park_task(monkeypatch, name="authless"):
     from tools.mcp_tool import MCPServerTask
 
     state = {"transport_calls": 0, "parked": 0, "auth_ok": False}
+
+    def _default_auth_error():
+        return OAuthNonInteractiveError(
+            "Browser authorization is required. Run `hermes mcp login <server>` "
+            "interactively to (re)authorize, then restart or reload the gateway.")
 
     class _Task(MCPServerTask):
         def _is_http(self):
@@ -177,9 +183,7 @@ def _auth_park_task(monkeypatch, name="authless"):
         async def _run_stdio(self, config):
             state["transport_calls"] += 1
             if not state["auth_ok"]:
-                raise OAuthNonInteractiveError(
-                    "Browser authorization is required. Run `hermes mcp login <server>` "
-                    "interactively to (re)authorize, then restart or reload the gateway.")
+                raise (exc_factory or _default_auth_error)()
             # Real _serve_session: only the handshake and discovery are stubbed, so the episode
             # reset stays the production one rather than something the test re-implements.
             return await self._serve_session(object(), 5.0)
@@ -208,10 +212,10 @@ async def _stop(task, run_task):
         run_task.cancel()
 
 
-def _park_logs(caplog):
-    """Every park log naming the auth failure, in order."""
+def _park_logs(caplog, exc_name="OAuthNonInteractiveError"):
+    """Every park log naming that failure, in order."""
     return [r for r in caplog.records
-            if "parking" in r.getMessage() and "OAuthNonInteractiveError" in r.getMessage()]
+            if "parking" in r.getMessage() and exc_name in r.getMessage()]
 
 
 @pytest.mark.no_isolate
@@ -286,3 +290,77 @@ def test_auth_park_message_states_the_probe_interval(monkeypatch, tmp_path, capl
     assert "hermes mcp login needs-login" in message, message
     assert "parking until credentials change" not in message, (
         "the park is timed, so the message must not promise a wait for a credential change")
+
+
+@pytest.mark.no_isolate
+def test_non_auth_permanent_park_also_logs_once_per_episode(monkeypatch, tmp_path, caplog):
+    """The latch is on the PARK, not on one error class.
+
+    Every permanent failure parks on the same timer, so a bad stdio command repeats
+    its WARNING exactly as an expired credential does (#337). Before the latch
+    covered both, this one warned on every probe forever.
+    """
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+
+    def _bad_command():
+        return FileNotFoundError(2, "No such file or directory", "does-not-exist")
+
+    async def _scenario():
+        task, state = _auth_park_task(monkeypatch, name="badcmd", exc_factory=_bad_command)
+        with caplog.at_level(logging.DEBUG, logger="tools.mcp_tool"):
+            run_task = asyncio.ensure_future(task.run({"command": "x"}))
+            assert await _spin_until(lambda: state["parked"] >= 3), (
+                f"server did not re-probe (parks={state['parked']})")
+            await _stop(task, run_task)
+
+    asyncio.run(_scenario())
+
+    records = _park_logs(caplog, "FileNotFoundError")
+    assert len(records) >= 3, f"expected one park log per probe, got {len(records)}"
+    warnings = [r for r in records if r.levelno == logging.WARNING]
+    assert len(warnings) == 1, (
+        f"a parked server must log its detail once per episode, got {len(warnings)} WARNINGs")
+    assert "re-probing every" in warnings[0].getMessage(), (
+        "the non-auth park message must say the probe repeats: " + warnings[0].getMessage())
+
+
+def test_oauth_setup_warning_follows_the_episode_latch(monkeypatch, tmp_path, caplog):
+    """`_build_oauth_auth` fails before the park is logged, on every probe.
+
+    An ``auth: oauth`` server with no usable cached tokens raises here each time the
+    timed probe rebuilds the transport, so this warning repeated on the same
+    interval as the one #337 names -- two WARNINGs per cycle, not one. It must
+    follow the latch without claiming it, so the park message still carries the
+    episode's WARNING.
+    """
+    from tools.mcp_tool import MCPServerTask
+
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    task = MCPServerTask("oauthless")
+    task._auth_type = "oauth"
+
+    def _boom(*a, **k):
+        raise RuntimeError("no cached tokens")
+
+    monkeypatch.setattr("tools.mcp_oauth_manager.get_manager", _boom)
+
+    with caplog.at_level(logging.DEBUG, logger="tools.mcp_tool"):
+        for _ in range(3):
+            with pytest.raises(RuntimeError):
+                task._build_oauth_auth("https://example.invalid/mcp", {})
+            # The park that follows each failure claims the latch the first time.
+            task._claim_parked_log()
+
+    setup_logs = [r for r in caplog.records if "MCP OAuth setup failed" in r.getMessage()]
+    assert len(setup_logs) == 3, f"expected one log per probe, got {len(setup_logs)}"
+    assert setup_logs[0].levelno == logging.WARNING, "the episode's first setup failure is a WARNING"
+    assert all(r.levelno == logging.DEBUG for r in setup_logs[1:]), (
+        "repeat setup failures must be DEBUG, got: " + str([r.levelname for r in setup_logs[1:]]))
+
+    # A real session ends the episode, so the next setup failure warns again.
+    task._clear_parked_log()
+    with caplog.at_level(logging.DEBUG, logger="tools.mcp_tool"):
+        with pytest.raises(RuntimeError):
+            task._build_oauth_auth("https://example.invalid/mcp", {})
+    assert [r for r in caplog.records if "MCP OAuth setup failed" in r.getMessage()][-1].levelno == \
+        logging.WARNING
