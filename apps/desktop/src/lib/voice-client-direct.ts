@@ -179,8 +179,8 @@ export function transcriptFromOpenAiMultipartBody(body: string): string {
  * re-running the same request through the gateway would just fail again
  * slower and hide the real error.
  */
-export async function transcribeAudioClientDirect(audio: Blob): Promise<null | string> {
-  const config = await fetchVoiceClientConfig()
+export async function transcribeAudioClientDirect(audio: Blob, owner?: OwnerScope): Promise<null | string> {
+  const config = await fetchVoiceClientConfig(owner)
   const stt = config?.stt
 
   if (!stt || stt.mode !== 'direct') {

@@ -279,6 +279,11 @@ export interface Translations {
       codeSkewRestartRequired: string
     }
     voice: {
+      fallbackTitle: string
+      fallbackCredential: string
+      fallbackQuota: string
+      fallbackAvailability: string
+      fallbackGeneric: string
       configureSpeechToText: string
       couldNotStartSession: string
       microphoneAccessDenied: string

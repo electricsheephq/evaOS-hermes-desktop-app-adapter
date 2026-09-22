@@ -61,7 +61,12 @@ import { ChatSwapOverlay, ChatSyncBadge } from './chat-swap-overlay'
 import { ChatBar, ChatBarFallback } from './composer'
 import { requestComposerInsert } from './composer/focus'
 import { droppedFileInlineRefs } from './composer/inline-refs'
-import { ComposerScopeProvider, ComposerSurfaceProvider, useComposerScope, useComposerSurfaceId } from './composer/scope'
+import {
+  ComposerScopeProvider,
+  ComposerSurfaceProvider,
+  useComposerScope,
+  useComposerSurfaceId
+} from './composer/scope'
 import type { ChatBarState } from './composer/types'
 import { type DroppedFile, partitionDroppedFiles } from './hooks/use-composer-actions'
 import { type DragKind, useFileDropZone } from './hooks/use-file-drop-zone'
@@ -310,17 +315,8 @@ function ChatRuntimeBoundary({
 
   const runtimeMessageRepository = useRuntimeMessageRepository(windowedMessages)
 
-  const storedId = useStore(view.$storedId)
-  const connection = useStore($connection)
-  const activeProfile = useStore($activeGatewayProfile)
-  // Subscribed (not read imperatively) so the "Show earlier" affordance
-  // appears/retires as tail hydrations and backfill pages record their state.
+  // Subscribed so the backfill affordance follows tail hydration state.
   const transcriptTailStates = useStore($transcriptTailBySessionId)
-  const connectionId = connection?.connectionId || (connection?.mode === 'local' ? 'local' : '')
-
-  const ownerRoute = storedId
-    ? getSessionOwnerHint(storedId, connectionId ? { connectionId, profile: activeProfile } : undefined)
-    : undefined
 
   const tailProfile = ownerRoute
     ? { connectionId: ownerRoute.connectionId, profile: ownerRoute.targetProfile || ownerRoute.profile }

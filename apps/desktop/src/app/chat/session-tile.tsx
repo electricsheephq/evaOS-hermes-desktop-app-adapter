@@ -19,6 +19,9 @@ import { useQueryClient } from '@tanstack/react-query'
 import { atom, computed } from 'nanostores'
 import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from 'react'
 
+import type { OwnerScope } from '@/api/client'
+import { notifyVoiceFallback } from '@/lib/voice-fallback-notice'
+
 import { useGatewayRequest } from '@/app/gateway/hooks/use-gateway-request'
 import { useModelControls } from '@/app/session/hooks/use-model-controls'
 import { blobToDataUrl } from '@/app/session/hooks/use-prompt-actions/utils'
@@ -159,17 +162,27 @@ function buildTileView(storedSessionId: string): SessionView {
 // tiles have no pin/delete affordance, and transcription needs no per-tile state.
 const noop = () => undefined
 
-const tileTranscribeAudio = async (audio: Blob) => {
+export const tileTranscribeAudio = async (
+  audio: Blob,
+  owner: OwnerScope,
+  assertCurrent: () => void = () => undefined
+) => {
   // Client-direct first (profile's own STT provider, no gateway audio hop);
   // relay when the provider is not client-callable. Same ladder as the main
   // composer's transcribeVoiceAudio.
-  const direct = await transcribeAudioClientDirect(audio)
+  const direct = await transcribeAudioClientDirect(audio, owner)
+  assertCurrent()
 
   if (direct !== null) {
     return direct
   }
 
-  return (await transcribeAudio(await blobToDataUrl(audio), audio.type)).transcript
+  const dataUrl = await blobToDataUrl(audio)
+  assertCurrent()
+  const result = await transcribeAudio(dataUrl, audio.type, owner)
+  assertCurrent()
+  if (result.fallback_active) notifyVoiceFallback(result.fallback_reason)
+  return result.transcript
 }
 
 function TileChat({
@@ -237,6 +250,32 @@ function TileChat({
       storedSessionId,
       view.$messages
     ]
+  )
+
+  const voiceOwnerRef = useRef(scope)
+  voiceOwnerRef.current = scope
+  const voiceMounted = useRef(true)
+  useEffect(() => {
+    voiceMounted.current = true
+    return () => {
+      voiceMounted.current = false
+    }
+  }, [])
+  const transcribeTileAudio = useCallback(
+    (audio: Blob) =>
+      tileTranscribeAudio(
+        audio,
+        {
+          connectionId: scope.connectionId,
+          profile: scope.profile
+        },
+        () => {
+          if (!voiceMounted.current || voiceOwnerRef.current !== scope) {
+            throw new DOMException('Voice conversation changed', 'AbortError')
+          }
+        }
+      ),
+    [scope]
   )
 
   // Tile actions must keep the persisted owner route. The ambient gateway hook
@@ -334,7 +373,7 @@ function TileChat({
           onSubmit={actions.submitText}
           onThreadMessagesChange={actions.handleThreadMessagesChange}
           onToggleSelectedPin={noop}
-          onTranscribeAudio={tileTranscribeAudio}
+          onTranscribeAudio={transcribeTileAudio}
           requestModelOptionsForOwner={requestTileGateway}
         />
       </ComposerScopeProvider>

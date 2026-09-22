@@ -8,8 +8,8 @@ import {
   type DirectTtsConfig,
   synthesizeSpeechClientDirect
 } from '@/lib/voice-client-direct'
+import { notifyVoiceFallback } from '@/lib/voice-fallback-notice'
 import { RECONNECT_ATTEMPT_TIMEOUT_MS, withTimeout } from '@/lib/with-timeout'
-import { notify } from '@/store/notifications'
 import {
   $voicePlayback,
   setVoicePlaybackState,
@@ -591,11 +591,7 @@ async function playSpeechDataUrl(
 
   const audio = new Audio(response.data_url)
   if (response.fallback_active) {
-    notify({
-      kind: 'warning',
-      title: 'Fish Audio → Speaches',
-      message: response.primary_error ?? 'Using local speech fallback.'
-    })
+    notifyVoiceFallback(response.fallback_reason)
   }
   currentAudio = audio
   setVoicePlaybackState(currentState('speaking', options, audio))

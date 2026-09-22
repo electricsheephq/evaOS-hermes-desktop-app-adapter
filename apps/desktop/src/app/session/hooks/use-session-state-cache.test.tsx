@@ -98,7 +98,7 @@ describe('useSessionStateCache — stored-id rotation provenance', () => {
     expect(cache.runtimeIdByStoredSessionIdRef.current.get('stored-A-next')).toBe('runtime-A')
   })
 
-  it('does not steal the foreground route when a fast A -> B switch beats A\'s rotation (#86106)', () => {
+  it("does not steal the foreground route when a fast A -> B switch beats A's rotation (#86106)", () => {
     let cache!: Cache
 
     setActiveSessionId('runtime-A')
@@ -124,9 +124,7 @@ describe('useSessionStateCache — stored-id rotation provenance', () => {
     window.history.pushState({}, '', '/#/stored-B')
     setActiveSessionId('runtime-A')
     setSelectedStoredSessionId(null)
-    render(
-      <Harness activeSessionId="runtime-A" onReady={value => (cache = value)} selectedStoredSessionId={null} />
-    )
+    render(<Harness activeSessionId="runtime-A" onReady={value => (cache = value)} selectedStoredSessionId={null} />)
 
     act(() => {
       cache.updateSessionState('runtime-A', state => state, 'stored-A')
@@ -142,9 +140,7 @@ describe('useSessionStateCache — stored-id rotation provenance', () => {
     window.history.pushState({}, '', '/#/stored-A')
     setActiveSessionId('runtime-A')
     setSelectedStoredSessionId(null)
-    render(
-      <Harness activeSessionId="runtime-A" onReady={value => (cache = value)} selectedStoredSessionId={null} />
-    )
+    render(<Harness activeSessionId="runtime-A" onReady={value => (cache = value)} selectedStoredSessionId={null} />)
 
     act(() => {
       cache.updateSessionState('runtime-A', state => state, 'stored-A')
@@ -164,9 +160,7 @@ describe('useSessionStateCache — stored-id rotation provenance', () => {
     window.history.pushState({}, '', '/')
     setActiveSessionId('runtime-A')
     setSelectedStoredSessionId(null)
-    render(
-      <Harness activeSessionId="runtime-A" onReady={value => (cache = value)} selectedStoredSessionId={null} />
-    )
+    render(<Harness activeSessionId="runtime-A" onReady={value => (cache = value)} selectedStoredSessionId={null} />)
 
     act(() => {
       cache.updateSessionState('runtime-A', state => state, 'stored-A')
@@ -215,15 +209,15 @@ describe('useSessionStateCache — stored-id rotation provenance', () => {
 
     // A tile keyed by an OLDER segment id of the same conversation still counts
     // as the foreground: the rotation carries the surface to the new tip.
-    setSessions([{ _lineage_ids: ['stored-A', 'stored-A-next'], _lineage_root_id: 'stored-A', id: 'stored-A-next' }] as never)
+    setSessions([
+      { _lineage_ids: ['stored-A', 'stored-A-next'], _lineage_root_id: 'stored-A', id: 'stored-A-next' }
+    ] as never)
     $sessionTiles.set([{ storedSessionId: 'stored-A' }])
     setActiveSessionId('runtime-A')
     setSelectedStoredSessionId(null)
     $layoutTree.set(group(['workspace', 'session-tile:stored-A'], { active: 'session-tile:stored-A', id: 'grp-main' }))
     noteActiveTreeGroup('grp-main')
-    render(
-      <Harness activeSessionId="runtime-A" onReady={value => (cache = value)} selectedStoredSessionId={null} />
-    )
+    render(<Harness activeSessionId="runtime-A" onReady={value => (cache = value)} selectedStoredSessionId={null} />)
 
     act(() => {
       cache.updateSessionState('runtime-A', state => state, 'stored-A')

@@ -204,6 +204,11 @@ export const ar = defineLocale({
       codeSkewRestartRequired: 'بعد التحديث ما زال هذا الخلفية يشغّل كودا قديما. أعد تشغيله لتحميل الكود الجديد.'
     },
     voice: {
+      fallbackTitle: 'استخدام خدمة الصوت المحلية البديلة',
+      fallbackCredential: 'بيانات اعتماد Fish Audio غير متاحة أو تم رفضها. يتم استخدام Speaches المحلي.',
+      fallbackQuota: 'تعذر تنفيذ طلب Fish Audio بسبب الحصة أو الفوترة. يتم استخدام Speaches المحلي.',
+      fallbackAvailability: 'خدمة Fish Audio غير متاحة مؤقتًا. يتم استخدام Speaches المحلي.',
+      fallbackGeneric: 'يتم استخدام Speaches المحلي لهذا الطلب.',
       configureSpeechToText: 'اضبط تحويل الكلام إلى نص لاستخدام وضع الصوت.',
       couldNotStartSession: 'تعذر بدء جلسة الصوت',
       microphoneAccessDenied: 'تم رفض الوصول إلى الميكروفون.',

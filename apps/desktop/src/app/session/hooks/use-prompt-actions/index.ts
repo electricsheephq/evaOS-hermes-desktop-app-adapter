@@ -13,6 +13,7 @@ import { sanitizeComposerInput } from '@/lib/composer-input-sanitize'
 import { triggerHaptic } from '@/lib/haptics'
 import { setMutableRef } from '@/lib/mutable-ref'
 import { normalize } from '@/lib/text'
+import { notifyVoiceFallback } from '@/lib/voice-fallback-notice'
 import { transcribeAudioClientDirect } from '@/lib/voice-client-direct'
 import { clearClarifyRequest } from '@/store/clarify'
 import {
@@ -31,6 +32,7 @@ import {
   $currentCwd,
   $messages,
   $terminalBackend,
+  getSessionOwnerHint,
   setActiveSessionId,
   setAwaitingResponse,
   setBusy,
@@ -641,8 +643,19 @@ export function usePromptActions({
       }
       const connection = getApiRequestConnection()
       const profile = getApiRequestProfile()
-      const scope = capabilityScoped()
       const session = selectedStoredSessionIdRef.current
+      const owner = session
+        ? getSessionOwnerHint(session, {
+            connectionId: connection || 'local',
+            profile: profile || 'default'
+          })
+        : undefined
+      const scope = owner
+        ? capabilityScoped({
+            connectionId: owner.connectionId,
+            profile: owner.targetProfile || owner.profile
+          })
+        : capabilityScoped()
       const assertCurrent = () => {
         if (
           connection !== getApiRequestConnection() ||
@@ -659,7 +672,7 @@ export function usePromptActions({
       // (local whisper, command providers, older backend) → relay unchanged.
       // Provider REJECTIONS surface — re-running the same request through
       // the relay would fail identically, just slower.
-      const direct = await transcribeAudioClientDirect(audio)
+      const direct = await transcribeAudioClientDirect(audio, scope)
       assertCurrent()
 
       if (direct !== null) {
@@ -671,11 +684,7 @@ export function usePromptActions({
       const result = await transcribeAudio(dataUrl, audio.type, scope)
       assertCurrent()
       if (result.fallback_active) {
-        notify({
-          kind: 'warning',
-          title: 'Fish Audio → Speaches',
-          message: result.primary_error ?? 'Using local speech fallback.'
-        })
+        notifyVoiceFallback(result.fallback_reason)
       }
 
       return result.transcript

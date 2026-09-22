@@ -28,57 +28,60 @@ describe('useAutoSpeakReplies — owner-routed synthesis', () => {
     Reflect.deleteProperty(window, 'hermesDesktop')
   })
 
-  it('synthesizes a Bot reply with the scope owner (connection, profile), not the active scope', async () => {
-    const api = vi.fn(async ({ path }: { path: string }) =>
-      path.startsWith('/api/audio/voice-config') ? { ok: false } : { audio: '' }
-    )
+  it.each(['default', 'bot-adam'])(
+    'synthesizes owner %s through its gateway while the primary differs',
+    async profile => {
+      const api = vi.fn(async ({ path }: { path: string }) =>
+        path.startsWith('/api/audio/voice-config') ? { ok: false } : { audio: '' }
+      )
 
-    Object.defineProperty(window, 'hermesDesktop', { configurable: true, value: { api } })
-    setApiRequestConnection('gw-active')
-    setApiRequestProfile('research')
-    $autoSpeakReplies.set(true)
+      Object.defineProperty(window, 'hermesDesktop', { configurable: true, value: { api } })
+      setApiRequestConnection('gw-active')
+      setApiRequestProfile('default')
+      $autoSpeakReplies.set(true)
 
-    const $messages = atom<never[]>([])
-    let reply: null | { id: string; pending: boolean; text: string } = null
+      const $messages = atom<never[]>([])
+      let reply: null | { id: string; pending: boolean; text: string } = null
 
-    const wrapper = ({ children }: { children: ReactNode }) => (
-      <ComposerScopeProvider
-        value={{ ...MAIN_COMPOSER_SCOPE, $messages, connectionId: 'gw-bots', profile: 'bot-adam', target: 'tile:bot' }}
-      >
-        {children}
-      </ComposerScopeProvider>
-    )
+      const wrapper = ({ children }: { children: ReactNode }) => (
+        <ComposerScopeProvider
+          value={{ ...MAIN_COMPOSER_SCOPE, $messages, connectionId: 'gw-bots', profile, target: 'tile:bot' }}
+        >
+          {children}
+        </ComposerScopeProvider>
+      )
 
-    renderHook(
-      () =>
-        useAutoSpeakReplies({
-          conversationActive: false,
-          failureLabel: 'failed',
-          markSpoken: () => {
-            reply = null
-          },
-          pendingReply: () => reply,
-          sessionId: 'bot-session'
-        }),
-      { wrapper }
-    )
+      renderHook(
+        () =>
+          useAutoSpeakReplies({
+            conversationActive: false,
+            failureLabel: 'failed',
+            markSpoken: () => {
+              reply = null
+            },
+            pendingReply: () => reply,
+            sessionId: 'bot-session'
+          }),
+        { wrapper }
+      )
 
-    reply = { id: 'm1', pending: false, text: 'Hello from Adam.' }
-    $messages.set([])
+      reply = { id: 'm1', pending: false, text: 'Hello from Adam.' }
+      $messages.set([])
 
-    await vi.waitFor(() =>
-      expect(api.mock.calls.map(([request]) => (request as { path: string }).path)).toContain('/api/audio/speak')
-    )
+      await vi.waitFor(() =>
+        expect(api.mock.calls.map(([request]) => (request as { path: string }).path)).toContain('/api/audio/speak')
+      )
 
-    const scopes = new Set(
-      api.mock.calls.map(([request]) => {
-        const { connectionId, profile } = request as { connectionId?: string; profile?: string }
+      const scopes = new Set(
+        api.mock.calls.map(([request]) => {
+          const { connectionId, profile } = request as { connectionId?: string; profile?: string }
 
-        return `${connectionId}::${profile}`
-      })
-    )
+          return `${connectionId}::${profile}`
+        })
+      )
 
-    // voice-config AND the speak POST — every leg names the Bot's owner.
-    expect(scopes).toEqual(new Set(['gw-bots::bot-adam']))
-  })
+      // voice-config AND the speak POST — every leg names the Bot's owner.
+      expect(scopes).toEqual(new Set([`gw-bots::${profile}`]))
+    }
+  )
 })
