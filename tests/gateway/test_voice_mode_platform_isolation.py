@@ -124,12 +124,16 @@ class TestVoiceModeProfileIsolation:
 
     @staticmethod
     def _discord_adapter(owner=None):
+        from types import SimpleNamespace
         from unittest.mock import AsyncMock
 
         a = MagicMock()
         a.platform = Platform.DISCORD
         a._owner_profile = owner
         a._voice_text_channels = {111: 123}
+        a._voice_channel_ids = {111: 456}
+        a._voice_clients = {111: SimpleNamespace(channel=SimpleNamespace(id=456))}
+        a._voice_capture_binding_valid = lambda guild_id, *, generation: guild_id == 111 and generation == 1
         a._voice_sources = {}
         a._voice_input_callback = None
         a._on_voice_disconnect = None
@@ -169,8 +173,9 @@ class TestVoiceModeProfileIsolation:
         assert "123" not in default_ad._auto_tts_enabled_chats
 
         # A transcript captured by bot2's adapter runs through bot2, not default.
+        bot2_ad._voice_sources[111] = src.to_dict()
         runner._bind_voice_input_callback(bot2_ad)
-        await bot2_ad._voice_input_callback(guild_id=111, user_id=42, transcript="hi")
+        await bot2_ad._voice_input_callback(guild_id=111, user_id=42, transcript="hi", capture_generation=1)
         bot2_ad.handle_message.assert_awaited_once()
         default_ad.handle_message.assert_not_awaited()
         assert bot2_ad.handle_message.call_args[0][0].source.profile == "bot2"

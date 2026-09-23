@@ -3634,7 +3634,9 @@ class BasePlatformAdapter(ABC):
             hi = _or_default(lambda: int(os.getenv("HERMES_HUMAN_DELAY_MAX_MS", str(hi))), hi)
         return random.uniform(lo / 1000.0, hi / 1000.0)
 
-    async def _synthesize_auto_tts(self, text_content: str) -> Tuple[List[str], Optional[str]]:
+    async def _synthesize_auto_tts(
+        self, text_content: str, result_metadata: Optional[Dict[str, Any]] = None,
+    ) -> Tuple[List[str], Optional[str]]:
         """Synthesize auto-TTS audio -> ``(existing_paths, requested_path)``; empty/None on failure
         (logged, never raised). Path built platform-aware HERE: HERMES_SESSION_PLATFORM is cleared
         post-handler."""
@@ -3650,6 +3652,13 @@ class BasePlatformAdapter(ABC):
                 requested_path = build_auto_tts_output_path(self.platform)
                 tts_data = _json.loads(await asyncio.to_thread(
                     text_to_speech_tool, text=speech_text, output_path=requested_path))
+                if result_metadata is not None and isinstance(tts_data, dict):
+                    for key in (
+                        "primary_provider", "fallback_active", "fallback_provider",
+                        "fallback_reason", "primary_error",
+                    ):
+                        if key in tts_data:
+                            result_metadata[key] = tts_data[key]
                 if tts_data.get("success", True):
                     raw_tts_paths = tts_data.get("file_paths") or [tts_data.get("file_path")]
                     paths = [str(path) for path in raw_tts_paths if path and Path(path).exists()]
@@ -3669,14 +3678,27 @@ class BasePlatformAdapter(ABC):
 
     async def _play_tts_file(
         self, event: MessageEvent, text_content: str, tts_path: str, first: bool,
-        metadata: Dict[str, Any], record_delivery: Callable) -> bool:
+        metadata: Dict[str, Any], record_delivery: Callable,
+        provider_status: Optional[Dict[str, Any]] = None,
+    ) -> bool:
         """Play one synthesized TTS file. Returns True when the ORIGINAL reply text rode
         along as a Telegram caption (first file, ≤1024 chars) so the text send is skipped."""
         caption = None
         if first and self.platform == Platform.TELEGRAM and text_content and text_content[:1024] == text_content:
             caption = text_content
+        playback_metadata = dict(metadata)
+        raw = getattr(event, "raw_message", None)
+        generation = getattr(raw, "voice_capture_generation", None)
+        guild_id = getattr(raw, "guild_id", None)
+        if generation is not None and guild_id is not None:
+            playback_metadata["_hermes_live_voice_request"] = {
+                "guild_id": guild_id, "generation": generation,
+            }
+        if provider_status:
+            playback_metadata["_hermes_voice_provider_status"] = dict(provider_status)
         tts_result = await self.play_tts(
-            chat_id=event.source.chat_id, audio_path=tts_path, caption=caption, metadata=metadata)
+            chat_id=event.source.chat_id, audio_path=tts_path, caption=caption,
+            metadata=playback_metadata)
         record_delivery(tts_result)
         return bool(caption and getattr(tts_result, "success", False))
 
@@ -4011,16 +4033,20 @@ class BasePlatformAdapter(ABC):
                 # Final content gets notify=True; typing metadata stays unmarked (thread-strict).
                 _final_thread_metadata = _mark_notify_metadata(_thread_metadata)
                 _tts_paths, _tts_requested_path = [], None
+                _tts_provider_status: Dict[str, Any] = {}
                 if self._wants_auto_tts(
                         event, session_key, interrupt_event, text_content, media_files):
-                    _tts_paths, _tts_requested_path = await self._synthesize_auto_tts(text_content)
+                    _tts_paths, _tts_requested_path = await self._synthesize_auto_tts(
+                        text_content, result_metadata=_tts_provider_status,
+                    )
                 # TTS plays before text; generated files are removed afterwards.
                 _tts_caption_delivered = False
                 for _tts_index, _tts_path in enumerate(_tts_paths):
                     try:
                         _tts_caption_delivered |= await self._play_tts_file(
                             event, text_content, _tts_path, _tts_index == 0, _final_thread_metadata,
-                            _record_delivery)
+                            _record_delivery,
+                            provider_status=_tts_provider_status if _tts_index == 0 else None)
                     finally:
                         with contextlib.suppress(OSError):
                             os.remove(_tts_path)

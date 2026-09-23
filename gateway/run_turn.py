@@ -22,7 +22,7 @@ from contextvars import copy_context
 from gateway.config import Platform
 from gateway.media_repair import repair_explicit_computer_use_media_paths
 from gateway.platforms.base import BasePlatformAdapter
-from gateway.platforms.event import MessageEvent
+from gateway.platforms.event import MessageEvent, MessageType
 from gateway.session import (
     SessionSource, _session_key_namespace, build_channel_continuity_note,
     build_session_context,
@@ -1928,12 +1928,23 @@ class GatewayTurnMixin:
         """Inner handler that runs under the _running_agents sentinel guard."""
         _msg_start_time = time.time()
         _platform_name = source.platform.value if hasattr(source.platform, "value") else str(source.platform)
+        _is_voice_event = event.message_type == MessageType.VOICE
+        _msg_preview = (
+            "[voice redacted]"
+            if _is_voice_event
+            else (event.text or "")[:80].replace("\n", " ")
+        )
+        _reply_text = getattr(event, "reply_to_text", None) or ""
+        _reply_preview = (
+            "[voice redacted]"
+            if _is_voice_event and _reply_text
+            else _reply_text[:80].replace("\n", " ")
+        )
         logger.info(
             "inbound message: platform=%s user=%s chat=%s msg=%r reply_to_id=%s reply_to_text=%r",
             _platform_name, source.user_name or source.user_id or "unknown",
-            source.chat_id or "unknown", (event.text or "")[:80].replace("\n", " "),
-            getattr(event, "reply_to_message_id", None),
-            (getattr(event, "reply_to_text", None) or "")[:80].replace("\n", " "),
+            source.chat_id or "unknown", _msg_preview,
+            getattr(event, "reply_to_message_id", None), _reply_preview,
         )
 
         resolved = await self._hmwa_resolve_session(event, source)
