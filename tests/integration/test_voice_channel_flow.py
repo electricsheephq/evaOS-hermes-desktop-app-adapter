@@ -208,8 +208,8 @@ class TestRealNaClDecrypt:
 class TestRealNaClWithDAVE:
     """NaCl decrypt + DAVE passthrough scenarios with real crypto."""
 
-    def test_dave_unknown_ssrc_passthrough(self):
-        """DAVE enabled but SSRC unknown → skip DAVE, buffer audio."""
+    def test_dave_unknown_ssrc_dropped(self):
+        """DAVE ciphertext is never passed to Opus before its speaker is known."""
         key = _make_secret_key()
         dave = MagicMock()  # DAVE session present but SSRC not mapped
         receiver = _make_voice_receiver(key, dave_session=dave)
@@ -217,11 +217,8 @@ class TestRealNaClWithDAVE:
         packet = _build_encrypted_rtp_packet(key, b'\xf8\xff\xfe', ssrc=100)
         receiver._on_packet(packet)
 
-        # DAVE decrypt not called (SSRC unknown)
         dave.decrypt.assert_not_called()
-        # Audio still buffered via passthrough
-        assert 100 in receiver._buffers
-        assert len(receiver._buffers[100]) > 0
+        assert len(receiver._buffers.get(100, b"")) == 0
 
     def test_dave_unencrypted_error_passthrough(self):
         """DAVE raises 'Unencrypted' → use NaCl-decrypted data as-is."""
@@ -289,18 +286,17 @@ class TestRTPPaddingStrip:
         assert bytes(recv_plain._buffers[100]) == bytes(recv_padded._buffers[100])
 
     def test_padding_with_dave_passthrough(self):
-        """Padding stripped before DAVE → passthrough buffers cleanly."""
+        """Padded DAVE ciphertext is dropped while its SSRC remains unknown."""
         key = _make_secret_key()
         opus_silence = b"\xf8\xff\xfe"
-        dave = MagicMock()  # SSRC unmapped → DAVE skipped, passthrough used
+        dave = MagicMock()
         receiver = _make_voice_receiver(key, dave_session=dave)
 
         packet = _build_padded_rtp_packet(key, opus_silence, pad_len=4, ssrc=100)
         receiver._on_packet(packet)
 
         dave.decrypt.assert_not_called()
-        assert 100 in receiver._buffers
-        assert len(receiver._buffers[100]) > 0
+        assert len(receiver._buffers.get(100, b"")) == 0
 
     def test_invalid_padding_length_zero_dropped(self):
         """Declared pad_len=0 is invalid (RFC requires count includes itself)."""
