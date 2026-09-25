@@ -454,7 +454,9 @@ def _finalize_session(session: dict | None, end_reason: str = "tui_close") -> No
                         agent._end_session_on_close = False
     # ``_teardown_session`` follows with ``agent.close()``, whose ``_finalize_owned_session_row`` ends the row as
     # ``agent_close`` through the agent's own handle — every spare decision above would be undone one call later.
-    if agent is not None and (_desktop_automatic_cleanup or not _tui_owns_lifecycle):
+    # evaOS: ``_tui_owns_lifecycle`` starts False here (conservative ownership), so guard like the sites above.
+    if agent is not None and (_desktop_automatic_cleanup or not _tui_owns_lifecycle) and hasattr(
+            agent, "_end_session_on_close"):
         agent._end_session_on_close = False
     # In-flight async delegations end WITH the session (no return address left). Always interrupt by THIS live UI
     # sid; by durable session_key only when the TUI owns the lifecycle — a viewer tab must not kill gateway work.

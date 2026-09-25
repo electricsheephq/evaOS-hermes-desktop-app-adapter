@@ -309,6 +309,7 @@ Desktop behaviour choices made during the resolution (review in PR): managed bui
 - A routed profile with no `terminal:` section resolves its cwd placeholder per surface instead of inheriting the gateway process cwd; every other terminal key still falls back to the gateway's values.
 - Cron jobs follow the main agent model at fire time unless pinned (0469740ab3); `hermes cron resnap` is gone.
 - Upstream revert 2632229bcf (named profiles read the root `auth.json` again): with `HERMES_SHARED_AUTH_FILE` set, the root read resolves to the provisioned shared file, never an unmanaged root store.
+- Desktop boot failure overlay: upstream renders it as a modal Radix dialog, which makes the rest of the app inert. In a managed build it is non-modal (`modal={!managedEva}`), so the delegated-support banners (End support session, Switch support target) stay clickable above a boot failure; `e2e/managed-boot.spec.ts` covers both.
 
 ## Test adaptations
 
@@ -319,6 +320,7 @@ Fork tests that reach fork internals, and upstream tests that assume upstream-on
 - The merge commit carries the conflict markers and each group commit resolves its group, so the commits between the merge and the last group commit do not import. Only the branch head is a runnable tree.
 - The MCP group is three commits (tag checkpoint, fleet unit, desktop unit) per the re-port procedure.
 - Fixes found after a group was committed (the R5 entry-point filter, `test_env_loader`, `test_r32_managed_startup`, `test_plugins_cmd_enable_disable_nested`, `test_managed_profile_scope_r30`) landed in the group-10 commit.
+- Two fixes found by PR CI landed after the ledger commit: the managed boot overlay above, and a `hasattr` guard in `tui_gateway/session_lifecycle.py` finalize (the fork's conservative ownership starts `_tui_owns_lifecycle` False, so upstream's unguarded `_end_session_on_close` write reached agent stand-ins without the attribute).
 - RE-7 from the re-port map (the `setup_mcp` tool on the `desktop_ui_v2` surface with its `mcp.setup.request` protocol gate) is not carried: `setup_mcp` is COVERED-UPSTREAM by `connection.*`, so there is nothing to gate.
 
 ## KNOWN GAPS

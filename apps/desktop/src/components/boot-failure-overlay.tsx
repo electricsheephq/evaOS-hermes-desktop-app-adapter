@@ -51,13 +51,15 @@ export async function completeManagedSignIn(signIn: () => Promise<unknown>, relo
 // exited during startup, bootstrap latched, …). Without this the app shell
 // renders dead — "gateway offline", no composer, only a toast — with no way
 // to retry, repair the install, switch the gateway, or find the logs.
-function BootFailureModal({ children, title }: { children: ReactNode; title?: string }) {
+function BootFailureModal({ children, modal = true, title }: { children: ReactNode; modal?: boolean; title?: string }) {
   const [contentNode, setContentNode] = useState<HTMLDivElement | null>(null)
 
+  // evaOS: a managed build keeps the delegated-support banners (End support session, Switch support
+  // target) reachable above a boot failure, so the overlay must not make the rest of the app inert.
   return (
-    <DialogPrimitive.Root open>
+    <DialogPrimitive.Root modal={modal} open>
       <DialogPrimitive.Portal>
-        <DialogPrimitive.Content aria-describedby={undefined} aria-modal="true" asChild ref={setContentNode}>
+        <DialogPrimitive.Content aria-describedby={undefined} aria-modal={modal} asChild ref={setContentNode}>
           <div
             className="fixed inset-0 z-(--z-setup) flex items-center justify-center bg-(--ui-chat-surface-background) p-6"
             // Masks the whole app on boot failure — must stay filled under window
@@ -439,7 +441,7 @@ export function BootFailureOverlay() {
 
   if (view === 'connect') {
     return (
-      <BootFailureModal title={copy.gatewaySettings}>
+      <BootFailureModal modal={!managedEva} title={copy.gatewaySettings}>
         <div className="flex max-h-[86vh] w-full max-w-[46rem] flex-col overflow-hidden rounded-xl border border-(--stroke-nous) bg-(--ui-chat-bubble-background) shadow-nous">
           {/* Subtle back affordance (projects/overlay idiom): muted → foreground
               on hover, no divider. */}
@@ -462,7 +464,7 @@ export function BootFailureOverlay() {
   }
 
   return (
-    <BootFailureModal>
+    <BootFailureModal modal={!managedEva}>
       <div className="w-full max-w-[40rem] overflow-hidden rounded-xl border border-(--stroke-nous) bg-(--ui-chat-bubble-background) shadow-nous">
         <div className="flex items-start gap-3 px-5 py-4">
           <ErrorIcon className="mt-0.5" size="1.25rem" />
