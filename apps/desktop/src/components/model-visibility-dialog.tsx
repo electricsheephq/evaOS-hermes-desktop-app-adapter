@@ -1,6 +1,7 @@
+import type { ModelOptionProvider, ModelOptionsResult } from '@hermes/shared'
 import { useStore } from '@nanostores/react'
 import { useQuery } from '@tanstack/react-query'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -11,22 +12,36 @@ import { HighlightMatches } from '@/components/ui/highlight-matches'
 import { Switch } from '@/components/ui/switch'
 import type { HermesGateway } from '@/hermes'
 import { useI18n } from '@/i18n'
+<<<<<<< HEAD
 import { isManagedEvaosAgent, managedProviderDisplayValue } from '@/i18n/managed-brand'
 import { Search } from '@/lib/icons'
+||||||| 939e45c91d
+import { Search } from '@/lib/icons'
+=======
+import { Plus, Search, X } from '@/lib/icons'
+>>>>>>> f97608f178
 import { modelOptionsQueryKey, requestModelOptions } from '@/lib/model-options'
 import { displayModelName, modelDisplayParts } from '@/lib/model-status-label'
 import { foldIncludes, normalize } from '@/lib/text'
+import {
+  $customModels,
+  addCustomModel,
+  customModelCandidate,
+  isCustomModel,
+  removeCustomModel,
+  withCustomModels
+} from '@/store/custom-models'
 import {
   $visibleModels,
   collapseModelFamilies,
   effectiveVisibleKeys,
   modelVisibilityKey,
+  seedKnownModels,
   setProviderVisibility,
   setVisibleModels,
   toggleModelVisibility
 } from '@/store/model-visibility'
 import { $collapsedProviders, toggleCollapsedProvider } from '@/store/provider-collapse'
-import type { ModelOptionProvider, ModelOptionsResponse } from '@/types/hermes'
 
 interface ModelVisibilityDialogProps {
   gw?: HermesGateway
@@ -53,35 +68,58 @@ export function ModelVisibilityDialog({
   const [search, setSearch] = useState('')
   const stored = useStore($visibleModels)
   const collapsedProviders = useStore($collapsedProviders)
+  const customModels = useStore($customModels)
 
   const modelOptions = useQuery({
     queryKey: modelOptionsQueryKey(profile, sessionId, ownerConnectionId),
-    queryFn: (): Promise<ModelOptionsResponse> => requestModelOptions({ gateway: gw, profile, sessionId }),
+    queryFn: (): Promise<ModelOptionsResult> => requestModelOptions({ gateway: gw, profile, sessionId }),
     enabled: open
   })
 
   const providers = useMemo(
     () =>
+<<<<<<< HEAD
       (modelOptions.data?.providers ?? []).filter(
         provider => (provider.models ?? []).length > 0 && (!managedEva || provider.slug !== 'llamacpp')
       ),
     [managedEva, modelOptions.data]
+||||||| 939e45c91d
+    () => (modelOptions.data?.providers ?? []).filter(provider => (provider.models ?? []).length > 0),
+    [modelOptions.data]
+=======
+      withCustomModels(
+        (modelOptions.data?.providers ?? []).filter(provider => (provider.models ?? []).length > 0),
+        customModels
+      ),
+    [modelOptions.data, customModels]
+>>>>>>> f97608f178
   )
+
+  useEffect(() => seedKnownModels(providers), [providers])
 
   const visible = effectiveVisibleKeys(stored, providers)
 
   const toggle = (provider: ModelOptionProvider, model: string) => {
-    setVisibleModels(toggleModelVisibility($visibleModels.get(), providers, provider.slug, model))
+    setVisibleModels(toggleModelVisibility($visibleModels.get(), providers, provider.slug, model), providers)
   }
 
   const setProviderVisible = (provider: ModelOptionProvider, next: boolean) => {
-    setVisibleModels(setProviderVisibility($visibleModels.get(), providers, provider.slug, next))
+    setVisibleModels(setProviderVisibility($visibleModels.get(), providers, provider.slug, next), providers)
   }
 
   const q = normalize(search)
 
   const matches = (provider: ModelOptionProvider, model: string) =>
     !q || foldIncludes(`${model} ${managedProviderDisplayValue(provider.slug, provider.name, managedEva)} ${provider.slug} ${displayModelName(model)}`, q)
+
+  // Typing an id no provider lists offers to add it — same gesture as the
+  // pickers, minus the switch — and the new row lands visible. Only once the
+  // query matches nothing, so a partial search isn't shadowed by the offer.
+  const hasMatches = providers.some(provider =>
+    collapseModelFamilies(provider.models ?? []).some(family => matches(provider, family.id))
+  )
+
+  const customSlug = hasMatches ? null : customModelCandidate(search, providers)
 
   return (
     <Dialog onOpenChange={onOpenChange} open={open}>
@@ -164,6 +202,21 @@ export function ModelVisibilityDialog({
                             <HighlightMatches foldSeparators query={search} text={name} />
                             {tag ? <span className="text-(--ui-text-tertiary)"> {tag}</span> : null}
                           </span>
+                          {isCustomModel(customModels, provider.slug, family.id) && (
+                            <Button
+                              aria-label={copy.removeCustomModel}
+                              className="-my-1 text-(--ui-text-tertiary)"
+                              onClick={event => {
+                                event.preventDefault()
+                                removeCustomModel(provider.slug, family.id)
+                              }}
+                              size="icon-xs"
+                              type="button"
+                              variant="ghost"
+                            >
+                              <X className="size-3" />
+                            </Button>
+                          )}
                           <Switch
                             checked={visible.has(key)}
                             onCheckedChange={() => toggle(provider, family.id)}
@@ -175,6 +228,30 @@ export function ModelVisibilityDialog({
                 </div>
               )
             })
+          )}
+          {customSlug && providers.length > 0 && (
+            <div className="py-0.5">
+              <div className="px-3 pb-0.5 pt-1 text-[0.625rem] font-semibold uppercase tracking-wider text-(--ui-text-tertiary)">
+                {copy.addCustomModel}
+              </div>
+              {providers.map(provider => (
+                <button
+                  className="flex w-full cursor-pointer items-center gap-2 px-3 py-1 text-left text-xs hover:bg-(--ui-control-active-background)"
+                  key={`custom:${provider.slug}`}
+                  onClick={() => {
+                    addCustomModel(provider.slug, customSlug, provider)
+                    setSearch('')
+                  }}
+                  type="button"
+                >
+                  <span className="min-w-0 flex-1 truncate">
+                    {customSlug}
+                    <span className="text-(--ui-text-tertiary)"> {provider.name}</span>
+                  </span>
+                  <Plus className="size-3 shrink-0 text-(--ui-text-tertiary)" />
+                </button>
+              ))}
+            </div>
           )}
         </div>
 

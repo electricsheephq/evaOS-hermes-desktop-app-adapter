@@ -7,6 +7,7 @@ fail closed on both the open and write paths instead of creating the second
 generation.
 """
 
+import errno
 import gc
 import os
 import sqlite3
@@ -15,7 +16,6 @@ from pathlib import Path
 
 import pytest
 
-import hermes_state
 import hermes_state_dbfile
 import hermes_state_readpool
 import hermes_state_wal
@@ -48,9 +48,6 @@ def test_classify_deleted_wal_separately_from_main_file_replacement():
     assert classify_persistence_error(str(replaced)) == "replaced"
 
 
-def test_iter_holders_empty_on_non_linux(monkeypatch, tmp_path):
-    monkeypatch.setattr(hermes_state.sys, "platform", "win32")
-    assert iter_deleted_sqlite_sidecar_holders(tmp_path / "state.db") == []
 
 
 def test_clean_open_and_second_open_still_work(tmp_path, force_wal):
@@ -208,6 +205,32 @@ def test_iter_holders_ignores_live_unhashed_dentry(tmp_path, force_wal, monkeypa
         assert wal.exists()
     finally:
         db.close()
+
+
+@pytest.mark.parametrize("vanish_errno", [errno.ENOENT, errno.ESRCH])
+def test_iter_holders_ignores_descriptor_closed_during_scan(tmp_path, monkeypatch, vanish_errno):
+    """A descriptor (ENOENT) or its whole process (ESRCH) gone after ``readlink``
+    cannot hold a retired generation."""
+    path = tmp_path / "state.db"
+    wal = Path(str(path) + "-wal")
+    wal.write_bytes(b"current generation")
+    vanished_fd = tmp_path / "closed-writable-opener-fd"
+    monkeypatch.setattr(hermes_state_dbfile.sys, "platform", "linux")
+    monkeypatch.setattr(
+        hermes_state_dbfile,
+        "_iter_proc_fd_targets",
+        lambda: iter([(os.getpid(), str(wal) + " (deleted)", str(vanished_fd))]),
+    )
+    real_stat = os.stat
+
+    def stat_vanished(target, *args, **kwargs):
+        if str(target) == str(vanished_fd):
+            raise OSError(vanish_errno, os.strerror(vanish_errno), str(target))
+        return real_stat(target, *args, **kwargs)
+
+    monkeypatch.setattr(hermes_state_dbfile.os, "stat", stat_vanished)
+
+    assert iter_deleted_sqlite_sidecar_holders(path) == []
 
 
 @pytest.mark.skipif(

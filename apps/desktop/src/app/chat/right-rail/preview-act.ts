@@ -309,6 +309,7 @@ ${preamble()}
  *  difference. */
 type Trip = { error: string; kind: 'failed' } | { kind: 'answered'; result: PreviewActResult } | { kind: 'silent' }
 
+<<<<<<< HEAD
 async function runJson(
   run: PreviewScriptRunner,
   code: string,
@@ -318,8 +319,16 @@ async function runJson(
     return { error: ACTION_CANCELLED, kind: 'failed' }
   }
 
+||||||| 939e45c91d
+async function runJson(run: PreviewScriptRunner, code: string): Promise<Trip> {
+=======
+async function runJson(run: PreviewScriptRunner, code: string): Promise<Trip> {
+  // Pages such as Trendyol replace Promise with ZoneAwarePromise. Electron
+  // awaits native promises only, otherwise IPC clones the thenable's state.
+  // An async function adopts it into a native promise without changing the page.
+>>>>>>> f97608f178
   const raw = await Promise.race([
-    run(code).catch((error: unknown) => new Error(String(error))),
+    run(`(async () => (${code}))()`).catch((error: unknown) => new Error(String(error))),
     new Promise<undefined>(resolve => setTimeout(resolve, ACT_TIMEOUT_MS))
   ])
 

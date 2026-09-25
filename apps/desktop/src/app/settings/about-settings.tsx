@@ -21,7 +21,9 @@ import {
 } from '@/store/updates'
 
 import { ListRow, SectionHeading, SettingsContent } from './primitives'
+import { SETTING_IDS, settingElementId } from './settings-manifest'
 import { UninstallSection } from './uninstall-section'
+import { useSettingDeepLink } from './use-setting-deep-link'
 
 const RELEASE_NOTES_URL = 'https://github.com/NousResearch/hermes-agent/releases'
 const INSTALLER_URL = 'https://hermes-agent.nousresearch.com/'
@@ -48,6 +50,7 @@ function relativeTime(ms: number | undefined, a: Translations['settings']['about
   return a.daysAgo(Math.round(diff / 86_400_000))
 }
 
+<<<<<<< HEAD
 function ManagedAboutSettings() {
   const { t } = useI18n()
   const a = t.settings.about
@@ -108,6 +111,29 @@ function ManagedAboutSettings() {
 }
 
 function UnmanagedAboutSettings() {
+||||||| 939e45c91d
+export function AboutSettings() {
+=======
+interface AboutSettingsProps {
+  subpage?: string
+}
+
+export function AboutSettings({ subpage }: AboutSettingsProps = {}) {
+  useSettingDeepLink('about', page => subpage === undefined || page === subpage)
+
+  if (subpage === 'uninstall') {
+    return (
+      <SettingsContent>
+        <UninstallSection />
+      </SettingsContent>
+    )
+  }
+
+  return <AppUpdatesSettings includeUninstall={subpage === undefined} />
+}
+
+function AppUpdatesSettings({ includeUninstall }: { includeUninstall: boolean }) {
+>>>>>>> f97608f178
   const { t } = useI18n()
   const a = t.settings.about
   const version = useStore($desktopVersion)
@@ -144,7 +170,9 @@ function UnmanagedAboutSettings() {
     statusLine = status?.message ?? a.cantUpdate
     statusTone = 'error'
   } else if (status?.error) {
-    statusLine = status.message ? `${a.cantReach} ${status.message}` : a.cantReach
+    // A git that never ran is a local problem; leading with "couldn't reach
+    // the update server" would misdiagnose it as a network failure.
+    statusLine = [status.error === 'git-unusable' ? '' : a.cantReach, status.message].filter(Boolean).join(' ')
     statusTone = 'error'
   } else if (applying) {
     statusLine = a.installing
@@ -286,10 +314,11 @@ function UnmanagedAboutSettings() {
         <ListRow
           description={a.automaticUpdatesDesc}
           hint={a.branchCommit(status?.branch ?? 'unknown', status?.currentSha?.slice(0, 7) ?? 'unknown')}
+          id={settingElementId(SETTING_IDS.about.automaticUpdates)}
           title={a.automaticUpdates}
         />
 
-        <UninstallSection />
+        {includeUninstall && <UninstallSection />}
       </div>
     </SettingsContent>
   )

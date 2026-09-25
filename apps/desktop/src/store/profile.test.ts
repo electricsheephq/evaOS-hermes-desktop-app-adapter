@@ -9,6 +9,7 @@ import type { ProfileInfo } from '@/types/hermes'
 const ensureGatewayForProfile = vi.fn(async (_profile: string) => undefined)
 const ensureGatewayForAgent = vi.fn(async () => undefined)
 const openGatewayForProfile = vi.fn(async (_profile: string) => undefined)
+const openGatewayForAgent = vi.fn(async (_connectionId: null | string, _profile: string) => undefined)
 const openSecondaryCount = vi.fn(() => 0)
 const $gateway = atom<unknown>({ id: 'live-socket', connectionState: 'open' })
 const resetStarmapGraph = vi.fn()
@@ -17,11 +18,13 @@ let primaryGatewaySource: null | string = null
 
 vi.mock('@/store/gateway', () => ({
   $gateway,
+  activeGatewayConnectionId: () => null,
   // Activation now verifies the socket's route before publishing the profile.
   activeGatewayConnectionId: () => activeGatewaySource,
   activeGatewayProfileKey: () => ensureGatewayForProfile.mock.lastCall?.[0] ?? $activeGatewayProfile.get(),
   ensureGatewayForAgent,
   ensureGatewayForProfile,
+  openGatewayForAgent,
   openGatewayForProfile,
   openSecondaryCount,
   primaryGatewayConnectionId: () => primaryGatewaySource
@@ -55,6 +58,7 @@ const {
 } = await import('./profile')
 
 const { $poolLimits } = await import('@/store/pool-limits')
+const { $connectionsRegistry } = await import('@/store/connection-registry-state')
 
 const { $connection } = await import('./session')
 const { invalidateProfileScopedQueries } = await import('@/lib/query-client')
@@ -200,6 +204,27 @@ describe('prewarmProfileBackend (hover-intent pool spawn)', () => {
     expect(openGatewayForProfile).not.toHaveBeenCalled()
   })
 
+  // #89756: SSH sources are connect-on-demand — a hover-warm on an SSH row
+  // dialed the tunnel and spawned an isolated remote backend per bot.
+  it('never dials an SSH registry source; a same-box Remote gateway still warms', () => {
+    openGatewayForAgent.mockClear()
+    $connectionsRegistry.set({
+      version: 2,
+      primary: 'shell',
+      secureTokenStorage: true,
+      connections: [
+        { id: 'shell', kind: 'ssh', label: 'Shell', host: 'box', tokenSet: false, tokenPreview: '' },
+        { id: 'gateway', kind: 'remote', label: 'Gateway', url: 'http://box:8642', tokenSet: true, tokenPreview: '…' }
+      ]
+    })
+
+    prewarmProfileBackend('dax', 'shell')
+    prewarmProfileBackend('dax', 'gateway')
+
+    expect(openGatewayForAgent.mock.calls).toEqual([['gateway', 'dax']])
+    expect(openGatewayForProfile).not.toHaveBeenCalled()
+  })
+
   it('throttles repeat pre-warms for the same profile within the interval', () => {
     prewarmProfileBackend('warm-throttle-a')
     prewarmProfileBackend('warm-throttle-a')
@@ -225,14 +250,6 @@ describe('prewarmProfileBackend (hover-intent pool spawn)', () => {
     prewarmProfileBackend('warm-saturated')
 
     expect(openGatewayForProfile).not.toHaveBeenCalled()
-  })
-
-  it('pre-warms while pool slots are free', () => {
-    openSecondaryCount.mockReturnValue(1)
-
-    prewarmProfileBackend('warm-slot-free')
-
-    expect(openGatewayForProfile).toHaveBeenCalledWith('warm-slot-free')
   })
 
   it('follows the live pool-limit atom, not a hard-coded cap', () => {

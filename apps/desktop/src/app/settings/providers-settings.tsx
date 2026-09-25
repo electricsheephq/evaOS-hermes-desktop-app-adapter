@@ -18,6 +18,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { RowButton } from '@/components/ui/row-button'
 import { SearchField } from '@/components/ui/search-field'
+import { Tip } from '@/components/ui/tooltip'
 import { disconnectOAuthProvider, listOAuthProviders } from '@/hermes'
 import { useI18n } from '@/i18n'
 import { isManagedEvaosAgent, managedProviderDisplayValue, sanitizeManagedBrandText } from '@/i18n/managed-brand'
@@ -301,6 +302,7 @@ function ConnectedProviderRow({
         ) : null}
       </RowButton>
       <div className="flex items-center gap-1 pr-2">
+<<<<<<< HEAD
         {managedUnavailable ? (
           <span className="text-xs font-medium text-muted-foreground">{copy.managedUnavailable}</span>
         ) : (
@@ -335,6 +337,59 @@ function ConnectedProviderRow({
               </Button>
             )}
           </>
+||||||| 939e45c91d
+        <Trail className="size-4 text-muted-foreground transition group-hover:text-foreground" />
+        {canDisconnect && (
+          <Button
+            aria-label={`${t.common.remove} ${title}`}
+            disabled={disconnecting}
+            onClick={() => onDisconnect(provider)}
+            size="icon-xs"
+            title={`${t.common.remove} ${title}`}
+            type="button"
+            variant="ghost"
+          >
+            {disconnecting ? <Loader2 className="size-3 animate-spin" /> : <Trash2 className="size-3" />}
+          </Button>
+        )}
+        {terminalDisconnect && (
+          <Button
+            aria-label={`${copy.disconnect} ${title}`}
+            onClick={() => onTerminalDisconnect(provider)}
+            size="icon-xs"
+            title={copy.disconnectInTerminal}
+            type="button"
+            variant="ghost"
+          >
+            <Trash2 className="size-3" />
+          </Button>
+=======
+        <Trail className="size-4 text-muted-foreground transition group-hover:text-foreground" />
+        {canDisconnect && (
+          <Button
+            aria-label={`${t.common.remove} ${title}`}
+            disabled={disconnecting}
+            onClick={() => onDisconnect(provider)}
+            size="icon-xs"
+            type="button"
+            variant="ghost"
+          >
+            {disconnecting ? <Loader2 className="size-3 animate-spin" /> : <Trash2 className="size-3" />}
+          </Button>
+        )}
+        {terminalDisconnect && (
+          <Tip label={copy.disconnectInTerminal}>
+            <Button
+              aria-label={`${copy.disconnect} ${title}`}
+              onClick={() => onTerminalDisconnect(provider)}
+              size="icon-xs"
+              type="button"
+              variant="ghost"
+            >
+              <Trash2 className="size-3" />
+            </Button>
+          </Tip>
+>>>>>>> f97608f178
         )}
       </div>
     </div>

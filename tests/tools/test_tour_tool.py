@@ -3,7 +3,6 @@
 import json
 
 from tools import tour_tool as tt
-from tools.registry import registry
 
 
 def _run(**kwargs):
@@ -11,6 +10,7 @@ def _run(**kwargs):
     return json.loads(tt.tour_tool(**kwargs))
 
 
+<<<<<<< HEAD
 def test_lives_in_the_gui_surface_toolset(monkeypatch):
     """Scoped by toolset, not by the backend's env — see AGENTS.md."""
     monkeypatch.delenv("HERMES_DESKTOP", raising=False)
@@ -18,15 +18,18 @@ def test_lives_in_the_gui_surface_toolset(monkeypatch):
 
     assert entry is not None
     assert entry.toolset == "desktop_ui_v2"
-
-
-def test_answers_to_the_appearance_switch():
-    """Tours off has to mean the model never sees the tool. See
-    tests/tools/test_display_toggles.py for the config end of it."""
+||||||| 939e45c91d
+def test_lives_in_the_gui_surface_toolset(monkeypatch):
+    """Scoped by toolset, not by the backend's env — see AGENTS.md."""
+    monkeypatch.delenv("HERMES_DESKTOP", raising=False)
     entry = registry.get_entry("gui_tour")
 
     assert entry is not None
-    assert entry.check_fn is tt.check_tours_enabled
+    assert entry.toolset == "desktop_ui"
+=======
+>>>>>>> f97608f178
+
+
 
 
 def test_requires_callback():

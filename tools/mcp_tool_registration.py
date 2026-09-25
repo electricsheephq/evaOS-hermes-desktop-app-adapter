@@ -9,7 +9,8 @@ import threading
 from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, Callable, Dict, Iterable, List, Optional
-from tools.mcp_tool_common import _parse_boolish, _core, _resolve_tool_timeout, mcp_field
+from tools.mcp_tool_common import _parse_boolish, _core, _resolve_tool_timeout, mcp_field, mcp_server_enabled
+from tools import mcp_tool_config as _config
 from tools import mcp_tool_handlers as _handlers
 from tools import mcp_tool_schema as _schema
 from tools.mcp_tool_handlers import (
@@ -17,6 +18,7 @@ from tools.mcp_tool_handlers import (
     _make_list_resources_handler, _make_read_resource_handler)
 from tools.mcp_tool_schema import (
     _UTILITY_CAPABILITY_ATTRS, _build_utility_schemas, _normalize_name_filter, matches_name_filter)
+from tools.mcp_tool_scope import _key_name, _key_scope, _resolve_server_key, _server_key
 
 if TYPE_CHECKING:  # pragma: no cover
     from tools.mcp_tool import MCPServerTask
@@ -49,26 +51,68 @@ def _annotation_read_only_hint(mcp_tool: Any) -> bool:
     return hint is True
 
 
+<<<<<<< HEAD
 def _record_tool_trust_metadata(server_name: str, config: dict, tools: List[Any],
                                 registration_home: Optional[str] = None) -> None:
+||||||| 939e45c91d
+def _record_tool_trust_metadata(server_name: str, config: dict, tools: List[Any]) -> None:
+=======
+def _record_tool_trust_metadata(server_name: str, config: dict, tools: List[Any], key=None) -> None:
+>>>>>>> f97608f178
     """Capture per-server trust and per-tool readOnlyHint at discovery — the security boundary: the call-time gate
+<<<<<<< HEAD
     classifies from data we control, never re-read server-supplied state."""
     state_key = _core._server_state_key(server_name, registration_home)
+||||||| 939e45c91d
+    classifies from data we control, never re-read server-supplied state."""
+=======
+    classifies from data we control, never re-read server-supplied state. *key* is the connection (default: the
+    registering profile's own); the ``trust`` policy is recorded under it for the profile that owns it — an
+    adopting profile records its own policy in ``_record_scope_trust``."""
+>>>>>>> f97608f178
     with _core._lock:
+<<<<<<< HEAD
         _core._server_trust_levels[state_key] = _normalize_server_trust((config or {}).get("trust"))
         _core._tool_read_only_hints[state_key] = {
             t.name: _annotation_read_only_hint(t)
             for t in tools
             if getattr(t, "name", None)
         }
+||||||| 939e45c91d
+        _core._server_trust_levels[server_name] = _normalize_server_trust((config or {}).get("trust"))
+        hints = _core._tool_read_only_hints.setdefault(server_name, {})
+        hints.update({t.name: _annotation_read_only_hint(t) for t in tools if getattr(t, "name", None)})
+=======
+        if key is None:
+            key = _server_key(server_name)
+        _core._server_trust_levels[key] = _normalize_server_trust((config or {}).get("trust"))
+        hints = _core._tool_read_only_hints.setdefault(key, {})
+        hints.update({t.name: _annotation_read_only_hint(t) for t in tools if getattr(t, "name", None)})
+>>>>>>> f97608f178
 
 
+<<<<<<< HEAD
 def _track_mcp_tool_server(tool_name: str, server_name: str,
                            registration_home: Optional[str] = None) -> None:
     """Remember the exact profile-owned MCP server that registered *tool_name*."""
     state_key = _core._server_state_key(server_name, registration_home)
     provenance_key = (tool_name if isinstance(state_key, str)
                       else (state_key[0], tool_name))
+||||||| 939e45c91d
+def _track_mcp_tool_server(tool_name: str, server_name: str) -> None:
+    """Remember the exact raw MCP server that registered *tool_name*."""
+=======
+def _record_scope_trust(server_name: str, config: dict, scope: str) -> None:
+    """``trust`` is the CONSUMING profile's policy, never the connection's: an ``untrusted`` profile that
+    adopts a ``full`` profile's live connection must still be asked before every write-capable call."""
+    with _core._lock:
+        _core._server_trust_levels[_server_key(server_name, scope, current=False)] = _normalize_server_trust(
+            (config or {}).get("trust"))
+
+
+def _track_mcp_tool_server(tool_name: str, server_name: str) -> None:
+    """Remember the exact raw MCP server that registered *tool_name*."""
+>>>>>>> f97608f178
     with _core._lock:
         _core._mcp_tool_server_names[provenance_key] = state_key
 
@@ -84,41 +128,142 @@ def _forget_mcp_tool_server(tool_name: str, registration_home: Optional[str] = N
         _core._mcp_tool_server_names.pop(key, None)
 
 
+<<<<<<< HEAD
 def _raw_server_name(state_key: Any) -> str:
     return state_key if isinstance(state_key, str) else state_key[1]
 
 
 def _restore_server_toolset_alias(state_key: Any) -> None:
     """Keep the process-global alias while any profile owns this server's tools."""
+||||||| 939e45c91d
+def _deregister_mcp_tool_all_scopes(server_name: str, tool_name: str) -> None:
+    """Deregister one server tool from every profile overlay that owns it."""
+=======
+def _server_key_for_task(server) -> object:
+    """Connection key of a live ``MCPServerTask`` (teardown runs on the MCP loop without the
+    discovering profile's context, so the key is found by identity, never re-derived)."""
+    with _core._lock:
+        for key, live in _core._servers.items():
+            if live is server:
+                return key
+    return _server_key(server.name)
+
+
+def _deregister_mcp_tool_all_scopes(server, tool_name: str) -> None:
+    """Deregister one server tool from every profile overlay that owns it. *server* is the
+    live task or a connection key."""
+>>>>>>> f97608f178
     from tools.registry import registry
 
+<<<<<<< HEAD
     name = _raw_server_name(state_key)
+||||||| 939e45c91d
+=======
+    key = server if isinstance(server, (str, tuple)) else _server_key_for_task(server)
+>>>>>>> f97608f178
     with _core._lock:
+<<<<<<< HEAD
         server = _core._servers.get(state_key)
         scopes = set(_core._server_tool_scopes.get(state_key, ()))
         tool_names = list(getattr(server, "_registered_tool_names", ()) if server is not None else ())
+||||||| 939e45c91d
+        scopes = set(_core._server_tool_scopes.get(server_name, ()))
+        if not scopes:
+            scopes = {_core._server_registry_scope(server_name)}
+    for scope in scopes:
+        registry.deregister(tool_name, scope=scope)
+    _forget_mcp_tool_server(tool_name)
+    _restore_server_toolset_alias(server_name)
+
+
+def _restore_server_toolset_alias(server_name: str) -> None:
+    """Keep the process-global alias while any profile still owns this server's tools."""
+    from tools.registry import registry
+
+    with _core._lock:
+        server = _core._servers.get(server_name)
+        scopes = set(_core._server_tool_scopes.get(server_name, ()))
+        tool_names = list(getattr(server, "_registered_tool_names", ()) if server is not None else ())
+=======
+        scopes = set(_core._server_tool_scopes.get(key, ()))
+        if not scopes:
+            scopes = {_core._server_registry_scope(key)}
+    for scope in scopes:
+        registry.deregister(tool_name, scope=scope)
+    _forget_mcp_tool_server(tool_name)
+    _restore_server_toolset_alias(key)
+
+
+def _restore_server_toolset_alias(key) -> None:
+    """Keep the process-global alias while any profile still owns tools of a server with this
+    name — including another profile's same-named connection (the alias is per NAME; the
+    registry deregister dropped it after checking only one scope)."""
+    from tools.registry import registry
+
+    server_name = _key_name(key)
+    with _core._lock:
+        owned = [(server, set(_core._server_tool_scopes.get(k, ())))
+                 for k, server in _core._servers.items() if _key_name(k) == server_name]
+>>>>>>> f97608f178
     if any(
         registry.snapshot_registration(tool_name, scope=scope) is not None
-        for scope in scopes for tool_name in tool_names
+        for server, scopes in owned for scope in scopes
+        for tool_name in getattr(server, "_registered_tool_names", ())
     ):
         registry.register_toolset_alias(name, f"mcp-{name}")
 
 
+<<<<<<< HEAD
 def _remove_server_scope(state_key: Any, scope: str) -> None:
     """Remove one profile overlay without disturbing the live connection owner."""
+||||||| 939e45c91d
+def _remove_server_scope(server_name: str, scope: str) -> None:
+    """Remove one profile's MCP overlay for a shared live connection."""
+=======
+def _remove_server_scope(key, scope: str) -> None:
+    """Remove one profile's MCP overlay for a shared live connection."""
+>>>>>>> f97608f178
     from tools.registry import registry
 
+<<<<<<< HEAD
     name = _raw_server_name(state_key)
     for tool_name in registry.get_tool_names_for_toolset(f"mcp-{name}"):
+||||||| 939e45c91d
+    for tool_name in registry.get_tool_names_for_toolset(f"mcp-{server_name}"):
+=======
+    server_name = _key_name(key)
+    for tool_name in registry.get_tool_names_for_toolset(f"mcp-{server_name}"):
+>>>>>>> f97608f178
         registry.deregister(tool_name, scope=scope)
     with _core._lock:
+<<<<<<< HEAD
         scopes = set(_core._server_tool_scopes.get(state_key, ()))
+||||||| 939e45c91d
+        scopes = set(_core._server_tool_scopes.get(server_name, ()))
+=======
+        scopes = set(_core._server_tool_scopes.get(key, ()))
+>>>>>>> f97608f178
         scopes.discard(scope)
         if scopes:
+<<<<<<< HEAD
             _core._server_tool_scopes[state_key] = scopes
+||||||| 939e45c91d
+            _core._server_tool_scopes[server_name] = scopes
+=======
+            _core._server_tool_scopes[key] = scopes
+>>>>>>> f97608f178
         else:
+<<<<<<< HEAD
             _core._server_tool_scopes.pop(state_key, None)
     _restore_server_toolset_alias(state_key)
+||||||| 939e45c91d
+            _core._server_tool_scopes.pop(server_name, None)
+    _restore_server_toolset_alias(server_name)
+=======
+            _core._server_tool_scopes.pop(key, None)
+        _core._server_trust_levels.pop(_server_key(server_name, scope, current=False), None)
+    _restore_server_toolset_alias(key)
+>>>>>>> f97608f178
 
 
 def _select_utility_schemas(server_name: str, server: "MCPServerTask", config: dict) -> List[dict]:
@@ -158,12 +303,28 @@ def _existing_tool_names() -> List[str]:
 
         with _core._lock:
             server_names = [
+<<<<<<< HEAD
                 _raw_server_name(state_key) for state_key in _core._servers
                 if _core._server_visible_in_scope(state_key, scope)
+||||||| 939e45c91d
+                name for name in _core._servers
+                if _core._server_visible_in_scope(name, scope)
+=======
+                _key_name(key) for key in _core._servers
+                if _core._server_visible_in_scope(key, scope)
+>>>>>>> f97608f178
             ]
             server_names.extend(
+<<<<<<< HEAD
                 _raw_server_name(state_key) for state_key in _core._lazy_server_tool_names
                 if state_key not in _core._servers and _core._state_key_is_current(state_key)
+||||||| 939e45c91d
+                name for name in _core._lazy_server_tool_names
+                if name not in _core._servers
+=======
+                _key_name(key) for key in _core._lazy_server_tool_names
+                if key not in _core._servers and _core._server_visible_in_scope(key, scope)
+>>>>>>> f97608f178
             )
         return sorted({
             tool_name
@@ -178,8 +339,16 @@ def _existing_tool_names() -> List[str]:
         names.extend(server._registered_tool_names if hasattr(server, "_registered_tool_names")
                      else (_schema._convert_mcp_schema(server.name, t)["name"] for t in server._tools))
     with _core._lock:
+<<<<<<< HEAD
         names.extend(n for sname, tool_names in _core._lazy_server_tool_names.items()
                      if _core._state_key_is_current(sname) and sname not in _core._servers for n in tool_names)
+||||||| 939e45c91d
+        names.extend(n for sname, tool_names in _core._lazy_server_tool_names.items()
+                     if sname not in _core._servers for n in tool_names)
+=======
+        names.extend(n for key, tool_names in _core._lazy_server_tool_names.items()
+                     if key not in _core._servers for n in tool_names)
+>>>>>>> f97608f178
     return names
 
 
@@ -296,16 +465,25 @@ def _resolve_name_collisions(name: str, candidates: List[_Candidate]) -> List[_C
 
 
 def _register_candidates(name: str, candidates: List[_Candidate], *, check_fn: Callable,
+<<<<<<< HEAD
                          scope: Callable[[], Optional[str]], lazy: bool,
                          registration_home: Optional[str] = None,
                          state_key: Any = None) -> List[str]:
+||||||| 939e45c91d
+                         scope: Callable[[], Optional[str]], lazy: bool) -> List[str]:
+=======
+                         scope: Callable[[], Optional[str]], lazy: bool, key=None) -> List[str]:
+>>>>>>> f97608f178
     """Register candidates under toolset ``mcp-{name}``; returns the names that landed. The
     ownership pre-check is advisory (servers connect in parallel): ``registry.register()`` is
-    the atomic gate and its verdict is re-read after every call."""
+    the atomic gate and its verdict is re-read after every call. *key* is the connection whose
+    ``_server_tool_scopes`` records the registering scope (default: this scope's own)."""
     from tools.registry import registry
     toolset_name = f"mcp-{name}"
     registered: List[str] = []
     scope_value = scope()
+    if key is None:
+        key = _server_key(name, scope_value, current=False)
     for c in candidates:
         existing_toolset = registry.get_toolset_for_tool(c.registry_name)
         if existing_toolset and existing_toolset != toolset_name:  # foreign owner: skip, preserve it
@@ -327,9 +505,15 @@ def _register_candidates(name: str, candidates: List[_Candidate], *, check_fn: C
             _track_mcp_tool_server(c.registry_name, name, registration_home)
             if scope_value is not None:
                 with _core._lock:
+<<<<<<< HEAD
                     owned_key = state_key if state_key is not None else _core._server_state_key(
                         name, registration_home)
                     _core._server_tool_scopes.setdefault(owned_key, set()).add(scope_value)
+||||||| 939e45c91d
+                    _core._server_tool_scopes.setdefault(name, set()).add(scope_value)
+=======
+                    _core._server_tool_scopes.setdefault(key, set()).add(scope_value)
+>>>>>>> f97608f178
             registered.append(c.registry_name)
         elif not lazy:
             logger.error("MCP server '%s': registration of %s as '%s' was rejected by the registry; "
@@ -374,42 +558,88 @@ def _register_server_tools(name: str, server: "MCPServerTask", config: dict) -> 
     refresh); returns the names. Toolset aliases derive from the live registry, not
     ``toolsets.TOOLSETS``; lossy normalization collisions (``read-file``/``read_file``) fail closed."""
     should_register = _make_tool_filter(name, config)
+<<<<<<< HEAD
     _record_tool_trust_metadata(name, config, server._tools, server.registration_home)
     candidates = _tool_candidates(name, server._tools, should_register, server.tool_timeout,
                                   server.registration_home)
     candidates += _utility_candidates(name, _select_utility_schemas(name, server, config), server.tool_timeout,
                                       server.registration_home)
+||||||| 939e45c91d
+    _record_tool_trust_metadata(name, config, server._tools)
+    candidates = _tool_candidates(name, server._tools, should_register, server.tool_timeout)
+    candidates += _utility_candidates(name, _select_utility_schemas(name, server, config), server.tool_timeout)
+=======
+    key = _server_key_for_task(server)
+    _record_tool_trust_metadata(name, config, server._tools, key)
+    candidates = _tool_candidates(name, server._tools, should_register, server.tool_timeout)
+    candidates += _utility_candidates(name, _select_utility_schemas(name, server, config), server.tool_timeout)
+>>>>>>> f97608f178
     registered = _register_candidates(
         name, _resolve_name_collisions(name, candidates),
+<<<<<<< HEAD
         check_fn=_make_check_fn(name, server.registration_home),
         scope=lambda: _core._server_registry_scope(name, server.registration_home), lazy=False,
         registration_home=server.registration_home)
+||||||| 939e45c91d
+        check_fn=_make_check_fn(name), scope=lambda: _core._server_registry_scope(name), lazy=False)
+=======
+        check_fn=_make_check_fn(name), scope=lambda: _core._server_registry_scope(key), lazy=False, key=key)
+>>>>>>> f97608f178
     if registered:
         _write_schema_cache(name, server, config, should_register)
     return registered
 
 
-def _server_enabled(config: dict) -> bool:
-    return _parse_boolish(config.get("enabled", True), default=True)
-
-
 def _connection_identity(config: dict) -> tuple:
+<<<<<<< HEAD
     """Route plus credentials that make a live connection safe to share."""
+||||||| 939e45c91d
+    """What makes one live connection reusable for another profile: the route fingerprint PLUS
+    everything that authenticates it (``config_fingerprint`` deliberately excludes credentials so
+    the schema cache survives a token rotation). Two profiles pointing at the same URL with different
+    headers/env/auth are two identities; borrowing across them would call tools as the other user."""
+=======
+    """What makes one live connection reusable for another profile: the route fingerprint PLUS
+    everything that authenticates it (``config_fingerprint`` deliberately excludes credentials so
+    the schema cache survives a token rotation). Two profiles pointing at the same URL with different
+    headers/env/auth/client certificates are two identities; borrowing across them would call tools
+    as the other user."""
+>>>>>>> f97608f178
     from tools.mcp_schema_cache import config_fingerprint
 
     def frozen(value):
         return json.dumps(value or {}, sort_keys=True, default=str)
 
+<<<<<<< HEAD
     return (
         config_fingerprint(config),
         frozen(config.get("env")),
         frozen(config.get("headers")),
         (config.get("auth") or "").lower().strip(),
     )
+||||||| 939e45c91d
+    return (config_fingerprint(config), _frozen(config.get("env")), _frozen(config.get("headers")),
+            (config.get("auth") or "").lower().strip())
+=======
+    return (config_fingerprint(config), _frozen(config.get("env")), _frozen(config.get("headers")),
+            _auth_type(config), _frozen(config.get("client_cert")), _frozen(config.get("client_key")))
+>>>>>>> f97608f178
 
 
-def _same_server_route(server: Any, config: dict) -> bool:
-    return _connection_identity(getattr(server, "_config", {}) or {}) == _connection_identity(config)
+def _auth_type(config: dict) -> str:
+    return (config.get("auth") or "").lower().strip()
+
+
+def _same_server_route(server: Any, config: dict, *, cross_profile: bool = False) -> bool:
+    """Whether *server* matches *config*, with OAuth connections never reusable across profiles.
+
+    OAuth credentials live in the owning profile's token storage rather than the static config,
+    so identical OAuth configs cannot prove that two profiles authenticate as the same account.
+    """
+    if _connection_identity(getattr(server, "_config", {}) or {}) != _connection_identity(config):
+        return False
+    # Identities match, so both sides carry the same normalised auth type.
+    return not (cross_profile and _auth_type(config) == "oauth")
 
 
 def register_connected_into_current_scope(servers: dict) -> int:
@@ -429,11 +659,26 @@ def _register_connected_into_current_scope(servers: dict) -> int:
     if scope is None:
         return 0
 
+    # Callers that connect a subset (plugin go-live, a connector, orphan re-registration) pass only
+    # those names. A name they omit is judged against this profile's own config, or connecting one
+    # server would strip every other server's tools from the profile while their connections live on.
+    with _core._lock:
+        omitted = {_key_name(key) for key, scopes in _core._server_tool_scopes.items()
+                   if scope in scopes and _key_name(key) not in servers}
+    profile_servers = _config._load_mcp_config() if omitted else {}
+
     with _core._lock:
         stale = []
+<<<<<<< HEAD
         for state_key, scopes in _core._server_tool_scopes.items():
+||||||| 939e45c91d
+        for name, scopes in _core._server_tool_scopes.items():
+=======
+        for key, scopes in _core._server_tool_scopes.items():
+>>>>>>> f97608f178
             if scope not in scopes:
                 continue
+<<<<<<< HEAD
             name = _raw_server_name(state_key)
             server = _core._servers.get(state_key)
             config = servers.get(name)
@@ -442,12 +687,35 @@ def _register_connected_into_current_scope(servers: dict) -> int:
                 stale.append(state_key)
     for state_key in stale:
         _remove_server_scope(state_key, scope)
+||||||| 939e45c91d
+            server = _core._servers.get(name)
+            config = servers.get(name)
+            if (config is None or not _server_enabled(config) or server is None
+                    or getattr(server, "session", None) is None or not _same_server_route(server, config)):
+                stale.append(name)
+    for name in stale:
+        _remove_server_scope(name, scope)
+=======
+            name = _key_name(key)
+            if name not in servers and name not in omitted:
+                continue  # attached after the config read; the next pass judges it
+            server = _core._servers.get(key)
+            config = servers[name] if name in servers else profile_servers.get(name)
+            cross_profile = _key_scope(key) != scope
+            if (config is None or not mcp_server_enabled(config) or server is None
+                    or getattr(server, "session", None) is None
+                    or not _same_server_route(server, config, cross_profile=cross_profile)):
+                stale.append(key)
+    for key in stale:
+        _remove_server_scope(key, scope)
+>>>>>>> f97608f178
 
     registered_servers = 0
     for name, config in servers.items():
-        if not _server_enabled(config):
+        if not mcp_server_enabled(config):
             continue
         with _core._lock:
+<<<<<<< HEAD
             matches = [
                 (state_key, server) for state_key, server in _core._servers.items()
                 if _raw_server_name(state_key) == name
@@ -455,10 +723,36 @@ def _register_connected_into_current_scope(servers: dict) -> int:
                 and _same_server_route(server, config)
             ]
         if not matches:
+||||||| 939e45c91d
+            server = _core._servers.get(name)
+        if server is None or getattr(server, "session", None) is None or not _same_server_route(server, config):
+=======
+            if _server_key(name, scope, current=False) in _core._servers:
+                continue  # this profile has its own connection for the name
+            # Any other profile's live connection with the same route AND credentials is shareable.
+            shared = [(key, live) for key, live in _core._servers.items()
+                      if _key_name(key) == name and getattr(live, "session", None) is not None
+                      and _same_server_route(live, config, cross_profile=True)]
+        if not shared:
+>>>>>>> f97608f178
             continue
+<<<<<<< HEAD
         state_key, server = matches[0]
+||||||| 939e45c91d
+        # Visibility for this profile: the owner keeps teardown, this scope sees the connection.
+=======
+        key, server = shared[0]
+        # Visibility for this profile: the owner keeps teardown, this scope sees the connection.
+>>>>>>> f97608f178
         with _core._lock:
+<<<<<<< HEAD
             _core._server_tool_scopes.setdefault(state_key, set()).add(scope)
+||||||| 939e45c91d
+            _core._server_tool_scopes.setdefault(name, set()).add(scope)
+=======
+            _core._server_tool_scopes.setdefault(key, set()).add(scope)
+        _record_scope_trust(name, config, scope)
+>>>>>>> f97608f178
         if registry.get_tool_names_for_toolset(f"mcp-{name}"):
             continue
         registration_home = getattr(server, "registration_home", None)
@@ -467,6 +761,7 @@ def _register_connected_into_current_scope(servers: dict) -> int:
         candidates += _utility_candidates(
             name, _select_utility_schemas(name, server, config), server.tool_timeout, registration_home)
         names = _register_candidates(
+<<<<<<< HEAD
             name,
             _resolve_name_collisions(name, candidates),
             check_fn=_make_check_fn(name, registration_home),
@@ -475,6 +770,13 @@ def _register_connected_into_current_scope(servers: dict) -> int:
             registration_home=registration_home,
             state_key=state_key,
         )
+||||||| 939e45c91d
+            name, _resolve_name_collisions(name, candidates),
+            check_fn=_make_check_fn(name), scope=lambda: scope, lazy=False)
+=======
+            name, _resolve_name_collisions(name, candidates),
+            check_fn=_make_check_fn(name), scope=lambda: scope, lazy=False, key=key)
+>>>>>>> f97608f178
         if names:
             registered_servers += 1
             with _core._lock:
@@ -508,9 +810,20 @@ def _register_from_cache_sync(name: str, config: dict, entry: dict,
         registration_home=registration_home)
     if registered:
         with _core._lock:
+<<<<<<< HEAD
             state_key = _core._server_state_key(name, registration_home)
             _core._lazy_server_configs[state_key] = dict(config)
             _core._lazy_server_fingerprints[state_key] = config_fingerprint(config)
             _core._lazy_server_tool_names[state_key] = list(registered)
+||||||| 939e45c91d
+            _core._lazy_server_configs[name] = dict(config)
+            _core._lazy_server_fingerprints[name] = config_fingerprint(config)
+            _core._lazy_server_tool_names[name] = list(registered)
+=======
+            key = _server_key(name)
+            _core._lazy_server_configs[key] = dict(config)
+            _core._lazy_server_fingerprints[key] = config_fingerprint(config)
+            _core._lazy_server_tool_names[key] = list(registered)
+>>>>>>> f97608f178
         logger.info("MCP server '%s' (lazy): registered %d tool(s) from schema cache", name, len(registered))
     return registered

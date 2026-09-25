@@ -361,7 +361,13 @@ class CDPSupervisor(DialogSupervisionMixin, FrameTrackingMixin):
             return False
         logger.warning("CDP supervisor %s: stopped after %s failed reconnect attempts: %s",
                        self.task_id, failures, _redact_cdp_error_text(e))
+<<<<<<< HEAD
         SUPERVISOR_REGISTRY._remove_if_same(self.task_id, self)
+||||||| 939e45c91d
+=======
+        if SUPERVISOR_REGISTRY.get(self.task_id) is self:
+            SUPERVISOR_REGISTRY._pop(self.task_id)
+>>>>>>> f97608f178
         return True
 
     async def _run(self) -> None:
@@ -371,9 +377,11 @@ class CDPSupervisor(DialogSupervisionMixin, FrameTrackingMixin):
         A failure before the first successful attach is fatal for ``start()``."""
         reconnect_failures, last_success_at, backoff = 0, 0.0, 0.5
         import websockets  # deferred: only supervisors that connect pay the import
+        from agent.proxy_bypass import loopback_connect_kwargs
+        connect_kwargs = {"max_size": 50 * 1024 * 1024, **loopback_connect_kwargs(self.cdp_url)}
         while not self._stop_requested:
             try:
-                self._ws = await asyncio.wait_for(websockets.connect(self.cdp_url, max_size=50 * 1024 * 1024), timeout=10.0)
+                self._ws = await asyncio.wait_for(websockets.connect(self.cdp_url, **connect_kwargs), timeout=10.0)
             except Exception as e:
                 if self._fail_start(e):
                     return

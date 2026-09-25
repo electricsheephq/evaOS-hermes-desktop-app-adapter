@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
+<<<<<<< HEAD
 const mocks = vi.hoisted(() => {
   const previewSurface = { owned: true }
 
@@ -37,10 +38,17 @@ vi.mock('@/store/reactions-local', () => ({ recordAgentReaction: mocks.recordAge
 vi.mock('@/store/session', () => ({ setMessages: mocks.setMessages }))
 vi.mock('@/store/tips', () => ({ $tipsEnabled: { get: mocks.tipsEnabled }, showTip: mocks.showTip }))
 vi.mock('@/store/tours', () => ({ $toursEnabled: { get: mocks.toursEnabled } }))
+||||||| 939e45c91d
+import { $gateway } from '@/store/gateway'
+import { $toursEnabled } from '@/store/tours'
+=======
+import { $activeTip, $retiredTips, $tipsEnabled, dismissTip, resetTips, retireActiveTip } from '@/store/tips'
+>>>>>>> f97608f178
 
 import { handleDesktopBridgeEvent } from './desktop-bridge'
 import type { GatewayEventContext } from './types'
 
+<<<<<<< HEAD
 function context(type: string, isActiveEvent: boolean, fromActiveSource = isActiveEvent): GatewayEventContext {
   return {
     deps: {
@@ -61,14 +69,51 @@ function context(type: string, isActiveEvent: boolean, fromActiveSource = isActi
     sessionId: 'runtime-session'
   } as unknown as GatewayEventContext
 }
+||||||| 939e45c91d
+function previewActContext({
+  explicitSid,
+  isActiveEvent
+}: {
+  explicitSid: string
+  isActiveEvent: boolean
+}): GatewayEventContext {
+  return {
+    event: { session_id: explicitSid || undefined, type: 'preview.act.request' },
+    explicitSid,
+    isActiveEvent,
+    payload: { action: 'elements', request_id: 'request-1' }
+  } as GatewayEventContext
+}
+=======
+vi.mock('@/app/right-sidebar/terminal/agent-terminal-stream', () => ({ writeAgentTerminalChunk: vi.fn() }))
+vi.mock('@/app/right-sidebar/terminal/terminals', () => ({ closeAgentTerminalByProc: vi.fn() }))
+vi.mock('@/store/pane-focus', () => ({ applyDesktopLayoutPreset: vi.fn(), revealDesktopPane: vi.fn() }))
+vi.mock('@/store/reactions-local', () => ({ recordAgentReaction: vi.fn() }))
+vi.mock('@/store/session', () => ({ setMessages: vi.fn() }))
+>>>>>>> f97608f178
 
+<<<<<<< HEAD
 function deferred<T>() {
   let resolve!: (value: T) => void
 
   const promise = new Promise<T>(next => {
     resolve = next
   })
+||||||| 939e45c91d
+describe('preview action bridge routing', () => {
+  afterEach(() => {
+    $gateway.set(null)
+  })
+=======
+const tipShow = (text: string): GatewayEventContext =>
+  ({
+    event: { type: 'tip.show' },
+    isActiveEvent: true,
+    payload: { selector: '[data-tour="model-pill"]', text }
+  }) as unknown as GatewayEventContext
+>>>>>>> f97608f178
 
+<<<<<<< HEAD
   return { promise, resolve }
 }
 
@@ -183,24 +228,122 @@ describe('desktop bridge source and foreground isolation', () => {
       text: ''
     })
   })
+||||||| 939e45c91d
+  it('leaves a scoped action request unanswered in a window showing another session', () => {
+    const request = vi.fn()
+    $gateway.set({ request } as never)
 
+    expect(handleDesktopBridgeEvent(previewActContext({ explicitSid: 'session-a', isActiveEvent: false }))).toBe(true)
+    expect(request).not.toHaveBeenCalled()
+  })
+
+  it('keeps the legacy fail-fast response for an unscoped inactive request', () => {
+    const request = vi.fn()
+    $gateway.set({ request } as never)
+
+    expect(handleDesktopBridgeEvent(previewActContext({ explicitSid: '', isActiveEvent: false }))).toBe(true)
+    expect(request).toHaveBeenCalledWith('preview.act.respond', {
+      request_id: 'request-1',
+      text: JSON.stringify({
+        error: 'The in-app browser only takes actions in the session the user is looking at.',
+        success: false
+      })
+    })
+  })
+})
+=======
+beforeEach(() => {
+  dismissTip()
+  resetTips()
+  $tipsEnabled.set(true)
+})
+>>>>>>> f97608f178
+
+<<<<<<< HEAD
   it('discards a native window read when its session loses the foreground while IPC is pending', async () => {
     const pending = deferred<{ frontmost: null; platform: string; window: null }>()
     const readWindowBelow = vi.fn(() => pending.promise)
     window.hermesDesktop = { ...window.hermesDesktop, readWindowBelow } as typeof window.hermesDesktop
     const ctx = context('window.read.request', true)
+||||||| 939e45c91d
+function tourContext({
+  explicitSid,
+  isActiveEvent
+}: {
+  explicitSid: string
+  isActiveEvent: boolean
+}): GatewayEventContext {
+  return {
+    event: { session_id: explicitSid || undefined, type: 'tour.request' },
+    explicitSid,
+    isActiveEvent,
+    payload: { action: 'discover', request_id: 'tour-request-1' }
+  } as GatewayEventContext
+}
+=======
+describe('tip.show bridge (#117216)', () => {
+  it('a ✕-closed agent tip does not come back on the next tip.show of the same content', () => {
+    handleDesktopBridgeEvent(tipShow('Choose a model here.'))
+    const tipId = $activeTip.get()?.tipId
+>>>>>>> f97608f178
 
+<<<<<<< HEAD
     expect(handleDesktopBridgeEvent(ctx)).toBe(true)
     expect(readWindowBelow).toHaveBeenCalledOnce()
+||||||| 939e45c91d
+describe('tour bridge routing', () => {
+  afterEach(() => {
+    $gateway.set(null)
+    $toursEnabled.set(true)
+  })
+=======
+    expect(tipId).toMatch(/^agent:/)
+>>>>>>> f97608f178
 
+<<<<<<< HEAD
     ctx.deps.activeSessionIdRef.current = 'new-foreground-session'
     pending.resolve({ frontmost: null, platform: 'darwin', window: null })
+||||||| 939e45c91d
+  it('leaves a scoped request unanswered in another session even when tours are disabled', () => {
+    const request = vi.fn()
+    $gateway.set({ request } as never)
+    $toursEnabled.set(false)
+=======
+    retireActiveTip()
+    expect($retiredTips.get()).toContain(tipId)
+>>>>>>> f97608f178
 
+<<<<<<< HEAD
     await vi.waitFor(() => expect(mocks.requestGatewayForAgent).toHaveBeenCalledOnce())
     expect(mocks.requestGatewayForAgent).toHaveBeenCalledWith('source-b', 'background-profile', 'window.read.respond', {
       request_id: 'request-1',
       text: ''
     })
+||||||| 939e45c91d
+    expect(handleDesktopBridgeEvent(tourContext({ explicitSid: 'session-a', isActiveEvent: false }))).toBe(true)
+    expect(request).not.toHaveBeenCalled()
+  })
+
+  it('keeps the legacy fail-fast response for an unscoped inactive request', () => {
+    const request = vi.fn()
+    $gateway.set({ request } as never)
+
+    expect(handleDesktopBridgeEvent(tourContext({ explicitSid: '', isActiveEvent: false }))).toBe(true)
+    expect(request).toHaveBeenCalledWith('tour.respond', {
+      request_id: 'tour-request-1',
+      text: JSON.stringify({
+        error: 'Tours only run in the session the user is looking at.',
+        success: false
+      })
+    })
+=======
+    handleDesktopBridgeEvent(tipShow('Choose a model here.'))
+    expect($activeTip.get()).toBeNull()
+
+    // Different content is a different tip and still shows.
+    handleDesktopBridgeEvent(tipShow('Attach files with the paperclip.'))
+    expect($activeTip.get()?.text).toBe('Attach files with the paperclip.')
+>>>>>>> f97608f178
   })
 
   it('does not paint a tour after its session loses the foreground during lazy loading', async () => {

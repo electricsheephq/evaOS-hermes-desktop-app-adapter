@@ -71,6 +71,7 @@ afterEach(() => {
 })
 
 describe('BootFailureOverlay', () => {
+<<<<<<< HEAD
   it('reloads only after managed sign-in succeeds', async () => {
     const reload = vi.fn()
 
@@ -147,6 +148,26 @@ describe('BootFailureOverlay', () => {
         writable: true
       })
     }
+||||||| 939e45c91d
+=======
+  it('keeps keyboard focus inside the recovery surface', () => {
+    render(
+      <>
+        <button type="button">Background action</button>
+        <BootFailureOverlay />
+      </>
+    )
+
+    const recoverySurface = screen.getByRole('dialog', { name: /Hermes couldn't start/i })
+    const retry = screen.getByRole('button', { name: /retry/i })
+    const backgroundAction = screen.getByText(/background action/i)
+
+    retry.focus()
+    backgroundAction.focus()
+
+    expect(recoverySurface.getAttribute('aria-modal')).toBe('true')
+    expect(recoverySurface.contains(globalThis.document.activeElement)).toBe(true)
+>>>>>>> f97608f178
   })
 
   it('swaps to the in-place gateway settings view (no route nav) and back', async () => {
@@ -155,6 +176,7 @@ describe('BootFailureOverlay', () => {
     fireEvent.click(screen.getByRole('button', { name: /gateway settings/i }))
     // Recovery actions give way to the embedded panel (behind a Back control).
     expect(await screen.findByRole('button', { name: /back/i })).toBeTruthy()
+    expect(screen.getByRole('dialog', { name: /gateway settings/i }).getAttribute('aria-modal')).toBe('true')
     expect(screen.queryByRole('button', { name: /retry/i })).toBeNull()
 
     fireEvent.click(screen.getByRole('button', { name: /back/i }))

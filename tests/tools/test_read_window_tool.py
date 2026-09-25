@@ -3,9 +3,9 @@
 import json
 
 from tools import read_window_tool as rw
-from tools.registry import registry
 
 
+<<<<<<< HEAD
 def test_lives_in_the_gui_surface_toolset(monkeypatch):
     """Mirrors read_terminal: scoped by toolset, not by the backend's env."""
     monkeypatch.delenv("HERMES_DESKTOP", raising=False)
@@ -14,6 +14,17 @@ def test_lives_in_the_gui_surface_toolset(monkeypatch):
     assert entry is not None
     assert entry.toolset == "desktop_ui_v2"
     assert entry.check_fn is None
+||||||| 939e45c91d
+def test_lives_in_the_gui_surface_toolset(monkeypatch):
+    """Mirrors read_terminal: scoped by toolset, not by the backend's env."""
+    monkeypatch.delenv("HERMES_DESKTOP", raising=False)
+    entry = registry.get_entry("read_window_below")
+
+    assert entry is not None
+    assert entry.toolset == "desktop_ui"
+    assert entry.check_fn is None
+=======
+>>>>>>> f97608f178
 
 
 def test_requires_callback():
