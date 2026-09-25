@@ -2,12 +2,13 @@ import json
 import logging
 
 import pytest
+import requests
 
 import model_tools
 import tools.browser_live_view as live_view
 import tools.browser_tool as browser_tool
 import tools.browser_tool_lifecycle as browser_lifecycle
-from plugins.browser._common import CloudBrowserAPIError
+from plugins.browser._common import CloudBrowserAPIError, _response_error_code
 from tools.registry import registry
 
 
@@ -170,6 +171,33 @@ def test_missing_provider_session_is_evicted(monkeypatch, existing_named_session
     assert second["code"] == "browser_session_not_found"
     assert "No active Browserbase session" in second["error"]
     assert provider.seen == ["provider-session-1"]
+
+
+def test_http_404_from_provider_evicts_missing_session(
+    monkeypatch, existing_named_session
+):
+    response = requests.Response()
+    response.status_code = 404
+    response._content = b'{"statusCode":404,"error":"Not Found"}'
+    code = _response_error_code(response)
+    error = CloudBrowserAPIError(
+        f"debug request failed (code: {code})",
+        status_code=response.status_code,
+        code=code,
+    )
+    monkeypatch.setattr(
+        "tools.browser_tool_cloud._get_cloud_provider",
+        lambda: _FakeBrowserbase(error),
+    )
+
+    result = json.loads(live_view.browser_live_view(session="research"))
+
+    assert code == "http_404"
+    assert result["code"] == "http_404"
+    assert result["retryable"] is False
+    assert result["error"] == "The Browserbase session no longer exists."
+    assert "bu-named-research" not in browser_tool._active_sessions
+    assert "bu-named-research" not in browser_tool._session_last_activity
 
 
 def test_missing_named_session_does_not_create_one(monkeypatch):
