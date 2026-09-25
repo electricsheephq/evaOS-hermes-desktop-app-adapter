@@ -71,7 +71,6 @@ def _patch_topology(monkeypatch, homes, running, runtimes):
 
 
 class TestCollectProfileGatewayTopology:
-<<<<<<< HEAD
     def test_managed_process_reads_only_its_owner(self, tmp_path, monkeypatch):
         import gateway.status as status_mod
         import hermes_cli.profiles as profiles_mod
@@ -118,8 +117,6 @@ class TestCollectProfileGatewayTopology:
         assert topo["profiles"] == ["default"]
         assert topo["gateway_mode"] == "single"
         assert topo["gateways"] == [{"profile": "default", "ports": {}}]
-||||||| 939e45c91d
-=======
     def test_running_standalone_profile_is_in_topology(self, tmp_path, monkeypatch):
         from hermes_cli import profiles
 
@@ -133,7 +130,6 @@ class TestCollectProfileGatewayTopology:
         topo = _collect_profile_gateway_topology()
         assert "solo" in topo["profiles"]
         assert [g["profile"] for g in topo["gateways"]] == ["solo"]
->>>>>>> f97608f178
 
     def test_no_gateways_running(self, tmp_path, monkeypatch):
         homes = [("default", tmp_path / "d"), ("coder", tmp_path / "c")]

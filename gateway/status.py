@@ -1204,7 +1204,6 @@ def parse_active_agents(raw: Any) -> int:
         return 0
 
 
-<<<<<<< HEAD
 _STARTED_GATEWAY_STATES = frozenset({"running", "degraded"})
 
 
@@ -1215,40 +1214,18 @@ def gateway_state_is_started(gateway_state: Any) -> bool:
 
 # A live started gateway is a valid begin-drain target, even without a connected platform.
 _DRAINABLE_GATEWAY_STATES = _STARTED_GATEWAY_STATES
-||||||| 939e45c91d
-# Only a live ``running`` gateway is a valid begin-drain target.
-_DRAINABLE_GATEWAY_STATES = frozenset({"running"})
-=======
-# Live, serving states: a valid begin-drain target. ``degraded`` is a serving gateway with a parked
-# platform (a dead watchdog-stamped ``degraded`` is already excluded by ``gateway_running=False``).
-_DRAINABLE_GATEWAY_STATES = frozenset({"running", "degraded"})
->>>>>>> f97608f178
 
 
 def derive_gateway_busy(*, gateway_running: bool, gateway_state: Any, active_agents: Any) -> bool:
-<<<<<<< HEAD
-    """Busy iff live, started, and ``active_agents > 0`` -- the contract NAS gates on. Liveness
-    keys off ``gateway_running``, NEVER ``updated_at`` (an idle gateway never advances it)."""
-||||||| 939e45c91d
-    """Busy iff live, ``running``, and ``active_agents > 0`` -- the contract NAS gates on. Liveness
-    keys off ``gateway_running``, NEVER ``updated_at`` (an idle gateway never advances it)."""
-=======
     """Busy iff live, serving (``running``/``degraded``), and ``active_agents > 0`` -- the contract NAS gates on. Liveness
     keys off ``gateway_running``, NEVER ``updated_at`` (a stale heartbeat is a health warning, not death)."""
->>>>>>> f97608f178
     if not derive_gateway_drainable(gateway_running=gateway_running, gateway_state=gateway_state):
         return False
     return parse_active_agents(active_agents) > 0
 
 
 def derive_gateway_drainable(*, gateway_running: bool, gateway_state: Any) -> bool:
-<<<<<<< HEAD
-    """Drainable iff live and started; independent of ``active_agents`` (idle drains finish)."""
-||||||| 939e45c91d
-    """Drainable iff live and ``running``; independent of ``active_agents`` (idle drains finish)."""
-=======
     """Drainable iff live and serving; independent of ``active_agents`` (idle drains finish)."""
->>>>>>> f97608f178
     return bool(gateway_running) and gateway_state in _DRAINABLE_GATEWAY_STATES
 
 

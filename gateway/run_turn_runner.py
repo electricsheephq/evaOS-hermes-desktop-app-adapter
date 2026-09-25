@@ -1381,7 +1381,6 @@ class TurnRunner:
         from gateway.run_turn_runner_clarify_delivery import (
             UNDELIVERED_NO_SURFACE, _clarify_send_then_wait, text_fallback_coro)
         from tools import clarify_gateway as clarify_mod
-        from tools.clarify_tool import _is_timeout
         import uuid
         ctx = self._ctx
         if not ctx._status_adapter:
@@ -1426,20 +1425,6 @@ class TurnRunner:
         )
         # Boundary rule (see _approval_send_outcome): a send timeout is AMBIGUOUS — the card may
         # have posted with a late ack. Only a definitive failure tears down the registration;
-<<<<<<< HEAD
-        # ambiguous falls through to the bounded wait so a late reply resolves.
-        response = _clarify_send_then_wait(fut, clarify_id=clarify_id, session_key=session_key, clarify_mod=clarify_mod)
-        # Only re-arm typing when the user actually answered — canonical timeouts and the
-        # bracketed undeliverable/cancellation sentinels must pass through untouched.
-        is_bracketed_sentinel = isinstance(response, str) and response.startswith("[")
-        if not (_is_timeout(response) or is_bracketed_sentinel):
-||||||| 939e45c91d
-        # ambiguous falls through to the bounded wait so a late reply resolves.
-        response = _clarify_send_then_wait(fut, clarify_id=clarify_id, session_key=session_key, clarify_mod=clarify_mod)
-        # Only re-arm typing when the user actually answered — the undeliverable sentinel and the
-        # timeout/cancellation strings start with '[' and must pass through untouched.
-        if not (isinstance(response, str) and response.startswith("[")):
-=======
         # ambiguous falls through to the bounded wait so a late reply resolves. A definitive
         # failure — immediate or late — retries once as plain text before giving up.
         response, answered = _clarify_send_then_wait(
@@ -1456,7 +1441,6 @@ class TurnRunner:
                     retire(ctx._status_adapter, clarify_id, _CLARIFY_EXPIRED_NOTICE),
                     "Clarify card retire failed to schedule")
         elif rearm:
->>>>>>> f97608f178
             # Reopen typing IMMEDIATELY, not on the LLM's first post-answer token (native streaming
             # otherwise re-seeds lazily on the first delta: ~48s of dead air). request_reopen_seed is
             # a no-op outside the reopen-pending native state.

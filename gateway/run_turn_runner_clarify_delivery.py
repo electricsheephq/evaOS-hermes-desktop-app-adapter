@@ -111,7 +111,9 @@ def _clarify_send_then_wait(fut, *, clarify_id: str, session_key: str, clarify_m
     if late.undeliverable:
         return late.undeliverable, False
     if response is None or response == "":
-        return f"[user did not respond within {int(timeout / 60)}m]", False
+        # Canonical timeout guidance (tools/clarify_tool.TIMEOUT_RESPONSE), identical on every surface.
+        from tools.clarify_tool import TIMEOUT_RESPONSE
+        return TIMEOUT_RESPONSE, False
     return response, True
 
 

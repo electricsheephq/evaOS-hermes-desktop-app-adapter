@@ -17,16 +17,10 @@ today's teardown + sentinel behavior.
 import concurrent.futures
 from unittest.mock import MagicMock
 
-<<<<<<< HEAD
-from gateway.run import _clarify_send_disposition, _clarify_send_then_wait
 from gateway.run_turn_runner import TurnRunner
+from gateway.run_turn_runner_clarify_delivery import _clarify_send_disposition, _clarify_send_then_wait
 from gateway.turn_context import TurnContext
 from tools.clarify_tool import TIMEOUT_RESPONSE
-||||||| 939e45c91d
-from gateway.run import _clarify_send_disposition, _clarify_send_then_wait
-=======
-from gateway.run_turn_runner_clarify_delivery import _clarify_send_disposition, _clarify_send_then_wait
->>>>>>> f97608f178
 
 SENTINEL = "[clarify prompt could not be delivered]"
 
@@ -159,13 +153,7 @@ def test_no_response_returns_timeout_sentinel():
         _clarify_send_then_wait(
             fut, clarify_id="cid123", session_key="sk", clarify_mod=clarify_mod
         )
-<<<<<<< HEAD
-        == TIMEOUT_RESPONSE
-||||||| 939e45c91d
-        == "[user did not respond within 10m]"
-=======
-        == ("[user did not respond within 10m]", False)
->>>>>>> f97608f178
+        == (TIMEOUT_RESPONSE, False)  # evaOS #321: canonical timeout guidance on every surface
     )
 
 
@@ -182,7 +170,9 @@ def test_timeout_sentinel_does_not_resume_gateway_answer_state(monkeypatch):
     monkeypatch.setattr(runner, "_close_native_stream_boundary", lambda *args, **kwargs: True)
     monkeypatch.setattr(runner, "_schedule", lambda *args, **kwargs: MagicMock())
     monkeypatch.setattr(runner, "_stream_consumer", lambda: consumer)
-    monkeypatch.setattr("gateway.run._clarify_send_then_wait", lambda *args, **kwargs: TIMEOUT_RESPONSE)
+    monkeypatch.setattr(
+        "gateway.run_turn_runner_clarify_delivery._clarify_send_then_wait",
+        lambda *args, **kwargs: (TIMEOUT_RESPONSE, False))
     monkeypatch.setattr("tools.clarify_gateway.register", lambda **kwargs: None)
 
     assert runner._clarify_callback_sync("Proceed?", None) == TIMEOUT_RESPONSE

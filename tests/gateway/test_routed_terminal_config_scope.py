@@ -254,4 +254,8 @@ def test_missing_terminal_section_fails_open(tmp_path, monkeypatch):
     with _profile_runtime_scope(routed_home):
         routed_config = terminal_tool._get_env_config()
 
+    # evaOS adaptation (r34): upstream's profile terminal scope (tools/terminal_scope.py) resolves a
+    # routed profile's cwd placeholder per surface instead of inheriting the gateway process cwd;
+    # every policy key still fails open to the gateway's values.
+    routed_config.pop("cwd"), gateway_config.pop("cwd")
     assert routed_config == gateway_config

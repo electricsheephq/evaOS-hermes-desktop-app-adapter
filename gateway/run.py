@@ -820,95 +820,6 @@ def _approval_send_outcome(future, timeout: float) -> str:
     return "failed"
 
 
-<<<<<<< HEAD
-def _clarify_send_disposition(fut, *, session_key: str, clarify_mod) -> "str | None":
-    """Decide whether a clarify prompt send aborts the wait; returns the abort sentinel or ``None``.
-
-    Only a DEFINITIVE failure tears down the registration; ``ambiguous`` (card may have posted) stays armed
-    and proceeds to the bounded wait, whose response timeout covers a lost card."""
-    outcome = _approval_send_outcome(fut, timeout=15)
-    if outcome == "declined":
-        # P5(b): a connector DECLINE is MORE definitive than a failure — the
-        # destination was authorized and refused, so the card cannot arrive and
-        # no late reply can resolve it. Without this branch `declined` fell
-        # through to the bounded wait and the agent blocked until
-        # clarify_timeout (indefinitely when that is configured non-positive).
-        logger.warning(
-            "Clarify prompt DECLINED by the connector's egress guard; "
-            "clearing registration"
-        )
-        clarify_mod.clear_session(session_key)
-        return "[clarify prompt could not be delivered: destination refused]"
-    if outcome == "failed":
-        # Undeliverable: clear the registration and return the sentinel so the agent falls back, not hangs.
-        logger.warning("Clarify send failed definitively; clearing registration")
-        clarify_mod.clear_session(session_key)
-        return "[clarify prompt could not be delivered]"
-    if outcome == "ambiguous":
-        logger.warning(
-            "Clarify prompt send timed out — treating as possibly-delivered "
-            "(no teardown; the registration stays armed for a late reply)")
-    return None
-
-
-def _clarify_send_then_wait(fut, *, clarify_id: str, session_key: str, clarify_mod) -> str:
-    """Resolve a clarify prompt: send disposition, then the bounded wait."""
-    abort = _clarify_send_disposition(fut, session_key=session_key, clarify_mod=clarify_mod)
-    if abort is not None:
-        return abort
-    timeout = clarify_mod.get_clarify_timeout()
-    response = clarify_mod.wait_for_response(clarify_id, timeout=float(timeout))
-    if response is None or response == "":
-        from tools.clarify_tool import TIMEOUT_RESPONSE
-        return TIMEOUT_RESPONSE
-    return response
-
-
-||||||| 939e45c91d
-def _clarify_send_disposition(fut, *, session_key: str, clarify_mod) -> "str | None":
-    """Decide whether a clarify prompt send aborts the wait; returns the abort sentinel or ``None``.
-
-    Only a DEFINITIVE failure tears down the registration; ``ambiguous`` (card may have posted) stays armed
-    and proceeds to the bounded wait, whose response timeout covers a lost card."""
-    outcome = _approval_send_outcome(fut, timeout=15)
-    if outcome == "declined":
-        # P5(b): a connector DECLINE is MORE definitive than a failure — the
-        # destination was authorized and refused, so the card cannot arrive and
-        # no late reply can resolve it. Without this branch `declined` fell
-        # through to the bounded wait and the agent blocked until
-        # clarify_timeout (indefinitely when that is configured non-positive).
-        logger.warning(
-            "Clarify prompt DECLINED by the connector's egress guard; "
-            "clearing registration"
-        )
-        clarify_mod.clear_session(session_key)
-        return "[clarify prompt could not be delivered: destination refused]"
-    if outcome == "failed":
-        # Undeliverable: clear the registration and return the sentinel so the agent falls back, not hangs.
-        logger.warning("Clarify send failed definitively; clearing registration")
-        clarify_mod.clear_session(session_key)
-        return "[clarify prompt could not be delivered]"
-    if outcome == "ambiguous":
-        logger.warning(
-            "Clarify prompt send timed out — treating as possibly-delivered "
-            "(no teardown; the registration stays armed for a late reply)")
-    return None
-
-
-def _clarify_send_then_wait(fut, *, clarify_id: str, session_key: str, clarify_mod) -> str:
-    """Resolve a clarify prompt: send disposition, then the bounded wait."""
-    abort = _clarify_send_disposition(fut, session_key=session_key, clarify_mod=clarify_mod)
-    if abort is not None:
-        return abort
-    timeout = clarify_mod.get_clarify_timeout()
-    response = clarify_mod.wait_for_response(clarify_id, timeout=float(timeout))
-    if response is None or response == "":
-        return f"[user did not respond within {int(timeout / 60)}m]"
-    return response
-
-
-=======
->>>>>>> f97608f178
 def _resolve_progress_thread_id(
     platform: Any, source_thread_id: Any, event_message_id: Any, *, reply_in_thread: bool = True
 ) -> Optional[str]:
@@ -1758,12 +1669,6 @@ class MultiplexConfigError(RuntimeError):
     startup guard instead of being treated as retryable adapter-connect noise."""
 
 
-<<<<<<< HEAD
-class SecondaryPortBindingConfigError(MultiplexConfigError):
-    """A secondary profile enabled a port-binding platform: the default profile owns the single shared
-    listener (/p/<profile>/), so this is always a misconfiguration and is skipped, not fatal."""
-
-
 class ProfileConnectivityError(MultiplexConfigError):
     """A served profile did not come online and the operator demanded it.
 
@@ -1773,14 +1678,6 @@ class ProfileConnectivityError(MultiplexConfigError):
     """
 
 
-||||||| 939e45c91d
-class SecondaryPortBindingConfigError(MultiplexConfigError):
-    """A secondary profile enabled a port-binding platform: the default profile owns the single shared
-    listener (/p/<profile>/), so this is always a misconfiguration and is skipped, not fatal."""
-
-
-=======
->>>>>>> f97608f178
 class HygieneTurnHoldExceeded(Exception):
     """Hygiene-compression turn-hold budget elapsed mid-stream. Availability boundary, not a failure:
     must NOT take the idle-timeout path (AGENT_COMPRESSION_TIMEOUT, "no output", failure cooldown)."""
@@ -3623,19 +3520,15 @@ class GatewayRunner(
         self._session_db_init_error: Optional[str] = None
         # Non-default profiles' adapters by profile then Platform; self.adapters stays the default's map.
         self._profile_adapters: Dict[str, Dict[Platform, BasePlatformAdapter]] = {}
-<<<<<<< HEAD
         # Per-profile startup failures are recorded while secondary adapters are
         # brought up and consulted only by the opt-in connectivity assertion.
         self._profile_startup_failures: Dict[str, List[str]] = {}
         # Relay-only secondaries intentionally end with no adapter: ingress is
         # shared by the active profile, so the connectivity gate exempts them.
         self._profile_relay_served: set[str] = set()
-||||||| 939e45c91d
-=======
         # Each SERVED profile's gateway config, as loaded once by ``_load_secondary_profile_config``.
         # ``self.config`` is only the launch profile's: anything host-wide (restart notices) needs these.
         self._profile_configs: Dict[str, Any] = {}
->>>>>>> f97608f178
         self._warn_if_docker_media_delivery_is_risky()
         _gateway_runner_ref = _weakref.ref(self)
 

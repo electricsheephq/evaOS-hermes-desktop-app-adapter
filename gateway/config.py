@@ -596,22 +596,6 @@ class GatewayConfig:
     group_sessions_per_user: bool = True  # Isolate group sessions per participant when user IDs exist
     thread_sessions_per_user: bool = False  # False = threads shared across participants
     max_concurrent_sessions: Optional[int] = None  # Positive int caps simultaneous active sessions
-<<<<<<< HEAD
-    # Opt-in: the default profile's gateway serves every profile on the host (profiles stamped into
-    # session keys, per-profile adapters/credentials). Allowlist None = serve all; [] = default only.
-    multiplex_profiles: bool = False
-    multiplex_profile_allowlist: Optional[List[str]] = None
-    # Refuse to finish startup when a served profile has no adapter online.
-    # Off by default so one transient credential failure does not stop a gateway.
-    require_all_profiles_connected: bool = False
-    # Keep scheduled/local gateway services alive when no messaging platform can connect.
-    headless_ok: bool = False
-||||||| 939e45c91d
-    # Opt-in: the default profile's gateway serves every profile on the host (profiles stamped into
-    # session keys, per-profile adapters/credentials). Allowlist None = serve all; [] = default only.
-    multiplex_profiles: bool = False
-    multiplex_profile_allowlist: Optional[List[str]] = None
-=======
     # The default profile's gateway serves every profile on the host (profiles stamped into session
     # keys, per-profile adapters/credentials). On by default (DEFAULT_CONFIG), but UNSET here is
     # ``None``: a request the gateway settles at boot, not a verdict. ``hermes_cli.gateway_multiplex_mode
@@ -620,7 +604,11 @@ class GatewayConfig:
     # An explicit value (config.yaml, GATEWAY_MULTIPLEX_PROFILES, a constructor argument) is honoured
     # verbatim. Every reader tests truthiness, so an unresolved ``None`` never multiplexes by accident.
     multiplex_profiles: Optional[bool] = None
->>>>>>> f97608f178
+    # Refuse to finish startup when a served profile has no adapter online.
+    # Off by default so one transient credential failure does not stop a gateway.
+    require_all_profiles_connected: bool = False
+    # Keep scheduled/local gateway services alive when no messaging platform can connect.
+    headless_ok: bool = False
     # Public HTTPS endpoint for scoped RoomLink calls (an API key alone must never advertise a
     # route); HERMES_ROOM_LINK_URL overrides.
     room_link_url: Optional[str] = None
@@ -650,14 +638,8 @@ class GatewayConfig:
     _SCALAR_DICT_FIELDS = (
         "write_sessions_json", "always_log_local", "filter_silence_narration", "stt_enabled",
         "stt_echo_transcripts", "group_sessions_per_user", "thread_sessions_per_user",
-<<<<<<< HEAD
-        "max_concurrent_sessions", "multiplex_profiles", "multiplex_profile_allowlist",
-        "require_all_profiles_connected", "headless_ok",
-||||||| 939e45c91d
-        "max_concurrent_sessions", "multiplex_profiles", "multiplex_profile_allowlist",
-=======
         "max_concurrent_sessions", "multiplex_profiles",
->>>>>>> f97608f178
+        "require_all_profiles_connected", "headless_ok",
         "room_link_url", "systemd_watchdog_seconds", "loop_watchdog",
         "loop_watchdog_probe_interval_s", "loop_watchdog_probe_timeout_s",
         "loop_watchdog_max_strikes", "unauthorized_dm_behavior", "unauthorized_dm_decline_message",
@@ -801,19 +783,11 @@ class GatewayConfig:
             **{name: _coerce_bool(data.get(name), default) for name, default in _TOPLEVEL_BOOL_DEFAULTS.items()},
             stt_enabled=_coerce_bool(stt_setting("stt_enabled", "enabled"), True),
             stt_echo_transcripts=_coerce_bool(stt_setting("stt_echo_transcripts", "echo_transcripts"), True),
-<<<<<<< HEAD
-            multiplex_profiles=_coerce_bool(multiplex_profiles, False),
-            multiplex_profile_allowlist=pick("multiplex_profile_allowlist"),
+            multiplex_profiles=None if multiplex_profiles is None else _coerce_bool(multiplex_profiles, True),
             require_all_profiles_connected=_coerce_bool(
                 pick("require_all_profiles_connected"), False
             ),
             headless_ok=_coerce_bool(pick("headless_ok"), False),
-||||||| 939e45c91d
-            multiplex_profiles=_coerce_bool(multiplex_profiles, False),
-            multiplex_profile_allowlist=pick("multiplex_profile_allowlist"),
-=======
-            multiplex_profiles=None if multiplex_profiles is None else _coerce_bool(multiplex_profiles, True),
->>>>>>> f97608f178
             room_link_url=room_link_url if isinstance(room_link_url, str) else None,
             systemd_watchdog_seconds=systemd_watchdog_seconds,
             loop_watchdog=_coerce_bool(pick("loop_watchdog"), True),

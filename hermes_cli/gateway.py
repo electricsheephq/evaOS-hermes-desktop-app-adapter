@@ -300,7 +300,6 @@ def _graceful_restart_via_sigusr1(pid: int, drain_timeout: float, *, on_progress
     return _wait_for_pid_exit(pid, max(drain_timeout, 1.0), on_progress=on_progress)
 
 
-<<<<<<< HEAD
 def _runtime_status_matches_identity(
     record: object, identity: tuple[int, float]
 ) -> bool:
@@ -401,12 +400,7 @@ def _restart_managed_external_gateway_if_applicable() -> bool:
     return True
 
 
-def _wait_for_pid_exit(pid: int, timeout: float) -> bool:
-||||||| 939e45c91d
-def _wait_for_pid_exit(pid: int, timeout: float) -> bool:
-=======
 def _wait_for_pid_exit(pid: int, timeout: float, *, on_progress=None) -> bool:
->>>>>>> f97608f178
     """Wait up to ``timeout``s for ``pid`` to exit; True once gone. (``launchctl bootstrap`` fails EIO
     while the previous instance still drains, so teardown callers must wait for the real exit.)"""
     if pid <= 0:
@@ -1382,22 +1376,12 @@ def _wait_for_systemd_service_restart(
                 if runtime_state and _runtime_state_pid(runtime_state) != new_pid:
                     runtime_state = None
             gateway_state = (runtime_state or {}).get("gateway_state")
-<<<<<<< HEAD
             if gateway_state_is_started(gateway_state):
-                suffix = (" (degraded: no messaging platform connected)"
-                          if gateway_state == "degraded" else "")
-                print(f"✓ {scope_label} service restarted (PID {new_pid}){suffix}")
-||||||| 939e45c91d
-            if gateway_state == "running":
-                print(f"✓ {scope_label} service restarted (PID {new_pid})")
-=======
-            if gateway_state in ("running", "degraded"):
                 print(f"✓ {scope_label} service restarted (PID {new_pid})")
                 if gateway_state == "degraded":
                     # Serving, but a configured platform is parked or retrying: a real restart, not a
                     # failure — say so instead of waiting out the timeout and reporting one.
                     print(f"⚠ {scope_label} gateway is DEGRADED — see `hermes gateway status`")
->>>>>>> f97608f178
                 return True
             if gateway_state == "startup_failed":
                 reason = (runtime_state or {}).get("exit_reason") or "startup failed"
@@ -4347,29 +4331,6 @@ def _runtime_health_lines() -> list[str]:
 
     # A live-claiming snapshot can outlive an ungracefully killed gateway (taskkill /F, OOM). Past
     # the freshness TTL with the recorded PID gone, say so instead of rendering stale live state.
-<<<<<<< HEAD
-    if (
-        gateway_state in ("running", "starting", "draining", "degraded")
-        and runtime_status_is_stale(state)
-        and not runtime_status_pid_is_live(state)
-    ):
-        lines.append(
-            f"⚠ Stale gateway_state.json: recorded state '{gateway_state}' but the "
-            "recorded process is gone (likely an ungraceful shutdown)"
-        )
-        return lines
-||||||| 939e45c91d
-    if (
-        gateway_state in ("running", "starting", "draining")
-        and runtime_status_is_stale(state)
-        and not runtime_status_pid_is_live(state)
-    ):
-        lines.append(
-            f"⚠ Stale gateway_state.json: recorded state '{gateway_state}' but the "
-            "recorded process is gone (likely an ungraceful shutdown)"
-        )
-        return lines
-=======
     if gateway_state in ("running", "degraded", "starting", "draining") and runtime_status_is_stale(state):
         if not runtime_status_pid_is_live(state):
             lines.append(
@@ -4385,7 +4346,6 @@ def _runtime_health_lines() -> list[str]:
                 f"⚠ Gateway heartbeat stale: housekeeping has not refreshed gateway_state.json for {age} s "
                 f"(event loop or housekeeping wedged; pid {state.get('pid')} alive) — restart the gateway"
             )
->>>>>>> f97608f178
 
     if gateway_state == "startup_failed" and exit_reason:
         lines.append(f"⚠ Last startup issue: {exit_reason}")
@@ -5053,21 +5013,17 @@ def _cmd_restart(args):
         return
     system = getattr(args, "system", False)
     restart_all = getattr(args, "all", False)
-<<<<<<< HEAD
     # Managed flat-profile services are owned by an external supervisor. Hand
     # the restart to the running gateway (SIGUSR1 -> drain/exit) and require a
     # fresh supervisor-owned replacement; never fall through to manual launch.
     if _restart_managed_external_gateway_if_applicable():
         return
-||||||| 939e45c91d
-=======
     force = getattr(args, "force", False)
     # `--all` targets the ONE host multiplexer and _restart_all does its own ownership check with
     # the right one-liner; running the generic named-profile guard first made that branch
     # unreachable for `-p X gateway restart --all` (it printed a bare `gateway restart` instead).
     if not restart_all:
         _guard_named_profile_under_multiplexer(force=force)
->>>>>>> f97608f178
     if restart_all and _dispatch_all_via_service_manager_if_s6("restart"):
         return
     if not restart_all and _dispatch_via_service_manager_if_s6("restart"):

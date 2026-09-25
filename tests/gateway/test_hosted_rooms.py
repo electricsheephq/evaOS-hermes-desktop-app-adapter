@@ -1314,7 +1314,6 @@ def test_default_db_path_never_names_the_master_session_store(tmp_path, monkeypa
     assert from_root.parent == root
     assert from_root.name != "state.db"
 
-<<<<<<< HEAD
     managed_home = tmp_path / "hermes" / "employee"
     managed_home.mkdir(parents=True)
     monkeypatch.setenv("HERMES_HOME", str(managed_home))
@@ -1327,8 +1326,6 @@ def test_default_db_path_never_names_the_master_session_store(tmp_path, monkeypa
         assert not resolved.exists(), "path resolution and import must not eagerly open the store"
     finally:
         managed_home.chmod(0o700)
-||||||| 939e45c91d
-=======
 
 def test_upgrade_keeps_rooms_from_before_the_shared_state_db_split(tmp_path):
     """Rooms an install already had stay reachable after the move to ``shared-state.db``.
@@ -1454,4 +1451,3 @@ def test_unreadable_legacy_store_is_reported_once_per_process(tmp_path, caplog):
     with sqlite3.connect(store) as conn:
         assert not conn.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='hosted_room_legacy_imports'").fetchone()
->>>>>>> f97608f178

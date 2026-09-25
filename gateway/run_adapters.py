@@ -26,7 +26,7 @@ from gateway.restart import is_global_startup_conflict
 from gateway.run_shutdown import _log_suppressed
 from gateway.session import SessionSource
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Dict, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 if TYPE_CHECKING:  # string annotations only; never imported at runtime (cycle)
     from gateway.run import GatewayRunner  # noqa: F401
@@ -894,46 +894,23 @@ class GatewayAdapterLifecycleMixin:
         for profile_name, profile_home in profile_homes:
             if profile_name == active:
                 continue  # handled by the primary startup loop
-<<<<<<< HEAD
             served_secondaries.append(profile_name)
-||||||| 939e45c91d
-=======
             # Preserve changes made while the initial connection is awaiting I/O.
             scan_signature = profile_serve_signature(profile_home)
->>>>>>> f97608f178
             try:
                 connected += await self._start_one_profile_adapters(profile_name, profile_home, claimed)
-<<<<<<< HEAD
-            except SecondaryPortBindingConfigError as e:
-                logger.warning(
-                    "Skipping secondary profile '%s' due to port-binding config error: %s", profile_name, e,
-                )
-                self._record_profile_startup_failure(
-                    profile_name, "*", f"port-binding config error: {e}"
-                )
-||||||| 939e45c91d
-            except SecondaryPortBindingConfigError as e:
-                logger.warning(
-                    "Skipping secondary profile '%s' due to port-binding config error: %s", profile_name, e,
-                )
-=======
->>>>>>> f97608f178
             except MultiplexConfigError:
                 raise
             except Exception as e:
                 logger.error("Failed to start adapters for profile '%s': %s", profile_name, e, exc_info=True)
-<<<<<<< HEAD
                 self._record_profile_startup_failure(
                     profile_name, "*", f"profile startup raised {e}"
                 )
-        self._assert_all_profiles_connected(served_secondaries, active)
-||||||| 939e45c91d
-=======
                 # Not acknowledged: the reconcile watcher retries a transiently-failed profile.
                 transient_failed.add(profile_name)
             else:
                 self._served_profile_signatures[profile_name] = scan_signature
->>>>>>> f97608f178
+        self._assert_all_profiles_connected(served_secondaries, active)
         self._record_served_profiles(active, profile_homes)
         # ``_note_served_profiles`` fills a missing signature with the current one; that refill
         # would park a transiently-failed profile before the first watcher tick can retry it.
@@ -1192,14 +1169,11 @@ class GatewayAdapterLifecycleMixin:
             # Relay/WhatsApp are shared process-level ingress under multiplex; a secondary would retry-loop.
             # Say so: four profiles with WHATSAPP_ENABLED=true and nothing in the log is a silent dead channel.
             if multiplex and platform in (Platform.RELAY, Platform.WHATSAPP):
-<<<<<<< HEAD
                 if platform is Platform.RELAY:
                     relay_served = getattr(self, "_profile_relay_served", None)
                     if relay_served is None:
                         relay_served = self._profile_relay_served = set()
                     relay_served.add(profile_name)
-||||||| 939e45c91d
-=======
                 self._note_unserved_secondary_platform(profile_name, platform)
                 continue
             # api_server / webhook: the default's listener already mirrors them at /p/<profile>/; a second
@@ -1209,7 +1183,6 @@ class GatewayAdapterLifecycleMixin:
                     "[MULTIPLEX] Profile '%s': %s is served by the default profile's listener at /p/%s/ — "
                     "not starting a second listener", profile_name, platform.value, profile_name,
                 )
->>>>>>> f97608f178
                 continue
             adapter = None
             creation_failed = False

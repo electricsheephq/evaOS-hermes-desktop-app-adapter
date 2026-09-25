@@ -91,13 +91,9 @@ class MessageEvent:
 
     # Process-local admission receipt, never routing metadata or execution acknowledgement.
     _gateway_accepted: bool = field(default=False, init=False, repr=False, compare=False)
-<<<<<<< HEAD
     _gateway_route_mismatch: bool = field(default=False, init=False, repr=False, compare=False)
-||||||| 939e45c91d
-=======
     # Run-owned final presentation snapshot; never deserialized from ingress metadata.
     _notification_reply_muted: Optional[bool] = field(default=None, init=False, repr=False, compare=False)
->>>>>>> f97608f178
 
     def is_command(self) -> bool:
         """Check if this is a command message (e.g., /new, /reset)."""

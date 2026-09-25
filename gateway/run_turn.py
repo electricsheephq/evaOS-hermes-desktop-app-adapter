@@ -22,18 +22,10 @@ from contextlib import nullcontext, suppress
 from contextvars import copy_context
 from gateway.config import Platform
 from gateway.media_repair import repair_explicit_computer_use_media_paths
-<<<<<<< HEAD
-from gateway.platforms.base import BasePlatformAdapter
-from gateway.platforms.event import MessageEvent, MessageType
-||||||| 939e45c91d
-from gateway.platforms.base import BasePlatformAdapter
-from gateway.platforms.event import MessageEvent
-=======
 from gateway.platforms.base import BasePlatformAdapter, ProcessingOutcome
-from gateway.platforms.event import MessageEvent
+from gateway.platforms.event import MessageEvent, MessageType
 from gateway.response_filters import display_kind_for_event, is_machinery_display_kind
 from gateway.warning_notifications import diagnostic_metadata, diagnostic_turn_muted, diagnostic_wake_muted
->>>>>>> f97608f178
 from gateway.session import (
     SessionSource, _session_key_namespace, build_channel_continuity_note,
     build_session_context,

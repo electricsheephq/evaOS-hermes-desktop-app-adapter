@@ -146,27 +146,15 @@ def _collect_profile_gateway_topology() -> Dict[str, Any]:
     platform maps per live gateway, an internal aggregation input never exposed directly.
     """
     try:
-<<<<<<< HEAD
-        from hermes_cli.profiles import _check_gateway_running, profiles_to_serve
-        from hermes_cli.managed_profile_scope import managed_profile_name
-||||||| 939e45c91d
-        from hermes_cli.profiles import _check_gateway_running, profiles_to_serve
-=======
         from hermes_cli.profiles import _check_gateway_running, profiles_to_serve, profile_is_parked
->>>>>>> f97608f178
+        from hermes_cli.managed_profile_scope import managed_profile_name
         from gateway.status import read_runtime_status
-<<<<<<< HEAD
         owner = managed_profile_name()
         homes = (
             [(owner, get_hermes_home())]
             if owner is not None
-            else profiles_to_serve(True)
+            else profiles_to_serve(True, include_standalone=True, include_parked=True)
         )
-||||||| 939e45c91d
-        homes = profiles_to_serve(True)
-=======
-        homes = profiles_to_serve(True, include_standalone=True, include_parked=True)
->>>>>>> f97608f178
     except Exception:
         _log.debug("profile/gateway topology enumeration failed", exc_info=True)
         return {"profiles": [], "gateway_mode": "unknown", "gateways": [], "profile_platforms": {}}

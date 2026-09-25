@@ -367,137 +367,6 @@ class TestSendVoiceReply:
 
 
 # =====================================================================
-<<<<<<< HEAD
-# Discord play_tts skip when in voice channel
-# =====================================================================
-
-class TestDiscordPlayTtsSkip:
-    """Discord adapter skips play_tts when bot is in a voice channel."""
-
-    def _make_discord_adapter(self):
-        from plugins.platforms.discord.adapter import DiscordAdapter
-        from gateway.config import Platform, PlatformConfig
-        config = PlatformConfig(enabled=True, extra={})
-        config.token = "fake-token"
-        adapter = object.__new__(DiscordAdapter)
-        adapter.platform = Platform.DISCORD
-        adapter.config = config
-        adapter._voice_clients = {}
-        adapter._voice_locks = {}
-        adapter._voice_text_channels = {}
-        adapter._voice_sources = {}
-        adapter._voice_channel_ids = {}
-        adapter._voice_timeout_tasks = {}
-        adapter._voice_receivers = {}
-        adapter._voice_listen_tasks = {}
-        adapter._client = None
-        adapter._broadcast = AsyncMock()
-        return adapter
-
-    @pytest.mark.asyncio
-    async def test_play_tts_plays_in_vc_when_connected(self):
-        adapter = self._make_discord_adapter()
-        # Simulate bot in voice channel for guild 111, text channel 123
-        mock_vc = MagicMock()
-        mock_vc.is_connected.return_value = True
-        mock_vc.is_playing.return_value = False
-        adapter._voice_clients[111] = mock_vc
-        adapter._voice_text_channels[111] = 123
-
-        # Mock play_in_voice_channel to avoid actual ffmpeg call
-        async def fake_play(gid, path):
-            return True
-        adapter.play_in_voice_channel = fake_play
-
-        result = await adapter.play_tts(chat_id="123", audio_path="/tmp/test.ogg")
-        # play_tts now plays in VC instead of being a no-op
-        assert result.success is True
-
-
-# =====================================================================
-# Web play_tts sends play_audio (not voice bubble)
-# =====================================================================
-
-# =====================================================================
-# Help text + known commands
-# =====================================================================
-
-class TestVoiceInHelp:
-
-    def test_voice_in_help_output(self):
-        """The gateway help text includes /voice (generated from registry)."""
-        from hermes_cli.commands import gateway_help_lines
-        help_text = "\n".join(gateway_help_lines())
-        assert "/voice" in help_text
-
-
-# =====================================================================
-||||||| 939e45c91d
-# Discord play_tts skip when in voice channel
-# =====================================================================
-
-class TestDiscordPlayTtsSkip:
-    """Discord adapter skips play_tts when bot is in a voice channel."""
-
-    def _make_discord_adapter(self):
-        from plugins.platforms.discord.adapter import DiscordAdapter
-        from gateway.config import Platform, PlatformConfig
-        config = PlatformConfig(enabled=True, extra={})
-        config.token = "fake-token"
-        adapter = object.__new__(DiscordAdapter)
-        adapter.platform = Platform.DISCORD
-        adapter.config = config
-        adapter._voice_clients = {}
-        adapter._voice_locks = {}
-        adapter._voice_text_channels = {}
-        adapter._voice_sources = {}
-        adapter._voice_timeout_tasks = {}
-        adapter._voice_receivers = {}
-        adapter._voice_listen_tasks = {}
-        adapter._client = None
-        adapter._broadcast = AsyncMock()
-        return adapter
-
-    @pytest.mark.asyncio
-    async def test_play_tts_plays_in_vc_when_connected(self):
-        adapter = self._make_discord_adapter()
-        # Simulate bot in voice channel for guild 111, text channel 123
-        mock_vc = MagicMock()
-        mock_vc.is_connected.return_value = True
-        mock_vc.is_playing.return_value = False
-        adapter._voice_clients[111] = mock_vc
-        adapter._voice_text_channels[111] = 123
-
-        # Mock play_in_voice_channel to avoid actual ffmpeg call
-        async def fake_play(gid, path):
-            return True
-        adapter.play_in_voice_channel = fake_play
-
-        result = await adapter.play_tts(chat_id="123", audio_path="/tmp/test.ogg")
-        # play_tts now plays in VC instead of being a no-op
-        assert result.success is True
-
-
-# =====================================================================
-# Web play_tts sends play_audio (not voice bubble)
-# =====================================================================
-
-# =====================================================================
-# Help text + known commands
-# =====================================================================
-
-class TestVoiceInHelp:
-
-    def test_voice_in_help_output(self):
-        """The gateway help text includes /voice (generated from registry)."""
-        from hermes_cli.commands import gateway_help_lines
-        help_text = "\n".join(gateway_help_lines())
-        assert "/voice" in help_text
-
-
-# =====================================================================
-=======
->>>>>>> f97608f178
 # VoiceReceiver unit tests
 # =====================================================================
 
@@ -718,6 +587,11 @@ class TestVoiceChannelCommands:
             platform=Platform.DISCORD, chat_id="123", chat_type="channel",
             user_id="111", profile="first",
         ).to_dict()}
+        # evaOS adaptation (r34): the fork only dispatches voice input from a live, still-bound
+        # capture (voice channel id + client + capture generation), as the tests above set up.
+        mock_adapter._voice_channel_ids = {111: 456}
+        mock_adapter._voice_capture_binding_valid = MagicMock(return_value=True)
+        mock_adapter._voice_clients = {111: SimpleNamespace(channel=SimpleNamespace(id=456))}
         mock_adapter._client = MagicMock()
         mock_adapter._client.get_channel = MagicMock(return_value=AsyncMock())
         mock_adapter.handle_message = AsyncMock()
@@ -727,7 +601,8 @@ class TestVoiceChannelCommands:
             "second": {},
         }
 
-        await runner._handle_voice_channel_input(111, 222, "Hello from VC", adapter=mock_adapter)
+        await runner._handle_voice_channel_input(
+            111, 222, "Hello from VC", adapter=mock_adapter, capture_generation=1)
 
         source = mock_adapter.handle_message.call_args[0][0].source
         assert (source.user_id, source.profile) == ("222", "second")

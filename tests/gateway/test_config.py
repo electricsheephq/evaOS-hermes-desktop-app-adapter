@@ -274,26 +274,6 @@ class TestLoadGatewayConfig:
             encoding="utf-8",
         )
 
-<<<<<<< HEAD
-    @pytest.mark.parametrize(
-        "yaml_text, expected",
-        [
-            ("gateway:\n  headless_ok: true\n", True),
-            ("headless_ok: true\n", True),
-            (None, False),
-        ],
-    )
-    def test_headless_ok_reaches_runtime_config(self, tmp_path, monkeypatch, yaml_text, expected):
-        hermes_home = tmp_path / ".hermes"
-        hermes_home.mkdir()
-        if yaml_text is not None:
-            (hermes_home / "config.yaml").write_text(yaml_text, encoding="utf-8")
-        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
-
-        assert load_gateway_config().headless_ok is expected
-
-||||||| 939e45c91d
-=======
         monkeypatch.setenv("HERMES_HOME", str(hermes_home))
         monkeypatch.setenv("WEBHOOK_SECRET", "whsec-expanded")
         monkeypatch.setenv("API_SERVER_KEY", "server-key-expanded")
@@ -331,7 +311,24 @@ class TestLoadGatewayConfig:
             config.platforms[Platform.WEBHOOK].extra["secret"]
             == "${WEBHOOK_SECRET_UNSET_FOR_TEST}"
         )
->>>>>>> f97608f178
+
+    @pytest.mark.parametrize(
+        "yaml_text, expected",
+        [
+            ("gateway:\n  headless_ok: true\n", True),
+            ("headless_ok: true\n", True),
+            (None, False),
+        ],
+    )
+    def test_headless_ok_reaches_runtime_config(self, tmp_path, monkeypatch, yaml_text, expected):
+        hermes_home = tmp_path / ".hermes"
+        hermes_home.mkdir()
+        if yaml_text is not None:
+            (hermes_home / "config.yaml").write_text(yaml_text, encoding="utf-8")
+        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+
+        assert load_gateway_config().headless_ok is expected
+
 
     def test_slack_ignored_channels_config_sets_env_bridge(self, tmp_path, monkeypatch):
         hermes_home = tmp_path / ".hermes"

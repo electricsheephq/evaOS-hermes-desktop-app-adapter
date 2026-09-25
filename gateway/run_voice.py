@@ -247,31 +247,13 @@ class GatewayVoiceMixin:
             return None
         try:
             source = SessionSource.from_dict(source_data)
-<<<<<<< HEAD
         except (TypeError, ValueError, KeyError):
             return None
         if source.platform != Platform.DISCORD or source.chat_id != str(text_ch_id):
             return None
-        if self._adapter_for_source(source) is not adapter:
-            return None
         source.user_id = source.user_name = str(user_id)
-||||||| 939e45c91d
-            source.user_id = source.user_name = str(user_id)
-            return source
-        return SessionSource(
-            platform=Platform.DISCORD, chat_id=str(text_ch_id), user_id=str(user_id),
-            user_name=str(user_id), chat_type="channel",
-            profile=getattr(adapter, "_owner_profile", None))
-=======
-            source.user_id = source.user_name = str(user_id)
-        else:
-            source = SessionSource(
-                platform=Platform.DISCORD, chat_id=str(text_ch_id), user_id=str(user_id),
-                user_name=str(user_id), chat_type="channel",
-                profile=getattr(adapter, "_owner_profile", None))
         # Serialization drops transport provenance; auth must still follow the receiving bot.
         source._transport_adapter_ref = weakref.ref(adapter)
->>>>>>> f97608f178
         return source
 
     async def _handle_voice_channel_input(
@@ -295,17 +277,14 @@ class GatewayVoiceMixin:
                 guild_id, generation=capture_generation):
             return
         source = self._voice_input_source(adapter, guild_id, user_id, text_ch_id)
-<<<<<<< HEAD
         if source is None:
-||||||| 939e45c91d
-=======
+            return
         # The cached source still carries the previous speaker's identity (per-sender routes,
         # #106019): drop the pin so the seam re-resolves for THIS speaker.
         from gateway.session_identity import clear_identity
         clear_identity(source)
         if self._canonicalize(source, transport_profile=getattr(adapter, "_owner_profile", None)) is None:
             logger.warning("Dropping voice input: its profile route targets an unserved profile")
->>>>>>> f97608f178
             return
         # Validate the session owner against the current allowlist before auto-resuming. A session created
         # before TELEGRAM_ALLOWED_USERS (or equivalent) was configured, or before the owner was removed from

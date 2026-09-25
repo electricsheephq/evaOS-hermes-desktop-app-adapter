@@ -15,7 +15,6 @@ import hermes_cli.gateway as gateway
 _BREAKAWAY_MARKER = "_HERMES_GATEWAY_BREAKAWAY"
 
 
-<<<<<<< HEAD
 def test_gateway_started_state_accepts_degraded_but_not_startup_failed():
     from gateway.status import gateway_state_is_started
 
@@ -24,76 +23,6 @@ def test_gateway_started_state_accepts_degraded_but_not_startup_failed():
     assert gateway_state_is_started("startup_failed") is False
 
 
-def _install_fake_gateway_run(monkeypatch, start_gateway):
-    module = ModuleType("gateway.run")
-    module.start_gateway = start_gateway
-
-    def _exit_after_graceful_shutdown(code):
-        if code:
-            raise SystemExit(code)
-
-    setattr(module, "_exit_after_graceful_shutdown", _exit_after_graceful_shutdown)
-    monkeypatch.setitem(sys.modules, "gateway.run", module)
-    # ``run_gateway()`` calls ``refresh_systemd_unit_if_needed()`` on every
-    # invocation so that restart settings stay current after exit-code-75
-    # respawns. That helper writes to ``Path.home() / ".config/systemd/user
-    # /hermes-gateway.service"`` and runs ``systemctl --user daemon-reload``
-    # — both target the *real* user environment because the conftest only
-    # sandboxes ``HERMES_HOME``, not ``HOME``. Tests that drive
-    # ``run_gateway()`` end-to-end with a fake ``start_gateway`` MUST stub
-    # the refresh call too, or every run rewrites the developer's installed
-    # unit (baking in the test's pytest-tmp ``HERMES_HOME`` value, which
-    # systemd then uses on the next boot — silently breaking the gateway
-    # for the developer).
-    monkeypatch.setattr(gateway, "supports_systemd_services", lambda: False)
-    monkeypatch.setattr(
-        gateway, "refresh_systemd_unit_if_needed", lambda system=False: False
-    )
-    # Neutralize the supervised-gateway conflict guard by default so these
-    # end-to-end tests don't trip over a launchd/systemd gateway that happens
-    # to be installed+running on the developer's machine. Conflict-guard tests
-    # override this snapshot after calling the helper.
-    monkeypatch.setattr(
-        gateway,
-        "get_gateway_runtime_snapshot",
-        lambda *a, **k: gateway.GatewayRuntimeSnapshot(manager="manual process"),
-    )
-||||||| 939e45c91d
-def _install_fake_gateway_run(monkeypatch, start_gateway):
-    module = ModuleType("gateway.run")
-    module.start_gateway = start_gateway
-
-    def _exit_after_graceful_shutdown(code):
-        if code:
-            raise SystemExit(code)
-
-    setattr(module, "_exit_after_graceful_shutdown", _exit_after_graceful_shutdown)
-    monkeypatch.setitem(sys.modules, "gateway.run", module)
-    # ``run_gateway()`` calls ``refresh_systemd_unit_if_needed()`` on every
-    # invocation so that restart settings stay current after exit-code-75
-    # respawns. That helper writes to ``Path.home() / ".config/systemd/user
-    # /hermes-gateway.service"`` and runs ``systemctl --user daemon-reload``
-    # — both target the *real* user environment because the conftest only
-    # sandboxes ``HERMES_HOME``, not ``HOME``. Tests that drive
-    # ``run_gateway()`` end-to-end with a fake ``start_gateway`` MUST stub
-    # the refresh call too, or every run rewrites the developer's installed
-    # unit (baking in the test's pytest-tmp ``HERMES_HOME`` value, which
-    # systemd then uses on the next boot — silently breaking the gateway
-    # for the developer).
-    monkeypatch.setattr(gateway, "supports_systemd_services", lambda: False)
-    monkeypatch.setattr(
-        gateway, "refresh_systemd_unit_if_needed", lambda system=False: False
-    )
-    # Neutralize the supervised-gateway conflict guard by default so these
-    # end-to-end tests don't trip over a launchd/systemd gateway that happens
-    # to be installed+running on the developer's machine. Conflict-guard tests
-    # override this snapshot after calling the helper.
-    monkeypatch.setattr(
-        gateway,
-        "get_gateway_runtime_snapshot",
-        lambda *a, **k: gateway.GatewayRuntimeSnapshot(manager="manual process"),
-    )
-=======
 @pytest.fixture(autouse=True)
 def inert_task_scheduler_probe():
     """Tests that fake ``is_windows()`` send the reaper through ``_windows_scheduled_task_state``,
@@ -105,7 +34,6 @@ def inert_task_scheduler_probe():
     mp.setattr(gateway, "_windows_scheduled_task_state", lambda name: None)
     yield mp
     mp.undo()
->>>>>>> f97608f178
 
 
 def _run_native_windows_gateway_start_diag(

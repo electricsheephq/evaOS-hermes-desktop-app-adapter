@@ -97,19 +97,7 @@ class GatewayStartupMixin:
             event = queue.pop(0)
             try:
                 source = getattr(event, "source", None)
-<<<<<<< HEAD
-                adapter = self._adapter_for_source(source)
-||||||| 939e45c91d
-            source = getattr(event, "source", None)
-            adapter = self._adapter_for_source(source)
-            if adapter is None:
-                logger.debug(
-                    "Dropping startup-restore queued message: adapter unavailable for %s",
-                    getattr(getattr(source, "platform", None), "value", None),
-                )
-=======
                 adapter = self._intake_adapter_for(source)
->>>>>>> f97608f178
                 if adapter is None:
                     logger.debug(
                         "Dropping startup-restore queued message: adapter unavailable for %s",
@@ -1645,22 +1633,16 @@ class GatewayStartupMixin:
         self._wire_teams_pipeline_runtime()
         self._running = True
         self._install_plugin_message_injector()
-<<<<<<< HEAD
+        # A boot that could not start every configured platform is not a normal run: stamp ``degraded``
+        # so ``gateway status`` / /api/status / the health snapshot surface it, instead of only a log
+        # line next to "Gateway running with N platform(s)".
         self._update_runtime_status(
             "degraded" if (
                 connected_count == 0
                 and startup_nonretryable_errors
                 and not startup_retryable_errors
-            ) else "running"
+            ) else self._serving_state()
         )
-||||||| 939e45c91d
-        self._update_runtime_status("running")
-=======
-        # A boot that could not start every configured platform is not a normal run: stamp ``degraded``
-        # so ``gateway status`` / /api/status / the health snapshot surface it, instead of only a log
-        # line next to "Gateway running with N platform(s)".
-        self._update_runtime_status(self._serving_state())
->>>>>>> f97608f178
         await self._start_finish_wiring(connected_count)
         self._start_spawn_background_watchers()
         logger.info("Press Ctrl+C to stop")

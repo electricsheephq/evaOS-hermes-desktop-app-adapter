@@ -13,6 +13,9 @@ from unittest.mock import patch
 import pytest
 
 from gateway.platforms.base import SendResult
+# evaOS adaptation (r34): #321 carry — the gateway clarify timeout returns the canonical
+# TIMEOUT_RESPONSE guidance instead of upstream's "[user did not respond within Nm]".
+from tools.clarify_tool import TIMEOUT_RESPONSE
 
 
 class _CardAdapter:
@@ -91,7 +94,7 @@ def _run_clarify(adapter, answer=None, questions=None, answers=(), via_tool=Fals
 def test_timeout_retires_the_native_card_with_the_expired_notice():
     adapter = _CardAdapter()
     response, _labels = _run_clarify(adapter)
-    assert response.startswith("[user did not respond")
+    assert response == TIMEOUT_RESPONSE
     assert len(adapter.retired) == 1
     assert "expired" in adapter.retired[0][1].lower()
 
@@ -121,10 +124,10 @@ _THREE_QUESTIONS = [{"qid": f"q{i}", "question": q, "choices": ["a", "b"]}
 @pytest.mark.parametrize("answers,asked,payload,resumed", [
     # Nobody answers question 1: the batch ends there instead of re-asking — every further
     # question used to cost another full clarify_timeout — and reports the walk-away.
-    ((), ["One?"], {"answers": {}, "timed_out": True, "notice": "[user did not respond within 0m]"}, 0),
+    ((), ["One?"], {"answers": {}, "timed_out": True, "notice": TIMEOUT_RESPONSE}, 0),
     # Answers already given survive; the unanswered question is not invented.
     (("use postgres",), ["One?", "Two?"],
-     {"answers": {"q0": "use postgres"}, "timed_out": True, "notice": "[user did not respond within 0m]"}, 0),
+     {"answers": {"q0": "use postgres"}, "timed_out": True, "notice": TIMEOUT_RESPONSE}, 0),
     # A fully answered batch re-arms typing once, at the end: between two cards the re-arm
     # would only open a bubble the next question's boundary finalizes.
     (("one", "two", "three"), ["One?", "Two?", "Three?"],
@@ -149,7 +152,7 @@ class _UndeliverableAdapter(_CardAdapter):
 
 
 @pytest.mark.parametrize("adapter_cls,notice", [
-    (_CardAdapter, "[user did not respond within 0m]"),
+    (_CardAdapter, TIMEOUT_RESPONSE),
     # #112684: an undelivered card must not read as user inactivity — the delivery
     # sentinel rides along instead of being stored as the question's "answer".
     (_UndeliverableAdapter, "[clarify prompt could not be delivered]"),
