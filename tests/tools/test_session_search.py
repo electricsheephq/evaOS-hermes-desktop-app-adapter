@@ -16,6 +16,7 @@ import pytest
 
 from hermes_state import SessionDB
 from tools.session_search_tool import (
+    SESSION_SEARCH_SCHEMA,
     _format_timestamp,
     _is_compacted_message,
     _resolve_to_parent,
@@ -1532,7 +1533,6 @@ class TestNewResetLineageBrowse:
         assert "s_legacy_child" in sids
 
 
-<<<<<<< HEAD
 def test_managed_session_search_hides_sibling_profile(db, tmp_path, monkeypatch):
     from pathlib import Path
 
@@ -1571,8 +1571,8 @@ def test_managed_session_search_hides_sibling_profile(db, tmp_path, monkeypatch)
     assert "profile boundary marker" not in json.dumps(read)
 
     assert "profile" not in SESSION_SEARCH_SCHEMA["parameters"]["properties"]
-||||||| 939e45c91d
-=======
+
+
 def _unix(year, month, day):
     return int(datetime(year, month, day, tzinfo=timezone.utc).timestamp())
 
@@ -1662,4 +1662,3 @@ class TestDiscoverySessionExclusion:
         excluded = json.loads(session_search(
             query="unique lineage token alpha", limit=5, exclude_session_ids=["s_child"], db=db))
         assert not {r["session_id"] for r in excluded["results"]} & {"s_root", "s_child"}
->>>>>>> f97608f178

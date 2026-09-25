@@ -10,16 +10,10 @@ No LLM calls — every shape returns actual DB messages.
 
 import json
 import logging
-<<<<<<< HEAD
 import os
-from datetime import datetime
-||||||| 939e45c91d
-from datetime import datetime
-=======
 import re
 import time
 from datetime import datetime, timezone
->>>>>>> f97608f178
 from typing import Any, Dict, List, Optional, Union
 
 from hermes_state_common import _BOUNDARY_END_REASONS
@@ -367,24 +361,14 @@ def _hydrate_hit(db, lineage_root: str, match_info: Dict[str, Any], result_detai
 
 def _discover(db, query: str, role_filter: Optional[List[str]], limit: int, sort: Optional[str],
               detail: str, current_session_id: str = None, link_profile: str = None,
-<<<<<<< HEAD
-              routed_profile: Optional[str] = None) -> str:
-||||||| 939e45c91d
-              detail: str, current_session_id: str = None, link_profile: str = None) -> str:
-=======
+              routed_profile: Optional[str] = None,
               after_ts: Optional[int] = None, before_ts: Optional[int] = None,
               exclude_session_ids: Optional[List[str]] = None) -> str:
->>>>>>> f97608f178
     """Discovery shape: FTS5 plus adaptive or full result hydration."""
     current_lineage_root = _resolve_lineage(db, current_session_id) if current_session_id else None
-<<<<<<< HEAD
+    excluded_roots = _excluded_lineage_roots(db, exclude_session_ids or [])
     title_result = _title_match_result(
         db, query, current_lineage_root, routed_profile=routed_profile)
-||||||| 939e45c91d
-    title_result = _title_match_result(db, query, current_lineage_root)
-=======
-    excluded_roots = _excluded_lineage_roots(db, exclude_session_ids or [])
-    title_result = _title_match_result(db, query, current_lineage_root)
     # FTS rows are time-bounded in SQL (_search_filter_clauses); the title match bypasses that
     # query, so it is the one place the window is re-checked in Python.
     if title_result:
@@ -392,7 +376,6 @@ def _discover(db, query: str, role_filter: Optional[List[str]], limit: int, sort
         title_started = _coerce_started_ts((_get_session_meta(db, title_root) or _get_session_meta(db, title_sid)).get("started_at"))
         if {title_sid, title_root} & excluded_roots or not _in_time_window(title_started, after_ts, before_ts):
             title_result = None
->>>>>>> f97608f178
     raw_results, err = _loud(lambda: db.search_messages(
         query=query, role_filter=role_filter or ["user", "assistant"],
         exclude_sources=list(_HIDDEN_SESSION_SOURCES), limit=_DISCOVER_SCAN_LIMIT, offset=0, sort=sort,
@@ -422,14 +405,11 @@ def _discover(db, query: str, role_filter: Optional[List[str]], limit: int, sort
         if len(seen_sessions) >= limit:
             break
         raw_sid, resolved_sid = r["session_id"], _resolve_lineage(db, r["session_id"])
-<<<<<<< HEAD
         if routed_profile is not None and not _session_matches_profile(db, raw_sid, routed_profile):
             continue
         if routed_profile is not None and not _session_matches_profile(db, resolved_sid, routed_profile):
-||||||| 939e45c91d
-=======
+            continue
         if raw_sid in excluded_roots or resolved_sid in excluded_roots:
->>>>>>> f97608f178
             continue
         # Skip the current session lineage — UNLESS the hit's transcript has left live context. Three
         # sub-cases: Legacy compression rotation: the FTS hit lives in a session that itself ended with
@@ -706,13 +686,8 @@ def _scroll(db, session_id: str, around_message_id: int, window: int = 5,
 
 def _dispatch(query, role_filter, limit, db, current_session_id, session_id,
               around_message_id, window, sort, profile, detail, owned_dbs,
-<<<<<<< HEAD
+              after=None, before=None, exclude_session_ids=None,
               trusted_cross_profile: bool = False) -> str:
-||||||| 939e45c91d
-              around_message_id, window, sort, profile, detail, owned_dbs) -> str:
-=======
-              after=None, before=None, exclude_session_ids=None) -> str:
->>>>>>> f97608f178
     """Mode dispatch (see module docstring); scroll wins when an anchor is set.
     Profile DBs opened here are appended to *owned_dbs* for the caller to close."""
     # A raw `@session:<profile>/<id>` link as session_id: ids never contain "/", so
@@ -798,39 +773,20 @@ def _dispatch(query, role_filter, limit, db, current_session_id, session_id,
         db=db, query=query.strip(), limit=limit, sort=sort_norm if sort_norm in ("newest", "oldest") else None,
         role_filter=([r.strip() for r in role_filter.split(",") if r.strip()] or None) if isinstance(role_filter, str) else None,
         detail="full" if isinstance(detail, str) and detail.strip().lower() == "full" else "adaptive",
-<<<<<<< HEAD
         current_session_id=current_session_id,
         link_profile=profile or routed_profile,
-        routed_profile=routed_profile)
-||||||| 939e45c91d
-        current_session_id=current_session_id, link_profile=profile)
-=======
-        current_session_id=current_session_id, link_profile=profile, after_ts=after_ts, before_ts=before_ts,
+        routed_profile=routed_profile, after_ts=after_ts, before_ts=before_ts,
         exclude_session_ids=_normalize_exclude_session_ids(exclude_session_ids))
->>>>>>> f97608f178
 
 
-<<<<<<< HEAD
 def _run_session_search(
     query: str = "", role_filter: str = None, limit: int = 3, db=None,
     current_session_id: str = None, session_id: str = None, around_message_id: int = None,
     window: int = 5, sort: str = None, profile: str = None, detail: str = "adaptive",
+    after: str = None, before: str = None, exclude_session_ids: Optional[List[str]] = None,
     *, trusted_cross_profile: bool,
 ) -> str:
     """Run session search and close databases opened by this invocation."""
-||||||| 939e45c91d
-def session_search(query: str = "", role_filter: str = None, limit: int = 3, db=None,
-                   current_session_id: str = None, session_id: str = None, around_message_id: int = None,
-                   window: int = 5, sort: str = None, profile: str = None, detail: str = "adaptive") -> str:
-    """Run session search, closing DBs opened here. Positional order is frozen for old callers."""
-=======
-def session_search(query: str = "", role_filter: str = None, limit: int = 3, db=None,
-                   current_session_id: str = None, session_id: str = None, around_message_id: int = None,
-                   window: int = 5, sort: str = None, profile: str = None, detail: str = "adaptive",
-                   after: str = None, before: str = None, exclude_session_ids: Optional[List[str]] = None) -> str:
-    """Run session search, closing DBs opened here. Positional order is frozen for old callers;
-    new parameters are appended after ``detail``."""
->>>>>>> f97608f178
     from hermes_state import format_session_db_unavailable
     from hermes_state_registry import acquire, release_or_close
     owned_dbs: List[Any] = []
@@ -840,19 +796,11 @@ def session_search(query: str = "", role_filter: str = None, limit: int = 3, db=
             return tool_error(format_session_db_unavailable(), success=False)
         owned_dbs.append(db)
     try:
-<<<<<<< HEAD
         return _dispatch(
             query, role_filter, limit, db, current_session_id, session_id,
             around_message_id, window, sort, profile, detail, owned_dbs,
+            after=after, before=before, exclude_session_ids=exclude_session_ids,
             trusted_cross_profile=trusted_cross_profile)
-||||||| 939e45c91d
-        return _dispatch(query, role_filter, limit, db, current_session_id, session_id,
-                         around_message_id, window, sort, profile, detail, owned_dbs)
-=======
-        return _dispatch(query, role_filter, limit, db, current_session_id, session_id,
-                         around_message_id, window, sort, profile, detail, owned_dbs,
-                         after=after, before=before, exclude_session_ids=exclude_session_ids)
->>>>>>> f97608f178
     finally:
         for owned_db in reversed(owned_dbs):
             _quiet(lambda: release_or_close(owned_db), None, "Failed to close session_search SessionDB")
@@ -862,28 +810,32 @@ def session_search(
     query: str = "", role_filter: str = None, limit: int = 3, db=None,
     current_session_id: str = None, session_id: str = None, around_message_id: int = None,
     window: int = 5, sort: str = None, profile: str = None,
-    detail: str = "adaptive",
+    detail: str = "adaptive", after: str = None, before: str = None,
+    exclude_session_ids: Optional[List[str]] = None,
 ) -> str:
     """Run profile-local, agent-facing session search."""
     return _run_session_search(
         query=query, role_filter=role_filter, limit=limit, db=db,
         current_session_id=current_session_id, session_id=session_id,
         around_message_id=around_message_id, window=window, sort=sort,
-        profile=profile, detail=detail, trusted_cross_profile=False)
+        profile=profile, detail=detail, after=after, before=before,
+        exclude_session_ids=exclude_session_ids, trusted_cross_profile=False)
 
 
 def session_search_trusted(
     query: str = "", role_filter: str = None, limit: int = 3, db=None,
     current_session_id: str = None, session_id: str = None, around_message_id: int = None,
     window: int = 5, sort: str = None, profile: str = None,
-    detail: str = "adaptive",
+    detail: str = "adaptive", after: str = None, before: str = None,
+    exclude_session_ids: Optional[List[str]] = None,
 ) -> str:
     """Explicit non-agent boundary for authorized cross-profile reads."""
     return _run_session_search(
         query=query, role_filter=role_filter, limit=limit, db=db,
         current_session_id=current_session_id, session_id=session_id,
         around_message_id=around_message_id, window=window, sort=sort,
-        profile=profile, detail=detail, trusted_cross_profile=True)
+        profile=profile, detail=detail, after=after, before=before,
+        exclude_session_ids=exclude_session_ids, trusted_cross_profile=True)
 
 
 def check_session_search_requirements() -> bool:
