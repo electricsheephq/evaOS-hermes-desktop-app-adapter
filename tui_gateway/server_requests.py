@@ -36,6 +36,10 @@ import time
 import uuid
 from typing import Any, Callable
 
+# ---- BEGIN EVAOS-LEGACY-PROMPT-SHIM (rs35: delete; docs/r34-managed-delta.md) ----
+from tui_gateway import legacy_prompt_shim as _legacy_prompt_shim
+# ---- END EVAOS-LEGACY-PROMPT-SHIM ----
+
 logger = logging.getLogger(__name__)
 
 
@@ -117,6 +121,10 @@ def answers_requests(transport: Any) -> bool:
 def _unanswerable(method: str, sid: str) -> bool:
     if _answerable(sid):
         return False
+    # ---- BEGIN EVAOS-LEGACY-PROMPT-SHIM (rs35: delete; docs/r34-managed-delta.md) ----
+    if _legacy_prompt_shim.legacy_prompt_covers(method):
+        return False  # a pre-es.10 client answers through the shim's legacy twin
+    # ---- END EVAOS-LEGACY-PROMPT-SHIM ----
     logger.info("server request %s for %s not sent: the attached client predates server→client requests "
                 "(update the Hermes app)", method, sid)
     return True

@@ -12,6 +12,7 @@ from .common import (OpenModel, PendingApproval, ProfileParams, SessionLiveInfo,
                      Usage)
 from .connectors_operation import ConnectionRequestPayload
 from .registry import method
+from .server_requests import ClarifyQuestion  # EVAOS-LEGACY-PROMPT-SHIM (rs35: delete)
 
 
 # ── shared live-session snapshot ──────────────────────────────────────────────────────────────
@@ -24,6 +25,20 @@ class OpenRequestEntry(Result):
     id: str
     method: str
     params: dict[str, JsonValue]
+
+
+# ---- BEGIN EVAOS-LEGACY-PROMPT-SHIM (rs35: delete; docs/r34-managed-delta.md) ----
+class LegacyPendingClarify(Result):
+    """``legacy_prompt_shim._legacy_prompt_snapshot``: the open clarify in the pre-es.10 ``clarify.request``
+    shape (``request_id`` = the server request id); a batch carries the answers locked so far."""
+
+    request_id: str
+    question: str | None = None
+    choices: list[str] | None = None
+    multi_select: bool | None = None
+    questions: list[ClarifyQuestion] | None = None
+    answers: dict[str, str] | None = None
+# ---- END EVAOS-LEGACY-PROMPT-SHIM ----
 
 
 class InflightTurn(Result):
@@ -91,6 +106,7 @@ class LiveSessionSnapshot(Result):
     queued: QueuedPrompt | None = None
     pending_approval: PendingApproval | None = None
     open_requests: list[OpenRequestEntry] | None = None
+    pending_clarify: LegacyPendingClarify | None = None  # EVAOS-LEGACY-PROMPT-SHIM (rs35: delete)
     # The open connection operation (``tools/connectors/live.current``) as its ``connection.request``
     # payload: the card restores with the server's deadline after a reconnect or restart.
     pending_connection: ConnectionRequestPayload | None = None

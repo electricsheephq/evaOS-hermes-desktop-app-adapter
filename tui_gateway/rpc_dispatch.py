@@ -19,6 +19,10 @@ def _handle_admitted_request(req: dict) -> dict | None:
     if isinstance(normalized, dict):
         return normalized
     rid, method, params = normalized
+    # ---- BEGIN EVAOS-LEGACY-PROMPT-SHIM (rs35: delete; docs/r34-managed-delta.md) ----
+    if (legacy := _legacy_prompt_respond(rid, method, params)) is not None:
+        return legacy
+    # ---- END EVAOS-LEGACY-PROMPT-SHIM ----
     if not (fn := _methods.get(method)):
         return _err(rid, -32601, f"unknown method: {method} — the client and the Hermes backend are out of sync "
                     "(different versions); run `hermes update` and restart both")
