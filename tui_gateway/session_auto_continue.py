@@ -93,6 +93,7 @@ def _maybe_schedule_auto_continue(sid: str, session: dict, session_key: str) -> 
                 session["_auto_continue_scheduled"] = False  # a real user prompt beat us; it clears the marker
                 return
             session["running"] = True
+            session["_turn_requester_transport"] = None  # evaOS (RE-7): no client prompt, no requester
             session["last_active"] = time.time()
         # Ownership admission BEFORE message.start: a sibling backend sharing this HERMES_HOME may have written the
         # marker and still be mid-turn. Leave the marker so a later resume retries.
@@ -307,6 +308,9 @@ def _drain_queued_prompt(rid, sid: str, session: dict) -> bool:
         # prompt still runs, only the dead pin is dropped.
         if queued_transport is not None and not _transport_is_dead(queued_transport):
             _attach_session_transport(session, queued_transport)
+        # evaOS (RE-7): the queuer is the drained turn's requester (none when its peer is gone).
+        session["_turn_requester_transport"] = (
+            queued_transport if queued_transport is not None and not _transport_is_dead(queued_transport) else None)
     use_compute_host = _session_uses_compute_host(session)
     with session["history_lock"]:
         if int(session.get("_queued_prompt_generation", 0)) != queue_generation:

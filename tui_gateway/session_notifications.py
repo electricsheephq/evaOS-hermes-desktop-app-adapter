@@ -151,6 +151,7 @@ def _notif_claim_turn(session: dict) -> bool:
         if not admitted or session.get("running"):
             return False
         session["running"] = True
+        session["_turn_requester_transport"] = None  # evaOS (RE-7): no client prompt, no requester
         return True
 
 
@@ -626,6 +627,7 @@ def _poll_bot_live_delivery_once(sid: str, session: dict) -> bool:
         if claimed is None:
             return False
         session["running"] = True
+        session["_turn_requester_transport"] = None  # evaOS (RE-7): no client prompt, no requester
 
     delivery_id = str(claimed["id"])
 

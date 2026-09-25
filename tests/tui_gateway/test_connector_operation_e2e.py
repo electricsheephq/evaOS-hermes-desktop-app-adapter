@@ -141,8 +141,11 @@ def owned_session(monkeypatch, tmp_path):
             "attached_images": [],
             "source": "desktop",
             # evaOS adaptation (r34, RE-7): connection.request is gated at Desktop UI protocol 2 on the
-            # requesting viewer; a real Desktop session stores the protocol it negotiated.
+            # requesting viewer; a real Desktop session stores the protocol it negotiated ...
             "desktop_ui_protocol": 2,
+            # ... and the card goes only to the viewer whose prompt started the turn (its own protocol).
+            "viewers": {owner.transport: {"attached_at": 0.0, "source": "desktop", "desktop_ui_protocol": 2}},
+            "_turn_requester_transport": owner.transport,
         }
         monkeypatch.setitem(server._sessions, SID, session)
         yield owner, stranger

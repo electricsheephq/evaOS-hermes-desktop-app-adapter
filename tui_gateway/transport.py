@@ -237,6 +237,13 @@ class FanoutTransport:
                 return
 
     def write(self, obj: dict) -> bool:
+        return self._admit(obj)
+
+    def write_to(self, transport: Transport, obj: dict) -> bool:
+        """evaOS: queue ``obj`` on ONE attached peer's mailbox only (its ordering kept, no other peer sees it)."""
+        return self._admit(obj, only=transport)
+
+    def _admit(self, obj: dict, only: Transport | None = None) -> bool:
         # Freeze the queued frame so a caller cannot mutate it after admission. Same serialization
         # guard as the single-peer transports: an unserializable frame reaches every peer as -32603.
         encoded = serialize_frame(obj, "fanout", logger)
@@ -244,7 +251,7 @@ class FanoutTransport:
         frame = json.loads(encoded)
         with self._lock:
             for peer in list(self._peers):
-                if not peer.attached:
+                if not peer.attached or (only is not None and peer.transport is not only):
                     continue
                 if (len(peer.pending) >= self._MAX_PENDING_FRAMES
                         or peer.pending_bytes + size > self._MAX_PENDING_BYTES):
@@ -257,7 +264,7 @@ class FanoutTransport:
                     peer.writing = True
                     threading.Thread(target=self._drain, args=(peer,),
                                      name="tui-fanout", daemon=True).start()
-            return any(peer.attached for peer in self._peers)
+            return any(peer.attached and (only is None or peer.transport is only) for peer in self._peers)
 
     def close(self) -> None:
         """Detach without closing sockets owned by the connection handlers."""

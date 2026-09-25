@@ -445,6 +445,7 @@ def _run_post_turn_followups(
             if not admitted or session.get("running"):
                 return  # user already sent something — their turn wins
             session["running"] = True
+            session["_turn_requester_transport"] = None  # evaOS (RE-7): no client prompt, no requester
         _dispatch_followup_turn(rid, sid, session, goal_followup, "goal continuation dispatch")
     # Safety net for completion events that arrived mid-turn.  Ownership is positive-proof
     # and compression-chain aware (same fail-closed gate as the poller): session B must

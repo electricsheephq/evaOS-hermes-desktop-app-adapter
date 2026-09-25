@@ -660,6 +660,8 @@ def _(rid, params: dict) -> dict:
         rid, sid, session, text, params, has_truncation, requested_rebind_ids, hosted_task, display_kind)
     if err is not None:
         return err
+    # evaOS (RE-7): the viewer whose prompt claimed this turn; requester-only cards route to it.
+    session["_turn_requester_transport"] = t
     if turn_isolation:
         if turn_author:
             logger.debug("isolated compute turns carry no author yet; the turn from %s runs unattributed",

@@ -2109,6 +2109,50 @@ def _desktop_ui_request(sid: str, tool_name: str, required_protocol: int, reques
     return result
 
 
+class _FanoutPeerRoute:
+    """evaOS (RE-7): a write target that is one peer's mailbox inside a session fanout."""
+
+    def __init__(self, fanout: FanoutTransport, peer: Transport) -> None:
+        self._fanout, self._peer = fanout, peer
+
+    def write(self, frame: dict) -> bool:
+        return self._fanout.write_to(self._peer, frame)
+
+
+def _desktop_ui_emit_to_requester(sid: str, event: str, payload: dict) -> bool:
+    """evaOS (RE-7): deliver a card only to the viewer whose prompt started the running turn.
+
+    The requester is ``_turn_requester_transport`` (set where a turn is claimed from a client prompt). It must
+    still be attached to the session and must itself have negotiated the event's Desktop UI protocol. The
+    frame goes to that peer's own mailbox, never through the session fanout. No resolvable requester: the
+    card is refused, as the protocol guard refuses it.
+    """
+    required, tool_name = _DESKTOP_UI_EVENT_REQUIREMENTS[event]
+    with _sessions_lock:
+        session = _sessions.get(sid)
+    session = session if isinstance(session, dict) else {}
+    requester = session.get("_turn_requester_transport")
+    viewer = (session.get("viewers") or {}).get(requester) if requester is not None else None
+    protocol = viewer.get("desktop_ui_protocol") if isinstance(viewer, dict) else None
+    protocol = protocol if type(protocol) is int else 0
+    route = session.get("transport")
+    if isinstance(route, FanoutTransport) and route.contains(requester):
+        target = _FanoutPeerRoute(route, requester)
+    elif requester is not None and route is requester:
+        target = requester
+    else:
+        target = None
+    if (target is None or protocol < required or viewer.get("source") != "desktop"
+            or _transport_is_dead(requester)):
+        _log_desktop_ui_lifecycle(sid, tool_name, "protocol_blocked", required_protocol=required,
+                                  negotiated_protocol=protocol)
+        return False
+    dispatched = _emit(event, sid, payload, transport=target) is not False
+    _log_desktop_ui_lifecycle(sid, tool_name, "dispatched" if dispatched else "transport_unavailable",
+                              required_protocol=required, negotiated_protocol=protocol)
+    return dispatched
+
+
 def _desktop_ui_emit(sid: str, event: str, payload: dict) -> bool:
     """Guard the final fire-and-forget renderer write and record its outcome."""
     attachment = _desktop_ui_attachment_for_session(sid)
