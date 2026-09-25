@@ -102,7 +102,8 @@ def browser_live_view(session: str = "", task_id: Optional[str] = None) -> str:
         restore_activity()
         code = str(getattr(exc, "code", "browser_live_view_failed"))
         status = getattr(exc, "status_code", None)
-        if code == "browser_session_not_found":
+        session_not_found = code == "browser_session_not_found" or status == 404
+        if session_not_found:
             from tools import browser_tool_lifecycle
 
             with browser_tool._cleanup_lock:
@@ -113,11 +114,14 @@ def browser_live_view(session: str = "", task_id: Optional[str] = None) -> str:
                 )
             if should_cleanup:
                 browser_tool_lifecycle._cleanup_single_browser_session(key)
-        message = {
-            "browser_session_not_found": "The Browserbase session no longer exists.",
-            "browser_capacity": "browser capacity reached — retry shortly",
-            "browser_unavailable": "Browserbase live view is temporarily unavailable — retry shortly.",
-        }.get(code, f"Browserbase live view failed (code: {code}).")
+        message = (
+            "The Browserbase session no longer exists."
+            if session_not_found
+            else {
+                "browser_capacity": "browser capacity reached — retry shortly",
+                "browser_unavailable": "Browserbase live view is temporarily unavailable — retry shortly.",
+            }.get(code, f"Browserbase live view failed (code: {code}).")
+        )
         return tool_error(
             message,
             code=code,
