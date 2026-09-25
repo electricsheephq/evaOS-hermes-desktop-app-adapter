@@ -157,6 +157,11 @@ jobs:
           source .venv/bin/activate
           scripts/run_tests.sh --files '${{ matrix.slice.files }}'
         env:
+          # r34: upstream v2026.9.24 roughly triples per-test setup in the agent suites
+          # (tests/agent/test_run_agent.py, test_error_classifier.py; identical on the raw tag),
+          # and a relocated file has no duration-cache entry for the timeout scaler, so the
+          # flat 300s cap SIGKILLs it on 4-vCPU runners. Upstream runs these on 96-core runners.
+          HERMES_TEST_FILE_TIMEOUT: "600"
           # Ensure tests don't accidentally call real APIs
           OPENROUTER_API_KEY: ""
           OPENAI_API_KEY: ""
