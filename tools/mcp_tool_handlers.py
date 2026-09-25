@@ -6,7 +6,6 @@ import asyncio
 import contextvars
 import inspect
 import json
-import os
 import time
 from contextlib import asynccontextmanager
 from functools import partial
@@ -16,9 +15,6 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from hermes_platform import declaration
 from tools.registry import invalidate_check_fn_cache, tool_error
 from tools.ansi_strip import strip_unicode_tags
-from tools import approval_context as _approval_context
-from tools import approval_prompt as _approval_prompt
-from tools import approval_smart as _approval_smart
 from tools.mcp_tool_common import _exc_str, _sanitize_error, mcp_field, _core
 from tools import mcp_tool_loop as _loop
 from tools.mcp_tool_content import (
@@ -60,51 +56,6 @@ def _tool_is_read_only(server_name: str, tool_name: str) -> bool:
     return _core._tool_read_only_hints.get(_resolve_server_key(server_name), {}).get(tool_name) is True
 
 
-<<<<<<< HEAD
-def _canonical_home(value: Any) -> str:
-    return os.path.realpath(os.path.expanduser(str(value)))
-
-
-def _mcp_approval_home(server_name: str, *, state_key=None,
-                       registration_home: Optional[str] = None) -> Optional[str]:
-    """Resolve the profile that owns one MCP approval request.
-
-    A captured state key is authoritative. Otherwise use the server's registration
-    home, a unique metadata owner, or the current home outside multiplex mode. An
-    ambiguous multiplex owner fails closed before any prompt or transport work.
-    """
-    if isinstance(state_key, tuple):
-        return state_key[0]
-    if registration_home:
-        return _canonical_home(registration_home)
-
-    from agent.secret_scope import is_multiplex_active
-    multiplex = is_multiplex_active()
-    lookup_key = state_key if state_key is not None else _core._server_state_key(server_name)
-    with _core._lock:
-        server = _core._servers.get(lookup_key)
-        if server is None and not multiplex:
-            server = _core._servers.get(server_name)
-        server_home = getattr(server, "registration_home", None)
-        if server_home:
-            return _canonical_home(server_home)
-        profile_homes = set()
-        for owner_map in (_core._servers, _core._lazy_server_configs,
-                          _core._tool_read_only_hints):
-            for key in owner_map:
-                if isinstance(key, tuple) and len(key) == 2 and key[1] == server_name:
-                    profile_homes.add(key[0])
-    if len(profile_homes) == 1:
-        return next(iter(profile_homes))
-
-    if multiplex:
-||||||| 939e45c91d
-def _trust_gate_check(server_name: str, tool_name: str) -> Optional[str]:
-    """Approval gate for write-capable tools on ``trust: untrusted`` servers. None to proceed,
-    else a ``tool_error``. Fail-closed: approval-system errors block."""
-    if (_core._server_trust_levels.get(server_name, _core._TRUST_FULL) != _core._TRUST_UNTRUSTED
-            or _core._tool_read_only_hints.get(server_name, {}).get(tool_name) is True):
-=======
 def _trust_gate_check(server_name: str, tool_name: str) -> Optional[str]:
     """Approval gate for write-capable tools on ``trust: untrusted`` servers. None to proceed,
     else a ``tool_error``. Fail-closed: approval-system errors block."""
@@ -112,16 +63,10 @@ def _trust_gate_check(server_name: str, tool_name: str) -> Optional[str]:
     # Trust is the calling profile's own policy (an adopter of a shared connection keeps its own tier).
     trust = _core._server_trust_levels.get(_server_key(server_name), _core._TRUST_FULL)
     if trust != _core._TRUST_UNTRUSTED or _tool_is_read_only(server_name, tool_name):
->>>>>>> f97608f178
         return None
-    from hermes_constants import get_hermes_home
-    return _canonical_home(get_hermes_home())
-
-
-def _trust_prompt(server_name: str, tool_name: str) -> Optional[str]:
-    """Keep the current upstream trust-tier prompt for explicitly untrusted servers."""
-    try:
-        answer = _approval_prompt.request_elicitation_consent(
+    try:  # lazy: tools.approval routes the prompt to whichever surface owns the session
+        from tools.approval_prompt import request_elicitation_consent
+        answer = request_elicitation_consent(
             f"MCP tool '{tool_name}' on UNTRUSTED server '{server_name}' wants to run. This tool is write-capable "
             f"(no readOnlyHint=true annotation) and may modify external state.",
             f"Server '{server_name}' is configured 'trust: untrusted'. "
@@ -139,153 +84,11 @@ def _trust_prompt(server_name: str, tool_name: str) -> Optional[str]:
                       f"'{server_name}'. The command was NOT run. Do not retry without explicit user direction.")
 
 
-def _native_mcp_approval(server_name: str, tool_name: str, args: Optional[dict],
-                         trust: str) -> Optional[str]:
-    """Apply the released native mode/yolo approval contract to one write call."""
-    from agent.redact import redact_sensitive_text
-    from tools import approval
-
-    # Explicit trust-tier protection remains in force when mode=off or session yolo
-    # would otherwise bypass the native approval path.
-    if approval.is_approval_bypass_active():
-        return _trust_prompt(server_name, tool_name) if trust == _core._TRUST_UNTRUSTED else None
-
-    sensitive_keys = {
-        "authorization", "proxy-authorization", "access_token", "refresh_token", "id_token",
-        "token", "api_key", "apikey", "client_secret", "password", "passwd", "auth", "jwt",
-        "secret", "private_key", "key", "credential", "credentials",
-    }
-    normalized_sensitive_keys = {item.replace("-", "_") for item in sensitive_keys}
-
-    def _approval_safe(value: Any, key: str = "") -> Any:
-        normalized_key = key.strip().lower().replace("-", "_")
-        if (normalized_key in normalized_sensitive_keys
-                or normalized_key.endswith(("_token", "_secret", "_password", "_credential"))):
-            return "«redacted-secret»"
-        if isinstance(value, dict):
-            return {str(child_key): _approval_safe(child_value, str(child_key))
-                    for child_key, child_value in value.items()}
-        if isinstance(value, (list, tuple)):
-            return [_approval_safe(item) for item in value]
-        if isinstance(value, str):
-            return redact_sensitive_text(value, force=True, redact_url_credentials=True)
-        return value
-
-    try:
-        encoded_args = json.dumps(
-            _approval_safe(args if isinstance(args, dict) else {}),
-            ensure_ascii=False, sort_keys=True, default=str,
-        )
-    except Exception:
-        encoded_args = "{}"
-    display_target = redact_sensitive_text(
-        f"MCP {server_name}.{tool_name}\narguments: {encoded_args}",
-        force=True, redact_url_credentials=True,
-    )
-    description = (
-        f"MCP tool '{tool_name}' on server '{server_name}' can modify external state because "
-        "readOnlyHint=true was not supplied."
-    )
-
-    if _approval_context._get_approval_mode() == "smart":
-        verdict = _approval_smart._smart_approve(display_target, description)
-        if verdict == "approve":
-            return None
-        if verdict == "deny":
-            return tool_error(
-                f"MCP tool '{tool_name}' on server '{server_name}' was BLOCKED by smart approval. "
-                "The RPC was NOT sent. Do not retry without explicit user direction."
-            )
-
-    try:
-        answer = _approval_prompt.request_elicitation_consent(
-            display_target, description, surface=f"mcp-tool/{server_name}"
-        )
-    except Exception as exc:
-        logger.error("MCP native approval failed for %s.%s: %s", server_name, tool_name, exc, exc_info=True)
-        return tool_error(f"MCP tool '{tool_name}' on server '{server_name}' was blocked: the approval system "
-                          "was unavailable (fail-closed).")
-    if answer == "accept":
-        return None
-    return tool_error(
-        f"The user did not approve MCP tool '{tool_name}' on server '{server_name}'. The RPC was NOT sent. "
-        "Do not retry without explicit user direction."
-    )
-
-
-def _lookup_mcp_metadata(server_name: str, state_key,
-                         registration_home: Optional[str]):
-    """Find discovery metadata, including a unique owner when the active home is unknown."""
-    from agent.secret_scope import is_multiplex_active
-    multiplex = is_multiplex_active()
-    key = state_key if state_key is not None else _core._server_state_key(server_name, registration_home)
-    with _core._lock:
-        hints = _core._tool_read_only_hints.get(key)
-        if hints is None and key != server_name and not multiplex:
-            hints = _core._tool_read_only_hints.get(server_name)
-        if hints is None and state_key is None and multiplex:
-            matches = [
-                (candidate, value)
-                for candidate, value in _core._tool_read_only_hints.items()
-                if isinstance(candidate, tuple) and len(candidate) == 2 and candidate[1] == server_name
-            ]
-            if len(matches) == 1:
-                key, hints = matches[0]
-            elif len(matches) > 1:
-                return key, None, _core._TRUST_FULL, True
-        trust = _core._server_trust_levels.get(key)
-        if trust is None and key != server_name and not multiplex:
-            trust = _core._server_trust_levels.get(server_name)
-    return key, hints, trust or _core._TRUST_FULL, False
-
-
-def _trust_gate_check(server_name: str, tool_name: str, args: Optional[dict] = None,
-                      state_key=None, registration_home: Optional[str] = None) -> Optional[str]:
-    """Run profile-owned native approval, retaining the explicit upstream trust gate."""
-    state_key, hints, trust, ambiguous = _lookup_mcp_metadata(
-        server_name, state_key, registration_home,
-    )
-    if ambiguous:
-        return tool_error(
-            f"MCP tool '{tool_name}' was blocked because its profile approval scope could not be resolved"
-        )
-    metadata_present = hints is not None
-    read_only = (hints or {}).get(tool_name) is True
-    if read_only:
-        return None
-
-    # Preserve the upstream trust-only path for callers with no discovery metadata
-    # (and therefore no released approval owner to resolve).
-    if not metadata_present:
-        return _trust_prompt(server_name, tool_name) if trust == _core._TRUST_UNTRUSTED else None
-
-    approval_home = _mcp_approval_home(
-        server_name, state_key=state_key, registration_home=registration_home,
-    )
-    if approval_home is None:
-        return tool_error(
-            f"MCP tool '{tool_name}' was blocked because its profile approval scope could not be resolved"
-        )
-    from hermes_constants import reset_hermes_home_override, set_hermes_home_override
-    token = set_hermes_home_override(approval_home)
-    try:
-        return _native_mcp_approval(server_name, tool_name, args, trust)
-    finally:
-        reset_hermes_home_override(token)
-
-
-def _check_circuit_breaker(server_name: str, state_key=None) -> Optional[str]:
+def _check_circuit_breaker(server_name: str) -> Optional[str]:
     """Open-breaker error, or None when calls may proceed. After the cooldown the breaker is
     half-open: the next call probes; success resets, failure re-bumps and re-arms the cooldown."""
-<<<<<<< HEAD
-    key = state_key if state_key is not None else _core._server_state_key(server_name)
-||||||| 939e45c91d
-    failures = _core._server_error_counts.get(server_name, 0)
-    age = time.monotonic() - _core._server_breaker_opened_at.get(server_name, 0.0)
-=======
     from tools.mcp_tool_scope import _resolve_server_key
     key = _resolve_server_key(server_name)
->>>>>>> f97608f178
     failures = _core._server_error_counts.get(key, 0)
     age = time.monotonic() - _core._server_breaker_opened_at.get(key, 0.0)
     if failures < _core._CIRCUIT_BREAKER_THRESHOLD or age >= _core._CIRCUIT_BREAKER_COOLDOWN_SEC:
@@ -302,17 +105,12 @@ def _check_circuit_breaker(server_name: str, state_key=None) -> Optional[str]:
                       f"this tool yet — use alternative approaches or ask the user to check the MCP server.")
 
 
-def _acquire_call_server(server_name: str, tool_timeout: float, state_key=None):
+def _acquire_call_server(server_name: str, tool_timeout: float):
     """``(server, None)`` when a call may be dispatched, else ``(None, error)``. No session: a
     reconnect may be completing, so wait briefly before a breaker strike; still down -> ask the
     server task to rebuild (probing a dead transport would re-arm the breaker forever)."""
     from tools import mcp_tool_discovery as _discovery  # lazy: discovery -> registration -> handlers cycle
     not_connected = tool_error(f"MCP server '{server_name}' is not connected")
-<<<<<<< HEAD
-    server = _discovery._get_connected_server_for_call(server_name, state_key)
-||||||| 939e45c91d
-    server = _discovery._get_connected_server_for_call(server_name)
-=======
     from tools.mcp_liveness import unavailable_details
     details = unavailable_details(server_name)
     if details is not None:
@@ -330,11 +128,10 @@ def _acquire_call_server(server_name: str, tool_timeout: float, state_key=None):
             retry=current.retry,
         )
     server = _discovery._get_connected_server_for_call(server_name)
->>>>>>> f97608f178
     wait = min(5.0, float(tool_timeout or 5.0))
     if server and (server.session or _loop._wait_for_server_session_ready(server, timeout=wait)):
         return server, None
-    _core._bump_server_error(server_name, state_key)
+    _core._bump_server_error(server_name)
     if server and _loop._signal_reconnect(server):
         return None, tool_error(f"MCP server '{server_name}' transport is down; reconnect requested. Do NOT retry this "
                                 f"tool immediately — give it a few seconds to come back.")
@@ -349,15 +146,6 @@ def _result_is_error(result) -> bool:
         return False
 
 
-<<<<<<< HEAD
-def _record_call_outcome(server_name: str, result, state_key=None) -> Any:
-    """Breaker bookkeeping: an error payload from the tool itself still counts as a strike."""
-    (_core._bump_server_error if _result_is_error(result) else _core._reset_server_error)(server_name, state_key)
-||||||| 939e45c91d
-def _record_call_outcome(server_name: str, result) -> Any:
-    """Breaker bookkeeping: an error payload from the tool itself still counts as a strike."""
-    (_core._bump_server_error if _result_is_error(result) else _core._reset_server_error)(server_name)
-=======
 def _record_call_outcome(server_name: str, result) -> Any:
     """Breaker bookkeeping: an error payload from the tool itself still counts as a strike (#10447),
     flagged as an application error so the open-breaker message stays truthful."""
@@ -365,13 +153,12 @@ def _record_call_outcome(server_name: str, result) -> Any:
         _core._bump_server_error(server_name, application=True)
     else:
         _core._reset_server_error(server_name)
->>>>>>> f97608f178
     return result
 
 
-def _strike(server_name: str, message: str, state_key=None, **extra) -> str:
+def _strike(server_name: str, message: str, **extra) -> str:
     """Breaker strike + the ``tool_error`` payload for *message*."""
-    _core._bump_server_error(server_name, state_key)
+    _core._bump_server_error(server_name)
     return tool_error(message, **extra)
 
 
@@ -379,59 +166,29 @@ def _mcp_loop_running() -> bool:
     return _core._mcp_loop is not None and _core._mcp_loop.is_running()
 
 
-def _lookup_reconnectable_server(server_name: str, require_loop: bool = False, state_key=None):
+def _lookup_reconnectable_server(server_name: str, require_loop: bool = False):
     """The registered server object when it can be signalled to reconnect, else None.
     With *require_loop*, also None unless the MCP loop is running (nothing to wait on)."""
     from tools.mcp_tool_scope import _resolve_server_key
     with _core._lock:
-<<<<<<< HEAD
-        key = state_key if state_key is not None else _core._server_state_key(server_name)
-        srv = _core._servers.get(key)
-||||||| 939e45c91d
-        srv = _core._servers.get(server_name)
-=======
         srv = _core._servers.get(_resolve_server_key(server_name))
->>>>>>> f97608f178
     ok = srv is not None and hasattr(srv, "_reconnect_event") and (_mcp_loop_running() or not require_loop)
     return srv if ok else None
 
 
-<<<<<<< HEAD
-def _retry_once(server_name: str, retry_call, op_description: str, what: str, state_key=None):
-    """Re-run ``retry_call`` after a recovery step. Returns the result (closing the breaker)
-    when it is not an error payload; None when the retry raised or errored (caller falls through)."""
-||||||| 939e45c91d
-def _retry_once(server_name: str, retry_call, op_description: str, what: str):
-    """Re-run ``retry_call`` after a recovery step. Returns the result (closing the breaker)
-    when it is not an error payload; None when the retry raised or errored (caller falls through)."""
-=======
 def _retry_once(server_name: str, retry_call, op_description: str, what: str):
     """Re-run ``retry_call`` after a recovery step. Returns the result when the RPC completed
     (an application error is still the tool's real answer, and still a breaker strike per #10447);
     None when the retry raised (caller falls through)."""
->>>>>>> f97608f178
     try:
         result = retry_call()
     except Exception as retry_exc:
         logger.warning("MCP %s/%s retry after %s failed: %s", server_name, op_description, what, retry_exc)
         return None
-<<<<<<< HEAD
-    if _result_is_error(result):
-        return None
-    _core._reset_server_error(server_name, state_key)
-    return result
-||||||| 939e45c91d
-    if _result_is_error(result):
-        return None
-    _core._reset_server_error(server_name)
-    return result
-=======
     return _record_call_outcome(server_name, result)
->>>>>>> f97608f178
 
 
-def _handle_auth_error_and_retry(server_name: str, exc: BaseException, retry_call, op_description: str,
-                                 state_key=None):
+def _handle_auth_error_and_retry(server_name: str, exc: BaseException, retry_call, op_description: str):
     """OAuth recovery + one retry; None when *exc* is not an auth error. ``handle_401`` decides
     viability; if viable, signal a reconnect (fresh credentials), wait ready, retry once. Any
     failure returns the structured ``needs_reauth`` error so the model stops refreshing."""
@@ -444,27 +201,20 @@ def _handle_auth_error_and_retry(server_name: str, exc: BaseException, retry_cal
         logger.warning("MCP OAuth '%s': recovery attempt failed: %s", server_name, rec_exc)
         recovered = False
     if recovered:
-        srv = _lookup_reconnectable_server(server_name, state_key=state_key)
+        srv = _lookup_reconnectable_server(server_name)
         # Recovery + reconnect is independent evidence of viability: close the breaker here, not only on
         # retry success (else a failing retry pins it open forever).
         if srv is not None and _loop._signal_reconnect_and_wait(
                 server_name, srv, op_description=f"{op_description} after OAuth recovery", timeout=15):
-            _core._reset_server_error(server_name, state_key)
-        result = _retry_once(server_name, retry_call, op_description, "auth recovery", state_key)
+            _core._reset_server_error(server_name)
+        result = _retry_once(server_name, retry_call, op_description, "auth recovery")
         if result is not None:
             return result
-    return _strike(server_name, _NEEDS_REAUTH_MSG.format(s=server_name), state_key=state_key,
-                   needs_reauth=True, server=server_name)
+    return _strike(server_name, _NEEDS_REAUTH_MSG.format(s=server_name), needs_reauth=True, server=server_name)
 
 
 def _handle_session_expired_and_retry(server_name: str, exc: BaseException, retry_call, op_description: str,
-<<<<<<< HEAD
-                                      state_key=None):
-||||||| 939e45c91d
-def _handle_session_expired_and_retry(server_name: str, exc: BaseException, retry_call, op_description: str):
-=======
                                       *, call_may_have_side_effects: bool = False):
->>>>>>> f97608f178
     """Transport reconnect + one retry on session expiry; None to fall through. Skips
     ``handle_401``: the token is valid, only the server-side session is stale.
 
@@ -480,12 +230,6 @@ def _handle_session_expired_and_retry(server_name: str, exc: BaseException, retr
     healed but the call is never re-run; the model gets an ``outcome_uncertain`` error instead (same
     contract as the mid-call stdio death path). Callers pass True unless the tool is positively read-only.
     """
-<<<<<<< HEAD
-    srv = (_lookup_reconnectable_server(server_name, require_loop=True, state_key=state_key)
-           if _is_session_expired_error(exc) else None)
-||||||| 939e45c91d
-    srv = _lookup_reconnectable_server(server_name, require_loop=True) if _is_session_expired_error(exc) else None
-=======
     if not _is_session_expired_error(exc):
         return None
     srv = _lookup_reconnectable_server(server_name, require_loop=True)
@@ -504,7 +248,6 @@ def _handle_session_expired_and_retry(server_name: str, exc: BaseException, retr
         return tool_error(_SESSION_OUTCOME_UNCERTAIN_MSG.format(
             s=server_name, state="been re-established" if reconnected else "not recovered yet"),
             outcome_uncertain=True, server=server_name)
->>>>>>> f97608f178
     if srv is None:
         return None
     logger.info("MCP server '%s': %s failed with session-expired error (%s); signalling transport reconnect "
@@ -513,7 +256,7 @@ def _handle_session_expired_and_retry(server_name: str, exc: BaseException, retr
         logger.warning("MCP server '%s': reconnect did not ready within 15s after session-expired error; "
                        "falling through to error response.", server_name)
         return None
-    return _retry_once(server_name, retry_call, op_description, "session reconnect", state_key)
+    return _retry_once(server_name, retry_call, op_description, "session reconnect")
 
 
 class _StdioChildExited(RuntimeError):
@@ -524,8 +267,7 @@ class _StdioChildExited(RuntimeError):
         self.in_flight = in_flight
 
 
-def _handle_stdio_child_exited_and_retry(server_name: str, exc: Exception, retry_call, op_description: str,
-                                         state_key=None):
+def _handle_stdio_child_exited_and_retry(server_name: str, exc: Exception, retry_call, op_description: str):
     """Respawn a dead stdio child; retry once only when it was dead before dispatch.
 
     A mid-call exit is ambiguous: the server may have applied a side effect before its
@@ -542,7 +284,7 @@ def _handle_stdio_child_exited_and_retry(server_name: str, exc: Exception, retry
     if not isinstance(exc, _StdioChildExited):
         return None
     reconnected = False
-    srv = _lookup_reconnectable_server(server_name, state_key=state_key)
+    srv = _lookup_reconnectable_server(server_name)
     if srv is not None:
         action = "reconnecting without replay" if exc.in_flight else "respawning and retrying once"
         logger.info("MCP server '%s': %s found the stdio subprocess dead (%s); %s.",
@@ -556,14 +298,12 @@ def _handle_stdio_child_exited_and_retry(server_name: str, exc: Exception, retry
         return _strike(
             server_name,
             _STDIO_OUTCOME_UNCERTAIN_MSG.format(s=server_name),
-            state_key=state_key,
             outcome_uncertain=True,
         )
     if not reconnected:
-        return _strike(server_name, _STDIO_NO_RESPAWN_MSG.format(s=server_name, t=_core._STDIO_RESPAWN_WAIT_SEC),
-                       state_key=state_key)
+        return _strike(server_name, _STDIO_NO_RESPAWN_MSG.format(s=server_name, t=_core._STDIO_RESPAWN_WAIT_SEC))
     try:
-        return _record_call_outcome(server_name, retry_call(), state_key)
+        return _record_call_outcome(server_name, retry_call())
     except _StdioChildExited as retry_exc:
         # Died again right after respawn: broken server; run()'s budget takes it to the park.
         logger.warning("MCP server '%s': %s stdio subprocess exited again right after respawn (%s); not retrying "
@@ -572,20 +312,18 @@ def _handle_stdio_child_exited_and_retry(server_name: str, exc: Exception, retry
             return _strike(
                 server_name,
                 _STDIO_OUTCOME_UNCERTAIN_MSG.format(s=server_name),
-                state_key=state_key,
                 outcome_uncertain=True,
             )
-        return _strike(server_name, _STDIO_DIED_AGAIN_MSG.format(s=server_name), state_key=state_key)
+        return _strike(server_name, _STDIO_DIED_AGAIN_MSG.format(s=server_name))
     except Exception as retry_exc:
         logger.warning("MCP %s/%s retry after stdio respawn failed: %s", server_name, op_description, retry_exc)
         return _strike(server_name, _sanitize_error(
             f"MCP call failed after respawning the stdio subprocess for '{server_name}': "
-            f"{type(retry_exc).__name__}: {_exc_str(retry_exc)}"), state_key=state_key)
+            f"{type(retry_exc).__name__}: {_exc_str(retry_exc)}"))
 
 
 def _dispatch(server_name: str, server: Any, op: str, call, tool_timeout: float, recoverers,
-              on_final_failure: Callable[[BaseException], None], record_outcome: bool = False,
-              state_key=None) -> str:
+              on_final_failure: Callable[[BaseException], None], record_outcome: bool = False) -> str:
     """Mark the call started on *server* (doubles may lack ``mark_tool_call``), run coroutine function *call*
     on the MCP loop and, on failure, walk ``recoverers`` (``(server_name, exc, retry_call, op) -> Optional[str]``,
     None = not its kind; order matters). Unrecovered exceptions go through ``on_final_failure`` and become the
@@ -598,12 +336,12 @@ def _dispatch(server_name: str, server: Any, op: str, call, tool_timeout: float,
 
     try:
         result = call_once()
-        return _record_call_outcome(server_name, result, state_key) if record_outcome else result
+        return _record_call_outcome(server_name, result) if record_outcome else result
     except InterruptedError:
         return tool_error("MCP call interrupted: user sent a new message")
     except Exception as exc:
         for recover in recoverers:
-            recovered = recover(server_name, exc, call_once, op, state_key)
+            recovered = recover(server_name, exc, call_once, op)
             if recovered is not None:
                 return recovered
         on_final_failure(exc)
@@ -814,24 +552,16 @@ def _render_call_tool_result(result, server_name: str) -> str:
         return json.dumps({"result": text_result}, ensure_ascii=False)
 
 
-def _make_tool_handler(server_name: str, tool_name: str, tool_timeout: float,
-                       registration_home: Optional[str] = None):
+def _make_tool_handler(server_name: str, tool_name: str, tool_timeout: float):
     """Sync registry handler (``handler(args_dict, **kwargs) -> str``) calling an MCP tool via the background loop."""
     op = f"tools/call {tool_name}"
-    state_key = _core._server_state_key(server_name, registration_home)
 
     def _handler(args: dict, **kwargs) -> str:
-        if _core._server_state_key(server_name) != state_key:
-            return tool_error(
-                f"MCP tool '{tool_name}' is not registered for the active profile"
-            )
         # Security boundary: untrusted-server write tools need approval before ANY transport work (incl. lazy spawn).
-        error = _trust_gate_check(
-            server_name, tool_name, args, state_key, registration_home,
-        ) or _check_circuit_breaker(server_name, state_key)
+        error = _trust_gate_check(server_name, tool_name) or _check_circuit_breaker(server_name)
         if error is not None:
             return error
-        server, error = _acquire_call_server(server_name, tool_timeout, state_key)
+        server, error = _acquire_call_server(server_name, tool_timeout)
         if server is None:
             return error
         # Only a tool annotated readOnlyHint=True is replayed after session expiry; a 401 is always
@@ -850,21 +580,13 @@ def _make_tool_handler(server_name: str, tool_name: str, tool_timeout: float,
             return _render_call_tool_result(result, server_name)
 
         def _on_failure(exc):
-            _core._bump_server_error(server_name, state_key)
+            _core._bump_server_error(server_name)
             logger.error("MCP tool %s/%s call failed: %s", server_name, tool_name, exc)
         session_expired = partial(_handle_session_expired_and_retry, call_may_have_side_effects=not read_only)
         return _dispatch(
             server_name, server, op, _call, tool_timeout,
-<<<<<<< HEAD
-            (_handle_stdio_child_exited_and_retry, _handle_auth_error_and_retry, _handle_session_expired_and_retry),
-            _on_failure, record_outcome=True, state_key=state_key)
-||||||| 939e45c91d
-            (_handle_stdio_child_exited_and_retry, _handle_auth_error_and_retry, _handle_session_expired_and_retry),
-            _on_failure, record_outcome=True)
-=======
             (_handle_stdio_child_exited_and_retry, _handle_auth_error_and_retry, session_expired),
             _on_failure, record_outcome=True)
->>>>>>> f97608f178
     return _handler
 
 
@@ -872,13 +594,10 @@ def _make_utility_handler(op: str, log_label: str, rpc, render, required: Option
     """``(server_name, tool_timeout) -> sync handler`` for one utility tool: ``rpc(session, args,
     server_name)`` awaited under ``_rpc_lock``, ``render(result, server_name)`` -> JSON-able
     payload, ``required`` validated before any transport work."""
-    def _factory(server_name: str, tool_timeout: float, registration_home: Optional[str] = None):
-        state_key = _core._server_state_key(server_name, registration_home)
+    def _factory(server_name: str, tool_timeout: float):
         def _handler(args: dict, **kwargs) -> str:
-            if _core._server_state_key(server_name) != state_key:
-                return tool_error(f"MCP tool for server '{server_name}' is not registered for the active profile")
             from tools import mcp_tool_discovery as _discovery  # lazy: import cycle
-            server = _discovery._get_connected_server_for_call(server_name, state_key)
+            server = _discovery._get_connected_server_for_call(server_name)
             if not server or not server.session:
                 return tool_error(f"MCP server '{server_name}' is not connected")
             if required and not args.get(required):
@@ -891,8 +610,7 @@ def _make_utility_handler(op: str, log_label: str, rpc, render, required: Option
             return _dispatch(
                 server_name, server, op, _call, tool_timeout,
                 (_handle_auth_error_and_retry, _handle_session_expired_and_retry),
-                lambda exc: logger.error("MCP %s/%s failed: %s", server_name, log_label, exc),
-                state_key=state_key)
+                lambda exc: logger.error("MCP %s/%s failed: %s", server_name, log_label, exc))
         return _handler
     return _factory
 
@@ -968,16 +686,6 @@ _make_get_prompt_handler = _make_utility_handler(
     _render_get_prompt, required="name")
 
 
-<<<<<<< HEAD
-def _make_check_fn(server_name: str, registration_home: Optional[str] = None):
-    """Connection-alive check; lazy (schema-cache registered) servers count as available."""
-    def _check() -> bool:
-        state_key = _core._server_state_key(server_name, registration_home)
-||||||| 939e45c91d
-def _make_check_fn(server_name: str):
-    """Connection-alive check; lazy (schema-cache registered) servers count as available."""
-    def _check() -> bool:
-=======
 def _make_check_fn(server_name: str):
     """Connection-alive check; lazy (schema-cache registered) servers count as available.
 
@@ -989,29 +697,16 @@ def _make_check_fn(server_name: str):
     from tools.mcp_tool_scope import _resolve_server_key
 
     def _connected() -> bool:
->>>>>>> f97608f178
         with _core._lock:
-<<<<<<< HEAD
-            server = _core._servers.get(state_key)
-||||||| 939e45c91d
-            server = _core._servers.get(server_name)
-=======
             key = _resolve_server_key(server_name)
             server = _core._servers.get(key)
->>>>>>> f97608f178
             return ((server is not None and (server.session is not None or server._is_recycled_stdio()))
-<<<<<<< HEAD
-                    or state_key in _core._lazy_server_configs)
-||||||| 939e45c91d
-                    or server_name in _core._lazy_server_configs)
-=======
                     or key in _core._lazy_server_configs)
 
     def _check() -> bool:
         if not _connected():
             return False
         return _declared_app_offerable(server_name)
->>>>>>> f97608f178
     return _check
 
 

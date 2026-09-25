@@ -198,18 +198,11 @@ def _signal_reconnect(server: Any) -> bool:
     return True
 
 
-def reconnect_mcp_server(server_name: str, state_key=None) -> bool:
+def reconnect_mcp_server(server_name: str) -> bool:
     """Ask a currently-live MCP server to rebuild after external re-auth."""
     from tools.mcp_tool_scope import _resolve_server_key
     with _core._lock:
-<<<<<<< HEAD
-        key = state_key if state_key is not None else _core._server_state_key(server_name)
-        server = _core._servers.get(key)
-||||||| 939e45c91d
-        server = _core._servers.get(server_name)
-=======
         server = _core._servers.get(_resolve_server_key(server_name))
->>>>>>> f97608f178
     return server is not None and _signal_reconnect(server)
 
 

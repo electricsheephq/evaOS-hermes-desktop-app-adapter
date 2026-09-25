@@ -13,11 +13,11 @@ logger = logging.getLogger("tools.mcp_tool")
 
 # Live stdio MCP children (pid -> server_name), added after connection and removed on normal
 # shutdown, so they can be force-killed if SDK teardown fails.
-_stdio_pids: Dict[int, object] = {}
+_stdio_pids: Dict[int, str] = {}
 # PIDs that survived their session context exit (detected in _run_stdio's finally, reaped by
 # _kill_orphaned_mcp_children). Separate from _stdio_pids so sweeps never race active sessions.
 _orphan_stdio_pids: set = set()
-_orphan_stdio_pid_servers: Dict[int, object] = {}
+_orphan_stdio_pid_servers: Dict[int, str] = {}
 # pid -> pgid captured at spawn. The SDK spawns with start_new_session=True (PGID == PID);
 # grandchildren keep that PGID after the direct child exits, so killpg still reaches them.
 # Separate from _stdio_pids so the PGID survives the child's removal. Empty on Windows.
@@ -84,45 +84,16 @@ def _filter_mcp_children(pids: set) -> set:
     return kept
 
 
-<<<<<<< HEAD
-def _clear_connect_cooldowns(scope: Optional[str] = None) -> None:
-    """Drop connect-retry cooldowns for one profile, or all profiles when unscoped.
-    Caller holds ``_core._lock``."""
-    if scope is None:
-||||||| 939e45c91d
-def _clear_connect_cooldowns(names=None) -> None:
-    """Drop connect-retry cooldowns: a restart must re-attempt every server immediately, not
-    honour a stale per-server backoff. Caller holds ``_core._lock``."""
-    if names is None:
-=======
 def _clear_connect_cooldowns(keys=None) -> None:
     """Drop connect-retry cooldowns: a restart must re-attempt every server immediately, not
     honour a stale per-server backoff. Caller holds ``_core._lock``."""
     if keys is None:
->>>>>>> f97608f178
         _core._server_connect_retry_after.clear()
         _core._server_connect_failures.clear()
-<<<<<<< HEAD
-        return
-    from hermes_constants import hermes_home_key
-    for state_map in (_core._server_connect_retry_after, _core._server_connect_failures):
-        for state_key in list(state_map):
-            owner_scope = _core._server_scope_keys.get(state_key)
-            if owner_scope is None and isinstance(state_key, tuple):
-                owner_scope = hermes_home_key(state_key[0])
-            if owner_scope == scope:
-                state_map.pop(state_key, None)
-||||||| 939e45c91d
-    else:
-        for name in names:
-            _core._server_connect_retry_after.pop(name, None)
-            _core._server_connect_failures.pop(name, None)
-=======
     else:
         for key in keys:
             _core._server_connect_retry_after.pop(key, None)
             _core._server_connect_failures.pop(key, None)
->>>>>>> f97608f178
 
 
 def _reregister_orphaned_adopters() -> None:
@@ -216,27 +187,11 @@ def shutdown_mcp_servers(*, scope: Optional[str] = None, names: Optional[set] = 
                 if isinstance(result, Exception):
                     logger.debug("Error closing MCP server '%s': %s", server.name, result)
             with _core._lock:
-<<<<<<< HEAD
-                _clear_connect_cooldowns(scope)
-                for name in selected:
-                    _core._servers.pop(name, None)
-                    _core._server_scope_keys.pop(name, None)
-||||||| 939e45c91d
-                for name in selected:
-                    _core._servers.pop(name, None)
-                    _core._server_scope_keys.pop(name, None)
-=======
                 for key in selected:
                     _core._servers.pop(key, None)
                     _core._server_scope_keys.pop(key, None)
->>>>>>> f97608f178
                 clear_selected_status()
-<<<<<<< HEAD
-||||||| 939e45c91d
-                _clear_connect_cooldowns(None if scope is None else selected_status)
-=======
                 _clear_connect_cooldowns(None if wildcard else selected_status)
->>>>>>> f97608f178
 
         with _core._lock:
             loop = _core._mcp_loop
@@ -253,15 +208,8 @@ def shutdown_mcp_servers(*, scope: Optional[str] = None, names: Optional[set] = 
     # (a server that failed to connect is never in ``_servers`` — the most likely state for
     # stale backoff entries), no connect-cooldown state may survive shutdown.
     with _core._lock:
-        _clear_connect_cooldowns(scope)
         if not servers_snapshot:
             clear_selected_status()
-<<<<<<< HEAD
-    _loop._stop_mcp_loop(only_if_idle=scope is not None)
-||||||| 939e45c91d
-        _clear_connect_cooldowns(None if scope is None else selected_status)
-    _loop._stop_mcp_loop(only_if_idle=scope is not None)
-=======
         _clear_connect_cooldowns(None if wildcard else selected_status)
     _loop._stop_mcp_loop(only_if_idle=not wildcard)
     # A removed subset still shares its profile's log with the remaining servers.
@@ -269,18 +217,13 @@ def shutdown_mcp_servers(*, scope: Optional[str] = None, names: Optional[set] = 
     if names is None:
         from tools.mcp_tool_config import _close_mcp_stderr_logs
         _close_mcp_stderr_logs(scope=scope)
->>>>>>> f97608f178
 
 
-def _take_reapable_pids(include_active: bool, server_name: Optional[str]) -> tuple[Dict[int, object], Dict[int, int]]:
+def _take_reapable_pids(include_active: bool, server_name: Optional[str]) -> tuple[Dict[int, str], Dict[int, int]]:
     """Pop the PIDs to reap (and their spawn-time pgids) out of the ledgers under the lock, so
     a future spawn can't collide with stale state. Returns ``(pid -> owner, pid -> pgid)``."""
-    owner_key = _core._server_state_key(server_name) if server_name is not None else None
-
-    def _owned(entries: Dict[int, object]) -> Dict[int, object]:
-        return {pid: owner for pid, owner in entries.items()
-                if owner_key is None or owner == owner_key
-                or (isinstance(owner_key, str) and owner == server_name)}
+    def _owned(entries: Dict[int, str]) -> Dict[int, str]:
+        return {pid: owner for pid, owner in entries.items() if server_name is None or owner == server_name}
 
     with _core._lock:
         pids = _owned({opid: _orphan_stdio_pid_servers.get(opid, "orphan") for opid in _orphan_stdio_pids})

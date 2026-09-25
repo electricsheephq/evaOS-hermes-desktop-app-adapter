@@ -269,9 +269,7 @@ class MCPServerTransportMixin:
             except (AttributeError, OSError):  # Windows (os.getpgid is POSIX-only)
                 pass
         with _core._lock:
-            _stdio_pids.update(dict.fromkeys(
-                new_pids,
-                getattr(self, "state_key", _core._server_state_key(self.name, self.registration_home))))
+            _stdio_pids.update(dict.fromkeys(new_pids, self.name))
             _stdio_pgids.update(new_pgids)
         # Machine spawn ledger (startup sweeps reap orphans after an unclean exit); best-effort.
         for _pid in new_pids:
@@ -300,8 +298,7 @@ class MCPServerTransportMixin:
                 # Windows-safe pid probe; the child may be gone while descendants remain in its pgroup.
                 if _pid_exists(pid) or _pgroup_alive(_stdio_pgids.get(pid)):
                     _orphan_stdio_pids.add(pid)
-                    _orphan_stdio_pid_servers[pid] = getattr(
-                        self, "state_key", _core._server_state_key(self.name, self.registration_home))
+                    _orphan_stdio_pid_servers[pid] = self.name
                 else:  # nothing to reap — drop the pgid so PID reuse can't surface stale pgroup state
                     dropped = _stdio_pgids.pop(pid, None)
                     if dropped is not None:
@@ -457,12 +454,7 @@ class MCPServerTransportMixin:
             from tools.mcp_oauth_manager import get_manager
             return get_manager().get_or_build_provider(self.name, url, config.get("oauth"))
         except Exception as exc:
-            # An `auth: oauth` server with no usable cached tokens fails HERE on every timed
-            # self-probe, before the park is logged, so this warning repeats on the same interval
-            # (#337: two WARNINGs per cycle were measured, not one). Follow the episode latch
-            # without claiming it, so the park message below still carries the episode's WARNING.
-            log = logger.debug if self._parked_log_key is not None else logger.warning
-            log("MCP OAuth setup failed for '%s': %s", self.name, exc)
+            logger.warning("MCP OAuth setup failed for '%s': %s", self.name, exc)
             raise
 
     def _sse_transport(self, url: str, headers: dict, connect_timeout: float,
@@ -497,17 +489,10 @@ class MCPServerTransportMixin:
 
     def _streamable_http_transport(self, url: str, headers: dict, connect_timeout: float,
                                    ssl_verify, client_cert, oauth_auth,
-                                   strict_cfg_headers: bool, configured_header_names: set,
-                                   managed_lease_auth=None):
+                                   strict_cfg_headers: bool, configured_header_names: set):
         """Streamable HTTP context manager: mcp >= 1.24.0 gets a caller-owned httpx client; on the
         deprecated API (mcp < 1.24.0) the SDK owns the client."""
-        managed_lease = managed_lease_auth is not None
         if not _core._MCP_NEW_HTTP:
-            if managed_lease:
-                raise ImportError(
-                    f"MCP server '{self.name}' requires mcp >= 1.24.0 to "
-                    "disable environment proxying for managed lease auth."
-                )
             if strict_cfg_headers:  # fail closed: without an owned client redirects can't be hooked
                 raise ImportError(f"MCP server '{self.name}' requires mcp >= 1.24.0 to "
                                   "enforce the portable redirect-header boundary "
@@ -517,24 +502,6 @@ class MCPServerTransportMixin:
         # Explicit AsyncClient matching the SDK's create_mcp_http_client defaults; MUST come from the
         # SDK's httpx (httpx2 on mcp >= 2.0) since the SDK sends its own Requests through it.
         httpx = _core.sdk_httpx()
-<<<<<<< HEAD
-        _strip_auth_on_cross_origin_redirect = _make_redirect_header_stripper(
-            httpx.URL(url), strict=strict_cfg_headers, configured_header_names=configured_header_names)
-        client_kwargs: dict = {"follow_redirects": not managed_lease,
-                               "timeout": httpx.Timeout(float(connect_timeout), read=300.0),
-                               "verify": ssl_verify, **({"headers": headers} if headers else {}),
-                               "event_hooks": {"response": [_strip_auth_on_cross_origin_redirect]},
-                               **_present(auth=managed_lease_auth or oauth_auth, cert=client_cert)}
-        if managed_lease:
-            client_kwargs["trust_env"] = False
-||||||| 939e45c91d
-        _strip_auth_on_cross_origin_redirect = _make_redirect_header_stripper(
-            httpx.URL(url), strict=strict_cfg_headers, configured_header_names=configured_header_names)
-        client_kwargs: dict = {"follow_redirects": True, "timeout": httpx.Timeout(float(connect_timeout), read=300.0),
-                               "verify": ssl_verify, **({"headers": headers} if headers else {}),
-                               "event_hooks": {"response": [_strip_auth_on_cross_origin_redirect]},
-                               **_present(auth=oauth_auth, cert=client_cert)}
-=======
         _build_client = _make_redirect_header_stripper(
             httpx, httpx.URL(url), strict=strict_cfg_headers, configured_header_names=configured_header_names)
         # verify/cert live on the inner transport: a custom transport= makes client-level TLS kwargs
@@ -546,7 +513,6 @@ class MCPServerTransportMixin:
                                "transport": _make_mcp_body_cap_transport(httpx, inner_transport),
                                **_present(mounts=_mcp_proxy_mounts(httpx, url, ssl_verify, client_cert, self.name),
                                           auth=oauth_auth)}
->>>>>>> f97608f178
 
         @asynccontextmanager
         async def _owned_client_streams():  # the SDK skips cleanup when http_client is provided
@@ -562,42 +528,6 @@ class MCPServerTransportMixin:
             raise ImportError(f"MCP server '{self.name}' requires HTTP transport but "
                               "mcp.client.streamable_http is not available. "
                               "Upgrade the mcp package to get HTTP support.")
-<<<<<<< HEAD
-        _lease_auth = None
-        if self._auth_type == "evaos_lease":
-            from tools.evaos_mcp_lease import (
-                EvaosLeaseHttpAuth,
-                EvaosLeaseManager,
-                EvaosLeaseSource,
-            )
-
-            if self._evaos_lease_manager is None:
-                source = EvaosLeaseSource(
-                    profile_key=self.registration_home,
-                    app_slug=config["app_slug"],
-                    external_user_id=config.get("external_user_id"),
-                    account_id=config.get("account_id"),
-                    customer_id=config.get("customer_id"),
-                    agent_id=config.get("agent_id"),
-                )
-                self._evaos_lease_manager = EvaosLeaseManager(
-                    source=source,
-                    on_mint_failure=self._warn_evaos_lease_failure,
-                )
-                self._evaos_lease_auth = EvaosLeaseHttpAuth(
-                    self._evaos_lease_manager
-                )
-            lease = await self._evaos_lease_manager.get_lease()
-            url = lease.mcp_url
-            headers = dict(lease.headers)
-            _lease_auth = self._evaos_lease_auth
-        else:
-            url = config["url"]
-            headers = dict(config.get("headers") or {})
-||||||| 939e45c91d
-        url = config["url"]
-        headers = dict(config.get("headers") or {})
-=======
         url = config["url"]
         headers = dict(config.get("headers") or {})
         live = _live_endpoint(self.name)
@@ -606,7 +536,6 @@ class MCPServerTransportMixin:
             headers.update(live_headers)
         logger.debug("MCP server '%s': connecting to %s", self.name, url)
         self._http_rejection = {}  # last 4xx/5xx the owned client saw this attempt (recorder hook)
->>>>>>> f97608f178
         # Agent Plugins v1 strict_redirect_headers: configured headers MUST NOT follow a cross-origin
         # redirect — capture their names BEFORE client-generated headers are merged in.
         configured_header_names = {key.lower() for key in headers}
@@ -619,20 +548,6 @@ class MCPServerTransportMixin:
         common = (url, headers, connect_timeout, config.get("ssl_verify", True), _resolve_client_cert(self.name, config),
                   self._build_oauth_auth(url, config), bool(config.get("strict_redirect_headers")))
         if config.get("transport") == "sse":
-<<<<<<< HEAD
-            transport, label = self._sse_transport(*common), "SSE"
-        else:
-            transport = self._streamable_http_transport(
-                *common, configured_header_names, managed_lease_auth=_lease_auth)
-            label = "HTTP" if _core._MCP_NEW_HTTP else "legacy HTTP"
-        return await self._serve_transport(transport, label, float(connect_timeout))
-||||||| 939e45c91d
-            transport, label = self._sse_transport(*common), "SSE"
-        else:
-            transport = self._streamable_http_transport(*common, configured_header_names)
-            label = "HTTP" if _core._MCP_NEW_HTTP else "legacy HTTP"
-        return await self._serve_transport(transport, label, float(connect_timeout))
-=======
             return await self._serve_transport(self._sse_transport(*common), "SSE", float(connect_timeout))
         if self._sse_fallback:
             # A prior connect already proved this server SSE-only: skip the doomed Streamable
@@ -678,7 +593,6 @@ class MCPServerTransportMixin:
                     f"(Streamable HTTP: {http_detail}; SSE: "
                     f"{_unwrap_exception_group(sse_exc)}). Check the URL points at an MCP "
                     "endpoint, or pin `transport: sse` if the server is SSE-only.") from sse_exc
->>>>>>> f97608f178
 
     # -------------------------------------------------------------- discovery
 
@@ -713,25 +627,11 @@ class MCPServerTransportMixin:
         if self._registered_tool_names:
             return
         with _core._lock:
-<<<<<<< HEAD
-            owned = _core._servers.get(self.state_key) is self
-||||||| 939e45c91d
-            owned = _core._servers.get(self.name) is self
-=======
             owned = [key for key, live in _core._servers.items() if live is self]
->>>>>>> f97608f178
         if not owned and not self._ready.is_set():
             return
         self._registered_tool_names = _registration._register_server_tools(self.name, self, self._config)
         with _core._lock:  # a retained initial-failure server that just published tools has recovered
-<<<<<<< HEAD
-            if _core._servers.get(self.state_key) is self:
-                _core._server_connect_errors.pop(self.state_key, None)
-||||||| 939e45c91d
-            if _core._servers.get(self.name) is self:
-                _core._server_connect_errors.pop(self.name, None)
-=======
             for key in owned:
                 if _core._servers.get(key) is self:
                     _core._server_connect_errors.pop(key, None)
->>>>>>> f97608f178

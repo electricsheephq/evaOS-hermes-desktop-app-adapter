@@ -304,38 +304,23 @@ async def _paginate_full_list(list_method, items_attr: str, server_name: str,
 
 # ---- Server task -- each MCP server lives in one long-lived asyncio Task ----
 
-_ServerStateKey = str | tuple[str, str]
-
 class MCPServerTask(MCPServerRunMixin, MCPServerTransportMixin, MCPServerHealthMixin):
     """One MCP server connection in one long-lived asyncio Task (the transport's anyio cancel
     scopes must enter/exit in the same Task). Run state machine, transport bring-up and
     keepalive/liveness live in the three mixins."""
 
     __slots__ = (
-        "name", "session", "state_key", "tool_timeout", "_task", "_ready", "_shutdown_event", "_reconnect_event",
+        "name", "session", "tool_timeout", "_task", "_ready", "_shutdown_event", "_reconnect_event",
         "_tools", "_error", "_config", "_sampling", "_elicitation", "_registered_tool_names",
-        "_auth_type", "_refresh_lock", "registration_home", "_evaos_lease_manager", "_evaos_lease_auth",
-        "_evaos_lease_warning_emitted", "_rpc_lock", "_pending_refresh_tasks", "_pending_call_context",
+        "_auth_type", "_refresh_lock", "_rpc_lock", "_pending_refresh_tasks", "_pending_call_context",
         "_lifecycle_started_at", "_last_tool_call_at", "_idle_timeout_seconds", "_max_lifetime_seconds",
         "_recycled_reason", "initialize_result", "_ping_unsupported", "_list_cache_meta",
         "_reconnect_retries", "_session_proven", "_was_parked", "_inflight_tasks", "_reconnecting",
         "_suspect_reason", "_teardown_race", "_permanent_grace_used", "_stdio_child_pids",
-<<<<<<< HEAD
-        "_ever_connected", "_parked_log_key")
-||||||| 939e45c91d
-        "_ever_connected")
-=======
         "_ever_connected", "_sse_fallback", "_park_reason", "_last_park_line")
->>>>>>> f97608f178
 
-    def __init__(self, name: str, registration_home: Optional[str] = None):
+    def __init__(self, name: str):
         self.name = name
-        if registration_home is None:
-            from hermes_constants import get_hermes_home
-
-            registration_home = str(get_hermes_home())
-        self.registration_home = os.path.realpath(os.path.expanduser(registration_home))
-        self.state_key = _server_state_key(name, self.registration_home)
         self.session: Optional[Any] = None
         self.tool_timeout: float = _DEFAULT_TOOL_TIMEOUT
         self._task: Optional[asyncio.Task] = None
@@ -368,24 +353,11 @@ class MCPServerTask(MCPServerRunMixin, MCPServerTransportMixin, MCPServerHealthM
         self._http_rejection: dict = {}
         # True from park until proven healthy again; logs the revival once.
         self._was_parked: bool = False
-<<<<<<< HEAD
-        # The failure this parked episode has already logged, or None. The timed self-probe re-fails
-        # every _PARKED_RETRY_INTERVAL and must not repeat the WARNING (#337); every permanent park
-        # re-probes on that timer -- a 401, a 403, an OAuth setup failure, a bad command -- so the
-        # latch covers the park, not one error class. It holds the failure's key rather than a flag
-        # so a DIFFERENT permanent failure still warns: after a login succeeds, the next probe can
-        # hit a new blocker, and that diagnosis must not be hidden under the old episode. Cleared
-        # when the session is PROVEN (keepalive or a tool call), not at the handshake -- a server
-        # that connects and drops again is exactly the flapping case this latch is for.
-        self._parked_log_key: Optional[str] = None
-||||||| 939e45c91d
-=======
         # Why the server is parked (the revival_reason handed to _park), None once healthy again.
         # Lets cron preflight tell a network-blip park (recovering) from a permanent-error park
         # (revoked credentials, dead endpoint) that must not run the job tool-less forever.
         self._park_reason: Optional[str] = None
         self._last_park_line: Optional[str] = None  # last park WARNING text; identical re-parks log at DEBUG
->>>>>>> f97608f178
         # In-flight RPC tasks so a deliberate teardown fails them fast; _reconnecting is True
         # during that teardown so _track_inflight_rpc turns the cancel into a retryable error.
         # In-flight RPC bookkeeping (#48069 salvage): user-visible requests registered while running so a
@@ -408,9 +380,6 @@ class MCPServerTask(MCPServerRunMixin, MCPServerTransportMixin, MCPServerHealthM
         # (#81995).
         self._stdio_child_pids: Set[int] = set()
         self._auth_type: str = ""
-        self._evaos_lease_manager: Optional[Any] = None
-        self._evaos_lease_auth: Optional[Any] = None
-        self._evaos_lease_warning_emitted = False
         self._refresh_lock = asyncio.Lock()
         # A stdio session is one JSON-RPC stream (a concurrent list_tools can wedge a tool
         # call): serialize client-initiated RPCs per server (HTTP too, for ordering).
@@ -444,30 +413,9 @@ class MCPServerTask(MCPServerRunMixin, MCPServerTransportMixin, MCPServerHealthM
 # same server with their own credentials are two connections; a name-keyed ledger let the first
 # profile's connection shadow the second's (never connected, silently tool-less — #106005).
 
-<<<<<<< HEAD
-_servers: Dict[_ServerStateKey, MCPServerTask] = {}
-||||||| 939e45c91d
-_servers: Dict[str, MCPServerTask] = {}
-=======
 _servers: Dict[Any, MCPServerTask] = {}
->>>>>>> f97608f178
 # Profile registry scope per live connection (None outside multiplex) so a multiplexed
 # /reload-mcp tears down only its own profile's servers.
-<<<<<<< HEAD
-_server_scope_keys: Dict[_ServerStateKey, Optional[str]] = {}
-# Registry overlays that may call one compatible live connection. The connection
-# remains owned by _server_scope_keys; this map grants visibility only.
-_server_tool_scopes: Dict[_ServerStateKey, set[str]] = {}
-_server_connecting: set[_ServerStateKey] = set()
-_server_connect_errors: Dict[_ServerStateKey, str] = {}
-||||||| 939e45c91d
-_server_scope_keys: Dict[str, Optional[str]] = {}
-# Registry scopes that have adopted a live server connection. The owning scope above remains
-# authoritative for connection teardown; this set preserves visibility for shared connections.
-_server_tool_scopes: Dict[str, set] = {}
-_server_connecting: set[str] = set()
-_server_connect_errors: Dict[str, str] = {}
-=======
 _server_scope_keys: Dict[Any, Optional[str]] = {}
 # Registry scopes that have adopted a live server connection. The owning scope above remains
 # authoritative for connection teardown; this set preserves visibility for shared connections.
@@ -477,25 +425,12 @@ _server_connect_errors: Dict[Any, str] = {}
 # adopter scope -> server names whose shared connection an owner's scoped shutdown tore down;
 # drained by the next discovery pass so the adopter is re-registered (see mcp_tool_lifecycle).
 _orphaned_adopters: Dict[str, set] = {}
->>>>>>> f97608f178
 # Lazy startup: servers registered from the schema cache without connecting; popped on
 # first real connection.
-<<<<<<< HEAD
-# Keyed by profile-owned state key; entries are popped once a real connection is established on first use. See #56832.
-_lazy_server_configs: Dict[_ServerStateKey, dict] = {}
-_lazy_server_fingerprints: Dict[_ServerStateKey, str] = {}
-_lazy_server_tool_names: Dict[_ServerStateKey, List[str]] = {}
-||||||| 939e45c91d
-# Keyed by server name; entries are popped once a real connection is established on first use. See #56832.
-_lazy_server_configs: Dict[str, dict] = {}
-_lazy_server_fingerprints: Dict[str, str] = {}
-_lazy_server_tool_names: Dict[str, List[str]] = {}
-=======
 # Keyed by connection key; entries are popped once a real connection is established on first use. See #56832.
 _lazy_server_configs: Dict[Any, dict] = {}
 _lazy_server_fingerprints: Dict[Any, str] = {}
 _lazy_server_tool_names: Dict[Any, List[str]] = {}
->>>>>>> f97608f178
 # Task-local claim around ``_connect_server``: discovery retains a recoverable parked task
 # while standalone probes never publish failed servers into module-global ownership.
 _connect_server_claim: contextvars.ContextVar[Optional[Callable[[MCPServerTask], None]]] = (
@@ -516,16 +451,8 @@ _connect_server_claim: contextvars.ContextVar[Optional[Callable[[MCPServerTask],
 # ``retry_after`` deadline with exponential backoff. ``register_mcp_servers`` skips a server whose cooldown
 # has not elapsed, so a chronically failing server is retried on a backoff schedule instead of on every
 # worker session -- isolating it from the rest of the bridge. A successful connection clears the state.
-<<<<<<< HEAD
-_server_connect_retry_after: Dict[_ServerStateKey, float] = {}   # state key -> monotonic deadline
-_server_connect_failures: Dict[_ServerStateKey, int] = {}        # state key -> consecutive failures
-||||||| 939e45c91d
-_server_connect_retry_after: Dict[str, float] = {}   # name -> monotonic deadline
-_server_connect_failures: Dict[str, int] = {}        # name -> consecutive failures
-=======
 _server_connect_retry_after: Dict[Any, float] = {}   # connection key -> monotonic deadline
 _server_connect_failures: Dict[Any, int] = {}        # connection key -> consecutive failures
->>>>>>> f97608f178
 _CONNECT_RETRY_BASE_BACKOFF_SEC, _CONNECT_RETRY_MAX_BACKOFF_SEC = 30.0, 600.0
 
 # Per-server circuit breaker: closed -> open (calls short-circuit until the cooldown) ->
@@ -538,96 +465,27 @@ _CONNECT_RETRY_BASE_BACKOFF_SEC, _CONNECT_RETRY_MAX_BACKOFF_SEC = 30.0, 600.0
 # ``_server_breaker_opened_at`` records the monotonic timestamp when the breaker most recently transitioned
 # into the open state. Use the ``_bump_server_error`` / ``_reset_server_error`` helpers to mutate this state
 # — they keep the count and timestamp in sync.
-<<<<<<< HEAD
-_server_error_counts: Dict[_ServerStateKey, int] = {}
-_server_breaker_opened_at: Dict[_ServerStateKey, float] = {}
-||||||| 939e45c91d
-_server_error_counts: Dict[str, int] = {}
-_server_breaker_opened_at: Dict[str, float] = {}
-=======
 _server_error_counts: Dict[Any, int] = {}
 _server_breaker_opened_at: Dict[Any, float] = {}
 # True while every strike in the current streak was the tool's own error payload (server reachable,
 # call rejected); picks the open-breaker wording, since "unreachable" was false for that case (#11113).
 _server_errors_all_application: Dict[Any, bool] = {}
->>>>>>> f97608f178
 _CIRCUIT_BREAKER_THRESHOLD, _CIRCUIT_BREAKER_COOLDOWN_SEC = 3, 60.0
-
-def _server_state_key(server_name: str, registration_home: Optional[str] = None) -> _ServerStateKey:
-    """Return the process-local identity for one profile-owned server."""
-    from agent.secret_scope import is_multiplex_active
-    if not is_multiplex_active():
-        return server_name
-    if registration_home is None:
-        from hermes_constants import get_hermes_home
-        registration_home = get_hermes_home()
-    home = os.path.realpath(os.path.expanduser(str(registration_home)))
-    return (home, server_name)
-
-
-def _state_key_is_current(state_key: _ServerStateKey) -> bool:
-    """Return whether a profile-owned entry belongs to the active profile."""
-    current = _server_state_key("")
-    return (isinstance(state_key, str) if isinstance(current, str)
-            else isinstance(state_key, tuple) and state_key[0] == current[0])
-
-
-def _server_visible_in_scope(state_key: _ServerStateKey, current_scope: Optional[str]) -> bool:
-    """Return whether one profile-owned runtime entry belongs to this registry view."""
-    if current_scope is None:
-        return isinstance(state_key, str)
-    owner_scope = _server_scope_keys.get(state_key)
-    if owner_scope == current_scope:
-        return True
-    if isinstance(state_key, tuple) and state_key[0] == current_scope:
-        return True
-    return current_scope in _server_tool_scopes.get(state_key, ())
-
-
-def _tool_provenance_key(tool_name: str) -> str | tuple[str, str]:
-    """Profile-scope a generated MCP tool name without changing its display name."""
-    state_key = _server_state_key("")
-    if isinstance(state_key, str):
-        return tool_name
-    return (state_key[0], tool_name)
-
 
 # Trust-tier gating (``trust: full | untrusted``): on an untrusted server every write-capable
 # call (discovery-time ``readOnlyHint`` not exactly True; malformed fails closed) needs approval
 # before the RPC fires. A lying readOnlyHint can only skip approval for calls the operator was
 # already warned about, never widen access. Missing trust = full; unrecognized = untrusted (a
 # typo must never disable the gate). Classified at CALL time from DISCOVERY data: no schema
-<<<<<<< HEAD
-# mutation, prompt cache intact.
-_server_trust_levels: Dict[_ServerStateKey, str] = {}
-_tool_read_only_hints: Dict[_ServerStateKey, Dict[str, bool]] = {}
-||||||| 939e45c91d
-# mutation, prompt cache intact.
-_server_trust_levels: Dict[str, str] = {}
-_tool_read_only_hints: Dict[str, Dict[str, bool]] = {}
-=======
 # mutation, prompt cache intact. ``_server_trust_levels`` is keyed by the CONSUMING profile's own
 # key (its policy for the name, even when it adopted another profile's connection);
 # ``_tool_read_only_hints`` by the connection key (the server's own tool annotations).
 _server_trust_levels: Dict[Any, str] = {}
 _tool_read_only_hints: Dict[Any, Dict[str, bool]] = {}
->>>>>>> f97608f178
 
 _TRUST_FULL, _TRUST_UNTRUSTED = "full", "untrusted"
 
 
-<<<<<<< HEAD
-def _bump_server_error(server_name: str, state_key: Optional[_ServerStateKey] = None) -> None:
-    """Count a failure; at the threshold (re)stamp the breaker-open time."""
-    key = state_key if state_key is not None else _server_state_key(server_name)
-    n = _server_error_counts.get(key, 0) + 1
-    _server_error_counts[key] = n
-||||||| 939e45c91d
-def _bump_server_error(server_name: str) -> None:
-    """Count a failure; at the threshold (re)stamp the breaker-open time."""
-    n = _server_error_counts.get(server_name, 0) + 1
-    _server_error_counts[server_name] = n
-=======
 def _bump_server_error(server_name: str, *, application: bool = False) -> None:
     """Count a failure; at the threshold (re)stamp the breaker-open time. Keyed by the calling
     scope's connection so one profile's failing server never opens another profile's breaker.
@@ -637,44 +495,24 @@ def _bump_server_error(server_name: str, *, application: bool = False) -> None:
     n = _server_error_counts.get(key, 0) + 1
     _server_error_counts[key] = n
     _server_errors_all_application[key] = application and (n == 1 or _server_errors_all_application.get(key, False))
->>>>>>> f97608f178
     if n >= _CIRCUIT_BREAKER_THRESHOLD:
         _server_breaker_opened_at[key] = time.monotonic()
 
 
-def _reset_server_error(server_name: str, state_key: Optional[_ServerStateKey] = None) -> None:
+def _reset_server_error(server_name: str) -> None:
     """Close the breaker on any unambiguous success signal."""
-<<<<<<< HEAD
-    key = state_key if state_key is not None else _server_state_key(server_name)
-    _server_error_counts[key] = 0
-    _server_breaker_opened_at.pop(key, None)
-||||||| 939e45c91d
-    _server_error_counts[server_name] = 0
-    _server_breaker_opened_at.pop(server_name, None)
-=======
     from tools.mcp_tool_scope import _resolve_server_key
     key = _resolve_server_key(server_name)
     _server_error_counts[key] = 0
     _server_breaker_opened_at.pop(key, None)
     _server_errors_all_application.pop(key, None)
->>>>>>> f97608f178
 
 
-<<<<<<< HEAD
-# Raw server names opted into parallel tool calls (``foo-bar``/``foo_bar`` sanitize alike but
-# must not share policy).
-_parallel_safe_servers: set[_ServerStateKey] = set()
-||||||| 939e45c91d
-# Raw server names opted into parallel tool calls (``foo-bar``/``foo_bar`` sanitize alike but
-# must not share policy).
-_parallel_safe_servers: set = set()
-=======
 # Servers opted into parallel tool calls, keyed by the consuming profile's own key (``foo-bar``/
 # ``foo_bar`` sanitize alike but must not share policy; neither do two profiles' same-named servers).
 _parallel_safe_servers: set = set()
->>>>>>> f97608f178
 # registry tool name -> raw server name (the generated name is lossy; never re-parse it).
-_mcp_tool_server_names: Dict[str | tuple[str, str], _ServerStateKey] = {}
+_mcp_tool_server_names: Dict[str, str] = {}
 
 # Dedicated event loop in a background daemon thread; _lock guards the loop handles, _servers,
 # the status maps and the PID ledgers.
@@ -807,17 +645,6 @@ def _update_death_supervisor(verb: str, pgids) -> None:
             _death_supervisor = None
 
 
-<<<<<<< HEAD
-def _mcp_registry_scope(registration_home: Optional[str] = None) -> Optional[str]:
-    """Registry scope for MCP registrations: a profile overlay under a multiplexer, else None."""
-    from agent.secret_scope import is_multiplex_active
-    if not is_multiplex_active():
-||||||| 939e45c91d
-def _mcp_registry_scope() -> Optional[str]:
-    """Registry scope for MCP registrations: a profile overlay under a multiplexer, else None."""
-    from agent.secret_scope import is_multiplex_active
-    if not is_multiplex_active():
-=======
 def _mcp_registry_scope() -> Optional[str]:
     """Registry scope for MCP registrations: a profile overlay when this process serves profiles,
     else None. Under ``gateway.multiplex_profiles`` every turn runs scoped; a process that serves a
@@ -827,39 +654,11 @@ def _mcp_registry_scope() -> Optional[str]:
     Single-profile processes (no override, or an override naming their own home) keep bare names."""
     from agent.secret_scope import serves_routed_profile
     if not serves_routed_profile():
->>>>>>> f97608f178
         return None
-    if registration_home is None:
-        from tools.registry import registry
-        return registry.current_scope_key()
-    from hermes_constants import hermes_home_key
-    return hermes_home_key(registration_home)
+    from tools.registry import registry
+    return registry.current_scope_key()
 
 
-<<<<<<< HEAD
-def _server_registry_scope(name: str, registration_home: Optional[str] = None) -> Optional[str]:
-    """Scope owning *name*'s tools: the one captured at adoption (teardown runs on the MCP
-    loop without the discovering profile's context), else the current one."""
-    key = _server_state_key(name, registration_home)
-    if key in _server_scope_keys:
-        return _server_scope_keys[key]
-    return _mcp_registry_scope(registration_home)
-||||||| 939e45c91d
-def _server_registry_scope(name: str) -> Optional[str]:
-    """Scope owning *name*'s tools: the one captured at adoption (teardown runs on the MCP
-    loop without the discovering profile's context), else the current one."""
-    if name in _server_scope_keys:
-        return _server_scope_keys[name]
-    return _mcp_registry_scope()
-
-
-def _server_visible_in_scope(name: str, scope: Optional[str]) -> bool:
-    """Whether a live server is visible from ``scope`` without changing its teardown owner."""
-    if scope is None:
-        return True
-    return (_server_scope_keys.get(name) == scope
-            or scope in _server_tool_scopes.get(name, ()))
-=======
 def _server_registry_scope(key) -> Optional[str]:
     """Scope owning the connection under *key*'s tools: the one captured at adoption (teardown
     runs on the MCP loop without the discovering profile's context), else the current one."""
@@ -876,7 +675,6 @@ def _server_visible_in_scope(key, scope: Optional[str]) -> bool:
         return True
     return (_server_scope_keys.get(key) == scope
             or scope in _server_tool_scopes.get(key, ()))
->>>>>>> f97608f178
 
 
 # Cross-process discovery guard: advisory file lock so gateway + CLI + TUI don't all discover.

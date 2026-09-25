@@ -5,8 +5,6 @@ and tool deregistration. Origin state and patchable helpers are read through ``_
 
 import asyncio
 import logging
-import os
-import re
 import time
 from dataclasses import dataclass
 from typing import Optional
@@ -172,119 +170,6 @@ class MCPServerRunMixin:
         self._reconnect_event.clear()
         return "reconnect"
 
-<<<<<<< HEAD
-    def _validate_evaos_lease_config(self, config: dict) -> None:
-        """Reject connection and credential overrides for managed MCP auth."""
-        if self._auth_type != "evaos_lease":
-            return
-        from tools.evaos_mcp_lease import EvaosLeaseError
-
-        conflicting = {
-            "url", "headers", "command", "args", "env", "transport",
-            "oauth", "client_cert", "identity_header",
-        } & set(config)
-        if conflicting or config.get("ssl_verify") is False:
-            raise EvaosLeaseError(
-                "managed MCP config may specify only root-configured app "
-                "identity plus non-credential runtime options"
-            )
-        app_slug = config.get("app_slug")
-        if not isinstance(app_slug, str) or re.fullmatch(
-            r"[a-z0-9][a-z0-9_-]{0,127}", app_slug
-        ) is None:
-            raise EvaosLeaseError("managed MCP app slug is invalid")
-        external_user_id = config.get("external_user_id")
-        account_id = config.get("account_id")
-        customer_id = config.get("customer_id")
-        agent_id = config.get("agent_id")
-        has_profile_identity = external_user_id is not None
-        has_agent_identity = customer_id is not None or agent_id is not None
-        if has_profile_identity and has_agent_identity:
-            raise EvaosLeaseError(
-                "managed MCP profile and agent identity modes are mutually exclusive"
-            )
-        if not has_agent_identity and (external_user_id is None) != (account_id is None):
-            raise EvaosLeaseError(
-                "managed MCP external_user_id and account_id must be configured together"
-            )
-        if external_user_id is not None:
-            if not isinstance(external_user_id, str) or re.fullmatch(
-                r"[A-Za-z0-9._:-]{1,180}", external_user_id
-            ) is None:
-                raise EvaosLeaseError("managed MCP external user id is invalid")
-            if not isinstance(account_id, str) or re.fullmatch(
-                r"apn_[A-Za-z0-9_-]+", account_id
-            ) is None:
-                raise EvaosLeaseError("managed MCP account id is invalid")
-        if has_agent_identity and (
-            not isinstance(customer_id, str)
-            or re.fullmatch(r"[A-Za-z0-9._:-]{1,180}", customer_id) is None
-            or not isinstance(agent_id, str)
-            or re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,63}", agent_id) is None
-            or (
-                account_id is not None
-                and (
-                    not isinstance(account_id, str)
-                    or re.fullmatch(r"apn_[A-Za-z0-9_-]+", account_id) is None
-                )
-            )
-        ):
-            raise EvaosLeaseError(
-                "managed MCP customer_id and agent_id must be valid together"
-            )
-
-        # The user config may add or edit MCP entries. Lease identity is
-        # authoritative only when this exact server and identity tuple also
-        # exist in the root-owned managed overlay.
-        from hermes_cli.managed_profile_scope import managed_profile_name
-
-        try:
-            managed_profile = managed_profile_name()
-        except Exception as exc:
-            raise EvaosLeaseError(
-                "managed MCP profile authority is unavailable"
-            ) from exc
-        if managed_profile is not None:
-            from hermes_cli import managed_scope
-
-            managed_servers = managed_scope.apply_managed_overlay({}).get(
-                "mcp_servers"
-            )
-            authority = (
-                managed_servers.get(self.name)
-                if isinstance(managed_servers, dict)
-                else None
-            )
-            authority_fields = (
-                "auth",
-                "app_slug",
-                "external_user_id",
-                "account_id",
-                "customer_id",
-                "agent_id",
-            )
-            if (
-                not isinstance(authority, dict)
-                or authority.get("auth") != "evaos_lease"
-                or any(
-                    config.get(field) != authority.get(field)
-                    for field in authority_fields
-                )
-            ):
-                raise EvaosLeaseError(
-                    "managed MCP lease identity is not root-configured"
-                )
-
-    def _warn_evaos_lease_failure(self, exc: Exception) -> None:
-        if self._evaos_lease_warning_emitted:
-            return
-        self._evaos_lease_warning_emitted = True
-        logger.warning(
-            "MCP server '%s' profile '%s': managed Pipedream lease mint failed: %s",
-            self.name, os.path.basename(self.registration_home), exc,
-        )
-||||||| 939e45c91d
-=======
     def _log_park(self, msg: str, *args) -> None:
         """Park chatter control (#115713): re-parking a server that never revived is not a state
         transition — ``hermes mcp list`` already surfaces the parked state, so one identical
@@ -299,7 +184,6 @@ class MCPServerRunMixin:
         else:
             self._last_park_line = line
             logger.warning(msg, *args)
->>>>>>> f97608f178
 
     async def _park(self, revival_reason: str) -> bool:
         """Drop this server's tools and wait for a reconnect request; True when shutdown came instead.
@@ -390,51 +274,11 @@ class MCPServerRunMixin:
         self._elicitation = (_sampling.ElicitationHandler(self.name, elicitation_config,
                                                        call_context=lambda: self._pending_call_context)
                              if elicitation_config.get("enabled", True) and _core._MCP_ELICITATION_TYPES else None)
-        try:
-            self._validate_evaos_lease_config(config)
-        except Exception as exc:
-            logger.warning("MCP server '%s': %s", self.name, exc)
-            self._publish_error(exc)
-            return False
         if "url" in config and "command" in config:
             logger.warning("MCP server '%s' has both 'url' and 'command' in config. Using HTTP transport "
                            "('url'). Remove 'command' to silence this warning.", self.name)
         if not self._is_http():
             return True
-<<<<<<< HEAD
-        if self._auth_type != "evaos_lease":
-            try:
-                _errors._validate_remote_mcp_url(self.name, config.get("url"))
-                # Content-type preflight (Streamable HTTP only; SSE serves text/event-stream): a
-                # web-app root returns HTML and would hang the SDK for connect_timeout. Skipped once
-                # _ready was ever set and for OAuth servers (a token-less probe sees HTML/401).
-                if (config.get("transport") != "sse" and not config.get("skip_preflight")
-                        and not self._ready.is_set() and self._auth_type != "oauth"):
-                    await self._preflight_content_type(
-                        config["url"], headers=dict(config.get("headers") or {}),
-                        ssl_verify=config.get("ssl_verify", True),
-                        client_cert=_errors._resolve_client_cert(self.name, config))
-            except (_errors.InvalidMcpUrlError, _errors.NonMcpEndpointError) as exc:
-                logger.warning("%s", exc)
-                self._publish_error(exc)  # fail fast and non-retryably
-                return False
-||||||| 939e45c91d
-        try:
-            _errors._validate_remote_mcp_url(self.name, config.get("url"))
-            # Content-type preflight (Streamable HTTP only; SSE serves text/event-stream): a
-            # web-app root returns HTML and would hang the SDK for connect_timeout. Skipped once
-            # _ready was ever set and for OAuth servers (a token-less probe sees HTML/401).
-            if (config.get("transport") != "sse" and not config.get("skip_preflight")
-                    and not self._ready.is_set() and self._auth_type != "oauth"):
-                await self._preflight_content_type(
-                    config["url"], headers=dict(config.get("headers") or {}),
-                    ssl_verify=config.get("ssl_verify", True),
-                    client_cert=_errors._resolve_client_cert(self.name, config))
-        except (_errors.InvalidMcpUrlError, _errors.NonMcpEndpointError) as exc:
-            logger.warning("%s", exc)
-            self._publish_error(exc)  # fail fast and non-retryably
-            return False
-=======
         try:
             _errors._validate_remote_mcp_url(self.name, config.get("url"))
             # Content-type preflight (Streamable HTTP only; SSE serves text/event-stream): a
@@ -453,7 +297,6 @@ class MCPServerRunMixin:
             logger.warning("%s", exc)
             self._publish_error(exc)  # fail fast and non-retryably
             return False
->>>>>>> f97608f178
         return True
 
     def _publish_error(self, exc: BaseException) -> None:
@@ -621,66 +464,16 @@ class MCPServerRunMixin:
         await self._backoff_sleep(budget)
         return not self._shutdown_event.is_set()
 
-    @staticmethod
-    def _parked_log_key_for(root: BaseException) -> str:
-        """The identity of a parked failure for log dedup: its type, plus an HTTP status when there
-        is one so a 401 and a 403 are different episodes rather than one."""
-        status = getattr(getattr(root, "response", None), "status_code", None)
-        return f"{type(root).__name__}:{status}" if status is not None else type(root).__name__
-
-    def _claim_parked_log(self, key: str) -> bool:
-        """True for the FIRST park of an episode AND whenever the failure CHANGES, False while the
-        server stays parked on the same unusable condition; :meth:`_clear_parked_log` re-arms it.
-        Instance-scoped like ``_was_parked`` rather than a module-level set: the episode belongs to
-        this task, and two multiplex profiles can hold the same server name in one process."""
-        if self._parked_log_key == key:
-            return False
-        self._parked_log_key = key
-        return True
-
-    def _clear_parked_log(self) -> None:
-        """End the parked episode: the next permanent failure is a new one and logs in full."""
-        self._parked_log_key = None
-
     async def _on_initial_connect_error(self, exc: Exception, root: BaseException,
                                         failure_class: str, budget: "_RetryBudget") -> bool:
         if failure_class == "permanent":
             # Deterministic failure (bad command, non-MCP URL, 401/403): park at once; auth
             # failures park (not return) so the task can pick up fresh tokens later.
-<<<<<<< HEAD
-            # The park is TIMED (_park), so a condition the probe cannot change re-fails on every
-            # wake: one identical WARNING per _PARKED_RETRY_INTERVAL for as long as the server stays
-            # parked (#337, measured at 24/hour on one profile). That is true of every permanent
-            # park -- 401, 403, an OAuth setup failure, a bad command -- so the episode latch is on
-            # the park, not on one error class. The first failure of an episode is a WARNING; the
-            # re-probes are DEBUG.
-            if _errors._is_auth_error(root):
-                # Describe what the code does -- the old wording promised a credential-change wait
-                # the park does not implement -- and keep the remedy conditional: _is_auth_error is
-                # any 401, which includes a server holding a static header key in config.yaml, where
-                # `hermes mcp login` is not the fix.
-                detail = (f"authentication, parking; re-probing every {_core._PARKED_RETRY_INTERVAL}s — if this "
-                          f"server signs in interactively, run `hermes mcp login {self.name}` and the next "
-                          f"probe picks the new credentials up; a static key is corrected in the config")
-            else:
-                detail = (f"connection with a permanent error, parking without retries; re-probing every "
-                          f"{_core._PARKED_RETRY_INTERVAL}s")
-            log = logger.warning if self._claim_parked_log(self._parked_log_key_for(root)) else logger.debug
-            log("MCP server '%s' failed initial %s (state: connecting → parked): %s: %s",
-                self.name, detail, type(root).__name__, root)
-||||||| 939e45c91d
-            detail = (f"authentication, parking until credentials change; re-authenticate with "
-                      f"`hermes mcp login {self.name}`" if _errors._is_auth_error(root)
-                      else "connection with a permanent error, parking without retries")
-            logger.warning("MCP server '%s' failed initial %s (state: connecting → parked): %s: %s",
-                           self.name, detail, type(root).__name__, root)
-=======
             detail = (f"authentication, parking until credentials change; re-authenticate with "
                       f"`hermes mcp login {self.name}`" if _errors._is_auth_error(root)
                       else "connection with a permanent error, parking without retries")
             self._log_park("MCP server '%s' failed initial %s (state: connecting → parked): %s: %s",
                            self.name, detail, type(root).__name__, root)
->>>>>>> f97608f178
             return await self._park_initial_failure(exc, "after permanent initial failure", budget)
         budget.initial_retries += 1
         if budget.initial_retries > _core._MAX_INITIAL_CONNECT_RETRIES:
@@ -711,20 +504,8 @@ class MCPServerRunMixin:
             self._reconnect_retries, budget.backoff = 0, 1.0
             await asyncio.sleep(_jittered(1.0))
             return not self._shutdown_event.is_set()
-<<<<<<< HEAD
-        # Deterministic failure on a working server: park now. It re-fails on every timed self-probe
-        # exactly as it does on the initial-connect path, so it logs once per parked episode too
-        # (#337) — this is the path a server reaches after it HAS connected, and a real session is
-        # what re-arms the latch.
-        log = logger.warning if self._claim_parked_log(self._parked_log_key_for(root)) else logger.debug
-        log(
-||||||| 939e45c91d
-        # Deterministic failure on a working server: park now.
-        logger.warning(
-=======
         # Deterministic failure on a working server: park now.
         self._log_park(
->>>>>>> f97608f178
             "MCP server '%s' hit a permanent error, parking without retries; will self-probe every %ds "
             "(state: connected → parked): %s: %s", self.name, _core._PARKED_RETRY_INTERVAL, type(root).__name__, root)
         return await self._park_and_rearm("from parked state (permanent error)", budget)
@@ -771,15 +552,6 @@ class MCPServerRunMixin:
     def _deregister_tools(self) -> None:
         """Drop this server's tools from the registry (idempotent); on shutdown AND budget
         exhaustion, so a dead server never leaves phantom tools in the prompt."""
-        from tools.registry import registry
         for tool_name in list(getattr(self, "_registered_tool_names", [])):
-<<<<<<< HEAD
-            registry.deregister(tool_name, scope=_core._server_registry_scope(
-                self.name, self.registration_home))
-            _registration._forget_mcp_tool_server(tool_name, self.registration_home)
-||||||| 939e45c91d
-            _registration._deregister_mcp_tool_all_scopes(self.name, tool_name)
-=======
             _registration._deregister_mcp_tool_all_scopes(self, tool_name)
->>>>>>> f97608f178
         self._registered_tool_names = []

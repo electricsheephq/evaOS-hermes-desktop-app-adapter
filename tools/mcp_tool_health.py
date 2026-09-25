@@ -23,7 +23,7 @@ class MCPServerHealthMixin:
     __slots__ = ()
 
     def _is_http(self) -> bool:
-        return "url" in self._config or self._auth_type == "evaos_lease"
+        return "url" in self._config
 
     def _is_recycled_stdio(self) -> bool:
         """True when a stdio server was intentionally recycled."""
@@ -125,20 +125,9 @@ class MCPServerHealthMixin:
     def _deregister_owned(self, tool_names: Iterable[str]) -> None:
         """Deregister *tool_names* this server's toolset still owns (never a colliding name owned by another server)."""
         from tools.registry import registry
-        scope = _core._server_registry_scope(self.name, self.registration_home)
         for tool_name in tool_names:
-<<<<<<< HEAD
-            entry = registry.get_entry(tool_name, scope=scope)
-            if entry and entry.toolset == f"mcp-{self.name}":
-                registry.deregister(tool_name, scope=scope)
-                _registration._forget_mcp_tool_server(tool_name, self.registration_home)
-||||||| 939e45c91d
-            if registry.get_toolset_for_tool(tool_name) == f"mcp-{self.name}":
-                _registration._deregister_mcp_tool_all_scopes(self.name, tool_name)
-=======
             if registry.get_toolset_for_tool(tool_name) == f"mcp-{self.name}":
                 _registration._deregister_mcp_tool_all_scopes(self, tool_name)
->>>>>>> f97608f178
 
     async def _refresh_tools(self):
         """Re-fetch tools on ``tools/list_changed`` and update the registry. The lock serializes rapid-fire
@@ -222,14 +211,7 @@ class MCPServerHealthMixin:
             return
         self._session_proven = True
         self._reconnect_retries = 0
-<<<<<<< HEAD
-        # The parked-episode log latch ends here too, not at the handshake: a server that connects
-        # and drops again keeps its episode, so a flapping permanent failure stays deduped (#337).
-        self._clear_parked_log()
-||||||| 939e45c91d
-=======
         self._park_reason = None
->>>>>>> f97608f178
         if self._was_parked:
             self._was_parked = False
             logger.warning("MCP server '%s': revived — session healthy again after "

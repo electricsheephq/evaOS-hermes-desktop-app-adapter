@@ -5,16 +5,9 @@ from __future__ import annotations
 import threading
 from contextlib import nullcontext
 from contextvars import copy_context
-<<<<<<< HEAD
-from pathlib import Path
-from typing import Optional
-||||||| 939e45c91d
-from typing import Optional
-=======
 from typing import Dict, Optional, Set
 
 from hermes_constants import hermes_home_key
->>>>>>> f97608f178
 
 _mcp_discovery_lock = threading.Lock()
 # Discovery slot per profile home (``hermes_home_key()`` follows the context-local HERMES_HOME
@@ -24,58 +17,12 @@ _mcp_discovery_lock = threading.Lock()
 _mcp_discovery_started: Set[str] = set()
 _mcp_discovery_thread: Dict[str, threading.Thread] = {}
 _mcp_discovery_deferred: Optional[threading.Timer] = None
-# A multiplex serve owns one lazy discovery slot per effective profile home.
-# The legacy globals above remain the only slot outside multiplex mode.
-_mcp_discovery_started_scopes: set[str] = set()
-_mcp_discovery_threads: dict[str, threading.Thread] = {}
 # Process-wide MCP server-name allowlist derived from ``-t/--toolsets``.
 # ``None`` = no filter (spawn every configured server). Set once at CLI
 # startup by ``set_mcp_server_filter`` and honored by every discovery path
 # in this module (inline, background, deferred), so a ``-t terminal``
 # oneshot never cold-starts MCP subprocesses it cannot use.
 _mcp_server_filter: Optional[list[str]] = None
-
-
-def _discovery_scope_key() -> Optional[str]:
-    """Return the current multiplex profile identity, else the legacy slot."""
-    try:
-        from agent.secret_scope import is_multiplex_active
-
-        if not is_multiplex_active():
-            return None
-        from hermes_constants import get_hermes_home
-
-        return str(Path(get_hermes_home()).expanduser().resolve())
-    except Exception:
-        # Fail closed to the historical process slot when multiplex identity
-        # cannot be resolved; never invent a shared profile key.
-        return None
-
-
-def _current_discovery_thread() -> Optional[threading.Thread]:
-    scope_key = _discovery_scope_key()
-    if scope_key is None:
-        return _mcp_discovery_thread
-    return _mcp_discovery_threads.get(scope_key)
-
-
-def _any_mcp_connected_for_scope(scope_key: Optional[str]) -> bool:
-    """Return whether a live MCP server belongs to the active profile scope."""
-    if scope_key is None:
-        return _any_mcp_connected()
-    try:
-        from tools import mcp_tool
-
-        with mcp_tool._lock:
-            return any(
-                getattr(server, "session", None) is not None
-                and mcp_tool._server_scope_keys.get(name) == scope_key
-                for name, server in mcp_tool._servers.items()
-            )
-    except Exception:
-        # A missing/changed state seam must not treat another profile's
-        # connection as proof for this profile.
-        return False
 
 
 def set_mcp_server_filter(toolsets: object) -> Optional[list[str]]:
@@ -106,10 +53,9 @@ def get_mcp_server_filter() -> Optional[list[str]]:
 def _has_configured_mcp_servers() -> bool:
     """Cheap config probe so non-MCP users avoid importing the MCP stack."""
     try:
-        from hermes_cli import managed_scope
         from hermes_cli.config import read_raw_config
 
-        raw_config = managed_scope.apply_managed_overlay(read_raw_config() or {})
+        raw_config = read_raw_config() or {}
         if isinstance(raw_config.get("mcp_servers"), dict) and raw_config["mcp_servers"]:
             return True
         from hermes_cli.agent_plugins import has_enabled_agent_plugin_mcp
@@ -137,63 +83,19 @@ def _any_mcp_connected() -> bool:
 
 
 def start_background_mcp_discovery(*, logger, thread_name: str) -> None:
-<<<<<<< HEAD
-    """Spawn one background MCP discovery thread for the active scope.
-||||||| 939e45c91d
-    """Spawn one shared background MCP discovery thread for this process.
-=======
     """Spawn one background MCP discovery thread per profile home.
->>>>>>> f97608f178
 
     If the first run exits without connecting any server (e.g. startup cancellation / OOM restart),
-<<<<<<< HEAD
-    later calls may retry instead of pinning the process in "already started" with zero MCP tools.
-    Multiplex serves keep this state per effective profile home; single-profile callers retain the
-    historical process-wide slot.
-||||||| 939e45c91d
-    later calls may retry instead of pinning the process in "already started" with zero MCP tools.
-=======
     later calls may retry instead of pinning the profile in "already started" with zero MCP tools.
->>>>>>> f97608f178
     """
-<<<<<<< HEAD
-    global _mcp_discovery_started, _mcp_discovery_thread
-
-    scope_key = _discovery_scope_key()
-    # A shared serve may host profiles with no MCP configuration. Avoid creating
-    # empty per-profile slots while still probing lazily on each session.
-    if scope_key is not None and not _has_configured_mcp_servers():
-        return
-||||||| 939e45c91d
-    global _mcp_discovery_started, _mcp_discovery_thread
-
-=======
     home_key = hermes_home_key()
->>>>>>> f97608f178
     with _mcp_discovery_lock:
-<<<<<<< HEAD
-        started = (
-            _mcp_discovery_started
-            if scope_key is None
-            else scope_key in _mcp_discovery_started_scopes
-        )
-        thread = (
-            _mcp_discovery_thread
-            if scope_key is None
-            else _mcp_discovery_threads.get(scope_key)
-        )
-        if started:
-||||||| 939e45c91d
-        if _mcp_discovery_started:
-            thread = _mcp_discovery_thread
-=======
         if home_key in _mcp_discovery_started:
             thread = _mcp_discovery_thread.get(home_key)
->>>>>>> f97608f178
             if thread is not None and thread.is_alive():
                 return
             try:
-                if _any_mcp_connected_for_scope(scope_key):
+                if _any_mcp_connected():
                     return
             except Exception:
                 return
@@ -201,34 +103,11 @@ def start_background_mcp_discovery(*, logger, thread_name: str) -> None:
                 "Background MCP discovery previously exited with no connected "
                 "servers; retrying discovery thread"
             )
-<<<<<<< HEAD
-            if scope_key is None:
-                _mcp_discovery_started = False
-                _mcp_discovery_thread = None
-            else:
-                _mcp_discovery_started_scopes.discard(scope_key)
-                _mcp_discovery_threads.pop(scope_key, None)
-||||||| 939e45c91d
-            _mcp_discovery_started = False
-            _mcp_discovery_thread = None
-=======
             _mcp_discovery_started.discard(home_key)
             _mcp_discovery_thread.pop(home_key, None)
->>>>>>> f97608f178
 
-<<<<<<< HEAD
-        if scope_key is None:
-            _mcp_discovery_started = True
-        else:
-            _mcp_discovery_started_scopes.add(scope_key)
-        if scope_key is None and not _has_configured_mcp_servers():
-||||||| 939e45c91d
-        _mcp_discovery_started = True
-        if not _has_configured_mcp_servers():
-=======
         _mcp_discovery_started.add(home_key)
         if not _has_configured_mcp_servers():
->>>>>>> f97608f178
             return
 
         # Bare threads start from an empty context: run discovery under a copy of the caller's, so
@@ -241,7 +120,7 @@ def start_background_mcp_discovery(*, logger, thread_name: str) -> None:
             try:
                 _discover_mcp_tools_without_interactive_oauth()
                 try:
-                    if not _any_mcp_connected_for_scope(scope_key):
+                    if not _any_mcp_connected():
                         logger.warning("Background MCP discovery completed with zero connected servers")
                 except Exception:
                     logger.debug("Failed to inspect MCP status after background discovery", exc_info=True)
@@ -249,35 +128,10 @@ def start_background_mcp_discovery(*, logger, thread_name: str) -> None:
                 logger.debug("Background MCP tool discovery failed", exc_info=True)
             finally:
                 with _mcp_discovery_lock:
-<<<<<<< HEAD
-                    global _mcp_discovery_thread
-                    if scope_key is None:
-                        _mcp_discovery_thread = None
-                    else:
-                        _mcp_discovery_threads.pop(scope_key, None)
-||||||| 939e45c91d
-                    global _mcp_discovery_thread
-                    _mcp_discovery_thread = None
-=======
                     _mcp_discovery_thread.pop(home_key, None)
->>>>>>> f97608f178
 
-<<<<<<< HEAD
-        caller_context = copy_context()
-        thread = threading.Thread(
-            target=lambda: caller_context.run(_discover), name=thread_name, daemon=True,
-        )
-        if scope_key is None:
-            _mcp_discovery_thread = thread
-        else:
-            _mcp_discovery_threads[scope_key] = thread
-||||||| 939e45c91d
-        thread = threading.Thread(target=copy_context().run, args=(_discover,), name=thread_name, daemon=True)
-        _mcp_discovery_thread = thread
-=======
         thread = threading.Thread(target=copy_context().run, args=(_discover,), name=thread_name, daemon=True)
         _mcp_discovery_thread[home_key] = thread
->>>>>>> f97608f178
         thread.start()
 
 
@@ -373,16 +227,8 @@ def wait_for_mcp_discovery(timeout: "float | None" = None, *, single_query: bool
     server's real connect time. ``single_query`` uses ``mcp_single_query_discovery_timeout``
     (15s vs 1.5s) because one-shot sessions have no second turn to recover.
     """
-<<<<<<< HEAD
-    _start_deferred_mcp_discovery_now()
-    thread = _current_discovery_thread()
-||||||| 939e45c91d
-    _start_deferred_mcp_discovery_now()
-    thread = _mcp_discovery_thread
-=======
     start_deferred_mcp_discovery_now()
     thread = _current_home_thread()
->>>>>>> f97608f178
     if thread is None or not thread.is_alive():
         return
     thread.join(timeout=_resolve_discovery_timeout(timeout, single_query=single_query))
@@ -403,26 +249,14 @@ def mcp_discovery_in_flight() -> bool:
     late-refresh scheduler must consult both to decide whether a slow server's tools are still pending (see
     #51587).
     """
-<<<<<<< HEAD
-    thread = _current_discovery_thread()
-||||||| 939e45c91d
-    thread = _mcp_discovery_thread
-=======
     thread = _current_home_thread()
->>>>>>> f97608f178
     return thread is not None and thread.is_alive()
 
 
 def join_mcp_discovery(timeout: "float | None" = None) -> bool:
     """Block up to ``timeout`` for THIS module's discovery; True once complete, False if still
     running. For the off-critical-path late-refresh waiter (accepts a long wait, reports outcome)."""
-<<<<<<< HEAD
-    thread = _current_discovery_thread()
-||||||| 939e45c91d
-    thread = _mcp_discovery_thread
-=======
     thread = _current_home_thread()
->>>>>>> f97608f178
     if thread is None:
         return True
     thread.join(timeout=timeout)
