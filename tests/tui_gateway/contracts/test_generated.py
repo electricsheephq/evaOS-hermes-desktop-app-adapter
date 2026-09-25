@@ -43,6 +43,8 @@ _LITERAL_FRAME = re.compile(r"\"method\":\s*\"event\".{0,120}?\"type\":\s*\"([a-
 _SIDE_AGENT = re.compile(r"_spawn_side_agent\((?:[^()]|\([^()]*\))*?\"([a-z_][a-z0-9_.]*\.complete)\"", re.S)
 _SUBAGENT_RELAY = re.compile(r"\"(subagent\.[a-z_]+)\"")
 _DESKTOP_UI_EMIT = re.compile(r"desktop_ui\.(?:emit|emit_or_error)\(\s*\"([a-z_][a-z0-9_.]*)\"")
+# evaOS: the protocol-gated emitter ``_desktop_ui_emit(sid, "event", payload)`` (event name second).
+_GATED_DESKTOP_UI_EMIT = re.compile(r"\b_desktop_ui_emit\(\s*[^,()]+(?:\([^()]*\))?\s*,\s*\"([a-z_][a-z0-9_.]*)\"")
 _BROKER_FRAME = re.compile(r"^FRAME_[A-Z_]+ = \"(browser\.controller\.[a-z_]+)\"", re.M)
 _SETUP_READY = re.compile(r"^SETUP_READY_EVENT = \"([a-z_.]+)\"", re.M)
 
@@ -56,6 +58,7 @@ def emitted_event_names() -> set[str]:
     for src in (REPO / "tui_gateway").glob("*.py"):
         text = _read(src)
         names.update(_LITERAL_EMIT.findall(text))
+        names.update(_GATED_DESKTOP_UI_EMIT.findall(text))
         names.update(_LITERAL_FRAME.findall(text))
         names.update(_SIDE_AGENT.findall(text))
     from tui_gateway.agent_callbacks import _CHILD_DELTA_EVENTS

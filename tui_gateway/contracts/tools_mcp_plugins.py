@@ -98,8 +98,9 @@ method("tools.configure", params=ToolsConfigureParams, result=ToolsConfigureResu
 # ── reload ────────────────────────────────────────────────────────────────────────────────────
 
 
-class ReloadEnvParams(Params):
-    pass
+class ReloadEnvParams(ProfileParams):
+    """``profile`` is accepted for evaOS Desktop es.9 shared-remote routes (it adds ``profile`` to every
+    routed call); the reload itself is process-wide."""
 
 
 class ReloadEnvResult(Result):
@@ -110,9 +111,10 @@ method("reload.env", params=ReloadEnvParams, result=ReloadEnvResult,
        doc="Re-read ~/.hermes/.env (CLI /reload parity); built agents keep their pool until /new.")
 
 
-class ReloadMcpParams(Params):
+class ReloadMcpParams(ProfileParams):
     """Without ``confirm`` the handler may answer ``confirm_required`` (per ``approvals.mcp_reload_confirm``);
-    ``always`` persists the opt-out; ``rev`` is the config revision the caller wants loaded (coalescing)."""
+    ``always`` persists the opt-out; ``rev`` is the config revision the caller wants loaded (coalescing).
+    ``profile`` is accepted for evaOS Desktop es.9 shared-remote routes; the reload spans every live session."""
 
     session_id: str | None = None
     confirm: bool = False

@@ -26,15 +26,9 @@ from hermes_constants import (
     get_hermes_home, get_hermes_home_override, get_process_hermes_home, profile_name_for_home,
     reset_hermes_home_override, set_hermes_home_override)
 from hermes_cli.env_loader import load_hermes_dotenv
-<<<<<<< HEAD
-from hermes_cli.managed_profile_scope import ManagedProfileScopeError
-from utils import is_truthy_value
-||||||| 939e45c91d
-from utils import is_truthy_value
-=======
+from hermes_cli.managed_profile_scope import ManagedProfileScopeError  # noqa: F401  (rpc_dispatch binds to server globals)
 from utils import file_signature, is_truthy_value
 from hermes_state_ids import new_session_id
->>>>>>> f97608f178
 from tools.environments.local import hermes_subprocess_env
 from agent.replay_cleanup import canonicalize_replay_history
 from agent.reasoning_effort import clamp_effort, route_supported_efforts
@@ -661,14 +655,16 @@ def _event_frame(event: str, sid: str, payload: dict | None = None) -> dict:
     return {"jsonrpc": "2.0", "method": "event", "params": params}
 
 
-<<<<<<< HEAD
 def _emit(
     event: str,
     sid: str,
     payload: dict | None = None,
     *,
     transport: Transport | None = None,
-):
+) -> bool:
+    from agent.notification_presentation import event_presentation_muted
+    if event_presentation_muted(event, sid):
+        return False
     frame = _event_frame(event, sid, payload)
     if transport is None:
         return write_json(frame)
@@ -686,16 +682,6 @@ def _emit_on_transport(event: str, sid: str, payload: dict | None, transport: Tr
     if transport is None:
         return _emit(event, sid, payload)
     return _emit(event, sid, payload, transport=transport)
-||||||| 939e45c91d
-def _emit(event: str, sid: str, payload: dict | None = None) -> bool:
-    return write_json(_event_frame(event, sid, payload))
-=======
-def _emit(event: str, sid: str, payload: dict | None = None) -> bool:
-    from agent.notification_presentation import event_presentation_muted
-    if event_presentation_muted(event, sid):
-        return False
-    return write_json(_event_frame(event, sid, payload))
->>>>>>> f97608f178
 
 
 from tui_gateway import server_requests as _server_requests  # noqa: E402
@@ -900,42 +886,6 @@ def _normalize_request(req: Any) -> tuple[Any, str, dict] | dict:
     return rid, method, params if params is not None else {}
 
 
-<<<<<<< HEAD
-def handle_request(req: dict) -> dict | None:
-    normalized = _normalize_request(req)
-    if isinstance(normalized, dict):
-        return normalized
-    rid, method, params = normalized
-    if not (fn := _methods.get(method)):
-        return _err(rid, -32601, f"unknown method: {method}")
-    token = _current_rpc_method.set(method)
-    try:
-        return fn(rid, params)
-    except ManagedProfileScopeError as exc:
-        # A request naming a profile outside this managed gateway's scope is a refusal, not a
-        # server fault. Mirrors the dashboard's 403 in hermes_cli.web_server_profiles
-        # ._managed_profile_or_http; without this the PermissionError escaped the handler and
-        # the ws read loop answered a generic -32603 "internal error" plus a logged traceback.
-        return _err(rid, 4030, str(exc) or "profile is not authorized")
-    finally:
-        _current_rpc_method.reset(token)
-
-||||||| 939e45c91d
-def handle_request(req: dict) -> dict | None:
-    normalized = _normalize_request(req)
-    if isinstance(normalized, dict):
-        return normalized
-    rid, method, params = normalized
-    if not (fn := _methods.get(method)):
-        return _err(rid, -32601, f"unknown method: {method}")
-    token = _current_rpc_method.set(method)
-    try:
-        return fn(rid, params)
-    finally:
-        _current_rpc_method.reset(token)
-
-=======
->>>>>>> f97608f178
 
 def _current_session_steer_authority(session_id: str) -> tuple[Transport | None, dict | None]:
     """Unforgeable steering authority for this RPC context: the public session id is only a lookup
@@ -957,7 +907,6 @@ def _current_session_steer_authority(session_id: str) -> tuple[Transport | None,
         return transport, session
 
 
-<<<<<<< HEAD
 def _release_rpc_thread_read_connection() -> None:
     """Release a worker-local SessionDB reader when the pool supports explicit release.
 
@@ -975,70 +924,6 @@ def _release_rpc_thread_read_connection() -> None:
     except Exception:
         logger.debug("RPC worker SessionDB reader release failed", exc_info=True)
 
-
-def dispatch(req: dict, transport: Optional[Transport] = None) -> dict | None:
-    """Route inbound RPCs — long handlers to the pool (returns None; the worker writes its own
-    response via the bound transport), everything else inline (returns the response dict).
-    *transport* pins every write of this request — events included — to that transport;
-    omitted → the module stdio transport (``tui_gateway.entry`` behaviour)."""
-    t = transport or _stdio_transport
-    token = bind_transport(t)
-    try:
-        normalized = _normalize_request(req)
-        if isinstance(normalized, dict):
-            return normalized
-        if normalized[1] not in _LONG_HANDLERS:
-            return handle_request(req)
-        ctx = contextvars.copy_context()  # the pool worker must see the bound transport
-        if normalized[1] in _CONNECTOR_RPC_METHODS:
-            ctx.run(_capture_connector_rpc_owner, normalized[2])
-
-        def run():
-            try:
-                resp = handle_request(req)
-            except Exception as exc:
-                resp = _err(req.get("id"), -32000, f"handler error: {exc}")
-            finally:
-                _release_rpc_thread_read_connection()
-            if resp is not None:
-                t.write(resp)
-        _pool.submit(lambda: ctx.run(run))
-        return None
-    finally:
-        reset_transport(token)
-
-||||||| 939e45c91d
-def dispatch(req: dict, transport: Optional[Transport] = None) -> dict | None:
-    """Route inbound RPCs — long handlers to the pool (returns None; the worker writes its own
-    response via the bound transport), everything else inline (returns the response dict).
-    *transport* pins every write of this request — events included — to that transport;
-    omitted → the module stdio transport (``tui_gateway.entry`` behaviour)."""
-    t = transport or _stdio_transport
-    token = bind_transport(t)
-    try:
-        normalized = _normalize_request(req)
-        if isinstance(normalized, dict):
-            return normalized
-        if normalized[1] not in _LONG_HANDLERS:
-            return handle_request(req)
-        ctx = contextvars.copy_context()  # the pool worker must see the bound transport
-        if normalized[1] in _CONNECTOR_RPC_METHODS:
-            ctx.run(_capture_connector_rpc_owner, normalized[2])
-
-        def run():
-            try:
-                resp = handle_request(req)
-            except Exception as exc:
-                resp = _err(req.get("id"), -32000, f"handler error: {exc}")
-            if resp is not None:
-                t.write(resp)
-        _pool.submit(lambda: ctx.run(run))
-        return None
-    finally:
-        reset_transport(token)
-
-=======
->>>>>>> f97608f178
 
 def _wait_agent(session: dict, rid: str, timeout: float = 30.0) -> dict | None:
     ready = session.get("agent_ready")
@@ -1135,14 +1020,8 @@ def _deferred_build_agent_kwargs(current: dict, session_db) -> dict:
     runtime identity (like the eager resume's overrides splat) so the build can't drop the provider. No
     stored runtime, or an unroutable provider → this session's picked model/effort/tier, else the default."""
     kw = {"session_db": session_db, "context_cwd_is_launch_artifact": _context_cwd_is_launch_artifact(current),
-<<<<<<< HEAD
-          "platform_override": _session_source(current),
+          "platform_override": _session_source(current), "cwd_override": _session_cwd(current),
           "desktop_ui_protocol_override": current.get("desktop_ui_protocol")}
-||||||| 939e45c91d
-          "platform_override": _session_source(current)}
-=======
-          "platform_override": _session_source(current), "cwd_override": _session_cwd(current)}
->>>>>>> f97608f178
     if resume_sid := current.get("resume_session_id"):
         kw["session_id"] = resume_sid
     resume_overrides = current.get("resume_runtime_overrides")
@@ -1481,26 +1360,6 @@ def _enable_gateway_prompts() -> None:
 # ── Blocking prompt factory ──────────────────────────────────────────
 
 
-<<<<<<< HEAD
-# Blocking bridges whose `*.respond` tolerates a late reply (allow_expired=True): on timeout the tool
-# returns empty (or clarify's canonical sentinel), but a slow renderer could still answer and hit a raw
-# 4009 — `.expire` tears the card down.
-_EXPIRING_REQUESTS = frozenset({
-    "secret.request", "sudo.request", "vault.unlock.request", "vault.save_login.request", "vault.code.request", "clarify.request",
-    "terminal.read.request",
-    "preview.read.request", "preview.act.request", "window.read.request", "mcp.setup.request",
-    "tour.request",
-})
-||||||| 939e45c91d
-# Blocking bridges whose `*.respond` tolerates a late reply (allow_expired=True): on timeout the tool
-# returns empty, but a slow renderer could still answer and hit a raw 4009 — `.expire` tears the card down.
-_EXPIRING_REQUESTS = frozenset({
-    "secret.request", "sudo.request", "vault.unlock.request", "vault.save_login.request", "vault.code.request", "clarify.request",
-    "terminal.read.request",
-    "preview.read.request", "preview.act.request", "window.read.request", "mcp.setup.request",
-    "tour.request",
-})
-=======
 def _ask(method: str, sid: str, params: dict, timeout: float | None = 300) -> str:
     """Server→client request whose answer is one string under ``value`` (sudo, secret, vault prompts, GUI reads,
     MCP setup). Empty string when the renderer skipped, timed out, or was cancelled."""
@@ -1508,122 +1367,8 @@ def _ask(method: str, sid: str, params: dict, timeout: float | None = 300) -> st
     result = server_requests.send(method, sid, params, timeout=timeout)
     value = (result or {}).get("value", "")
     return value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
->>>>>>> f97608f178
 
 
-<<<<<<< HEAD
-def _block(
-    event: str,
-    sid: str,
-    payload: dict,
-    timeout: float | None = 300,
-    batch_qids: list[str] | None = None,
-    transport: Transport | None = None,
-) -> str:
-    # Check before registering a pending request so a legacy or non-Desktop
-    # client never waits for a responder it cannot implement.  The same check
-    # is repeated immediately before emit to close the lifecycle-downgrade race.
-    if event in _DESKTOP_UI_EVENT_REQUIREMENTS:
-        if error := _desktop_ui_emitter_protocol_error(sid, event):
-            return error
-    rid = uuid.uuid4().hex[:8]
-    ev = threading.Event()
-    with _prompt_lock:
-        _pending[rid] = (sid, ev)
-        payload["request_id"] = rid
-        _pending_prompt_payloads[rid] = (event, dict(payload))
-        if batch_qids:
-            # Multi-question clarify: per-question answers accumulate here (update-in-place until every
-            # qid is locked); locked answers survive a timeout — see the batch read-out below.
-            _batch_clarify[rid] = {"qids": list(batch_qids), "answers": {}}
-    answered, batch_answers = False, None
-    try:
-        if event in _DESKTOP_UI_EVENT_REQUIREMENTS:
-            if error := _desktop_ui_emitter_protocol_error(sid, event):
-                return error
-        _emit_on_transport(event, sid, payload, transport)
-        # Event semantics: None → wait forever (clarify_timeout <= 0; released only by a real answer or
-        # session.interrupt), 0 → return immediately, > 0 → bounded wait.
-        answered = ev.wait(timeout)
-    finally:
-        with _prompt_lock:
-            _pending.pop(rid, None)
-            _pending_prompt_payloads.pop(rid, None)
-            answer_present = rid in _answers
-            answer = _answers.pop(rid, "")
-            if (batch_state := _batch_clarify.pop(rid, None)) is not None:
-                batch_answers = dict(batch_state["answers"])
-    expire = lambda: _emit_on_transport(
-        f"{event.removesuffix('.request')}.expire",
-        sid,
-        {"request_id": rid},
-        transport,
-    )
-    if batch_qids is not None:
-        # Cancel-all (respond with no question_id) resolves via _answers with "" — a plain cancel, not a partial result.
-        if answer_present:
-            return answer
-        result: dict[str, object] = {"answers": batch_answers or {}}
-        if not answered:
-            # Deadline hit: keep what was locked, report the rest as absences (not skips), still expire live cards.
-            result["timed_out"] = True
-            _emit_on_transport(
-                f"{event.removesuffix('.request')}.expire",
-                sid,
-                {"request_id": rid},
-                transport,
-            )
-        return json.dumps(result, ensure_ascii=False)
-    if not answered and not answer_present and event in _EXPIRING_REQUESTS:
-        expire()
-    if not answered and not answer_present and event == "clarify.request":
-        from tools.clarify_tool import TIMEOUT_RESPONSE
-        return TIMEOUT_RESPONSE
-    return answer
-
-||||||| 939e45c91d
-def _block(event: str, sid: str, payload: dict, timeout: float | None = 300, batch_qids: list[str] | None = None) -> str:
-    rid = uuid.uuid4().hex[:8]
-    ev = threading.Event()
-    with _prompt_lock:
-        _pending[rid] = (sid, ev)
-        payload["request_id"] = rid
-        _pending_prompt_payloads[rid] = (event, dict(payload))
-        if batch_qids:
-            # Multi-question clarify: per-question answers accumulate here (update-in-place until every
-            # qid is locked); locked answers survive a timeout — see the batch read-out below.
-            _batch_clarify[rid] = {"qids": list(batch_qids), "answers": {}}
-    answered, batch_answers = False, None
-    try:
-        _emit(event, sid, payload)
-        # Event semantics: None → wait forever (clarify_timeout <= 0; released only by a real answer or
-        # session.interrupt), 0 → return immediately, > 0 → bounded wait.
-        answered = ev.wait(timeout)
-    finally:
-        with _prompt_lock:
-            _pending.pop(rid, None)
-            _pending_prompt_payloads.pop(rid, None)
-            answer_present = rid in _answers
-            answer = _answers.pop(rid, "")
-            if (batch_state := _batch_clarify.pop(rid, None)) is not None:
-                batch_answers = dict(batch_state["answers"])
-    expire = lambda: _emit(f"{event.removesuffix('.request')}.expire", sid, {"request_id": rid})
-    if batch_qids is not None:
-        # Cancel-all (respond with no question_id) resolves via _answers with "" — a plain cancel, not a partial result.
-        if answer_present:
-            return answer
-        result: dict[str, object] = {"answers": batch_answers or {}}
-        if not answered:
-            # Deadline hit: keep what was locked, report the rest as absences (not skips), still expire live cards.
-            result["timed_out"] = True
-            expire()
-        return json.dumps(result, ensure_ascii=False)
-    if not answered and not answer_present and event in _EXPIRING_REQUESTS:
-        expire()
-    return answer
-
-=======
->>>>>>> f97608f178
 
 def _clarify_timeout_seconds() -> float | None:
     """Clarify wait for the TUI/desktop bridge from the canonical config (gateway/CLI parity); 300s
@@ -1651,7 +1396,12 @@ def _clarify_block(sid: str, q, c, multi_select=False, questions=None) -> str:
         return json.dumps(result, ensure_ascii=False)
     params = {"question": q, "choices": c, "multi_select": True} if multi_select else {"question": q, "choices": c}
     result = server_requests.send("clarify", sid, params, timeout=_clarify_timeout_seconds())
-    answer = (result or {}).get("answer", "")
+    if result is None:
+        # Never answered (deadline, cancel, or no client able to answer): the canonical timeout
+        # guidance, like the CLI and messaging surfaces — never a bare "" the agent reads as a skip.
+        from tools.clarify_tool import TIMEOUT_RESPONSE
+        return TIMEOUT_RESPONSE
+    answer = result.get("answer", "")
     return answer if isinstance(answer, str) else ""
 
 
@@ -1669,19 +1419,9 @@ _TOUR_BRIDGE_UNAVAILABLE = json.dumps({
               "in this session.")})
 
 
-<<<<<<< HEAD
-def _tour_request(sid: str, payload: dict, *, transport: Transport | None = None) -> str:
-    """Bridge the tour tool callback onto _block without paying for a client that cannot answer: against
-    an older app nobody calls ``tour.respond`` and each action would block the full deadline, stacking per
-||||||| 939e45c91d
-def _tour_request(sid: str, payload: dict) -> str:
-    """Bridge the tour tool callback onto _block without paying for a client that cannot answer: against
-    an older app nobody calls ``tour.respond`` and each action would block the full deadline, stacking per
-=======
 def _tour_request(sid: str, payload: dict) -> str:
     """Bridge the tour tool callback onto a ``tour`` server request without paying for a client that cannot answer: against
     an older app nobody answers ``tour`` and each action would block the full deadline, stacking per
->>>>>>> f97608f178
     turn. First action per session gets the short probe deadline; unanswered → bridge marked unavailable
     for that session; once answered, the full deadline. Verdict lives on the record, so a new session re-probes.
 
@@ -1696,21 +1436,8 @@ def _tour_request(sid: str, payload: dict) -> str:
     state = session.get("tour_bridge")
     if state == "unanswered":
         return _TOUR_BRIDGE_UNAVAILABLE
-<<<<<<< HEAD
-    answer = _block(
-        "tour.request",
-        sid,
-        dict(payload),
-        timeout=_TOUR_TIMEOUT_S if state == "answered" else _TOUR_PROBE_TIMEOUT_S,
-        transport=transport,
-    )
-||||||| 939e45c91d
-    answer = _block("tour.request", sid, dict(payload),
-                    timeout=_TOUR_TIMEOUT_S if state == "answered" else _TOUR_PROBE_TIMEOUT_S)
-=======
     answer = _ask("tour", sid, dict(payload),
                   timeout=_TOUR_TIMEOUT_S if state == "answered" else _TOUR_PROBE_TIMEOUT_S)
->>>>>>> f97608f178
     if answer:
         session["tour_bridge"] = "answered"
     elif state != "answered":
@@ -2179,18 +1906,20 @@ def _negotiate_desktop_ui_protocol(platform: str, requested=None) -> int:
     return max(DESKTOP_UI_PROTOCOL_LEGACY, min(requested, DESKTOP_UI_PROTOCOL_CURRENT))
 
 
+# Renderer events (fire-and-forget) and server→client requests (``terminal.read``, ``preview.read``,
+# ``preview.act``, ``window.read``, ``tour``) reachable from the desktop_ui surfaces, with the minimum
+# negotiated Desktop UI protocol and the tool identity used in errors and lifecycle logs.
 _DESKTOP_UI_EVENT_REQUIREMENTS = {
-    "terminal.read.request": (1, "read_terminal"),
+    "terminal.read": (1, "read_terminal"),
     "terminal.close": (1, "close_terminal"),
     "preview.open": (1, "desktop_preview.open"),
     "pane.reveal": (1, "focus_pane"),
     "message.reaction": (1, "react_to_message"),
-    "preview.read.request": (2, "desktop_preview.read"),
+    "preview.read": (2, "desktop_preview.read"),
     "preview.close": (2, "desktop_preview.close"),
-    "preview.act.request": (2, "drive_preview"),
-    "window.read.request": (2, "read_window_below"),
-    "mcp.setup.request": (2, "setup_mcp"),
-    "tour.request": (2, "gui_tour"),
+    "preview.act": (2, "drive_preview"),
+    "window.read": (2, "read_window_below"),
+    "tour": (2, "gui_tour"),
     "layout.apply": (2, "apply_layout"),
     "tip.show": (3, "show_tip"),
 }
@@ -2333,7 +2062,10 @@ def _bind_session_attachment(
     with lock:
         session["source"] = resolved_source
         session["desktop_ui_protocol"] = protocol
-        if transport is not None:
+        # A late RPC from an already-closed socket is not a returning viewer: leave the detached
+        # sentinel (and its armed orphan reap) in place, as upstream's _rebind_live_transport does.
+        if transport is not None and not (
+                transport is not _detached_ws_transport and _transport_is_dead(transport)):
             session["transport"] = transport
             session.setdefault("viewers", {})[transport] = {
                 "attached_at": time.time(),
@@ -2395,7 +2127,6 @@ def _desktop_ui_emit(sid: str, event: str, payload: dict) -> bool:
 def _gui_surface_toolsets(platform: str, desktop_ui_protocol=None) -> set[str]:
     """Toolsets that exist because of the CLIENT (both off ``_HERMES_CORE_TOOLS``; this is the one gate).
     ``platform`` is the SESSION's source, never a process env var: the desktop may drive a URL/cloud
-<<<<<<< HEAD
     backend where ``HERMES_DESKTOP`` is unset (AGENTS.md surface rule).
 
     An explicit protocol is the negotiated GUI capability view and therefore
@@ -2412,25 +2143,18 @@ def _gui_surface_toolsets(platform: str, desktop_ui_protocol=None) -> set[str]:
         if negotiated >= 3:
             surfaces.add("desktop_ui_v3")
     return surfaces
-||||||| 939e45c91d
-    backend where ``HERMES_DESKTOP`` is unset (AGENTS.md surface rule)."""
-    return {"project", "desktop_ui"} if platform == "desktop" else {"project"}
-=======
-    backend where ``HERMES_DESKTOP`` is unset (AGENTS.md surface rule)."""
-    from toolsets import CLIENT_SURFACE_TOOLSETS
-    return set(CLIENT_SURFACE_TOOLSETS) if platform == "desktop" else {"project"}
 
 
-def _with_session_toolsets(selection, platform: str | None) -> list[str]:
+def _with_session_toolsets(selection, platform: str | None, desktop_ui_protocol=None) -> list[str]:
     """*selection* plus what the session carries whatever its config says (the client surface's
     toolsets when *platform* is given; the ones its PROFILE's role reserves, from the backend-written
     profile.yaml under the session's home override), minus toolsets reserved for another role."""
     from toolsets import profile_role_toolsets
     granted, denied = profile_role_toolsets()
-    surface = _gui_surface_toolsets(platform) if platform is not None else set()
+    # The always-available project surface plus the negotiated Desktop UI protocol view.
+    surface = ({"project"} | _gui_surface_toolsets(platform, desktop_ui_protocol)) if platform is not None else set()
     kept = [name for name in selection if name not in denied]
     return [*kept, *sorted((surface | granted) - set(kept))]
->>>>>>> f97608f178
 
 
 def _tui_notice(text: str) -> None:
@@ -2491,13 +2215,7 @@ def _load_enabled_toolsets(platform: str | None = None, desktop_ui_protocol=None
             from agent.coding_context import coding_selection
             selection = coding_selection(platform=session_platform)
             if selection is not None:
-<<<<<<< HEAD
-                return sorted({*selection, "project", *_gui_surface_toolsets(session_platform, desktop_ui_protocol)})
-||||||| 939e45c91d
-                return sorted({*selection, *_gui_surface_toolsets(session_platform)})
-=======
-                return sorted(_with_session_toolsets(selection, session_platform))
->>>>>>> f97608f178
+                return sorted(_with_session_toolsets(selection, session_platform, desktop_ui_protocol))
     try:
         from toolsets import validate_toolset
     except Exception:
@@ -2520,13 +2238,7 @@ def _load_enabled_toolsets(platform: str | None = None, desktop_ui_protocol=None
         enabled = _get_platform_tools(cfg, "cli", include_default_mcp_servers=True)
         if fallback_notice is not None:
             _tui_notice(fallback_notice)
-<<<<<<< HEAD
-        return sorted(enabled | {"project"} | _gui_surface_toolsets(session_platform, desktop_ui_protocol)) if enabled else None
-||||||| 939e45c91d
-        return sorted(enabled | _gui_surface_toolsets(session_platform)) if enabled else None
-=======
-        return sorted(_with_session_toolsets(enabled, session_platform)) if enabled else None
->>>>>>> f97608f178
+        return sorted(_with_session_toolsets(enabled, session_platform, desktop_ui_protocol)) if enabled else None
     except Exception:
         if fallback_notice is not None:
             _tui_notice("[tui] no valid HERMES_TUI_TOOLSETS entries and configured CLI toolsets could not be loaded; enabling all toolsets")
@@ -3011,13 +2723,8 @@ def _make_agent(
     model_override: dict | str | None = None, provider_override: str | None = None,
     reasoning_config_override: dict | None = None, service_tier_override: str | None = None,
     platform_override: str | None = None, context_cwd_is_launch_artifact: bool | None = None,
-<<<<<<< HEAD
+    cwd_override: str | None = None, auth_user_id: str | None = None,
     desktop_ui_protocol_override=None):
-||||||| 939e45c91d
-    platform_override: str | None = None, context_cwd_is_launch_artifact: bool | None = None):
-=======
-    cwd_override: str | None = None, auth_user_id: str | None = None):
->>>>>>> f97608f178
     # AC-4 test seam: dead unless armed by the isolated certify harness.
     from tui_gateway.synthetic_turn import maybe_build_synthetic_agent
     synthetic = maybe_build_synthetic_agent(session_id or key, model_override)

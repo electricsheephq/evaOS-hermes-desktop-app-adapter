@@ -259,120 +259,13 @@ def test_server_request_round_trip_uses_response_frame(capture):
     assert frame == {"jsonrpc": "2.0", "id": req.id, "method": "sudo", "params": {"session_id": "s1"}}
     assert req.id.startswith("srq-")
 
-<<<<<<< HEAD
-    # Terminal reads are Desktop-only.  Establish the same owning session a real Desktop request
-    # carries so expiry behavior is tested after authorization, not against the immediate deny path.
-    server._sessions["s1"] = {
-        "source": "desktop",
-        "desktop_ui_protocol": 1,
-        "history_lock": threading.Lock(),
-    }
-    try:
-        result = server._block(event, "s1", {}, timeout=0)
-    finally:
-        server._sessions.pop("s1", None)
-
-    if event == "clarify.request":
-        from tools.clarify_tool import TIMEOUT_RESPONSE
-        assert result == TIMEOUT_RESPONSE
-    else:
-        assert result == ""
-
-    messages = [json.loads(line) for line in buf.getvalue().splitlines()]
-    request, expiry = [message["params"] for message in messages]
-    assert request["type"] == event
-    assert expiry["type"] == event.removesuffix(".request") + ".expire"
-    assert expiry["session_id"] == "s1"
-    assert expiry["payload"]["request_id"] == request["payload"]["request_id"]
-||||||| 939e45c91d
-    assert server._block(event, "s1", {}, timeout=0) == ""
-
-    messages = [json.loads(line) for line in buf.getvalue().splitlines()]
-    request, expiry = [message["params"] for message in messages]
-    assert request["type"] == event
-    assert expiry["type"] == event.removesuffix(".request") + ".expire"
-    assert expiry["session_id"] == "s1"
-    assert expiry["payload"]["request_id"] == request["payload"]["request_id"]
-=======
     assert server.dispatch({"jsonrpc": "2.0", "id": req.id, "result": {"value": "hunter2"}}) is None
     thread.join(timeout=5)
     assert box["r"] == "hunter2"
     with server_requests._lock:
         assert not server_requests._open
->>>>>>> f97608f178
 
 
-<<<<<<< HEAD
-def test_clarify_explicit_empty_response_remains_a_cancel(server):
-    """An explicit empty answer is distinct from an unanswered deadline."""
-    box = {}
-    thread = threading.Thread(
-        target=lambda: box.setdefault(
-            "answer", server._block("clarify.request", "s1", {}, timeout=5)
-        ),
-        daemon=True,
-    )
-    thread.start()
-    deadline = time.monotonic() + 2
-    rid = None
-    while time.monotonic() < deadline and rid is None:
-        with server._prompt_lock:
-            rid = next(iter(server._pending), None)
-        time.sleep(0.01)
-    assert rid
-
-    response = server.handle_request({
-        "id": "cancel", "method": "clarify.respond",
-        "params": {"request_id": rid, "answer": ""},
-    })
-    thread.join(timeout=5)
-
-    assert response["result"] == {"status": "ok"}
-    assert box["answer"] == ""
-
-
-@pytest.mark.parametrize(
-    ("method", "value_key"),
-    [
-        ("secret.respond", "value"),
-        ("sudo.respond", "password"),
-        ("clarify.respond", "answer"),
-        ("terminal.read.respond", "text"),
-    ],
-)
-def test_late_prompt_response_is_idempotent(server, method, value_key):
-    """All four blocking bridges tolerate a late reply after their request has
-    expired — the `*.respond` returns a graceful `{"status": "expired"}` instead
-    of the raw 4009 protocol error a client would otherwise surface verbatim."""
-    response = server.handle_request(
-        {
-            "id": "late-response",
-            "method": method,
-            "params": {"request_id": "expired-request", value_key: ""},
-        }
-    )
-||||||| 939e45c91d
-@pytest.mark.parametrize(
-    ("method", "value_key"),
-    [
-        ("secret.respond", "value"),
-        ("sudo.respond", "password"),
-        ("clarify.respond", "answer"),
-        ("terminal.read.respond", "text"),
-    ],
-)
-def test_late_prompt_response_is_idempotent(server, method, value_key):
-    """All four blocking bridges tolerate a late reply after their request has
-    expired — the `*.respond` returns a graceful `{"status": "expired"}` instead
-    of the raw 4009 protocol error a client would otherwise surface verbatim."""
-    response = server.handle_request(
-        {
-            "id": "late-response",
-            "method": method,
-            "params": {"request_id": "expired-request", value_key: ""},
-        }
-    )
-=======
 @pytest.mark.parametrize("method, qids, settle, expected", [
     ("sudo", None,
      lambda sr, req: sr.resolve_response({"id": req.id, "result": {"value": "yes"}}) is True,
@@ -383,7 +276,6 @@ def test_late_prompt_response_is_idempotent(server, method, value_key):
 def test_settlement_wins_over_a_later_cancel(capture, method, qids, settle, expected):
     """A response and cancellation may race; the first settlement owns the result."""
     from tui_gateway import server_requests
->>>>>>> f97608f178
 
     req = server_requests.ServerRequest("s1", method, {}, qids=qids)
     with server_requests._lock:

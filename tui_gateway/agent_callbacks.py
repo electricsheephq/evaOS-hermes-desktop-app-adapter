@@ -117,33 +117,15 @@ def _agent_notice_update(sid: str, notice) -> None:
 
 
 def _agent_cbs(sid: str) -> dict:
-<<<<<<< HEAD
-    def _read_block(event: str, tool_name: str, timeout: int):
-        # read_terminal / read_preview (desktop GUI): blocking bridge like clarify; the preview
-||||||| 939e45c91d
-    def _read_block(event: str, timeout: int):
-        # read_terminal / read_preview (desktop GUI): blocking bridge like clarify; the preview
-=======
-    def _read_block(method: str, timeout: int):
+    def _read_block(method: str, tool_name: str, timeout: int):
         # read_terminal / read_preview (desktop GUI): server request like clarify; the preview
->>>>>>> f97608f178
         # read gets longer since a URL tab extracts text from a live page.
-<<<<<<< HEAD
         return lambda start=None, count=None: _desktop_ui_request(
             sid, tool_name, 1 if tool_name == "read_terminal" else 2,
-            lambda transport: _block(
-                event, sid,
+            lambda _transport: _ask(
+                method, sid,
                 {k: v for k, v in (("start", start), ("count", count)) if v is not None},
-                timeout=timeout, transport=transport))
-||||||| 939e45c91d
-        return lambda start=None, count=None: _block(
-            event, sid, {k: v for k, v in (("start", start), ("count", count)) if v is not None},
-            timeout=timeout)
-=======
-        return lambda start=None, count=None: _ask(
-            method, sid, {k: v for k, v in (("start", start), ("count", count)) if v is not None},
-            timeout=timeout)
->>>>>>> f97608f178
+                timeout=timeout))
 
     callbacks = {
         "tool_start_callback": lambda tc_id, name, args: _on_tool_start(sid, tc_id, name, args),
@@ -164,61 +146,26 @@ def _agent_cbs(sid: str) -> dict:
         "notice_clear_callback": lambda key: _emit("notification.clear", sid, {"key": key}),
         "clarify_callback": lambda q, c, multi_select=False, questions=None: (
             _clarify_block(sid, q, c, multi_select=multi_select, questions=questions)),
-<<<<<<< HEAD
-        "read_terminal_callback": _read_block("terminal.read.request", "read_terminal", 30),
-        "read_preview_callback": _read_block("preview.read.request", "desktop_preview.read", 45),
-||||||| 939e45c91d
-        "read_terminal_callback": _read_block("terminal.read.request", 30),
-        "read_preview_callback": _read_block("preview.read.request", 45),
-=======
-        "read_terminal_callback": _read_block("terminal.read", 30),
-        "read_preview_callback": _read_block("preview.read", 45),
->>>>>>> f97608f178
+        "read_terminal_callback": _read_block("terminal.read", "read_terminal", 30),
+        "read_preview_callback": _read_block("preview.read", "desktop_preview.read", 45),
         # drive_preview / annotate_preview (desktop GUI): same budget as the preview read it ends with.
-<<<<<<< HEAD
         "drive_preview_callback": lambda payload: _desktop_ui_request(
             sid, "drive_preview", 2,
-            lambda transport: _block("preview.act.request", sid, dict(payload), timeout=45, transport=transport)),
+            lambda _transport: _ask("preview.act", sid, dict(payload), timeout=45)),
         "annotate_preview_callback": lambda payload: _desktop_ui_request(
             sid, "annotate_preview", 2,
-            lambda transport: _block("preview.act.request", sid, dict(payload), timeout=45, transport=transport)),
-||||||| 939e45c91d
-        "drive_preview_callback": lambda payload: _block("preview.act.request", sid, dict(payload), timeout=45),
-=======
-        "drive_preview_callback": lambda payload: _ask("preview.act", sid, dict(payload), timeout=45),
->>>>>>> f97608f178
+            lambda _transport: _ask("preview.act", sid, dict(payload), timeout=45)),
         # read_window_below (desktop GUI): main process enumerates native windows.
-<<<<<<< HEAD
         "read_window_below_callback": lambda: _desktop_ui_request(
             sid, "read_window_below", 2,
-            lambda transport: _block("window.read.request", sid, {}, timeout=30, transport=transport)),
-        # setup_mcp (desktop GUI): consent card + install/enable/OAuth; long timeout on purpose
-        # (typing an API key, browser OAuth) and, like clarify, a late answer is tolerated.
-        "setup_mcp_callback": lambda server, action, reason: _desktop_ui_request(
-            sid, "setup_mcp", 2,
-            lambda transport: _block("mcp.setup.request", sid,
-                           {"server": server, "action": action, "reason": reason}, timeout=600,
-                           transport=transport)),
-        # tour (desktop GUI): renderer drives driver.js and answers tour.respond.
-        "tour_callback": lambda payload: _desktop_ui_request(
-            sid, "gui_tour", 2,
-            lambda transport: _tour_request(sid, payload, transport=transport))}
-||||||| 939e45c91d
-        "read_window_below_callback": lambda: _block("window.read.request", sid, {}, timeout=30),
-        # setup_mcp (desktop GUI): consent card + install/enable/OAuth; long timeout on purpose
-        # (typing an API key, browser OAuth) and, like clarify, a late answer is tolerated.
-        "setup_mcp_callback": lambda server, action, reason: _block(
-            "mcp.setup.request", sid, {"server": server, "action": action, "reason": reason}, timeout=600),
-        # tour (desktop GUI): renderer drives driver.js and answers tour.respond.
-        "tour_callback": lambda payload: _tour_request(sid, payload)}
-=======
-        "read_window_below_callback": lambda: _ask("window.read", sid, {}, timeout=30),
+            lambda _transport: _ask("window.read", sid, {}, timeout=30)),
         # manage_connections card. Fire-and-forget: the tool thread waits on its own operation
         # (tools/connectors/run.py), and the card drives it through connection.respond by op_id.
         "connection_callback": lambda payload: _emit("connection.request", sid, dict(payload)) and None,
         # tour (desktop GUI): renderer drives driver.js and answers the ``tour`` request.
-        "tour_callback": lambda payload: _tour_request(sid, payload)}
->>>>>>> f97608f178
+        "tour_callback": lambda payload: _desktop_ui_request(
+            sid, "gui_tour", 2,
+            lambda _transport: _tour_request(sid, payload))}
 
     # Interim assistant commentary (text alongside tool calls), gated on display.interim_assistant_
     # messages; _run_prompt_submit overwrites it per turn and clears it so a stale closure can't fire.

@@ -72,7 +72,7 @@ _CODING_TOOLS = _core_without("image_generate", "text_to_speech", "cronjob_manag
 
 # Toolsets a CLIENT adds to its own sessions (tui_gateway/server.py::_gui_surface_toolsets), never
 # config: another surface lacking them made no configuration choice.
-CLIENT_SURFACE_TOOLSETS = frozenset({"project", "desktop_ui"})
+CLIENT_SURFACE_TOOLSETS = frozenset({"project", "desktop_ui", "desktop_ui_v2", "desktop_ui_v3"})
 
 # Core toolset definitions: individual tools or references to other toolsets.
 TOOLSETS = {
@@ -141,29 +141,16 @@ TOOLSETS = {
     # gateway (tui_gateway/server.py::_load_enabled_toolsets) — never by a
     # process env var, which is blind to a desktop client on a remote backend.
     "desktop_ui": _ts(
-<<<<<<< HEAD
         "Desktop GUI protocol 1 — terminal read/close, preview open, pane focus, reactions",
         ["read_terminal", "close_terminal", "desktop_preview", "focus_pane", "react_to_message"],
     ),
     "desktop_ui_v2": _ts(
         "Desktop GUI protocol 2 — preview read/close and renderer responders",
-        ["drive_preview", "annotate_preview", "read_window_below", "setup_mcp", "gui_tour", "apply_layout"],
+        ["drive_preview", "annotate_preview", "read_window_below", "gui_tour", "apply_layout"],
     ),
     "desktop_ui_v3": _ts(
         "Desktop GUI protocol 3 — in-app tips",
         ["show_tip"],
-||||||| 939e45c91d
-        "Desktop GUI affordances — in-app terminal/browser panes, pane focus, "
-        "reactions (GUI sessions only)",
-        ["read_terminal", "close_terminal", "desktop_preview", "drive_preview",
-         "annotate_preview", "read_window_below", "focus_pane", "react_to_message",
-         "setup_mcp", "gui_tour", "show_tip"],
-=======
-        "Desktop GUI affordances — in-app terminal/browser panes, pane focus, "
-        "reactions (GUI sessions only)",
-        ["read_terminal", "close_terminal", "desktop_preview", "drive_preview",
-         "annotate_preview", "read_window_below", "focus_pane", "react_to_message",
-         "gui_tour", "show_tip"],
     ),
     # Enabled per SESSION whose PROFILE carries ``role: setup`` in its backend-written
     # profile.yaml (tui_gateway/server.py::_load_enabled_toolsets); stripped from every
@@ -174,7 +161,6 @@ TOOLSETS = {
         "requests through the approval card",
         ["manage_catalog"],
         role="setup",
->>>>>>> f97608f178
     ),
     "clarify": _ts("Ask the user clarifying questions (multiple-choice or open-ended)", ["clarify"]),
     "code_execution": _ts("Run Python scripts that call tools programmatically (reduces LLM round trips)", ["execute_code"]),

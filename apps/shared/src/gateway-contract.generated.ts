@@ -2772,6 +2772,7 @@ export interface SessionCreateParams {
   hidden?: boolean
   room_plumbing?: boolean
   follow_profile_config?: boolean
+  desktop_ui_protocol?: number | null
 }
 /** One create-time transcript row (``session_history._coerce_seed_history``); ``text`` is the legacy alias of ``content``; only ``display_kind: "hidden"`` is accepted from the wire. Clients forward stored rows verbatim (``_row_id``, ``timestamp``, …) and the coercer drops what it does not use, so the row stays open. */
 export interface SeedMessage {
@@ -2842,6 +2843,7 @@ export interface SessionResumeParams {
   omit_messages?: boolean
   eager_build?: boolean
   close_on_disconnect?: boolean
+  desktop_ui_protocol?: number | null
 }
 export interface SessionResumeResult {
   session_id: string
@@ -2912,6 +2914,7 @@ export interface SessionActivateParams {
   profile?: string | null
   cols?: number | null
   omit_messages?: boolean
+  desktop_ui_protocol?: number | null
 }
 export interface SessionActivateResult {
   session_id: string
@@ -3704,12 +3707,16 @@ export interface ToolsConfigureResult {
   reset: boolean
   unknown: string[]
 }
-export type ReloadEnvParams = Record<string, never>
+/** ``profile`` is accepted for evaOS Desktop es.9 shared-remote routes (it adds ``profile`` to every routed call); the reload itself is process-wide. */
+export interface ReloadEnvParams {
+  profile?: string | null
+}
 export interface ReloadEnvResult {
   updated: number
 }
-/** Without ``confirm`` the handler may answer ``confirm_required`` (per ``approvals.mcp_reload_confirm``); ``always`` persists the opt-out; ``rev`` is the config revision the caller wants loaded (coalescing). */
+/** Without ``confirm`` the handler may answer ``confirm_required`` (per ``approvals.mcp_reload_confirm``); ``always`` persists the opt-out; ``rev`` is the config revision the caller wants loaded (coalescing). ``profile`` is accepted for evaOS Desktop es.9 shared-remote routes; the reload spans every live session. */
 export interface ReloadMcpParams {
+  profile?: string | null
   session_id?: string | null
   confirm?: boolean
   always?: boolean

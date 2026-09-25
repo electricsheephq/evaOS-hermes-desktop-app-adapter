@@ -25767,7 +25767,21 @@
       },
       "ReloadEnvParams": {
         "additionalProperties": false,
-        "properties": {},
+        "description": "``profile`` is accepted for evaOS Desktop es.9 shared-remote routes (it adds ``profile`` to every\nrouted call); the reload itself is process-wide.",
+        "properties": {
+          "profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Profile"
+          }
+        },
         "title": "ReloadEnvParams",
         "type": "object"
       },
@@ -25787,8 +25801,20 @@
       },
       "ReloadMcpParams": {
         "additionalProperties": false,
-        "description": "Without ``confirm`` the handler may answer ``confirm_required`` (per ``approvals.mcp_reload_confirm``);\n``always`` persists the opt-out; ``rev`` is the config revision the caller wants loaded (coalescing).",
+        "description": "Without ``confirm`` the handler may answer ``confirm_required`` (per ``approvals.mcp_reload_confirm``);\n``always`` persists the opt-out; ``rev`` is the config revision the caller wants loaded (coalescing).\n``profile`` is accepted for evaOS Desktop es.9 shared-remote routes; the reload spans every live session.",
         "properties": {
+          "profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Profile"
+          },
           "session_id": {
             "anyOf": [
               {
@@ -27301,6 +27327,18 @@
             "default": false,
             "title": "Omit Messages",
             "type": "boolean"
+          },
+          "desktop_ui_protocol": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Desktop Ui Protocol"
           }
         },
         "required": [
@@ -28736,6 +28774,18 @@
             "default": false,
             "title": "Follow Profile Config",
             "type": "boolean"
+          },
+          "desktop_ui_protocol": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Desktop Ui Protocol"
           }
         },
         "title": "SessionCreateParams",
@@ -30119,6 +30169,18 @@
             "default": false,
             "title": "Close On Disconnect",
             "type": "boolean"
+          },
+          "desktop_ui_protocol": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Desktop Ui Protocol"
           }
         },
         "required": [

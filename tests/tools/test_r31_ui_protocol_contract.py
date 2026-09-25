@@ -24,7 +24,6 @@ from tools import (  # noqa: F401
     read_terminal_tool,
     read_window_tool,
     react_to_message_tool,
-    setup_mcp_tool,
     tip_tool,
     tour_tool,
 )
@@ -48,7 +47,6 @@ PROTOCOL_2_TOOLS = {
     "drive_preview",
     "annotate_preview",
     "read_window_below",
-    "setup_mcp",
     "gui_tour",
     "apply_layout",
 }
@@ -58,18 +56,20 @@ PROTOCOL_3_TOOLS = {"show_tip"}
 # Every renderer event reachable from the desktop_ui surface must be listed
 # here with the tool/action identity used for errors and lifecycle receipts.
 # The responder level is the minimum client protocol, not an authorization grant.
+# evaOS adaptation (r34): upstream turned the GUI reads/tour into server requests named without the
+# ``.request`` suffix, and deleted setup_mcp (COVERED-UPSTREAM by connection.*). es.9's legacy
+# ``*.request`` / ``*.respond`` wire is the PR-2 shim's job.
 EXPECTED_EVENT_REQUIREMENTS = {
-    "terminal.read.request": (1, "read_terminal"),
+    "terminal.read": (1, "read_terminal"),
     "terminal.close": (1, "close_terminal"),
     "preview.open": (1, "desktop_preview.open"),
     "pane.reveal": (1, "focus_pane"),
     "message.reaction": (1, "react_to_message"),
-    "preview.read.request": (2, "desktop_preview.read"),
+    "preview.read": (2, "desktop_preview.read"),
     "preview.close": (2, "desktop_preview.close"),
-    "preview.act.request": (2, "drive_preview"),
-    "window.read.request": (2, "read_window_below"),
-    "mcp.setup.request": (2, "setup_mcp"),
-    "tour.request": (2, "gui_tour"),
+    "preview.act": (2, "drive_preview"),
+    "window.read": (2, "read_window_below"),
+    "tour": (2, "gui_tour"),
     "layout.apply": (2, "apply_layout"),
     "tip.show": (3, "show_tip"),
 }
@@ -148,9 +148,10 @@ def test_protocol1_preview_open_dispatches_but_read_never_waits(monkeypatch):
     blocked = []
     desktop_ui.set_protocol_resolver(server._desktop_ui_emitter_protocol_error)
     desktop_ui.set_emitter(lambda current_sid, event, payload: emitted.append((current_sid, event, payload)))
+    # evaOS adaptation (r34): upstream GUI reads go through the server request ``_ask``, not ``_block``.
     monkeypatch.setattr(
         server,
-        "_block",
+        "_ask",
         lambda *args, **kwargs: blocked.append((args, kwargs)) or json.dumps({"text": "must not wait"}),
     )
 
@@ -173,9 +174,10 @@ def test_protocol2_preview_read_close_are_allowed_but_tip_is_blocked(monkeypatch
     blocked = []
     desktop_ui.set_protocol_resolver(server._desktop_ui_emitter_protocol_error)
     desktop_ui.set_emitter(lambda current_sid, event, payload: emitted.append((current_sid, event, payload)))
+    # evaOS adaptation (r34): upstream GUI reads go through the server request ``_ask``, not ``_block``.
     monkeypatch.setattr(
         server,
-        "_block",
+        "_ask",
         lambda *args, **kwargs: blocked.append((args, kwargs)) or json.dumps({"title": "Synthetic"}),
     )
 
@@ -190,7 +192,7 @@ def test_protocol2_preview_read_close_are_allowed_but_tip_is_blocked(monkeypatch
     assert tip["code"] == "desktop_ui_protocol_upgrade_required"
     assert [event for _sid, event, _payload in emitted] == ["preview.close"]
     assert len(blocked) == 1
-    assert blocked[0][0][0] == "preview.read.request"
+    assert blocked[0][0][0] == "preview.read"
 
     server._sessions.pop(sid, None)
 

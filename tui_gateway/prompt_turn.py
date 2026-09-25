@@ -1020,13 +1020,6 @@ def _run_prompt_submit(
         "kind=%s chars=%s images=%d",
         sid, session.get("session_key") or "", getattr(agent, "session_id", "") or "",
         display_kind or "user", len(text) if isinstance(text, str) else "-", len(images))
-<<<<<<< HEAD
-||||||| 939e45c91d
-    _emit("message.start", sid)
-=======
-    if not muted:
-        _emit("message.start", sid)
->>>>>>> f97608f178
 
     def run_body():
         # RPC-dispatcher ContextVars do not follow onto this thread: rebind the transport
@@ -1118,16 +1111,11 @@ def _run_prompt_submit(
             # still run its turn, but its stamp stays (#106459).
             if registered is session:
                 _reopen_routed_session_row(routing_db, sid, session)
-<<<<<<< HEAD
-            session["_run_thread"] = run_thread
-            _emit("message.start", sid)
-            run_thread.start()
-||||||| 939e45c91d
-            session["_run_thread"] = run_thread
-            run_thread.start()
-=======
+            # message.start only for a turn that is actually starting (a closing or re-registered
+            # session never gets a start frame without a matching end), ahead of the worker's frames.
+            if not muted:
+                _emit("message.start", sid)
             can_start = _start_session_work(run, name=f"prompt-turn-{sid}", session=session) is not None
->>>>>>> f97608f178
     if not can_start:
         with session["history_lock"]:
             session["running"] = False

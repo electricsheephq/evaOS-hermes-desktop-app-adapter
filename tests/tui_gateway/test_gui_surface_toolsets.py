@@ -15,7 +15,7 @@ answer is identical on every connection topology.
 import pytest
 
 import tui_gateway.server as server
-from toolsets import TOOLSETS
+from toolsets import TOOLSETS, resolve_toolset
 
 GUI_TOOLS_P1 = {
     "desktop_preview",
@@ -23,21 +23,11 @@ GUI_TOOLS_P1 = {
     "focus_pane",
     "read_terminal",
     "react_to_message",
-<<<<<<< HEAD
-||||||| 939e45c91d
-    "setup_mcp",
-    "show_tip",
-    "gui_tour",
-=======
-    "show_tip",
-    "gui_tour",
->>>>>>> f97608f178
 }
 GUI_TOOLS_P2 = {
     "annotate_preview",
     "drive_preview",
     "read_window_below",
-    "setup_mcp",
     "gui_tour",
     "apply_layout",
 }
@@ -55,7 +45,6 @@ def no_desktop_env(monkeypatch):
 
 
 class TestDesktopUiToolset:
-<<<<<<< HEAD
     def test_holds_exactly_the_gui_affordances(self):
         # Force discovery first so registry additions do not depend on which
         # earlier test imported tool modules (pre-existing ordering flake,
@@ -65,17 +54,6 @@ class TestDesktopUiToolset:
         assert set(resolve_toolset("desktop_ui")) == GUI_TOOLS_P1
         assert set(resolve_toolset("desktop_ui_v2")) == GUI_TOOLS_P2
         assert set(resolve_toolset("desktop_ui_v3")) == GUI_TOOLS_P3
-||||||| 939e45c91d
-    def test_holds_exactly_the_gui_affordances(self):
-        # apply_layout registers into desktop_ui via the registry (not the
-        # static toolsets.py list), so force discovery first — otherwise the
-        # result depends on which earlier test imported tool modules
-        # (pre-existing ordering flake, surfaced by the #97979 test sweep).
-        from tools.registry import discover_builtin_tools
-        discover_builtin_tools()
-        assert set(resolve_toolset("desktop_ui")) == GUI_TOOLS | {"apply_layout"}
-=======
->>>>>>> f97608f178
 
     def test_stays_off_the_core_tool_list(self):
         """Core ships on every API call — a GUI-only tool must not be there."""

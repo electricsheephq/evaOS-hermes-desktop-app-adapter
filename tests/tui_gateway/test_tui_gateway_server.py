@@ -1,3 +1,4 @@
+import contextlib
 import json
 import logging
 import os
@@ -7370,12 +7371,13 @@ def test_run_prompt_submit_rejects_worker_when_close_wins_publication(
         server, "_emit", lambda event, *_args, **_kwargs: emitted.append(event)
     )
 
+    # evaOS adaptation (r34): upstream now builds the worker inside the registry lock, after the close
+    # check, so the last window a concurrent close can win is the routing-DB resolution that precedes
+    # the lock. Claim the close there; the worker must never be built, published or started, and no
+    # message.start may be emitted (the fork emits it only for a turn that actually starts).
     class _CloseWinningThread:
         def __init__(self, target=None, daemon=None, **_kwargs):
-            assert target is not None
-            assert daemon is True
-            popped.append(server._pop_session_by_id(sid))
-            self._target = target
+            started.append("built")
 
         def start(self):
             started.append(True)
@@ -7383,14 +7385,21 @@ def test_run_prompt_submit_rejects_worker_when_close_wins_publication(
         def is_alive(self):
             return False
 
+    real_routing_db = server._routing_provenance_db
+
+    @contextlib.contextmanager
+    def _close_wins_routing_db(current):
+        popped.append(server._pop_session_by_id(sid))
+        with real_routing_db(current) as db:
+            yield db
+
     server._sessions[sid] = session
-    # Keep the dispatcher itself on the real class; only the prompt worker factory
-    # is replaced so the close claim happens at the publication boundary.
     dispatch_thread = server._RealThread(
         target=lambda: dispatch_results.append(
             server._run_prompt_submit("rid", sid, session, "turn")
         )
     )
+    monkeypatch.setattr(server, "_routing_provenance_db", _close_wins_routing_db)
     monkeypatch.setattr(server.threading, "Thread", _CloseWinningThread)
 
     try:

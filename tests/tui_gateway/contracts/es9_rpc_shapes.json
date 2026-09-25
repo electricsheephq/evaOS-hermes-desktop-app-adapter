@@ -1,0 +1,1987 @@
+{
+ "_about": "Every JSON-RPC request shape evaOS Desktop es.9 (adapter main 006e26669f) sends, with each optional key the call site or its routing wrapper may add. Legacy *.respond prompt answers and the transport-level gateway.ping heartbeat are excluded (PR-2 legacy prompt shim / ws transport).",
+ "shapes": [
+  {
+   "method": "approval.pending",
+   "params": {
+    "session_id": "x",
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/store/prompts.ts:180"
+  },
+  {
+   "method": "approval.received",
+   "params": {
+    "request_id": "x",
+    "session_id": "x",
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/store/prompts.ts:155"
+  },
+  {
+   "method": "approval.respond",
+   "params": {
+    "choice": "once",
+    "request_id": "x",
+    "session_id": "x",
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/components/assistant-ui/tool/approval.tsx:151"
+  },
+  {
+   "method": "approval.respond",
+   "params": {
+    "request_id": "x",
+    "choice": "deny",
+    "session_id": "x",
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/plugins/hermes-bots/group-turns.ts:611"
+  },
+  {
+   "method": "approval.respond",
+   "params": {
+    "choice": "once",
+    "session_id": "x",
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/store/native-notifications.ts:373"
+  },
+  {
+   "method": "billing.auto_reload",
+   "params": {
+    "enabled": true,
+    "threshold": "5.00",
+    "top_up_amount": "20.00",
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/app/settings/billing/api.ts:173"
+  },
+  {
+   "method": "billing.charge",
+   "params": {
+    "amount_usd": "10.00",
+    "idempotency_key": "x",
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/app/settings/billing/api.ts:148"
+  },
+  {
+   "method": "billing.charge_status",
+   "params": {
+    "charge_id": "x",
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/app/settings/billing/api.ts:156"
+  },
+  {
+   "method": "billing.state",
+   "params": {
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/app/settings/billing/api.ts:157"
+  },
+  {
+   "method": "billing.step_up",
+   "params": {
+    "session_id": "x",
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/app/settings/billing/api.ts:169"
+  },
+  {
+   "method": "bot_relay.deliver",
+   "params": {
+    "profile": "x",
+    "message": "x",
+    "from_profile": "x",
+    "from_handle": "x",
+    "from_connection": "x"
+   },
+   "site": "apps/desktop/src/plugins/hermes-bots/relay.ts:399"
+  },
+  {
+   "method": "bot_relay.outbox.drain",
+   "params": {
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/plugins/hermes-bots/relay.ts:352"
+  },
+  {
+   "method": "bot_relay.reply",
+   "params": {
+    "id": "x",
+    "reply": "x",
+    "error": "x",
+    "reason": "x",
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/plugins/hermes-bots/relay.ts:373"
+  },
+  {
+   "method": "bot_relay.roster.sync",
+   "params": {
+    "agents": [
+     {
+      "profile": "x",
+      "handle": "x",
+      "connection_id": "x",
+      "connection_label": "x",
+      "title": "x",
+      "description": "x"
+     }
+    ],
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/plugins/hermes-bots/relay.ts:303"
+  },
+  {
+   "method": "browser.manage",
+   "params": {
+    "action": "connect",
+    "session_id": "x",
+    "url": "http://127.0.0.1:9222",
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/app/session/hooks/use-prompt-actions/slash.ts:1092"
+  },
+  {
+   "method": "cli.exec",
+   "params": {
+    "argv": [
+     "profile",
+     "delete",
+     "x",
+     "--yes"
+    ],
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/plugins/hermes-bots/create-dialog.tsx:243"
+  },
+  {
+   "method": "cli.exec",
+   "params": {
+    "argv": [
+     "profile",
+     "describe",
+     "x",
+     "--text",
+     "x"
+    ],
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/plugins/hermes-bots/edit-profile-dialog.tsx:136"
+  },
+  {
+   "method": "cli.exec",
+   "params": {
+    "argv": [
+     "--profile",
+     "x",
+     "config",
+     "unset",
+     "model"
+    ],
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/plugins/hermes-bots/profile-config.tsx:568"
+  },
+  {
+   "method": "cli.exec",
+   "params": {
+    "argv": [
+     "profile",
+     "delete",
+     "x",
+     "--yes"
+    ]
+   },
+   "site": "apps/desktop/src/plugins/hermes-bots/profile-ops.ts:408"
+  },
+  {
+   "method": "command.dispatch",
+   "params": {
+    "session_id": "x",
+    "name": "x",
+    "arg": "x",
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/app/session/hooks/use-prompt-actions/slash.ts:423"
+  },
+  {
+   "method": "commands.catalog",
+   "params": {},
+   "site": "apps/desktop/src/app/chat/composer/hooks/use-slash-completions.ts:80"
+  },
+  {
+   "method": "commands.catalog",
+   "params": {
+    "session_id": "x",
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/app/session/hooks/use-prompt-actions/slash.ts:997"
+  },
+  {
+   "method": "complete.path",
+   "params": {
+    "word": "@file:",
+    "session_id": "x",
+    "cwd": "x"
+   },
+   "site": "apps/desktop/src/app/chat/composer/hooks/use-at-completions.ts:193"
+  },
+  {
+   "method": "complete.path",
+   "params": {
+    "session_id": "x",
+    "word": "@file:",
+    "cwd": "x",
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/app/session/hooks/use-context-suggestions.ts:37"
+  },
+  {
+   "method": "complete.slash",
+   "params": {
+    "text": "/he"
+   },
+   "site": "apps/desktop/src/app/chat/composer/hooks/use-slash-completions.ts:200"
+  },
+  {
+   "method": "config.get",
+   "params": {
+    "key": "project",
+    "cwd": "x",
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/app/contrib/hooks/use-background-sync.ts:651"
+  },
+  {
+   "method": "config.get",
+   "params": {
+    "key": "approvals.mode",
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/store/approval-mode.ts:56"
+  },
+  {
+   "method": "config.set",
+   "params": {
+    "session_id": "x",
+    "key": "reasoning",
+    "value": "minimal",
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/app/contrib/onboarding-kickoff.ts:72"
+  },
+  {
+   "method": "config.set",
+   "params": {
+    "session_id": "x",
+    "key": "model",
+    "value": "m --provider p",
+    "confirm_expensive_model": true,
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/app/session/hooks/use-model-controls.ts:276"
+  },
+  {
+   "method": "config.set",
+   "params": {
+    "key": "reasoning",
+    "session_id": "x",
+    "value": "x",
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/app/shell/model-menu-panel.tsx:150"
+  },
+  {
+   "method": "config.set",
+   "params": {
+    "key": "fast",
+    "session_id": "x",
+    "value": "x",
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/app/shell/model-menu-panel.tsx:176"
+  },
+  {
+   "method": "config.set",
+   "params": {
+    "key": "yolo",
+    "session_id": "x",
+    "value": "1",
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/lib/yolo-session.ts:16"
+  },
+  {
+   "method": "config.set",
+   "params": {
+    "key": "yolo",
+    "scope": "global",
+    "value": "1",
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/lib/yolo-session.ts:37"
+  },
+  {
+   "method": "config.set",
+   "params": {
+    "key": "approvals.mode",
+    "value": "x",
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/store/approval-mode.ts:77"
+  },
+  {
+   "method": "config.set",
+   "params": {
+    "key": "display.message_reactions",
+    "value": "true"
+   },
+   "site": "apps/desktop/src/store/display-toggles.ts:40"
+  },
+  {
+   "method": "connectors.connect",
+   "params": {
+    "session_id": "x",
+    "connectors": [
+     "x"
+    ],
+    "reconnect": false,
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/store/connector-flow.ts:178"
+  },
+  {
+   "method": "connectors.list",
+   "params": {
+    "session_id": "x",
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/store/connector-flow.ts:49"
+  },
+  {
+   "method": "cron.manage",
+   "params": {
+    "action": "list",
+    "include_disabled": true,
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/plugins/hermes-bots/cron.tsx:123"
+  },
+  {
+   "method": "cron.manage",
+   "params": {
+    "action": "pause",
+    "name": "x",
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/plugins/hermes-bots/cron.tsx:142"
+  },
+  {
+   "method": "cron.manage",
+   "params": {
+    "action": "resume",
+    "name": "x",
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/plugins/hermes-bots/cron.tsx:508"
+  },
+  {
+   "method": "cron.manage",
+   "params": {
+    "action": "add",
+    "name": "x",
+    "schedule": "0 9 * * *",
+    "prompt": "x",
+    "profile": "x",
+    "repeat": 3,
+    "continuity": true,
+    "deliver": "bot-chat"
+   },
+   "site": "apps/desktop/src/plugins/hermes-bots/cron.tsx:998"
+  },
+  {
+   "method": "diagnostics.share_nous",
+   "params": {
+    "error_context": "x",
+    "extra_files": {
+     "desktop.log": "x"
+    }
+   },
+   "site": "apps/desktop/src/store/send-diagnostics.ts:109"
+  },
+  {
+   "method": "file.attach",
+   "params": {
+    "name": "x",
+    "path": "x",
+    "session_id": "x",
+    "data_url": "data:text/plain;base64,aGk=",
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/app/session/hooks/use-prompt-actions/index.ts:198"
+  },
+  {
+   "method": "file.attach",
+   "params": {
+    "session_id": "x",
+    "data_url": "data:image/png;base64,aGk=",
+    "name": "x",
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/plugins/hermes-bots/group-turns.ts:725"
+  },
+  {
+   "method": "free_tier.ack_notice",
+   "params": {
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/store/free-tier.ts:58"
+  },
+  {
+   "method": "free_tier.status",
+   "params": {
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/store/free-tier.ts:40"
+  },
+  {
+   "method": "handoff.fail",
+   "params": {
+    "error": "x",
+    "session_id": "x",
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/app/session/hooks/use-prompt-actions/index.ts:584"
+  },
+  {
+   "method": "handoff.request",
+   "params": {
+    "platform": "x",
+    "session_id": "x",
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/app/session/hooks/use-prompt-actions/index.ts:539"
+  },
+  {
+   "method": "handoff.state",
+   "params": {
+    "session_id": "x",
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/app/session/hooks/use-prompt-actions/index.ts:563"
+  },
+  {
+   "method": "image.attach",
+   "params": {
+    "path": "x",
+    "session_id": "x",
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/app/session/hooks/use-prompt-actions/index.ts:178"
+  },
+  {
+   "method": "image.attach_bytes",
+   "params": {
+    "session_id": "x",
+    "content_base64": "aGk=",
+    "filename": "x.png",
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/app/session/hooks/use-prompt-actions/index.ts:173"
+  },
+  {
+   "method": "image.attach_bytes",
+   "params": {
+    "session_id": "x",
+    "content_base64": "aGk=",
+    "filename": "x",
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/plugins/hermes-bots/group-turns.ts:737"
+  },
+  {
+   "method": "image.detach",
+   "params": {
+    "session_id": "x",
+    "path": "x",
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/app/chat/hooks/use-composer-actions.ts:717"
+  },
+  {
+   "method": "image.generate",
+   "params": {
+    "prompt": "x",
+    "aspect_ratio": "square"
+   },
+   "site": "apps/desktop/src/plugins/hermes-bots/avatar-image.ts:110"
+  },
+  {
+   "method": "image.generate",
+   "params": {
+    "probe": true
+   },
+   "site": "apps/desktop/src/plugins/hermes-bots/avatar-image.ts:81"
+  },
+  {
+   "method": "llm.oneshot",
+   "params": {
+    "input": "x",
+    "instructions": "x",
+    "max_tokens": 256,
+    "session_id": "x",
+    "task": "x",
+    "temperature": 0.8,
+    "template": "commit_message",
+    "variables": {
+     "avoid": "x",
+     "diff": "x",
+     "recent_commits": "x"
+    }
+   },
+   "site": "apps/desktop/src/lib/oneshot.ts:46"
+  },
+  {
+   "method": "llm.oneshot",
+   "params": {
+    "instructions": "x",
+    "input": "x",
+    "temperature": 1.0
+   },
+   "site": "apps/desktop/src/store/projects.ts:786"
+  },
+  {
+   "method": "mcp.catalog",
+   "params": {
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/plugins/hermes-bots/create-dialog.tsx:307"
+  },
+  {
+   "method": "mcp.servers.add",
+   "params": {
+    "name": "x",
+    "preset": "x",
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/sdk/index.ts:649"
+  },
+  {
+   "method": "mcp.servers.list",
+   "params": {},
+   "site": "apps/desktop/src/plugins/hermes-bots/mcp-setup.tsx:75"
+  },
+  {
+   "method": "mcp.servers.oauth.callback",
+   "params": {
+    "name": "x",
+    "session_id": "x",
+    "code": "x",
+    "error": null,
+    "state": "x",
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/lib/mcp-dashboard-oauth.ts:138"
+  },
+  {
+   "method": "mcp.servers.oauth.callback",
+   "params": {
+    "name": "x",
+    "session_id": "x",
+    "state": "x",
+    "error": "access_denied",
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/lib/mcp-dashboard-oauth.ts:224"
+  },
+  {
+   "method": "mcp.servers.oauth.cancel",
+   "params": {
+    "name": "x",
+    "session_id": "x",
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/lib/mcp-dashboard-oauth.ts:216"
+  },
+  {
+   "method": "mcp.servers.oauth.poll",
+   "params": {
+    "name": "x",
+    "session_id": "x",
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/lib/mcp-dashboard-oauth.ts:162"
+  },
+  {
+   "method": "mcp.servers.oauth.start",
+   "params": {
+    "name": "x",
+    "client_redirect_uri": "http://127.0.0.1:5555/callback",
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/lib/mcp-dashboard-oauth.ts:86"
+  },
+  {
+   "method": "mcp.servers.set_api_key",
+   "params": {
+    "profile": "x",
+    "name": "x",
+    "env_var": "X_API_KEY",
+    "value": "x"
+   },
+   "site": "apps/desktop/src/plugins/hermes-bots/mcp-setup.tsx:211"
+  },
+  {
+   "method": "mcp.servers.test",
+   "params": {
+    "profile": "x",
+    "name": "x"
+   },
+   "site": "apps/desktop/src/plugins/hermes-bots/mcp-setup.tsx:227"
+  },
+  {
+   "method": "message.react",
+   "params": {
+    "session_id": "x",
+    "emoji": "x",
+    "author": "user",
+    "newest_role": "assistant",
+    "row_id": 12
+   },
+   "site": "apps/desktop/src/store/reactions.ts:75"
+  },
+  {
+   "method": "model.options",
+   "params": {
+    "session_id": "x",
+    "refresh": true,
+    "explicit_only": true,
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/lib/model-options.ts:250"
+  },
+  {
+   "method": "model.options",
+   "params": {
+    "include_unconfigured": true,
+    "explicit_only": false,
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/plugins/hermes-bots/model-picker.tsx:88"
+  },
+  {
+   "method": "pet.cancel",
+   "params": {
+    "token": "x"
+   },
+   "site": "apps/desktop/src/store/pet-generate.ts:344"
+  },
+  {
+   "method": "pet.disable",
+   "params": {
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/store/pet-gallery.ts:362"
+  },
+  {
+   "method": "pet.export",
+   "params": {
+    "slug": "x",
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/store/pet-gallery.ts:425"
+  },
+  {
+   "method": "pet.gallery",
+   "params": {},
+   "site": "apps/desktop/src/plugins/hermes-bots/pet.tsx:151"
+  },
+  {
+   "method": "pet.gallery",
+   "params": {
+    "localOnly": true,
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/store/pet-gallery.ts:135"
+  },
+  {
+   "method": "pet.gallery",
+   "params": {
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/store/pet-gallery.ts:162"
+  },
+  {
+   "method": "pet.generate",
+   "params": {
+    "prompt": "x",
+    "style": "auto",
+    "count": 4,
+    "referenceImage": "data:image/png;base64,aGk=",
+    "provider": "x"
+   },
+   "site": "apps/desktop/src/store/pet-generate.ts:401"
+  },
+  {
+   "method": "pet.generate.status",
+   "params": {},
+   "site": "apps/desktop/src/store/pet-generate.ts:136"
+  },
+  {
+   "method": "pet.hatch",
+   "params": {
+    "token": "x",
+    "cancelToken": "x",
+    "index": 0,
+    "name": "x",
+    "description": "",
+    "prompt": "x",
+    "style": "auto",
+    "provider": "x"
+   },
+   "site": "apps/desktop/src/store/pet-generate.ts:517"
+  },
+  {
+   "method": "pet.info",
+   "params": {
+    "profile": "x",
+    "knownRevision": "x"
+   },
+   "site": "apps/desktop/src/components/pet/floating-pet.tsx:195"
+  },
+  {
+   "method": "pet.info",
+   "params": {
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/store/pet-gallery.ts:190"
+  },
+  {
+   "method": "pet.info.meta",
+   "params": {
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/components/pet/floating-pet.tsx:161"
+  },
+  {
+   "method": "pet.remove",
+   "params": {
+    "slug": "x",
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/store/pet-gallery.ts:512"
+  },
+  {
+   "method": "pet.remove",
+   "params": {
+    "slug": "x"
+   },
+   "site": "apps/desktop/src/store/pet-generate.ts:210"
+  },
+  {
+   "method": "pet.rename",
+   "params": {
+    "slug": "x",
+    "name": "x",
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/store/pet-gallery.ts:473"
+  },
+  {
+   "method": "pet.rename",
+   "params": {
+    "slug": "x",
+    "name": "x"
+   },
+   "site": "apps/desktop/src/store/pet-generate.ts:601"
+  },
+  {
+   "method": "pet.scale",
+   "params": {
+    "scale": 1.0,
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/store/pet-gallery.ts:406"
+  },
+  {
+   "method": "pet.select",
+   "params": {
+    "slug": "x",
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/store/pet-gallery.ts:321"
+  },
+  {
+   "method": "pet.select",
+   "params": {
+    "slug": "x"
+   },
+   "site": "apps/desktop/src/store/pet-generate.ts:611"
+  },
+  {
+   "method": "pet.thumb",
+   "params": {
+    "slug": "x",
+    "url": "",
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/store/pet-gallery.ts:101"
+  },
+  {
+   "method": "ping",
+   "params": {},
+   "site": "apps/desktop/src/app/gateway/hooks/use-gateway-boot.ts:532"
+  },
+  {
+   "method": "plugins.manage",
+   "params": {
+    "action": "list",
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/store/agent-plugins.ts:108"
+  },
+  {
+   "method": "plugins.manage",
+   "params": {
+    "action": "toggle",
+    "key": "x",
+    "enable": true,
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/store/agent-plugins.ts:155"
+  },
+  {
+   "method": "plugins.manage",
+   "params": {
+    "action": "install",
+    "identifier": "x",
+    "force": false,
+    "enable": true,
+    "catalog_name": "x",
+    "ref": "x",
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/store/agent-plugins.ts:213"
+  },
+  {
+   "method": "plugins.manage",
+   "params": {
+    "action": "update",
+    "name": "x",
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/store/agent-plugins.ts:261"
+  },
+  {
+   "method": "preview.restart",
+   "params": {
+    "session_id": "x",
+    "url": "http://localhost:3000",
+    "context": "x",
+    "cwd": "x",
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/app/session/hooks/use-preview-routing.ts:51"
+  },
+  {
+   "method": "process.kill",
+   "params": {
+    "process_id": "x",
+    "session_id": "x",
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/store/composer-status.ts:468"
+  },
+  {
+   "method": "process.list",
+   "params": {
+    "session_id": "x",
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/store/composer-status.ts:405"
+  },
+  {
+   "method": "process.stop",
+   "params": {
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/app/session/hooks/use-prompt-actions/slash.ts:546"
+  },
+  {
+   "method": "profiles.configure",
+   "params": {
+    "name": "x",
+    "disabled_skills": [
+     "x"
+    ],
+    "enabled_toolsets": [
+     "x"
+    ],
+    "enabled_mcp_servers": [
+     "x"
+    ],
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/plugins/hermes-bots/create-dialog.tsx:433"
+  },
+  {
+   "method": "profiles.configure",
+   "params": {
+    "name": "x",
+    "ui_meta": {
+     "hermes-bots": {
+      "shape": "x",
+      "color": "x",
+      "imageKind": "shape",
+      "title": "x",
+      "created": 1727000000000
+     }
+    },
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/plugins/hermes-bots/create-dialog.tsx:457"
+  },
+  {
+   "method": "profiles.configure",
+   "params": {
+    "name": "x",
+    "ui_meta": {
+     "hermes-bots": {
+      "title": "x",
+      "shape": "x",
+      "color": "x"
+     }
+    },
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/plugins/hermes-bots/data.ts:348"
+  },
+  {
+   "method": "profiles.configure",
+   "params": {
+    "name": "x",
+    "ui_meta": {
+     "hermes-bots": {
+      "title": "x",
+      "shape": "x",
+      "color": "x"
+     }
+    }
+   },
+   "site": "apps/desktop/src/plugins/hermes-bots/data.ts:354"
+  },
+  {
+   "method": "profiles.configure",
+   "params": {
+    "name": "default",
+    "ui_meta": {
+     "hermes-bots-groups": {
+      "rooms": []
+     }
+    },
+    "ui_meta_expected_revisions": {
+     "hermes-bots-groups": 3
+    },
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/plugins/hermes-bots/group-chat.ts:1012"
+  },
+  {
+   "method": "profiles.configure",
+   "params": {
+    "name": "x",
+    "soul": "x",
+    "model": "x",
+    "provider": "x",
+    "disabled_skills": [
+     "x"
+    ],
+    "enabled_toolsets": [
+     "x"
+    ],
+    "enabled_mcp_servers": [
+     "x"
+    ],
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/plugins/hermes-bots/profile-config.tsx:603"
+  },
+  {
+   "method": "profiles.configure",
+   "params": {
+    "name": "x",
+    "model": "x",
+    "provider": "x",
+    "confirm_expensive_model": true,
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/plugins/hermes-bots/profile-config.tsx:627"
+  },
+  {
+   "method": "profiles.configure",
+   "params": {
+    "name": "x",
+    "soul": "x"
+   },
+   "site": "apps/desktop/src/plugins/hermes-bots/soul.ts:129"
+  },
+  {
+   "method": "profiles.create",
+   "params": {
+    "description": "x",
+    "name": "hermes-setup",
+    "clone_from": "default",
+    "share_auth": true,
+    "no_alias": true,
+    "soul": "x",
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/components/onboarding-chat/setup-profile.ts:320"
+  },
+  {
+   "method": "profiles.create",
+   "params": {
+    "name": "x",
+    "description": "x",
+    "clone_from": "default",
+    "no_skills": false,
+    "share_auth": true,
+    "soul": "x",
+    "model": "x",
+    "provider": "x",
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/plugins/hermes-bots/create-dialog.tsx:382"
+  },
+  {
+   "method": "profiles.create",
+   "params": {
+    "name": "x",
+    "clone_from": "x",
+    "description": "x",
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/plugins/hermes-bots/profile-ops.ts:336"
+  },
+  {
+   "method": "profiles.describe",
+   "params": {
+    "name": "x",
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/plugins/hermes-bots/create-dialog.tsx:304"
+  },
+  {
+   "method": "profiles.describe",
+   "params": {
+    "name": "x"
+   },
+   "site": "apps/desktop/src/plugins/hermes-bots/soul.ts:116"
+  },
+  {
+   "method": "profiles.get_asset",
+   "params": {
+    "asset": "avatar",
+    "name": "x"
+   },
+   "site": "apps/desktop/src/components/assistant-ui/thread/user-message.tsx:153"
+  },
+  {
+   "method": "profiles.list",
+   "params": {
+    "include_sessions": false
+   },
+   "site": "apps/desktop/src/components/assistant-ui/thread/user-message.tsx:137"
+  },
+  {
+   "method": "profiles.list",
+   "params": {
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/plugins/hermes-bots/canonical-chat.ts:555"
+  },
+  {
+   "method": "profiles.list",
+   "params": {
+    "include_sessions": false,
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/plugins/hermes-bots/relay.ts:214"
+  },
+  {
+   "method": "profiles.remember_onboarding",
+   "params": {
+    "answers": {
+     "accent": null,
+     "connectors": [
+      "x"
+     ],
+     "context": "x",
+     "name": "x",
+     "layout": "basic"
+    },
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/app/contrib/onboarding-handoff.ts:163"
+  },
+  {
+   "method": "profiles.set_asset",
+   "params": {
+    "name": "x",
+    "asset": "avatar",
+    "data": "data:image/png;base64,aGk=",
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/plugins/hermes-bots/create-dialog.tsx:465"
+  },
+  {
+   "method": "profiles.set_asset",
+   "params": {
+    "name": "x",
+    "asset": "avatar",
+    "data": "data:image/png;base64,aGk="
+   },
+   "site": "apps/desktop/src/plugins/hermes-bots/data.ts:381"
+  },
+  {
+   "method": "profiles.set_asset",
+   "params": {
+    "name": "x",
+    "asset": "avatar",
+    "clear": true,
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/plugins/hermes-bots/data.ts:387"
+  },
+  {
+   "method": "profiles.set_asset",
+   "params": {
+    "name": "x",
+    "asset": "avatar",
+    "clear": true
+   },
+   "site": "apps/desktop/src/plugins/hermes-bots/data.ts:392"
+  },
+  {
+   "method": "projects.add_folder",
+   "params": {
+    "id": "x",
+    "path": "x",
+    "is_primary": false,
+    "profile": "x",
+    "label": "x"
+   },
+   "site": "apps/desktop/src/store/projects.ts:1064"
+  },
+  {
+   "method": "projects.create",
+   "params": {
+    "name": "x",
+    "folders": [
+     "x"
+    ],
+    "use": false,
+    "profile": "x",
+    "primary_path": "x",
+    "slug": "x",
+    "description": "x",
+    "icon": "x",
+    "color": "x",
+    "board_slug": "x"
+   },
+   "site": "apps/desktop/src/store/projects.ts:885"
+  },
+  {
+   "method": "projects.delete",
+   "params": {
+    "id": "x",
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/store/projects.ts:1110"
+  },
+  {
+   "method": "projects.discover_repos",
+   "params": {
+    "scan": true,
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/store/projects.ts:649"
+  },
+  {
+   "method": "projects.list",
+   "params": {
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/store/projects.ts:356"
+  },
+  {
+   "method": "projects.project_sessions",
+   "params": {
+    "project_id": "x",
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/store/projects.ts:527"
+  },
+  {
+   "method": "projects.record_repos",
+   "params": {
+    "discovery_policy": {
+     "enabled": true,
+     "roots": [
+      "x"
+     ],
+     "exclude_paths": [
+      "x"
+     ]
+    },
+    "repos": [
+     {
+      "root": "x",
+      "label": "x"
+     }
+    ],
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/store/projects.ts:712"
+  },
+  {
+   "method": "projects.set_active",
+   "params": {
+    "id": "x",
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/store/projects.ts:1116"
+  },
+  {
+   "method": "projects.tree",
+   "params": {
+    "preview_limit": 5,
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/store/projects.ts:423"
+  },
+  {
+   "method": "projects.update",
+   "params": {
+    "id": "x",
+    "profile": "x",
+    "name": "x",
+    "color": "",
+    "icon": ""
+   },
+   "site": "apps/desktop/src/store/projects.ts:985"
+  },
+  {
+   "method": "prompt.btw",
+   "params": {
+    "session_id": "x",
+    "text": "x",
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/app/session/hooks/use-prompt-actions/slash.ts:582"
+  },
+  {
+   "method": "prompt.submit",
+   "params": {
+    "session_id": "x",
+    "text": "x",
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/app/contrib/handoff-leg.ts:124"
+  },
+  {
+   "method": "prompt.submit",
+   "params": {
+    "display_kind": "hidden",
+    "session_id": "x",
+    "text": "x",
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/app/contrib/onboarding-handoff.ts:273"
+  },
+  {
+   "method": "prompt.submit",
+   "params": {
+    "session_id": "x",
+    "text": "x",
+    "confirm_truncate": true,
+    "truncate_before_user_ordinal": 0,
+    "truncate_before_message_id": "x",
+    "truncate_before_row_id": 12,
+    "confirm_empty_truncate": true,
+    "rebind_survivor_row_ids": [
+     1,
+     2
+    ],
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/app/session/hooks/use-prompt-actions/rewind.ts:336"
+  },
+  {
+   "method": "prompt.submit",
+   "params": {
+    "session_id": "x",
+    "text": "x",
+    "interrupted": true,
+    "display_kind": "hidden",
+    "surface": "hud",
+    "queued": true,
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/app/session/hooks/use-prompt-actions/submit.ts:806"
+  },
+  {
+   "method": "reload.env",
+   "params": {
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/store/free-tier-sign-in.ts:259"
+  },
+  {
+   "method": "reload.mcp",
+   "params": {
+    "confirm": true,
+    "session_id": "x"
+   },
+   "site": "apps/desktop/src/app/skills/mcp-tab.tsx:732"
+  },
+  {
+   "method": "reload.mcp",
+   "params": {
+    "confirm": true,
+    "session_id": "x",
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/components/assistant-ui/mcp-setup-tool.tsx:246"
+  },
+  {
+   "method": "session.activate",
+   "params": {
+    "session_id": "x",
+    "cols": 96,
+    "omit_messages": true,
+    "desktop_ui_protocol": 3,
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/app/session/hooks/use-session-actions/index.ts:1182"
+  },
+  {
+   "method": "session.active_list",
+   "params": {
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/app/contrib/hooks/use-background-sync.ts:702"
+  },
+  {
+   "method": "session.branch",
+   "params": {
+    "session_id": "x",
+    "count": 2,
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/app/session/hooks/use-session-actions/index.ts:2133"
+  },
+  {
+   "method": "session.close",
+   "params": {
+    "session_id": "x",
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/app/session/hooks/use-session-actions/index.ts:657"
+  },
+  {
+   "method": "session.compress",
+   "params": {
+    "session_id": "x",
+    "focus_topic": "x",
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/app/session/hooks/use-prompt-actions/slash.ts:654"
+  },
+  {
+   "method": "session.context_breakdown",
+   "params": {
+    "session_id": "x",
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/app/shell/hooks/use-context-breakdown.ts:41"
+  },
+  {
+   "method": "session.control",
+   "params": {
+    "action": "subgoal.add",
+    "args": {
+     "text": "x"
+    },
+    "session_id": "x",
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/store/session-control.ts:827"
+  },
+  {
+   "method": "session.control.read",
+   "params": {
+    "session_id": "x",
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/store/session-control.ts:756"
+  },
+  {
+   "method": "session.create",
+   "params": {
+    "cols": 96,
+    "source": "desktop",
+    "messages": [
+     {
+      "content": "x",
+      "role": "user"
+     }
+    ],
+    "cwd": "x",
+    "profile": "x",
+    "parent_session_id": "x",
+    "desktop_ui_protocol": 3
+   },
+   "site": "apps/desktop/src/app/session/hooks/use-session-actions/index.ts:2137"
+  },
+  {
+   "method": "session.create",
+   "params": {
+    "cols": 96,
+    "source": "desktop",
+    "fast": false,
+    "cwd": "x",
+    "profile": "x",
+    "model": "x",
+    "provider": "x",
+    "reasoning_effort": "x",
+    "title": "x",
+    "messages": [
+     {
+      "content": "x",
+      "role": "user",
+      "display_kind": "hidden"
+     }
+    ],
+    "desktop_ui_protocol": 3
+   },
+   "site": "apps/desktop/src/app/session/hooks/use-session-actions/index.ts:604"
+  },
+  {
+   "method": "session.create",
+   "params": {
+    "cols": 96,
+    "source": "desktop",
+    "fast": false,
+    "cwd": "x",
+    "profile": "x",
+    "model": "x",
+    "provider": "x",
+    "reasoning_effort": "x",
+    "hidden": true,
+    "desktop_ui_protocol": 3
+   },
+   "site": "apps/desktop/src/app/session/hooks/use-session-actions/index.ts:807"
+  },
+  {
+   "method": "session.create",
+   "params": {
+    "profile": "x",
+    "title": "x",
+    "hidden": true,
+    "follow_profile_config": true,
+    "desktop_ui_protocol": 3
+   },
+   "site": "apps/desktop/src/plugins/hermes-bots/canonical-chat.ts:348"
+  },
+  {
+   "method": "session.create",
+   "params": {
+    "profile": "x",
+    "title": "x",
+    "hidden": true,
+    "room_plumbing": true,
+    "follow_profile_config": true,
+    "desktop_ui_protocol": 3
+   },
+   "site": "apps/desktop/src/plugins/hermes-bots/group-turns.ts:212"
+  },
+  {
+   "method": "session.cwd.set",
+   "params": {
+    "session_id": "x",
+    "cwd": "x",
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/app/session/hooks/use-cwd-actions.ts:94"
+  },
+  {
+   "method": "session.events.since",
+   "params": {
+    "session_id": "x",
+    "last_seen": 12
+   },
+   "site": "apps/shared/src/json-rpc-gateway.ts:553"
+  },
+  {
+   "method": "session.foreign.import",
+   "params": {
+    "id": "x",
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/app/session-import/index.tsx:94"
+  },
+  {
+   "method": "session.foreign.list",
+   "params": {
+    "source": "x",
+    "offset": 0,
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/app/session-import/index.tsx:51"
+  },
+  {
+   "method": "session.foreign.preview",
+   "params": {
+    "id": "x",
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/app/session-import/index.tsx:76"
+  },
+  {
+   "method": "session.history",
+   "params": {
+    "session_id": "x",
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/app/session/hooks/use-prompt-actions/rewind.ts:226"
+  },
+  {
+   "method": "session.interrupt",
+   "params": {
+    "session_id": "x",
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/app/chat/session-tile-actions.ts:355"
+  },
+  {
+   "method": "session.list",
+   "params": {
+    "include_hidden": true,
+    "title": "x",
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/app/contrib/onboarding-kickoff.ts:128"
+  },
+  {
+   "method": "session.list",
+   "params": {
+    "profile": "x",
+    "title": "x",
+    "limit": 200,
+    "include_hidden": true
+   },
+   "site": "apps/desktop/src/plugins/hermes-bots/canonical-chat.ts:200"
+  },
+  {
+   "method": "session.redirect",
+   "params": {
+    "session_id": "x",
+    "text": "x",
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/app/chat/session-tile-actions.ts:414"
+  },
+  {
+   "method": "session.resume",
+   "params": {
+    "session_id": "x",
+    "omit_messages": false,
+    "desktop_ui_protocol": 3,
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/app/contrib/handoff-leg.ts:80"
+  },
+  {
+   "method": "session.resume",
+   "params": {
+    "session_id": "x",
+    "cols": 96,
+    "omit_messages": true,
+    "profile": "x",
+    "desktop_ui_protocol": 3
+   },
+   "site": "apps/desktop/src/app/contrib/hooks/use-session-tile-delegate.ts:342"
+  },
+  {
+   "method": "session.resume",
+   "params": {
+    "session_id": "x",
+    "source": "desktop",
+    "profile": "x",
+    "desktop_ui_protocol": 3
+   },
+   "site": "apps/desktop/src/app/session/hooks/use-prompt-actions/resolve-target-session.ts:104"
+  },
+  {
+   "method": "session.resume",
+   "params": {
+    "session_id": "x",
+    "source": "desktop",
+    "omit_messages": true,
+    "profile": "x",
+    "desktop_ui_protocol": 3
+   },
+   "site": "apps/desktop/src/app/session/hooks/use-prompt-actions/submit.ts:617"
+  },
+  {
+   "method": "session.resume",
+   "params": {
+    "session_id": "x",
+    "cols": 96,
+    "source": "desktop",
+    "defer_history": true,
+    "lazy": true,
+    "omit_messages": true,
+    "profile": "x",
+    "desktop_ui_protocol": 3
+   },
+   "site": "apps/desktop/src/app/session/hooks/use-session-actions/index.ts:1581"
+  },
+  {
+   "method": "session.resume",
+   "params": {
+    "session_id": "x",
+    "profile": "x",
+    "omit_messages": true,
+    "desktop_ui_protocol": 3
+   },
+   "site": "apps/desktop/src/plugins/hermes-bots/group-turns.ts:157"
+  },
+  {
+   "method": "session.resume",
+   "params": {
+    "session_id": "x",
+    "profile": "x",
+    "desktop_ui_protocol": 3
+   },
+   "site": "apps/desktop/src/plugins/hermes-bots/group-turns.ts:800"
+  },
+  {
+   "method": "session.save",
+   "params": {
+    "session_id": "x",
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/app/session/hooks/use-prompt-actions/slash.ts:479"
+  },
+  {
+   "method": "session.status",
+   "params": {
+    "session_id": "x",
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/app/session/hooks/use-prompt-actions/slash.ts:479"
+  },
+  {
+   "method": "session.title",
+   "params": {
+    "session_id": "x",
+    "title": "x"
+   },
+   "site": "apps/desktop/src/app/chat/sidebar/session-actions-menu.tsx:80"
+  },
+  {
+   "method": "session.title",
+   "params": {
+    "session_id": "x",
+    "title": "x",
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/app/contrib/onboarding-handoff.ts:251"
+  },
+  {
+   "method": "session.usage",
+   "params": {
+    "session_id": "x",
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/app/session/hooks/use-session-actions/index.ts:1195"
+  },
+  {
+   "method": "session.workspace.move",
+   "params": {
+    "cwd": "x",
+    "session_key": "x",
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/store/projects.ts:573"
+  },
+  {
+   "method": "setup.runtime_check",
+   "params": {
+    "provider": "x",
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/lib/runtime-readiness.ts:97"
+  },
+  {
+   "method": "setup.status",
+   "params": {
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/app/contrib/onboarding-kickoff.ts:106"
+  },
+  {
+   "method": "skills.manage",
+   "params": {
+    "action": "install",
+    "query": "x",
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/plugins/hermes-bots/skills-hub.tsx:125"
+  },
+  {
+   "method": "skills.manage",
+   "params": {
+    "action": "search",
+    "query": "x"
+   },
+   "site": "apps/desktop/src/plugins/hermes-bots/skills-hub.tsx:99"
+  },
+  {
+   "method": "slash.exec",
+   "params": {
+    "session_id": "x",
+    "command": "x",
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/app/session/hooks/use-prompt-actions/slash.ts:387"
+  },
+  {
+   "method": "slash.exec",
+   "params": {
+    "command": "goal status",
+    "session_id": "x",
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/store/goals.ts:174"
+  },
+  {
+   "method": "subagent.interrupt",
+   "params": {
+    "session_id": "x",
+    "subagent_id": "x",
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/app/chat/composer/status-stack/subagent-controls.tsx:29"
+  },
+  {
+   "method": "subagent.list",
+   "params": {
+    "session_id": "x",
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/app/chat/composer/status-stack/use-subagent-snapshot.ts:34"
+  },
+  {
+   "method": "subagent.steer",
+   "params": {
+    "session_id": "x",
+    "subagent_id": "x",
+    "text": "x",
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/app/chat/composer/status-stack/subagent-controls.tsx:29"
+  },
+  {
+   "method": "subagent.tail",
+   "params": {
+    "session_id": "x",
+    "subagent_id": "x",
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/app/chat/composer/status-stack/subagent-transcript.tsx:30"
+  },
+  {
+   "method": "subscription.change",
+   "params": {
+    "subscription_type_id": "x",
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/app/settings/billing/api.ts:165"
+  },
+  {
+   "method": "subscription.preview",
+   "params": {
+    "subscription_type_id": "x",
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/app/settings/billing/api.ts:160"
+  },
+  {
+   "method": "subscription.resume",
+   "params": {
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/app/settings/billing/api.ts:163"
+  },
+  {
+   "method": "subscription.state",
+   "params": {
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/app/settings/billing/api.ts:158"
+  },
+  {
+   "method": "vault.add",
+   "params": {
+    "kind": "login",
+    "label": "x",
+    "origin": "https://x.example",
+    "secret": {
+     "identifier_type": "email",
+     "identifier": "x",
+     "password": "x",
+     "otp_secret": "x"
+    },
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/app/settings/vault-settings.tsx:310"
+  },
+  {
+   "method": "vault.list",
+   "params": {
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/app/settings/vault-settings.tsx:249"
+  },
+  {
+   "method": "vault.lock",
+   "params": {
+    "name": "x",
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/app/settings/vault-settings.tsx:213"
+  },
+  {
+   "method": "vault.remove",
+   "params": {
+    "id": "x",
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/app/settings/vault-settings.tsx:357"
+  },
+  {
+   "method": "vault.source.set",
+   "params": {
+    "name": "x",
+    "enabled": true,
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/app/settings/vault-settings.tsx:207"
+  },
+  {
+   "method": "vault.sources",
+   "params": {
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/app/settings/vault-settings.tsx:192"
+  },
+  {
+   "method": "vault.unlock",
+   "params": {
+    "name": "x",
+    "password": "x",
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/app/settings/vault-settings.tsx:230"
+  },
+  {
+   "method": "wake.feed",
+   "params": {
+    "pcm": "AAAA",
+    "sample_rate": 16000
+   },
+   "site": "apps/desktop/src/lib/wake-client-capture.ts:148"
+  },
+  {
+   "method": "wake.pause",
+   "params": {},
+   "site": "apps/desktop/src/app/chat/composer/hooks/use-composer-voice.ts:367"
+  },
+  {
+   "method": "wake.resume",
+   "params": {},
+   "site": "apps/desktop/src/store/wake-word.ts:344"
+  },
+  {
+   "method": "wake.start",
+   "params": {
+    "persist": true,
+    "surface": "gui",
+    "client_capture": true,
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/app/session/hooks/use-prompt-actions/slash.ts:842"
+  },
+  {
+   "method": "wake.start",
+   "params": {
+    "surface": "gui",
+    "client_capture": true
+   },
+   "site": "apps/desktop/src/store/wake-word.ts:277"
+  },
+  {
+   "method": "wake.start",
+   "params": {
+    "persist": true,
+    "surface": "gui",
+    "client_capture": true
+   },
+   "site": "apps/desktop/src/store/wake-word.ts:312"
+  },
+  {
+   "method": "wake.status",
+   "params": {
+    "client_capture": true,
+    "surface": "gui",
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/app/session/hooks/use-prompt-actions/slash.ts:822"
+  },
+  {
+   "method": "wake.status",
+   "params": {
+    "client_capture": true,
+    "surface": "gui"
+   },
+   "site": "apps/desktop/src/store/wake-word.ts:253"
+  },
+  {
+   "method": "wake.stop",
+   "params": {
+    "persist": true,
+    "profile": "x"
+   },
+   "site": "apps/desktop/src/app/session/hooks/use-prompt-actions/slash.ts:858"
+  },
+  {
+   "method": "wake.stop",
+   "params": {
+    "persist": true
+   },
+   "site": "apps/desktop/src/store/wake-word.ts:306"
+  },
+  {
+   "method": "wake.stop",
+   "params": {},
+   "site": "apps/desktop/src/store/wake-word.ts:75"
+  }
+ ]
+}

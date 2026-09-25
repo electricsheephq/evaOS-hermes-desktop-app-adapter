@@ -310,7 +310,10 @@ def _refresh_live_sessions(home=None, *, preserve_prefix: bool = False, note: st
         agent = sess["agent"]
         try:
             with _session_profile_runtime_scope(sess):
-                enabled = _load_enabled_toolsets(getattr(agent, "platform", None))
+                # evaOS: the session's CURRENT source (activate can rebind desktop<->tui) decides the
+                # client-surface toolsets, with its negotiated desktop_ui_protocol.
+                enabled = _load_enabled_toolsets(
+                    _session_source(sess) or getattr(agent, "platform", None), sess.get("desktop_ui_protocol"))
                 refresh(agent, enabled_override=enabled, quiet_mode=True, preserve_prefix=preserve_prefix)
         except Exception as _exc:
             logger.warning("Failed to refresh cached agent tools (session %s): %s", sid, _exc)
@@ -353,38 +356,8 @@ def _(rid, params: dict) -> dict:
     req_rev = str(params.get("rev") or "")
 
     def _refresh_session_agent() -> None:
-<<<<<<< HEAD
-        """Rebuild THIS session's cached tool snapshot + push session.info (the agent never
-        re-reads the registry). Runs under _mcp_reload_lock so a concurrent reload can't
-        tear the registry down mid-refresh."""
-        if not session:
-            return
-        agent = session["agent"]
-        try:  # enabled_override re-resolves toolsets so a server enabled in config this session is picked up
-            _mcp_agent.refresh_agent_mcp_tools(
-                agent,
-                enabled_override=_load_enabled_toolsets(
-                    _session_source(session), session.get("desktop_ui_protocol")),
-                quiet_mode=True)
-        except Exception as _exc:
-            logger.warning("Failed to refresh cached agent tools after /reload-mcp: %s", _exc)
-        _emit("session.info", params.get("session_id", ""), _session_info(agent, session))
-||||||| 939e45c91d
-        """Rebuild THIS session's cached tool snapshot + push session.info (the agent never
-        re-reads the registry). Runs under _mcp_reload_lock so a concurrent reload can't
-        tear the registry down mid-refresh."""
-        if not session:
-            return
-        agent = session["agent"]
-        try:  # enabled_override re-resolves toolsets so a server enabled in config this session is picked up
-            _mcp_agent.refresh_agent_mcp_tools(agent, enabled_override=_load_enabled_toolsets(), quiet_mode=True)
-        except Exception as _exc:
-            logger.warning("Failed to refresh cached agent tools after /reload-mcp: %s", _exc)
-        _emit("session.info", params.get("session_id", ""), _session_info(agent, session))
-=======
         """Runs under _mcp_reload_lock so a concurrent reload can't tear the registry down mid-refresh."""
         _refresh_live_sessions()
->>>>>>> f97608f178
 
     def _do_full_reload() -> None:
         """shutdown+discover+refresh under the lock, then mark a completed generation. Config

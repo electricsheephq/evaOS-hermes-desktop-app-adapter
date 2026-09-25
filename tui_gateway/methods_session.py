@@ -880,13 +880,9 @@ def _resume_eager(ctx: _Resume) -> dict:
             stored_runtime_overrides = _stored_session_runtime_overrides(ctx.found)
             agent = _make_agent_in_context(
                 sid, ctx.target, session_db=ctx.db, platform_override=source,
-<<<<<<< HEAD
                 desktop_ui_protocol_override=_negotiate_desktop_ui_protocol(
                     source, ctx.requested_desktop_ui_protocol),
-||||||| 939e45c91d
-=======
                 cwd_override=ctx.profile_resume_cwd or None,
->>>>>>> f97608f178
                 context_cwd_is_launch_artifact=(source in _LAUNCH_CWD_NOT_A_WORKSPACE and not ctx.profile_resume_cwd),
                 auth_user_id=_transport_auth_user_id(current_transport()), **stored_runtime_overrides)
         except Exception as e:
@@ -2062,16 +2058,10 @@ def _build_branch_agent(session: dict, new_sid: str, new_key: str, history: list
     try:
         with _profile_build_scope(parent_home):
             agent = _make_agent_in_context(new_sid, new_key, session_db=branch_db, platform_override=source,
-<<<<<<< HEAD
                                            desktop_ui_protocol_override=session.get("desktop_ui_protocol"),
-                                           context_cwd_is_launch_artifact=_context_cwd_is_launch_artifact(session))
-||||||| 939e45c91d
-                                           context_cwd_is_launch_artifact=_context_cwd_is_launch_artifact(session))
-=======
                                            cwd_override=_session_cwd(session),
                                            context_cwd_is_launch_artifact=_context_cwd_is_launch_artifact(session),
                                            auth_user_id=parent_user_id)
->>>>>>> f97608f178
             _init_session(new_sid, new_key, agent, list(history), cols=session.get("cols", 80),
                           cwd=_session_cwd(session), session_db=branch_db, source=source, profile_home=parent_home,
                           desktop_ui_protocol=session.get("desktop_ui_protocol"),

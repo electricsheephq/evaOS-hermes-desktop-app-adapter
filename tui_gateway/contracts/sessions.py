@@ -130,6 +130,9 @@ class SessionCreateParams(ProfileParams):
     hidden: bool = False
     room_plumbing: bool = False
     follow_profile_config: bool = False
+    # evaOS Desktop UI protocol level the client implements (tui_gateway/server.py
+    # ``_negotiate_desktop_ui_protocol``: missing/invalid = 1, clamped to the runtime's level).
+    desktop_ui_protocol: int | None = None
 
 
 class SessionCreateResult(Result):
@@ -178,6 +181,7 @@ class SessionResumeParams(SessionParams):
     omit_messages: bool = False
     eager_build: bool = False
     close_on_disconnect: bool = False
+    desktop_ui_protocol: int | None = None  # evaOS Desktop UI protocol level; see SessionCreateParams
 
 
 class SessionResumeResult(LiveSessionSnapshot):
@@ -191,6 +195,7 @@ method("session.resume", params=SessionResumeParams, result=SessionResumeResult,
 class SessionActivateParams(SessionParams):
     cols: int | None = None  # sent by the desktop; the handler keeps the session's current width
     omit_messages: bool = False
+    desktop_ui_protocol: int | None = None  # evaOS Desktop UI protocol level; see SessionCreateParams
 
 
 class SessionActivateResult(LiveSessionSnapshot):

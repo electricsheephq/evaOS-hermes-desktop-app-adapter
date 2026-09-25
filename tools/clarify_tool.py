@@ -143,16 +143,10 @@ def _normalize_questions(questions) -> tuple:
 
 def _batch_result(normalized: List[dict], answers: dict, timed_out: bool, notice: Optional[str] = None) -> str:
     """Batch result JSON; unanswered -> "". The top-level ``timed_out`` flag (present only when
-<<<<<<< HEAD
     true) tells the agent whether blanks are deliberate skips or the user walking away, while
-    ``timeout_guidance`` carries the canonical safety guidance for that case."""
-||||||| 939e45c91d
-    true) tells the agent whether blanks are deliberate skips or the user walking away."""
-=======
-    true) tells the agent whether blanks are deliberate skips or the user walking away; ``notice``
+    ``timeout_guidance`` carries the canonical safety guidance for that case; ``notice``
     (surface-supplied, only beside ``timed_out``) says WHY the wait ended, so an undeliverable
     prompt never reads as user inactivity."""
->>>>>>> f97608f178
     responses = []
     for entry in normalized:
         raw = answers.get(entry["qid"])
@@ -163,13 +157,9 @@ def _batch_result(normalized: List[dict], answers: dict, timed_out: bool, notice
     result: Dict[str, object] = {"responses": responses}
     if timed_out:
         result["timed_out"] = True
-<<<<<<< HEAD
         result["timeout_guidance"] = TIMEOUT_RESPONSE
-||||||| 939e45c91d
-=======
         if notice:
             result["notice"] = str(notice)
->>>>>>> f97608f178
     return json.dumps(result, ensure_ascii=False)
 
 
@@ -275,14 +265,8 @@ CLARIFY_SCHEMA = {
         "enumerated inside the question text (choices render as pickable "
         "rows; options written into the question are dead prose the user "
         "can't click). Result: {responses: [...]} in question order (plus "
-<<<<<<< HEAD
-        "timed_out=true and timeout_guidance if the user stopped part-way). Prefer deciding "
-||||||| 939e45c91d
-        "timed_out=true if the user stopped part-way). Prefer deciding "
-=======
-        "timed_out=true, and a notice saying why, if the user stopped "
-        "part-way or the prompt could not be delivered). Prefer deciding "
->>>>>>> f97608f178
+        "timed_out=true and timeout_guidance, and a notice saying why, if the "
+        "user stopped part-way or the prompt could not be delivered). Prefer deciding "
         "low-stakes questions yourself; don't use this for dangerous-command "
         "confirmation (the terminal tool handles that)."
     ),

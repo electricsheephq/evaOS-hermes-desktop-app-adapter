@@ -356,12 +356,8 @@ class ComputeHost:
                 reasoning_config_override=frame.get("reasoning_config_override"),
                 service_tier_override=frame.get("service_tier_override"),
                 platform_override=frame.get("source"),
-<<<<<<< HEAD
                 desktop_ui_protocol_override=frame.get("desktop_ui_protocol"),
-||||||| 939e45c91d
-=======
                 cwd_override=str(frame.get("cwd") or "") or None,
->>>>>>> f97608f178
                 context_cwd_is_launch_artifact=bool(
                     frame.get("context_cwd_is_launch_artifact", False)),
                 session_db=session_db, auth_user_id=frame.get("auth_user_id"))

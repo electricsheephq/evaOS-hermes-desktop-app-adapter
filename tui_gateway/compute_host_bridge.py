@@ -67,16 +67,9 @@ def _compute_host_turn_frame(
         "model_override": session.get("model_override"),
         "reasoning_config_override": session.get("create_reasoning_override"),
         "service_tier_override": session.get("create_service_tier_override"),
-<<<<<<< HEAD
         "source": _session_source(session),
         "desktop_ui_protocol": session.get("desktop_ui_protocol"),
         "attached_images": attached_images,
-        "queued_prompt_generation": queued_prompt_generation}
-||||||| 939e45c91d
-        "source": _session_source(session), "attached_images": attached_images,
-        "queued_prompt_generation": queued_prompt_generation}
-=======
-        "source": _session_source(session), "attached_images": attached_images,
         "auth_user_id": _session_auth_user_id(session),
         "queued_prompt_generation": queued_prompt_generation,
         # #101416: vouch that this process already holds the registry lease for this session, so
@@ -96,7 +89,6 @@ def _active_session_lease_vouch(session: dict) -> dict | None:
     if str(lease.session_id) != str(session.get("session_key") or ""):
         return None
     return {"lease_id": str(lease.lease_id), "session_id": str(lease.session_id)}
->>>>>>> f97608f178
 
 
 def _metadata_mirror(session: dict | None) -> dict:

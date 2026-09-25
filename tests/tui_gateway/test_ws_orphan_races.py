@@ -250,6 +250,7 @@ def test_late_rpc_from_closed_socket_keeps_orphan_reap_armed(monkeypatch, path, 
     monkeypatch.setattr(server, "_handle_busy_submit", lambda *a, **kw: {"result": {"status": "queued"}})
     monkeypatch.setattr(server, "_sess", lambda *a: (session, None))
     ctx = SimpleNamespace(rid=1, owns_db=False, db=None, cols=80, omit_messages=True,
+                          params={}, requested_desktop_ui_protocol=None,  # evaOS adaptation (r34)
                           defer_history=False, target="stored", profile=None,
                           profile_home=None, profile_resume_cwd=None, found={},
                           messages=lambda history: [], mint=lambda: ("unused", "tui", "."),

@@ -34,6 +34,12 @@ def _handle_admitted_request(req: dict) -> dict | None:
         response = fn(rid, params)
     except ProfileUnavailableError as exc:
         return _err(rid, 4064, str(exc))
+    except ManagedProfileScopeError as exc:
+        # A request naming a profile outside this managed gateway's scope is a refusal, not a
+        # server fault. Mirrors the dashboard's 403 in hermes_cli.web_server_profiles
+        # ._managed_profile_or_http; without this the PermissionError escaped the handler and
+        # the ws read loop answered a generic -32603 "internal error" plus a logged traceback.
+        return _err(rid, 4030, str(exc) or "profile is not authorized")
     finally:
         _current_rpc_method.reset(token)
     if contract is not None and isinstance(response, dict) and isinstance(response.get("result"), dict):
@@ -77,6 +83,8 @@ def dispatch(req: dict, transport: Optional[Transport] = None) -> dict | None:
                     resp = _handle_admitted_request(req)
                 except Exception as exc:
                     resp = _err(req.get("id"), -32000, f"handler error: {exc}")
+                finally:
+                    _release_rpc_thread_read_connection()
                 if resp is not None:
                     t.write(resp)
             future = _pool.submit(lambda: ctx.run(run))
