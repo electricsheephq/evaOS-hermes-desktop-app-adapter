@@ -4499,6 +4499,48 @@ class TestDashboardPluginManifestExtensions:
         assert len(entries) == 1
         assert entries[0]["tab"]["path"] == "/from-profile"
 
+    def test_managed_dashboard_plugin_rejects_profile_shadow(self, tmp_path, monkeypatch):
+        """A profile plugin cannot shadow an operator-managed dashboard plugin."""
+        from hermes_cli import managed_scope, web_server_dashboard
+
+        managed_dir = tmp_path / "managed-scope"
+        managed_dir.mkdir()
+        (managed_dir / "config.yaml").write_text(
+            "plugins:\n  enabled: [managed-dashboard]\n", encoding="utf-8"
+        )
+        profile_home = tmp_path / "profile"
+        bundled_home = tmp_path / "bundled"
+        self._write_plugin(profile_home, "managed-dashboard", {
+            "name": "managed-dashboard",
+            "label": "Profile Shadow",
+            "api": "plugin_api.py",
+        })
+        self._write_plugin(bundled_home, "managed-dashboard", {
+            "name": "managed-dashboard",
+            "label": "Managed Plugin",
+            "api": "plugin_api.py",
+        })
+        monkeypatch.setenv("HERMES_MANAGED_DIR", str(managed_dir))
+        monkeypatch.setattr(
+            web_server_dashboard,
+            "_dashboard_plugin_search_dirs",
+            lambda: [
+                (profile_home / "plugins", "user"),
+                (bundled_home / "plugins", "bundled"),
+            ],
+        )
+        managed_scope.invalidate_managed_cache()
+
+        try:
+            plugins = web_server_dashboard._discover_dashboard_plugins()
+        finally:
+            managed_scope.invalidate_managed_cache()
+
+        entries = [p for p in plugins if p["name"] == "managed-dashboard"]
+        assert [(p["source"], p["label"]) for p in entries] == [
+            ("bundled", "Managed Plugin")
+        ]
+
     def test_unreadable_plugin_paths_do_not_block_discovery(self, tmp_path, monkeypatch, caplog):
         """A denied plugin directory or manifest must not prevent valid plugins loading."""
         from pathlib import Path
