@@ -1085,10 +1085,10 @@ class GatewayNotificationsMixin:
             await admit_internal_event(adapter, synth_event)
             return True
         except WakeNotAccepted:
-            # Durable callers refund the claim; ordinary watch callers just requeue.
+            if getattr(synth_event, "_gateway_route_mismatch", False):
+                # Permanent: durable callers park the row via the sentinel; watch callers drop instead of requeueing.
+                return self._PERMANENT_ROUTE_MISMATCH if raise_not_accepted else None
             if raise_not_accepted:
-                if getattr(synth_event, "_gateway_route_mismatch", False):
-                    return self._PERMANENT_ROUTE_MISMATCH
                 raise
             return False
         except Exception as e:

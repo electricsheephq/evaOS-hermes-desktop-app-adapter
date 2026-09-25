@@ -90,11 +90,11 @@ async def test_completion_ack_requires_admission_and_replay_never_repeats(tmp_pa
         for event in events:
             row = delegation.get_durable_delegation(event["delegation_id"])
             assert (row["delivery_state"], row["delivery_attempts"]) == ("pending", 0)
-        # An explicitly mismatched adapter key must fail closed too.
+        # A permanent adapter-key mismatch on the non-durable path drops instead of requeueing.
         adapter.set_session_store(runner.session_store)
         wrong = dict(events[0], session_key="agent:main:discord:dm:other",
                      platform="discord", chat_type="dm", chat_id="42")
-        assert await runner._inject_watch_notification("wrong-route", wrong) is False
+        assert await runner._inject_watch_notification("wrong-route", wrong) is None
         runner._BUSY_QUEUE_MAX_PENDING = 4
         assert await runner._deliver_async_delegation_group(events) is True
         assert await runner._deliver_async_delegation_group(events) is None
@@ -112,6 +112,34 @@ async def test_completion_ack_requires_admission_and_replay_never_repeats(tmp_pa
         release.set()
         await drain(adapter)
         await runner._cancel_process_completion_batch_tasks()
+
+
+@pytest.mark.asyncio
+async def test_permanent_watch_route_mismatch_is_dropped_from_drain(caplog):
+    runner = GatewayRunner(GatewayConfig())
+    adapter = DiscordAdapter(PlatformConfig(enabled=True, typing_indicator=False))
+    adapter.set_session_store(runner.session_store)
+    received = []
+
+    async def handler(event):
+        received.append(event)
+
+    adapter.set_message_handler(handler)
+    runner.adapters = {Platform.DISCORD: adapter}
+    completion_queue = queue.Queue()
+    completion_queue.put({
+        "type": "watch_match", "session_id": "watch-route-mismatch",
+        "session_key": "agent:main:discord:dm:other", "platform": "discord",
+        "chat_type": "dm", "chat_id": "42", "pattern": "READY",
+        "command": "build", "output": "READY\n",
+    })
+    caplog.set_level(logging.WARNING)
+
+    await runner._drain_watch_notifications(completion_queue)
+
+    assert completion_queue.empty()
+    assert received == []
+    assert sum("Dropping internally routed event" in r.message for r in caplog.records) == 1
 
 
 @pytest.mark.asyncio
