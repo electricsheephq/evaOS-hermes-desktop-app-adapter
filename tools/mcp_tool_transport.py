@@ -454,7 +454,11 @@ class MCPServerTransportMixin:
             from tools.mcp_oauth_manager import get_manager
             return get_manager().get_or_build_provider(self.name, url, config.get("oauth"))
         except Exception as exc:
-            logger.warning("MCP OAuth setup failed for '%s': %s", self.name, exc)
+            # An `auth: oauth` server with no usable cached tokens fails HERE on every timed
+            # self-probe, before the park is logged, so this warning would repeat on the same
+            # interval (#337). Follow the park episode: WARNING once, DEBUG while parked.
+            log = logger.debug if self._was_parked else logger.warning
+            log("MCP OAuth setup failed for '%s': %s", self.name, exc)
             raise
 
     def _sse_transport(self, url: str, headers: dict, connect_timeout: float,
@@ -489,10 +493,20 @@ class MCPServerTransportMixin:
 
     def _streamable_http_transport(self, url: str, headers: dict, connect_timeout: float,
                                    ssl_verify, client_cert, oauth_auth,
-                                   strict_cfg_headers: bool, configured_header_names: set):
+                                   strict_cfg_headers: bool, configured_header_names: set,
+                                   managed_lease_auth=None):
         """Streamable HTTP context manager: mcp >= 1.24.0 gets a caller-owned httpx client; on the
-        deprecated API (mcp < 1.24.0) the SDK owns the client."""
+        deprecated API (mcp < 1.24.0) the SDK owns the client.
+
+        ``managed_lease_auth`` (``auth: evaos_lease``): no redirects, no environment proxying
+        (neither ``trust_env`` nor proxy mounts), and the lease auth instead of OAuth."""
+        managed_lease = managed_lease_auth is not None
         if not _core._MCP_NEW_HTTP:
+            if managed_lease:
+                raise ImportError(
+                    f"MCP server '{self.name}' requires mcp >= 1.24.0 to "
+                    "disable environment proxying for managed lease auth."
+                )
             if strict_cfg_headers:  # fail closed: without an owned client redirects can't be hooked
                 raise ImportError(f"MCP server '{self.name}' requires mcp >= 1.24.0 to "
                                   "enforce the portable redirect-header boundary "
@@ -507,12 +521,15 @@ class MCPServerTransportMixin:
         # verify/cert live on the inner transport: a custom transport= makes client-level TLS kwargs
         # inert — and suppresses httpx's own proxy auto-detection, hence the explicit mounts=.
         inner_transport = httpx.AsyncHTTPTransport(verify=ssl_verify, **_present(cert=client_cert))
-        client_kwargs: dict = {"follow_redirects": True, "timeout": httpx.Timeout(float(connect_timeout), read=300.0),
+        proxy_mounts = None if managed_lease else _mcp_proxy_mounts(httpx, url, ssl_verify, client_cert, self.name)
+        client_kwargs: dict = {"follow_redirects": not managed_lease,
+                               "timeout": httpx.Timeout(float(connect_timeout), read=300.0),
                                **({"headers": headers} if headers else {}),
                                "event_hooks": {"response": [_make_http_rejection_recorder(self._http_rejection)]},
                                "transport": _make_mcp_body_cap_transport(httpx, inner_transport),
-                               **_present(mounts=_mcp_proxy_mounts(httpx, url, ssl_verify, client_cert, self.name),
-                                          auth=oauth_auth)}
+                               **_present(mounts=proxy_mounts, auth=managed_lease_auth or oauth_auth)}
+        if managed_lease:
+            client_kwargs["trust_env"] = False
 
         @asynccontextmanager
         async def _owned_client_streams():  # the SDK skips cleanup when http_client is provided
@@ -528,6 +545,8 @@ class MCPServerTransportMixin:
             raise ImportError(f"MCP server '{self.name}' requires HTTP transport but "
                               "mcp.client.streamable_http is not available. "
                               "Upgrade the mcp package to get HTTP support.")
+        if self._auth_type == "evaos_lease":
+            return await self._run_evaos_lease_http(config)
         url = config["url"]
         headers = dict(config.get("headers") or {})
         live = _live_endpoint(self.name)
@@ -593,6 +612,47 @@ class MCPServerTransportMixin:
                     f"(Streamable HTTP: {http_detail}; SSE: "
                     f"{_unwrap_exception_group(sse_exc)}). Check the URL points at an MCP "
                     "endpoint, or pin `transport: sse` if the server is SSE-only.") from sse_exc
+
+    async def _run_evaos_lease_http(self, config: dict):
+        """``auth: evaos_lease``: the broker-minted lease supplies the URL and headers. Streamable
+        HTTP only -- no SSE transport, no SSE fallback, no portable-plugin live endpoint."""
+        from tools.evaos_mcp_lease import (
+            EvaosLeaseHttpAuth,
+            EvaosLeaseManager,
+            EvaosLeaseSource,
+        )
+
+        if self._evaos_lease_manager is None:
+            source = EvaosLeaseSource(
+                profile_key=self.registration_home,
+                app_slug=config["app_slug"],
+                external_user_id=config.get("external_user_id"),
+                account_id=config.get("account_id"),
+                customer_id=config.get("customer_id"),
+                agent_id=config.get("agent_id"),
+            )
+            self._evaos_lease_manager = EvaosLeaseManager(
+                source=source,
+                on_mint_failure=self._warn_evaos_lease_failure,
+            )
+            self._evaos_lease_auth = EvaosLeaseHttpAuth(
+                self._evaos_lease_manager
+            )
+        lease = await self._evaos_lease_manager.get_lease()
+        url = lease.mcp_url
+        headers = dict(lease.headers)
+        logger.debug("MCP server '%s': connecting to its managed lease endpoint", self.name)
+        self._http_rejection = {}
+        configured_header_names = {key.lower() for key in headers}
+        headers = _apply_identity_header(self.name, config, headers)
+        if not any(key.lower() == "mcp-protocol-version" for key in headers):
+            headers["mcp-protocol-version"] = _core.LATEST_HANDSHAKE_VERSION
+        connect_timeout = config.get("connect_timeout", _core._DEFAULT_CONNECT_TIMEOUT)
+        transport = self._streamable_http_transport(
+            url, headers, connect_timeout, config.get("ssl_verify", True),
+            _resolve_client_cert(self.name, config), None, False, configured_header_names,
+            managed_lease_auth=self._evaos_lease_auth)
+        return await self._serve_transport(transport, "HTTP", float(connect_timeout))
 
     # -------------------------------------------------------------- discovery
 

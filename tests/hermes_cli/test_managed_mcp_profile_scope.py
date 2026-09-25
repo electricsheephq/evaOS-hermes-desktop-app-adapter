@@ -235,9 +235,11 @@ def test_multiplex_sessions_discover_managed_mcp_per_profile(
     )
     monkeypatch.setattr(entry, "_mcp_discovery_enabled", False)
     set_multiplex_active(True)
-    mcp_startup._mcp_discovery_started_scopes.clear()
-    mcp_startup._mcp_discovery_threads.clear()
-    # Model the Dorman topology: base MCP state was published before
+    # evaOS adaptation (r34): upstream keys the startup slot by hermes_home_key() in
+    # ``_mcp_discovery_started`` (set) / ``_mcp_discovery_thread`` (dict).
+    mcp_startup._mcp_discovery_started.clear()
+    mcp_startup._mcp_discovery_thread.clear()
+    # Model the shared-serve topology: base MCP state was published before
     # multiplex activation. It must not count as Jane's discovery state.
     base_state_key = "base-pre-multiplex"
     with mcp_tool._lock:
@@ -277,9 +279,9 @@ def test_multiplex_sessions_discover_managed_mcp_per_profile(
             )
             assert mcp_startup.join_mcp_discovery(timeout=2)
             assert fresh_registry.get_entry("mcp__gbrain__whoami") is None
-            assert str(empty.resolve()) not in (
-                mcp_startup._mcp_discovery_started_scopes
-            )
+            # evaOS adaptation (r34): upstream marks the empty profile's slot started and returns
+            # before creating a discovery thread.
+            assert str(empty.resolve()) not in mcp_startup._mcp_discovery_thread
 
         # Opening another session for Jane reuses her completed scope instead
         # of rescanning every profile or starting another discovery thread.
@@ -293,17 +295,16 @@ def test_multiplex_sessions_discover_managed_mcp_per_profile(
             (str(jane.resolve()), "jane-profile-token"),
             (str(louis.resolve()), "louis-profile-token"),
         ]
-        assert set(mcp_startup._mcp_discovery_started_scopes) == {
-            str(jane.resolve()),
-            str(louis.resolve()),
-        }
+        assert {str(jane.resolve()), str(louis.resolve())} <= set(
+            mcp_startup._mcp_discovery_started
+        )
     finally:
         for state_key in added_state_keys:
             with mcp_tool._lock:
                 mcp_tool._servers.pop(state_key, None)
                 mcp_tool._server_scope_keys.pop(state_key, None)
-        mcp_startup._mcp_discovery_threads.clear()
-        mcp_startup._mcp_discovery_started_scopes.clear()
+        mcp_startup._mcp_discovery_thread.clear()
+        mcp_startup._mcp_discovery_started.clear()
         entry._mcp_discovery_enabled = previous_enabled
         set_multiplex_active(previous_multiplex)
 
@@ -328,8 +329,10 @@ def test_single_profile_discovery_keeps_legacy_process_slot(
         "tools.mcp_tool_discovery.get_mcp_status",
         lambda: [{"connected": True}],
     )
-    mcp_startup._mcp_discovery_started = False
-    mcp_startup._mcp_discovery_thread = None
+    # evaOS adaptation (r34): upstream's slot is keyed by home even outside multiplex mode; the
+    # invariant kept here is one discovery per process home, never a rescan.
+    mcp_startup._mcp_discovery_started.clear()
+    mcp_startup._mcp_discovery_thread.clear()
     set_multiplex_active(False)
 
     try:
@@ -350,8 +353,54 @@ def test_single_profile_discovery_keeps_legacy_process_slot(
         )
 
         assert seen == ["base"]
-        assert not mcp_startup._mcp_discovery_started_scopes
     finally:
-        mcp_startup._mcp_discovery_thread = None
-        mcp_startup._mcp_discovery_started = False
+        mcp_startup._mcp_discovery_thread.clear()
+        mcp_startup._mcp_discovery_started.clear()
         set_multiplex_active(previous_multiplex)
+
+
+def test_managed_stdio_absolute_command_gets_managed_voyage_key(tmp_path, monkeypatch):
+    """N5 (r34): the managed GBrain stdio entry reads ``${VOYAGE_API_KEY}`` from the MANAGED .env
+    (never the profile .env shadow or the process env), keeps its absolute command, and the
+    child env carries the managed value."""
+    from tools.mcp_tool_config import _build_safe_env, _load_mcp_config, _resolve_stdio_command
+
+    _, jane, _ = _setup_scopes(tmp_path, monkeypatch)
+    managed_home = tmp_path / "managed" / "jane"
+    bin_dir = tmp_path / "gbrain-bin"
+    bin_dir.mkdir()
+    command = bin_dir / "gbrain"
+    command.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    command.chmod(0o755)
+    _write_yaml(
+        managed_home / "config.yaml",
+        {
+            "mcp_servers": {
+                "company-brain": {
+                    "command": str(command),
+                    "args": ["serve"],
+                    "cwd": str(tmp_path),
+                    "env": {"VOYAGE_API_KEY": "${VOYAGE_API_KEY}"},
+                }
+            }
+        },
+    )
+    (managed_home / ".env").write_text("VOYAGE_API_KEY=managed-voyage\n", encoding="utf-8")
+    (jane / ".env").write_text(
+        "PROFILE_MCP_TOKEN=jane-profile-token\nVOYAGE_API_KEY=profile-shadow\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("VOYAGE_API_KEY", "process")
+    _clear_config_caches()
+
+    with _profile_scope(jane):
+        servers = _load_mcp_config()
+        cfg = servers["company-brain"]
+        assert cfg["env"]["VOYAGE_API_KEY"] == "managed-voyage"
+        child_env = _build_safe_env(cfg["env"])
+        resolved_command, resolved_env = _resolve_stdio_command(cfg["command"], child_env)
+
+    assert child_env["VOYAGE_API_KEY"] == "managed-voyage"
+    assert resolved_command == str(command)
+    assert resolved_env["PATH"].split(os.pathsep)[0] == str(bin_dir)
+    assert os.environ["VOYAGE_API_KEY"] == "process"

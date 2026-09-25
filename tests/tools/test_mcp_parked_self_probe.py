@@ -173,6 +173,11 @@ def _auth_park_task(monkeypatch, name="authless", exc_factory=None):
         def _is_http(self):
             return False
 
+        def _still_configured_enabled(self):
+            # evaOS adaptation (r34): upstream pauses the self-probe of an entry that is gone
+            # from mcp_servers; this synthetic server has no config entry.
+            return True
+
         def _deregister_tools(self):
             state["parked"] += 1
             self._registered_tool_names = []
@@ -252,7 +257,10 @@ def _probe_permanent_park(monkeypatch, caplog, exc_factory=None, exc_name="OAuth
     # here composes the two halves, so the oauth case below is not the only thing standing behind
     # that line. Without this, a park that stopped claiming the latch would leave the oauth driver
     # passing on a state production never reaches.
-    assert task._parked_log_key is not None, "a real park must claim the latch the log level reads"
+    # evaOS adaptation (r34): the latch is upstream's ``_was_parked`` + ``_last_park_line`` (keyed
+    # by failure class), not the fork's ``_parked_log_key``.
+    assert task._was_parked and task._last_park_line is not None, (
+        "a real park must claim the latch the log level reads")
     return _park_logs(caplog, exc_name)
 
 
@@ -282,7 +290,7 @@ def _probe_oauth_setup(monkeypatch, caplog):
             # these tests, and it is staged because reaching _build_oauth_auth through the loop needs
             # the HTTP transport; that the real park performs this exact claim is asserted in
             # _probe_permanent_park above, so the two together cover the production sequence.
-            task._claim_parked_log(task._parked_log_key_for(RuntimeError("no cached tokens")))
+            task._was_parked = True  # evaOS adaptation (r34): upstream's park sets _was_parked
 
     return [r for r in caplog.records if "MCP OAuth setup failed" in r.getMessage()]
 
@@ -382,10 +390,43 @@ def test_an_episode_ends_on_a_proven_session_or_a_changed_failure(monkeypatch, t
     assert key(_HTTPish(401)) != key(_HTTPish(403)), "a 401 and a 403 are different episodes"
     assert key(FileNotFoundError(2, "no such file")) == "FileNotFoundError"
 
-    first = key(_HTTPish(401))
-    assert keyed._claim_parked_log(first) is True, "the episode's first failure logs"
-    assert keyed._claim_parked_log(first) is False, "the same failure re-probing does not"
-    assert keyed._claim_parked_log(key(_HTTPish(403))) is True, "a changed failure logs again"
-    assert keyed._claim_parked_log(key(_HTTPish(403))) is False
-    keyed._clear_parked_log()
-    assert keyed._claim_parked_log(key(_HTTPish(403))) is True, "a proven session re-arms the latch"
+    # evaOS adaptation (r34): drive upstream's ``_log_park`` with the failure-class key instead of
+    # the fork's ``_claim_parked_log`` / ``_clear_parked_log`` pair.
+    def _levels(*failures):
+        caplog.clear()
+        with caplog.at_level(logging.DEBUG, logger="tools.mcp_tool"):
+            for exc in failures:
+                keyed._log_park("MCP server '%s' parked: %s", keyed.name, exc, key=key(exc))
+                keyed._was_parked = True
+        return [r.levelno for r in caplog.records if "parked:" in r.getMessage()]
+
+    assert _levels(_HTTPish(401), _HTTPish(401), _HTTPish(403), _HTTPish(403)) == [
+        logging.WARNING, logging.DEBUG, logging.WARNING, logging.DEBUG]
+    keyed._was_parked = False  # a proven session (_mark_session_proven) ends the episode
+    assert _levels(_HTTPish(403)) == [logging.WARNING], "a proven session re-arms the latch"
+
+
+@pytest.mark.no_isolate
+def test_same_failure_class_with_varying_text_warns_once(monkeypatch, tmp_path, caplog):
+    """N4 (r34): a 401 whose body carries a fresh request id on every probe is ONE failure class;
+    upstream's text-equality dedupe alone would warn on every probe."""
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    from tools.mcp_tool import MCPServerTask
+
+    class _Resp:
+        status_code = 401
+
+    class _HTTPish(Exception):
+        def __init__(self, request_id):
+            super().__init__(f"HTTP 401 request_id={request_id}")
+            self.response = _Resp()
+
+    task = MCPServerTask("varying")
+    with caplog.at_level(logging.DEBUG, logger="tools.mcp_tool"):
+        for request_id in ("a1", "b2", "c3"):
+            exc = _HTTPish(request_id)
+            task._log_park("MCP server '%s' hit a permanent error: %s", task.name, exc,
+                           key=task._parked_log_key_for(exc))
+            task._was_parked = True
+    levels = [r.levelno for r in caplog.records if "hit a permanent error" in r.getMessage()]
+    assert levels == [logging.WARNING, logging.DEBUG, logging.DEBUG]

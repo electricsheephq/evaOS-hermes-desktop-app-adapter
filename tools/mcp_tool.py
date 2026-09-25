@@ -317,10 +317,24 @@ class MCPServerTask(MCPServerRunMixin, MCPServerTransportMixin, MCPServerHealthM
         "_recycled_reason", "initialize_result", "_ping_unsupported", "_list_cache_meta",
         "_reconnect_retries", "_session_proven", "_was_parked", "_inflight_tasks", "_reconnecting",
         "_suspect_reason", "_teardown_race", "_permanent_grace_used", "_stdio_child_pids",
-        "_ever_connected", "_sse_fallback", "_park_reason", "_last_park_line")
+        "_ever_connected", "_sse_fallback", "_park_reason", "_last_park_line",
+        "registration_home", "_evaos_lease_manager", "_evaos_lease_auth", "_evaos_lease_warning_emitted")
 
-    def __init__(self, name: str):
+    def __init__(self, name: str, registration_home: Optional[str] = None):
         self.name = name
+        # The profile home that owns this server (the connection's registry scope when routed, else
+        # this process's home): the managed lease's profile key and log label.
+        if registration_home is None:
+            registration_home = _mcp_registry_scope()
+        if registration_home is None:
+            from hermes_constants import get_hermes_home
+
+            registration_home = str(get_hermes_home())
+        self.registration_home = os.path.realpath(os.path.expanduser(registration_home))
+        # ``auth: evaos_lease`` state: built on the first connect, reused across reconnects.
+        self._evaos_lease_manager: Optional[Any] = None
+        self._evaos_lease_auth: Optional[Any] = None
+        self._evaos_lease_warning_emitted = False
         self.session: Optional[Any] = None
         self.tool_timeout: float = _DEFAULT_TOOL_TIMEOUT
         self._task: Optional[asyncio.Task] = None
