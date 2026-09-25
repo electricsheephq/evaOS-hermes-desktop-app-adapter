@@ -16,8 +16,10 @@ import logging
 import os
 import shutil
 import shlex
+import stat
 import threading
 import time
+import uuid
 import webbrowser  # noqa: F401  (tests patch auth_mod.webbrowser.open; same module object)
 
 from contextlib import ExitStack, contextmanager
@@ -74,21 +76,13 @@ from hermes_cli.auth_xai import (  # noqa: F401  re-exported
     _xai_validate_inference_base_url, refresh_xai_oauth_pure, resolve_xai_oauth_runtime_credentials)
 from hermes_cli.auth_codex import (  # noqa: F401  re-exported
     _codex_access_token_is_expiring, _codex_device_code_login, _codex_http_client,
-    _codex_auth_store_transaction, _codex_pool_rate_limit_status, _codex_pool_store_transaction,
+    _codex_auth_store_transaction, _codex_pool_rate_limit_status,
     _codex_quota_probe_cache, _codex_usage_probe_url,
     _import_codex_cli_tokens, _is_codex_rate_limit_shaped, _login_openai_codex,
-<<<<<<< HEAD
-    _probe_codex_quota_restored, _read_codex_pool_entries, _read_codex_tokens,
-    _refresh_codex_auth_tokens, _save_codex_tokens, _validated_codex_token_state,
-    clear_codex_pool_quota_cooldowns, refresh_codex_oauth_pure, resolve_codex_runtime_credentials)
-||||||| 939e45c91d
-    _probe_codex_quota_restored, _read_codex_tokens, _refresh_codex_auth_tokens, _save_codex_tokens,
-    clear_codex_pool_quota_cooldowns, refresh_codex_oauth_pure, resolve_codex_runtime_credentials)
-=======
-    _probe_codex_quota_restored, _read_codex_tokens, _refresh_codex_auth_tokens,
-    _refresh_expired_codex_probe_token, _save_codex_tokens, clear_codex_pool_quota_cooldowns,
-    refresh_codex_oauth_pure, resolve_codex_runtime_credentials)
->>>>>>> f97608f178
+    _probe_codex_quota_restored, _read_codex_tokens,
+    _refresh_codex_auth_tokens, _refresh_expired_codex_probe_token, _save_codex_tokens,
+    _validated_codex_token_state, clear_codex_pool_quota_cooldowns, refresh_codex_oauth_pure,
+    resolve_codex_runtime_credentials)
 from hermes_cli.auth_spotify import (  # noqa: F401  re-exported
     _refresh_spotify_oauth_state, get_spotify_auth_status, login_spotify_command,
     resolve_spotify_runtime_credentials)
@@ -979,23 +973,15 @@ def _save_auth_store(auth_store: Dict[str, Any], target_path: Optional[Path] = N
     """Atomically persist *auth_store* (0o600, parent tightened to 0o700) to the active store, or to
     an explicit *target_path* (e.g. the global-root write-through for rotating xAI OAuth grants)."""
     auth_file = target_path if target_path is not None else _auth_file_path()
-<<<<<<< HEAD
     managed_gid = _managed_shared_auth_gid(auth_file)
     if managed_gid is not None and not auth_file.exists():
         raise RuntimeError(f"managed auth store is unavailable: {auth_file}")
-    # Tighten parent dir to 0o700 for legacy stores. Managed shared auth uses
+    # Legacy stores: 0o600 under a 0o700 parent (_save_private_json). Managed shared auth keeps
     # its provisioned group metadata instead.
-||||||| 939e45c91d
-    # Tighten parent dir to 0o700 so siblings can't traverse to creds. No-op on Windows (POSIX mode bits not
-    # enforced); ignore failures. secure_parent_dir refuses to chmod /, top-level dirs, or the hermes-agent
-    # install tree (#25821, #93050).
-=======
->>>>>>> f97608f178
     auth_store["version"] = AUTH_STORE_VERSION
     auth_store["updated_at"] = datetime.now(timezone.utc).isoformat()
-<<<<<<< HEAD
     if managed_gid is None:
-        _write_private_file_atomic(auth_file, json.dumps(auth_store, indent=2) + "\n", fsync_dir=True)
+        _save_private_json(auth_file, auth_store, fsync_dir=True)
     else:
         auth_file.parent.mkdir(parents=True, exist_ok=True)
         tmp_path = auth_file.with_name(
@@ -1033,25 +1019,11 @@ def _save_auth_store(auth_store: Dict[str, Any], target_path: Optional[Path] = N
                     tmp_path.unlink()
             except OSError:
                 pass
-    if managed_gid is None:
-        try:
-            auth_file.chmod(stat.S_IRUSR | stat.S_IWUSR)
-        except OSError:
-            pass
-||||||| 939e45c91d
-    _write_private_file_atomic(auth_file, json.dumps(auth_store, indent=2) + "\n", fsync_dir=True)
-    try:
-        auth_file.chmod(stat.S_IRUSR | stat.S_IWUSR)
-    except OSError:
-        pass
-=======
-    _save_private_json(auth_file, auth_store, fsync_dir=True)
     if target_path is not None:
         # A write-through to the global root must not be masked by the mtime memo: on coarse-mtime
         # filesystems a read-after-write in the same tick would keep serving the pre-write store.
         global _global_auth_store_cache
         _global_auth_store_cache = None
->>>>>>> f97608f178
     return auth_file
 
 

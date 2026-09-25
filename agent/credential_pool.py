@@ -1012,8 +1012,11 @@ class _RefreshDone(Exception):
         self.result = result
 
 
-<<<<<<< HEAD
-class CredentialPool(CredentialPoolAdminMixin):
+class CredentialPool(CredentialPoolAdminMixin, CredentialPoolModelCooldownMixin):
+    # evaOS managed shared-auth write-through base; class default keeps pools built via
+    # ``__new__`` (upstream test fixtures) on the non-shared path.
+    _shared_persistence_base: Optional[Dict[str, Dict[str, Any]]] = None
+
     def __init__(
         self,
         provider: str,
@@ -1022,13 +1025,6 @@ class CredentialPool(CredentialPoolAdminMixin):
         auth_source_path: Optional[Path] = None,
         profile_shadow_path: Optional[Path] = None,
     ):
-||||||| 939e45c91d
-class CredentialPool(CredentialPoolAdminMixin):
-    def __init__(self, provider: str, entries: List[PooledCredential]):
-=======
-class CredentialPool(CredentialPoolAdminMixin, CredentialPoolModelCooldownMixin):
-    def __init__(self, provider: str, entries: List[PooledCredential]):
->>>>>>> f97608f178
         self.provider = provider
         self._entries = sorted(entries, key=lambda entry: entry.priority)
         self._current_id: Optional[str] = None

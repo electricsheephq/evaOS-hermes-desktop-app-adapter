@@ -99,16 +99,25 @@ def _shared_refresh_worker(
         }
 
     auth.refresh_codex_oauth_pure = _refresh
-    original_read = auth._read_codex_tokens
+    # evaOS adaptation (r34): upstream takes the initial read as one locked snapshot inside
+    # auth_codex (#73667) instead of calling ``auth._read_codex_tokens``; hook that snapshot and
+    # wait on the barrier after its lock is released, as the old read hook did.
+    import contextlib
+    import hermes_cli.auth_codex as auth_codex
+    original_transaction = auth_codex._codex_auth_store_transaction
+    initial_read_pending = [True]
 
-    def _read_initial_pair(*_args, **_kwargs):
-        result = original_read(*_args, **_kwargs)
-        with initial_reads.get_lock():
-            initial_reads.value += 1
-        initial_read_barrier.wait(timeout=15)
-        return result
+    @contextlib.contextmanager
+    def _read_initial_pair(*args, **kwargs):
+        with original_transaction(*args, **kwargs) as snapshot:
+            yield snapshot
+        if initial_read_pending[0]:
+            initial_read_pending[0] = False
+            with initial_reads.get_lock():
+                initial_reads.value += 1
+            initial_read_barrier.wait(timeout=15)
 
-    auth._read_codex_tokens = _read_initial_pair
+    auth_codex._codex_auth_store_transaction = _read_initial_pair
     if not start_event.wait(timeout=15):
         result_queue.put(False)
         return

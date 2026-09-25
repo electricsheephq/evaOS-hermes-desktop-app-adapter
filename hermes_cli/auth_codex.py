@@ -102,15 +102,8 @@ def _validated_codex_token_state(state: Optional[Dict[str, Any]]) -> Dict[str, A
         raise _codex_err(_MISSING_ACCESS_TOKEN_MSG.format(relogin=_codex_relogin_command()),
                          "codex_auth_missing_access_token", relogin=True)
     if not _nonempty_str(tokens.get("refresh_token")):
-<<<<<<< HEAD
-        raise _codex_err(_MISSING_REFRESH_TOKEN_MSG, "codex_auth_missing_refresh_token", relogin=True)
-||||||| 939e45c91d
-        raise _codex_err(
-            _MISSING_REFRESH_TOKEN_MSG, "codex_auth_missing_refresh_token", relogin=True)
-=======
         raise _codex_err(_MISSING_REFRESH_TOKEN_MSG.format(relogin=_codex_relogin_command()),
                          "codex_auth_missing_refresh_token", relogin=True)
->>>>>>> f97608f178
     return {"tokens": tokens, "last_refresh": state.get("last_refresh")}
 
 
@@ -220,13 +213,6 @@ def _sync_codex_pool_entries(
         _clear_pool_entry_status(entry)
 
 
-<<<<<<< HEAD
-def _save_codex_tokens(tokens: Dict[str, str], last_refresh: str = None, label: str = None) -> None:
-    """Save Codex OAuth tokens to the authority they were read from."""
-||||||| 939e45c91d
-def _save_codex_tokens(tokens: Dict[str, str], last_refresh: str = None, label: str = None) -> None:
-    """Save Codex OAuth tokens to Hermes auth store (~/.hermes/auth.json)."""
-=======
 def _save_codex_tokens(
     tokens: Dict[str, str], last_refresh: str = None, label: str = None, *,
     set_active: bool = True, write_through: bool = False,
@@ -244,24 +230,22 @@ def _save_codex_tokens(
     is the profile's own grant and must not overwrite the root account it was borrowing.
     ``set_active=False`` stores credentials for a side tool (image gen) without making Codex the
     active inference provider.
+
+    Managed shared auth (``HERMES_SHARED_AUTH_FILE``): the managed transaction resolves the
+    authority (the profile store, or the shared file when the profile has no Codex state or pool
+    rows of its own) and every save writes back to that authority, refresh or not.
     """
->>>>>>> f97608f178
     from hermes_cli.auth import (
         _auth_file_path, _load_auth_store, _provider_state_transaction, _same_path,
         _save_auth_store, _store_provider_state, _utc_now_z)
     if last_refresh is None:
         last_refresh = _utc_now_z()
-<<<<<<< HEAD
-    with _codex_auth_store_transaction() as (auth_store, state, source_path):
-        state = state or {}
-||||||| 939e45c91d
-    with _auth_store_lock():
-        auth_store = _load_auth_store()
-        state = _load_provider_state(auth_store, "openai-codex") or {}
-=======
-    with _provider_state_transaction("openai-codex") as (auth_store, state, source_path):
+    managed_shared = bool(os.getenv("HERMES_SHARED_AUTH_FILE", "").strip())
+    transaction = (
+        _codex_auth_store_transaction() if managed_shared
+        else _provider_state_transaction("openai-codex"))
+    with transaction as (auth_store, state, source_path):
         state = dict(state) if state else {}
->>>>>>> f97608f178
         # Capture the previous singleton tokens BEFORE overwriting: the pool sync uses them to
         # tell legacy singleton-aliases (refresh) from independent ``auth add`` accounts (keep).
         previous_singleton_tokens = (
@@ -270,22 +254,20 @@ def _save_codex_tokens(
         if label and str(label).strip():
             state["label"] = str(label).strip()
         target_store, target_path = auth_store, None
-        if write_through and source_path is not None and not _same_path(source_path, _auth_file_path()):
+        if managed_shared:
+            # The managed transaction already yielded the authority's own store under its lock;
+            # a refresh still never changes the active provider.
+            target_path = source_path
+            if write_through:
+                set_active = False
+        elif write_through and source_path is not None and not _same_path(source_path, _auth_file_path()):
             # Root-borrowed grant: the transaction already holds root's lock, so write the rotated
             # chain into ROOT's store (never set_active — a refresh is not a provider choice).
             target_store, target_path, set_active = _load_auth_store(source_path), source_path, False
         _store_provider_state(target_store, "openai-codex", state, set_active=set_active)
         _sync_codex_pool_entries(
-<<<<<<< HEAD
-            auth_store, tokens, last_refresh, previous_singleton_tokens=previous_singleton_tokens)
-        _save_auth_store(auth_store, target_path=source_path)
-||||||| 939e45c91d
-            auth_store, tokens, last_refresh, previous_singleton_tokens=previous_singleton_tokens)
-        _save_auth_store(auth_store)
-=======
             target_store, tokens, last_refresh, previous_singleton_tokens=previous_singleton_tokens)
         _save_auth_store(target_store, target_path=target_path)
->>>>>>> f97608f178
 
 
 def _recover_codex_tokens_from_cli(
@@ -675,13 +657,14 @@ def resolve_codex_runtime_credentials(
             # make. No recovery follows a read-only read, so no observed token is needed.
             data = _read_codex_tokens(_lock=False)
         else:
-            with _auth_store_lock():
+            # The Codex transaction locks the store that owns the grant (the managed shared file
+            # when HERMES_SHARED_AUTH_FILE routes it there, else the active store).
+            with _codex_auth_store_transaction() as (_store, state, _source_path):
                 # Observe the singleton in the same locked snapshot the read validates, so recovery
                 # can compare-and-swap against exactly the credential it is repairing (#73667).
-                from hermes_cli.auth import _load_auth_store, _load_provider_state
-                raw = (_load_provider_state(_load_auth_store(), "openai-codex") or {}).get("tokens")
+                raw = (state or {}).get("tokens")
                 observed = raw.get("access_token") if isinstance(raw, dict) else None
-                data = _read_codex_tokens(_lock=False)
+                data = _validated_codex_token_state(state)
     except AuthError as exc:
         read_error = exc
         if not read_only and exc.relogin_required and exc.code in {
@@ -928,50 +911,23 @@ def clear_codex_pool_quota_cooldowns(access_token: Optional[str] = None) -> int:
     rate-limited entry does (a redeemed banked reset restores the whole account; a still-exhausted
     entry just re-freezes with fresh metadata on its next 429).
     """
-<<<<<<< HEAD
-    from hermes_cli.auth import _save_auth_store
-||||||| 939e45c91d
-    from hermes_cli.auth import _auth_store_lock, _load_auth_store, _save_auth_store
-=======
     from agent.credential_pool import _borrowed_single_use_pool_root, _profile_owns_pool_provider
     from hermes_cli.auth import _auth_store_lock, _load_auth_store, _save_auth_store
->>>>>>> f97608f178
     cleared = 0
     try:
-<<<<<<< HEAD
-        with _codex_pool_store_transaction() as (auth_store, source_path):
-            entries = _pool_entries(auth_store, "openai-codex")
-            if entries is None:
-                return 0
-            for entry in _codex_pool_dicts(entries):
-||||||| 939e45c91d
-        with _auth_store_lock():
-            auth_store = _load_auth_store()
-            entries = _pool_entries(auth_store, "openai-codex")
-            if entries is None:
-                return 0
-            for entry in _codex_pool_dicts(entries):
-=======
         # Same owner rule as ``persist_pool_entries``: a profile with no Codex rows of its own
         # borrows the global-root pool, so the cooldown must clear where the rows actually live.
         target = None if _profile_owns_pool_provider("openai-codex") else _borrowed_single_use_pool_root()
         with _auth_store_lock(target_path=target):
             auth_store = _load_auth_store(target)
             for entry in _codex_pool_dicts(_pool_entries(auth_store, "openai-codex")):
->>>>>>> f97608f178
                 if access_token and str(entry.get("access_token") or "") != access_token:
                     continue
                 if _entry_is_rate_limit_exhausted(entry):
                     _clear_pool_entry_status(entry)
                     cleared += 1
             if cleared:
-<<<<<<< HEAD
-                _save_auth_store(auth_store, target_path=source_path)
-||||||| 939e45c91d
-                _save_auth_store(auth_store)
-=======
                 _save_auth_store(auth_store, target_path=target)
->>>>>>> f97608f178
     except Exception:
         logger.debug("Failed to clear Codex pool quota cooldowns", exc_info=True)
     return cleared
@@ -983,66 +939,6 @@ def _codex_pool_dicts(entries: Optional[List[Any]]) -> Iterator[Dict[str, Any]]:
             yield entry
 
 
-<<<<<<< HEAD
-def _read_codex_pool_entries() -> Optional[List[Any]]:
-    """Read Codex pool rows from the active or managed shared authority."""
-    from hermes_cli.auth import (
-        _auth_file_path, _auth_store_lock, _global_auth_file_path,
-        _load_auth_store, _load_global_auth_store, _same_path,
-    )
-    active_path = _auth_file_path()
-    managed_shared = bool(os.getenv("HERMES_SHARED_AUTH_FILE", "").strip())
-    with _auth_store_lock():
-        auth_store = _load_auth_store()
-        entries = _pool_entries(auth_store, "openai-codex")
-        if isinstance(entries, list) and entries:
-            return list(entries)
-        global_path = _global_auth_file_path()
-        if global_path is None or _same_path(global_path, active_path):
-            return []
-        if managed_shared:
-            with _auth_store_lock(target_path=global_path):
-                shared_store = _load_auth_store(global_path, fail_closed=True)
-        else:
-            shared_store = _load_global_auth_store()
-        return list(_pool_entries(shared_store, "openai-codex") or [])
-
-
-@contextmanager
-def _codex_pool_store_transaction(
-    timeout_seconds: float = AUTH_LOCK_TIMEOUT_SECONDS,
-):
-    """Lock the store that owns managed Codex pool status rows."""
-    from hermes_cli.auth import (
-        _auth_file_path, _auth_store_lock, _global_auth_file_path, _load_auth_store, _same_path,
-    )
-    active_path = _auth_file_path()
-    managed_shared = bool(os.getenv("HERMES_SHARED_AUTH_FILE", "").strip())
-    with _auth_store_lock(timeout_seconds=timeout_seconds):
-        active_store = _load_auth_store()
-        active_entries = _pool_entries(active_store, "openai-codex")
-        if not managed_shared or (isinstance(active_entries, list) and active_entries):
-            yield active_store, active_path
-            return
-        shared_path = _global_auth_file_path()
-        if shared_path is None or _same_path(shared_path, active_path):
-            yield active_store, active_path
-            return
-        with _auth_store_lock(timeout_seconds=timeout_seconds, target_path=shared_path):
-            yield _load_auth_store(shared_path, fail_closed=True), shared_path
-
-
-||||||| 939e45c91d
-def _read_codex_pool_entries() -> Optional[List[Any]]:
-    """Locked read of ``credential_pool.openai-codex`` from auth.json (None when absent)."""
-    from hermes_cli.auth import _auth_store_lock, _load_auth_store
-    with _auth_store_lock():
-        auth_store = _load_auth_store()
-    return _pool_entries(auth_store, "openai-codex")
-
-
-=======
->>>>>>> f97608f178
 def _codex_pool_rate_limit_status() -> Optional[Dict[str, Any]]:
     """Return metadata for a pool-only Codex credential in quota cooldown.
 

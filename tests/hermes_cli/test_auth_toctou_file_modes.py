@@ -21,13 +21,7 @@ import json
 import os
 import stat
 import sys
-<<<<<<< HEAD
 from pathlib import Path
-from unittest.mock import patch
-||||||| 939e45c91d
-from unittest.mock import patch
-=======
->>>>>>> f97608f178
 
 import pytest
 
@@ -166,54 +160,6 @@ def test_shared_nous_store_writes_0o600_with_0o700_parent(tmp_path, monkeypatch)
 
     data = json.loads(path.read_text())
     assert data["refresh_token"] == "nous-refresh-xxx"
-<<<<<<< HEAD
-
-
-# ---------------------------------------------------------------------------
-# Atomicity: verify ``os.open`` is called with an explicit 0o600 mode.
-# ---------------------------------------------------------------------------
-
-
-def test_save_auth_store_uses_os_open_with_0o600_mode(tmp_path, monkeypatch):
-    """Regression: the writer must call ``os.open`` with an explicit restricted
-    mode so the file is created at 0o600 atomically — closing the TOCTOU
-    window the previous ``Path.open('w')`` left open (fd inherited process
-    umask and was briefly 0o644 before post-write chmod)."""
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
-
-    observed_opens: list[tuple[str, int, int]] = []
-    real_os_open = os.open
-
-    def spying_os_open(path, flags, mode=0o777, *args, **kwargs):
-        observed_opens.append((str(path), flags, mode))
-        return real_os_open(path, flags, mode, *args, **kwargs)
-
-    with patch.object(os, "open", spying_os_open):
-        from hermes_cli import auth as auth_mod
-
-        auth_mod._save_auth_store(
-            {"version": auth_mod.AUTH_STORE_VERSION, "providers": {}}
-        )
-
-    auth_tmp_opens = [
-        (p, fl, m) for (p, fl, m) in observed_opens if "auth.json.tmp" in p
-    ]
-    assert auth_tmp_opens, (
-        f"os.open was never called for the auth.json temp file; "
-        f"observed={observed_opens!r}"
-    )
-    for path, flags, mode in auth_tmp_opens:
-        assert flags & os.O_CREAT, f"auth.json temp open missing O_CREAT: path={path}"
-        assert flags & os.O_EXCL, (
-            f"auth.json temp open missing O_EXCL — TOCTOU-safe pattern regressed: "
-            f"path={path}, flags={flags}"
-        )
-        # Must be exactly S_IRUSR | S_IWUSR (0o600) — no group/other bits.
-        expected = stat.S_IRUSR | stat.S_IWUSR
-        assert mode == expected, (
-            f"auth.json temp open mode 0o{mode:o} != 0o{expected:o} — "
-            f"umask would apply and potentially expose tokens"
-        )
 
 
 def test_managed_shared_save_preserves_gid_and_group_mode(tmp_path, monkeypatch):
@@ -222,6 +168,9 @@ def test_managed_shared_save_preserves_gid_and_group_mode(tmp_path, monkeypatch)
     shared = root / "shared-auth" / "auth.json"
     _write_managed_shared(shared, {"version": 1, "providers": {}})
     shared_gid = shared.stat().st_gid
+    # evaOS adaptation (r34): upstream refuses to materialize a missing named profile home
+    # (hermes_constants.mkdir_under_hermes_home), so the worker profile must exist first.
+    (root / "profiles" / "worker").mkdir(parents=True)
     monkeypatch.setenv("HERMES_HOME", str(root / "profiles" / "worker"))
     monkeypatch.setenv("HERMES_SHARED_AUTH_FILE", str(shared))
     old_umask = os.umask(0o022)
@@ -392,53 +341,3 @@ def test_managed_lock_flocks_validated_descriptor_after_path_swap(tmp_path, monk
 
     assert swapped
     assert outside.read_text() == "outside"
-||||||| 939e45c91d
-
-
-# ---------------------------------------------------------------------------
-# Atomicity: verify ``os.open`` is called with an explicit 0o600 mode.
-# ---------------------------------------------------------------------------
-
-
-def test_save_auth_store_uses_os_open_with_0o600_mode(tmp_path, monkeypatch):
-    """Regression: the writer must call ``os.open`` with an explicit restricted
-    mode so the file is created at 0o600 atomically — closing the TOCTOU
-    window the previous ``Path.open('w')`` left open (fd inherited process
-    umask and was briefly 0o644 before post-write chmod)."""
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
-
-    observed_opens: list[tuple[str, int, int]] = []
-    real_os_open = os.open
-
-    def spying_os_open(path, flags, mode=0o777, *args, **kwargs):
-        observed_opens.append((str(path), flags, mode))
-        return real_os_open(path, flags, mode, *args, **kwargs)
-
-    with patch.object(os, "open", spying_os_open):
-        from hermes_cli import auth as auth_mod
-
-        auth_mod._save_auth_store(
-            {"version": auth_mod.AUTH_STORE_VERSION, "providers": {}}
-        )
-
-    auth_tmp_opens = [
-        (p, fl, m) for (p, fl, m) in observed_opens if "auth.json.tmp" in p
-    ]
-    assert auth_tmp_opens, (
-        f"os.open was never called for the auth.json temp file; "
-        f"observed={observed_opens!r}"
-    )
-    for path, flags, mode in auth_tmp_opens:
-        assert flags & os.O_CREAT, f"auth.json temp open missing O_CREAT: path={path}"
-        assert flags & os.O_EXCL, (
-            f"auth.json temp open missing O_EXCL — TOCTOU-safe pattern regressed: "
-            f"path={path}, flags={flags}"
-        )
-        # Must be exactly S_IRUSR | S_IWUSR (0o600) — no group/other bits.
-        expected = stat.S_IRUSR | stat.S_IWUSR
-        assert mode == expected, (
-            f"auth.json temp open mode 0o{mode:o} != 0o{expected:o} — "
-            f"umask would apply and potentially expose tokens"
-        )
-=======
->>>>>>> f97608f178
