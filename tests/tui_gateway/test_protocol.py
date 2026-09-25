@@ -337,12 +337,16 @@ def _ws_session(server, sid, peer):
                              "agent_ready": None}
 
 
-def test_server_request_fails_fast_for_a_ws_client_that_never_advertised(server):
+def test_server_request_fails_fast_for_a_ws_client_that_never_advertised(server, monkeypatch):
     """A WebSocket client that never sent ``client.capabilities`` cannot answer, so send() returns the
     error-response shape (None) at once instead of stalling the agent for the deadline (#112548).
     The frame is never written; nothing is left open for a reconnect replay."""
     from tui_gateway import server_requests
 
+    # ---- BEGIN EVAOS-LEGACY-PROMPT-SHIM (rs35: delete; docs/r34-managed-delta.md) ----
+    # Upstream behaviour with the shim off; tests/tui_gateway/test_legacy_prompt_shim.py covers it on.
+    monkeypatch.setenv("HERMES_EVAOS_LEGACY_PROMPT_SHIM", "0")
+    # ---- END EVAOS-LEGACY-PROMPT-SHIM ----
     peer = _silent_ws()
     _ws_session(server, "ws-old", peer)
     t0 = time.monotonic()
@@ -1508,6 +1512,10 @@ def test_approval_for_a_ws_client_that_never_advertised_settles_the_queue_entry(
     from tools import approval as approval_mod
     from tools import approval_gateway_wait as wait_mod
 
+    # ---- BEGIN EVAOS-LEGACY-PROMPT-SHIM (rs35: delete; docs/r34-managed-delta.md) ----
+    # Upstream behaviour with the shim off; tests/tui_gateway/test_legacy_prompt_shim.py covers it on.
+    monkeypatch.setenv("HERMES_EVAOS_LEGACY_PROMPT_SHIM", "0")
+    # ---- END EVAOS-LEGACY-PROMPT-SHIM ----
     peer = _silent_ws()
     _ws_session(server, "ws-old-approval", peer)
     monkeypatch.setattr(wait_mod._ctx, "_get_approval_timeout", lambda: 3)
