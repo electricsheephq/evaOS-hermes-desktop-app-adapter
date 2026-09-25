@@ -316,7 +316,9 @@ async def test_base_adapter_queues_non_control_plugin_text_for_exact_session():
 
 @pytest.mark.asyncio
 async def test_base_adapter_rejects_derived_session_mismatch():
+    runner = GatewayRunner(GatewayConfig())
     adapter = _RoutingAdapter()
+    adapter.set_session_store(runner.session_store)
     adapter.set_message_handler(AsyncMock())
     event = MessageEvent(
         text="ordinary input",
