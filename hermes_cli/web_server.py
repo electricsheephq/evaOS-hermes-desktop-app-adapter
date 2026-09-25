@@ -106,35 +106,6 @@ def _start_serve_cron_ticker(stop_event: "threading.Event", interval: int = 60) 
             from hermes_cli.profiles import (
                 _check_gateway_running, _served_by_running_multiplexer, profiles_to_serve)
 
-<<<<<<< HEAD
-            profile_homes = list(profiles_to_serve(multiplex=True))
-            use_profile_gate = len(profile_homes) > 1 or (
-                len(profile_homes) == 1 and env_var_enabled("HERMES_CRON_TICKER")
-            )
-            if use_profile_gate:
-                start_kwargs["profile_homes"] = (
-                    tuple(profile_homes) if len(profile_homes) == 1 else profile_homes
-                )
-                # Stand down, per tick, for a profile whose OWN gateway runs:
-                # it ticks with live adapters, and the tick-lock race would
-                # otherwise deliver through the standalone path (#100489).
-                from hermes_cli.profiles import _check_gateway_running
-
-                start_kwargs["profile_gate"] = lambda _name, home: not _check_gateway_running(Path(home))
-                if len(profile_homes) > 1:
-                    from hermes_logging import enable_profile_log_routing
-||||||| 939e45c91d
-            profile_homes = list(profiles_to_serve(multiplex=True))
-            if len(profile_homes) > 1:
-                start_kwargs["profile_homes"] = profile_homes
-                # Stand down, per tick, for a profile whose OWN gateway runs:
-                # it ticks with live adapters, and the tick-lock race would
-                # otherwise deliver through the standalone path (#100489).
-                from hermes_cli.profiles import _check_gateway_running
-
-                start_kwargs["profile_gate"] = lambda _name, home: not _check_gateway_running(Path(home))
-                from hermes_logging import enable_profile_log_routing
-=======
             # Same served set as the multiplexer: default + every live profile under profiles/.
             # The ticker re-enumerates this callable every cycle. Passing a
             # startup snapshot leaves deleted profiles in the scheduler until
@@ -154,32 +125,15 @@ def _start_serve_cron_ticker(stop_event: "threading.Event", interval: int = 60) 
                     _check_gateway_running(Path(home))
                     or (name != "default" and _served_by_running_multiplexer(name)))
                 from hermes_logging import enable_profile_log_routing
->>>>>>> f97608f178
 
-<<<<<<< HEAD
-                    enable_profile_log_routing(profile_homes)
-                    _log.info(
-                        "Serve cron scheduler will tick %d profile(s): %s",
-                        len(profile_homes),
-                        [name for name, _home in profile_homes],
-                    )
-||||||| 939e45c91d
-                enable_profile_log_routing(profile_homes)
-                _log.info(
-                    "Desktop cron scheduler will tick %d profile(s): %s",
-                    len(profile_homes),
-                    [name for name, _home in profile_homes],
-                )
-=======
                 enable_profile_log_routing(initial_profile_homes)
                 _log.info(
-                    "Desktop cron scheduler will tick %d profile(s): %s",
+                    "Serve cron scheduler will tick %d profile(s): %s",
                     len(initial_profile_homes),
                     [name for name, _home in initial_profile_homes],
                 )
->>>>>>> f97608f178
         except Exception:
-            if env_var_enabled("HERMES_CRON_TICKER") and os.getenv("HERMES_DESKTOP") != "1":
+            if env_var_enabled("HERMES_CRON_TICKER") and not is_desktop_owned_backend():
                 _log.exception("Serve cron: profile enumeration failed; env-only ticker disabled")
                 return
             # Fail open to the single-store ticker so the active profile keeps firing.
@@ -260,29 +214,12 @@ async def _lifespan(app: "FastAPI"):
     )
     hosted_room_start_thread.start()
 
-<<<<<<< HEAD
     # Desktop-spawned backends and explicitly opted-in headless serve processes
     # fire cron jobs themselves when no messaging gateway owns the scheduler.
-||||||| 939e45c91d
-    # Desktop-spawned backends (HERMES_DESKTOP=1) fire cron jobs themselves,
-    # since the app has no gateway running the scheduler. Server `hermes
-    # dashboard` is unaffected — it relies on its own gateway.
-=======
-    # Desktop-spawned backends fire cron jobs themselves, since the app has no
-    # gateway running the scheduler. Server `hermes dashboard` is unaffected —
-    # it relies on its own gateway.
->>>>>>> f97608f178
     cron_stop: "threading.Event | None" = None
     cron_thread: "threading.Thread | None" = None
-<<<<<<< HEAD
-    is_desktop = os.getenv("HERMES_DESKTOP") == "1"
-    if is_desktop:
-||||||| 939e45c91d
-    if os.getenv("HERMES_DESKTOP") == "1":
-=======
     desktop_owned = is_desktop_owned_backend()
     if desktop_owned:
->>>>>>> f97608f178
         # Reap an orphaned gateway from an abnormal previous exit (reparented to
         # launchd, still holding the platform WebSocket) before forking a fresh
         # one that would race the same credential (#77276). Runs
@@ -295,7 +232,7 @@ async def _lifespan(app: "FastAPI"):
         except Exception:
             _log.exception("Desktop startup: orphan gateway reap failed")
 
-    if is_desktop or env_var_enabled("HERMES_CRON_TICKER"):
+    if desktop_owned or env_var_enabled("HERMES_CRON_TICKER"):
         cron_stop = threading.Event()
         cron_thread = threading.Thread(
             target=_start_serve_cron_ticker,

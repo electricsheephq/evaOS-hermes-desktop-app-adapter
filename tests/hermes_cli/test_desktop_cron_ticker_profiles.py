@@ -103,15 +103,11 @@ def test_single_profile_ticks_only_without_gateway(monkeypatch, tmp_path, gatewa
     from hermes_constants import get_hermes_home
     import hermes_cli.profiles as profiles_mod
 
-<<<<<<< HEAD
     monkeypatch.delenv("HERMES_CRON_TICKER", raising=False)
-||||||| 939e45c91d
-=======
     home = tmp_path / "root"
     home.mkdir()
     monkeypatch.setattr(profiles_mod, "profiles_to_serve", lambda **_kw: [("default", home)])
     monkeypatch.setattr(profiles_mod, "_check_gateway_running", lambda _home: gateway_running)
->>>>>>> f97608f178
     monkeypatch.setattr(
         "cron.scheduler_provider.resolve_cron_scheduler", InProcessCronScheduler
     )
@@ -172,7 +168,6 @@ def test_external_provider_never_gets_profile_homes(monkeypatch, tmp_path):
     assert external.start_kwargs == {"interval": 13}
 
 
-<<<<<<< HEAD
 def _capture_builtin_multiplex(monkeypatch):
     import cron.scheduler_provider as sp
 
@@ -195,7 +190,8 @@ def test_cron_ticker_env_uses_one_flat_managed_profile(monkeypatch, flat_managed
     ws._start_serve_cron_ticker(threading.Event(), interval=17)
 
     assert captured["interval"] == 17
-    assert captured["profile_homes"] == (("main", flat_managed_profile),)
+    # Upstream re-enumerates the served set every cycle (a callable, not a startup snapshot).
+    assert captured["profile_homes"]() == [("main", flat_managed_profile)]
     assert callable(captured["profile_gate"])
 
 
@@ -263,8 +259,8 @@ def test_no_cron_ticker_without_either_env_gate(monkeypatch):
         pass
 
     assert started.is_set() is False
-||||||| 939e45c91d
-=======
+
+
 def test_desktop_ticker_serves_every_profile_and_yields_to_owning_gateway(monkeypatch, _providers, tmp_path):
     """The Desktop ticker mirrors the multiplexer's served set (default + every live profile dir)
     and stands down, per tick, for a profile already owned by a gateway: its own running gateway,
@@ -298,4 +294,3 @@ def test_desktop_ticker_serves_every_profile_and_yields_to_owning_gateway(monkey
     assert gate("guest", root / "profiles" / "guest") is True
     assert gate("worker", root / "profiles" / "worker") is False
     assert gate("solo", root / "profiles" / "solo") is False
->>>>>>> f97608f178
