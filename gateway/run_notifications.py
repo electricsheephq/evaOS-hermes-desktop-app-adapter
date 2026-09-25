@@ -56,6 +56,7 @@ class GatewayNotificationsMixin:
     # Coalescing keys: process completions (short-window fan-in) and async delegations (+ parent session).
     _COMPLETION_BATCH_KEY_FIELDS = ("session_key", "platform", "chat_type", "chat_id", "thread_id", "user_id")
     _ASYNC_GROUP_KEY_FIELDS = ("session_key", "parent_session_id", *_COMPLETION_BATCH_KEY_FIELDS[1:])
+    _PERMANENT_ROUTE_MISMATCH = object()
 
     @dataclasses.dataclass
     class _UpdatePaths:
@@ -1085,7 +1086,9 @@ class GatewayNotificationsMixin:
             return True
         except WakeNotAccepted:
             # Durable callers refund the claim; ordinary watch callers just requeue.
-            if raise_not_accepted and not getattr(synth_event, "_gateway_route_mismatch", False):
+            if raise_not_accepted:
+                if getattr(synth_event, "_gateway_route_mismatch", False):
+                    return self._PERMANENT_ROUTE_MISMATCH
                 raise
             return False
         except Exception as e:
@@ -1301,6 +1304,8 @@ class GatewayNotificationsMixin:
                     return None
                 identity_claimed = True
             injection_result = await self._inject_watch_notification(synth_text, evt, raise_not_accepted=True)
+            if injection_result is self._PERMANENT_ROUTE_MISMATCH:
+                return False if claim.claim_id else None
             if injection_result is not True:
                 return injection_result
             accepted = True

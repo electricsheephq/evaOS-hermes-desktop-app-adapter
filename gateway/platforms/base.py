@@ -3505,6 +3505,7 @@ class BasePlatformAdapter(ABC):
         """Process an incoming message; returns quickly by spawning a background
         task so new messages (and interrupts) can arrive while an agent runs."""
         event._gateway_accepted = False
+        event._gateway_route_mismatch = False
         if not self._message_handler:
             return
         if event.allow_gateway_control:
@@ -3518,13 +3519,13 @@ class BasePlatformAdapter(ABC):
         session_key = self._event_session_key(event)
         if expected_session_key and session_key != expected_session_key:
             try:
-                store_key = self._session_store._generate_session_key(event.source)
+                store_key = self._session_store._generate_session_key(event.source) if event.internal else None
             except Exception:
                 store_key = None
             if store_key != expected_session_key:
                 event._gateway_route_mismatch = True
-                logger.warning("Dropping internally routed event: expected session=%s derived=%s",
-                               expected_session_key, session_key)
+                logger.warning("Dropping internally routed event: expected session=%s derived=%s store=%s",
+                               expected_session_key, session_key, store_key)
                 return
         # On-entry self-heal: clear a guard whose owner task already exited.
         if session_key in self._active_sessions:

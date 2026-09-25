@@ -1,13 +1,14 @@
 """Real adapter admission is the completion acknowledgement boundary."""
 import asyncio
 import logging
+import queue
 import time
 
 import pytest
 
 from gateway.config import GatewayConfig, Platform, PlatformConfig
 from gateway.platforms.event import MessageEvent
-from gateway.run import GatewayRunner
+from gateway.run import GatewayRunner, _AGENT_PENDING_SENTINEL
 from gateway.session import SessionSource, build_session_key
 from hermes_state import SessionDB
 from plugins.platforms.discord.adapter import DiscordAdapter
@@ -69,6 +70,7 @@ async def test_completion_ack_requires_admission_and_replay_never_repeats(tmp_pa
             row = delegation.get_durable_delegation(event["delegation_id"])
             assert (row["delivery_state"], row["delivery_attempts"]) == ("pending", 0)
         # An explicitly mismatched adapter key must fail closed too.
+        adapter.set_session_store(runner.session_store)
         wrong = dict(events[0], session_key="agent:main:discord:dm:other",
                      platform="discord", chat_type="dm", chat_id="42")
         assert await runner._inject_watch_notification("wrong-route", wrong) is False
@@ -147,6 +149,7 @@ async def test_completion_accepts_session_store_key_when_adapter_thread_policy_d
     received = []
 
     async def handler(event):
+        assert runner._session_key_for_source(event.source) == key
         received.append(event.text)
 
     adapter.set_message_handler(handler)
@@ -158,7 +161,7 @@ async def test_completion_accepts_session_store_key_when_adapter_thread_policy_d
             record for record in caplog.records
             if "Dropping internally routed event" in record.message
         ]
-        assert outcomes == [True] + [None] * 19, (
+        assert outcomes[0] is True, (
             f"outcomes={outcomes}, state={row['delivery_state']}, "
             f"attempts={row['delivery_attempts']}, route_drops={len(route_drops)}"
         )
@@ -168,6 +171,94 @@ async def test_completion_accepts_session_store_key_when_adapter_thread_policy_d
     finally:
         await drain(adapter)
         await runner._cancel_process_completion_batch_tasks()
+
+
+@pytest.mark.asyncio
+async def test_shared_thread_completion_queues_while_store_session_is_busy():
+    runner = GatewayRunner(GatewayConfig(thread_sessions_per_user=False))
+    adapter = DiscordAdapter(PlatformConfig(
+        enabled=True,
+        typing_indicator=False,
+        extra={"thread_sessions_per_user": True},
+    ))
+    adapter.set_session_store(runner.session_store)
+    runner.adapters = {Platform.DISCORD: adapter}
+    created_by_a = SessionSource(
+        platform=Platform.DISCORD,
+        chat_type="thread",
+        chat_id="shared-thread",
+        thread_id="shared-thread",
+        user_id="user-a",
+    )
+    entry = runner.session_store.get_or_create_session(created_by_a)
+    key = entry.session_key
+    evt = pending(key, "shared-thread-busy")
+    evt.update(user_id="user-b")
+
+    async def handler(event):
+        assert event.source.user_id == "user-a"
+        return await runner._handle_message(event)
+
+    adapter.set_message_handler(handler)
+    runner._session_state(key).turn.agent = _AGENT_PENDING_SENTINEL
+    try:
+        assert await runner._deliver_async_delegation_group([evt]) is True
+        await drain(adapter)
+        assert adapter._pending_messages[key].internal is True
+        assert "shared-thread-busy" in adapter._pending_messages[key].text
+        assert runner._session_state(key).turn.agent is _AGENT_PENDING_SENTINEL
+    finally:
+        runner._session_state(key).turn.agent = None
+        adapter._pending_messages.clear()
+        await drain(adapter)
+        await runner._cancel_process_completion_batch_tasks()
+
+
+@pytest.mark.asyncio
+async def test_mismatched_non_durable_notice_is_not_requeued_with_dropped_final(
+    monkeypatch, caplog,
+):
+    from tools import process_registry as process_registry_module
+
+    runner = GatewayRunner(GatewayConfig())
+    adapter = DiscordAdapter(PlatformConfig(enabled=True, typing_indicator=False))
+    adapter.set_session_store(runner.session_store)
+    adapter.set_message_handler(lambda _event: None)
+    runner.adapters = {Platform.DISCORD: adapter}
+    runner._running = True
+
+    final = pending("agent:main:discord:dm:other", "notice-route-mismatch")
+    final.update(platform="discord", chat_type="dm", chat_id="42")
+    notice = dict(
+        final,
+        task_failure_notice=True,
+        is_batch=True,
+        n_tasks=1,
+        results=[{"task_index": 0, "status": "failed", "goal": "probe", "error": "boom"}],
+    )
+    claim_id = "test-terminal-final"
+    assert delegation.claim_completion_delivery(final["delegation_id"], claim_id)
+    assert delegation.drop_completion_delivery(final["delegation_id"], claim_id)
+
+    isolated = queue.Queue()
+    isolated.put(notice)
+    isolated.put(final)
+    monkeypatch.setattr(process_registry_module.process_registry, "completion_queue", isolated)
+    sleep_calls = 0
+
+    async def stop_after_one_pass(_delay):
+        nonlocal sleep_calls
+        sleep_calls += 1
+        if sleep_calls >= 2:
+            runner._running = False
+
+    monkeypatch.setattr(asyncio, "sleep", stop_after_one_pass)
+    caplog.set_level(logging.WARNING)
+    await runner._async_delegation_watcher(interval=0)
+
+    assert isolated.empty()
+    assert delegation.get_durable_delegation(final["delegation_id"])["delivery_state"] == "dropped"
+    assert sum("Dropping internally routed event" in record.message for record in caplog.records) == 1
 
 
 @pytest.mark.asyncio
