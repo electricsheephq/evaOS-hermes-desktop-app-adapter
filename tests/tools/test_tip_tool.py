@@ -5,6 +5,7 @@ import json
 import pytest
 
 from tools import tip_tool as tt
+from tools.registry import registry
 
 
 @pytest.fixture
@@ -20,7 +21,6 @@ def emitted(monkeypatch):
     return sent
 
 
-<<<<<<< HEAD
 def test_lives_in_the_gui_surface_toolset(monkeypatch):
     """Scoped by toolset, not by the backend's env — see AGENTS.md."""
     monkeypatch.delenv("HERMES_DESKTOP", raising=False)
@@ -28,16 +28,6 @@ def test_lives_in_the_gui_surface_toolset(monkeypatch):
 
     assert entry is not None
     assert entry.toolset == "desktop_ui_v3"
-||||||| 939e45c91d
-def test_lives_in_the_gui_surface_toolset(monkeypatch):
-    """Scoped by toolset, not by the backend's env — see AGENTS.md."""
-    monkeypatch.delenv("HERMES_DESKTOP", raising=False)
-    entry = registry.get_entry("show_tip")
-
-    assert entry is not None
-    assert entry.toolset == "desktop_ui"
-=======
->>>>>>> f97608f178
 
 
 

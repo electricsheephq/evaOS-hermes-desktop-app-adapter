@@ -220,12 +220,15 @@ class TestEnableToolOverrideConsent:
         mock_user.return_value = nested_plugin_env
         mock_bundled.return_value = nested_plugin_env / "nonexistent"
 
-        with patch("rich.console.Console.input", side_effect=EOFError) as prompt:
+        # evaOS adaptation (r34): the fork persists both plugin lists in one save
+        # (_save_plugin_sets) so a disable→enable cycle cannot lose the selection (R5).
+        with patch("rich.console.Console.input", side_effect=EOFError) as prompt, \
+                patch("hermes_cli.plugins_cmd._save_plugin_sets") as mock_save_sets:
             cmd_enable("disk-cleanup")
 
         prompt.assert_not_called()
         mock_set_flag.assert_not_called()
-        assert "disk-cleanup" in mock_save_en.call_args[0][0]
+        assert "disk-cleanup" in mock_save_sets.call_args[0][0]
 
     @patch("hermes_cli.plugins.get_bundled_plugins_dir")
     @patch("hermes_cli.plugins_cmd._plugins_dir")

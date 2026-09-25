@@ -2,6 +2,7 @@
 import textwrap
 from types import SimpleNamespace
 
+import pytest
 
 
 def test_operator_owned_fails_closed_off_posix(monkeypatch):

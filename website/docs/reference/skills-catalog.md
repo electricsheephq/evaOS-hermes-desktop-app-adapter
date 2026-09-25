@@ -51,6 +51,7 @@ If a skill is missing from this list but present in the repo, the catalog is reg
 | Skill | Description | Path |
 |-------|-------------|------|
 | [`sdlc-review`](../user-guide/skills/bundled/devops/devops-sdlc-review.md) | Review Kanban handoffs and route verified outcomes. | `devops/sdlc-review` |
+| [`security-review`](../user-guide/skills/bundled/devops/devops-security-review.md) | Audit installed plugins, skills, and MCP servers. | `devops/security-review` |
 
 ## email
 

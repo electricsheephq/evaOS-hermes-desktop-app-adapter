@@ -99,7 +99,6 @@ class _StalledSummaryWorker:
             fence.finish_commit()
 
 
-<<<<<<< HEAD:tests/agent/test_compression_stall_fallback_78981.py
 def _run(
     worker,
     *,
@@ -109,11 +108,6 @@ def _run(
     idle=_FIXTURE_IDLE_SECONDS,
     ceiling=_FIXTURE_CEILING_SECONDS,
 ):
-||||||| 939e45c91d:tests/agent/test_compression_stall_fallback_78981.py
-def _run(worker, *, chain, timeouts, messages, idle=0.05, ceiling=0.2):
-=======
-def _run(worker, *, chain, timeouts, messages, idle=0.05, ceiling=2.0):
->>>>>>> f97608f178:tests/agent/test_compression_stall_fallback.py
     with _patch_chain(chain):
         return run_compress_context_with_progress_timeout(
             worker=worker,
@@ -174,16 +168,8 @@ def test_retry_runs_on_a_host_published_fence():
                 worker=worker,
                 messages=original,
                 system_prompt_fallback="degraded-prompt",
-<<<<<<< HEAD:tests/agent/test_compression_stall_fallback_78981.py
                 idle_timeout_seconds=_FIXTURE_IDLE_SECONDS,
                 total_ceiling_seconds=_FIXTURE_CEILING_SECONDS,
-||||||| 939e45c91d:tests/agent/test_compression_stall_fallback_78981.py
-                idle_timeout_seconds=0.05,
-                total_ceiling_seconds=0.2,
-=======
-                idle_timeout_seconds=0.05,
-                total_ceiling_seconds=2.0,
->>>>>>> f97608f178:tests/agent/test_compression_stall_fallback.py
                 new_fence=_new_fence,
             )
     finally:
@@ -212,16 +198,8 @@ def test_hard_interrupt_suppresses_the_fallback_attempt():
                 worker=worker,
                 messages=original,
                 system_prompt_fallback="degraded-prompt",
-<<<<<<< HEAD:tests/agent/test_compression_stall_fallback_78981.py
                 idle_timeout_seconds=_FIXTURE_IDLE_SECONDS,
                 total_ceiling_seconds=_FIXTURE_CEILING_SECONDS,
-||||||| 939e45c91d:tests/agent/test_compression_stall_fallback_78981.py
-                idle_timeout_seconds=0.05,
-                total_ceiling_seconds=0.2,
-=======
-                idle_timeout_seconds=0.05,
-                total_ceiling_seconds=2.0,
->>>>>>> f97608f178:tests/agent/test_compression_stall_fallback.py
                 on_timeout=lambda *args: timeouts.append(args),
                 telemetry_agent=agent,
             )

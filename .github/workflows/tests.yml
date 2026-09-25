@@ -134,11 +134,6 @@ jobs:
         # re-download, keeping the persisted cache small and fast to restore.
         run: uv cache prune --ci
 
-<<<<<<< HEAD
-      - name: Run tests (slice ${{ matrix.slice.index }}/${{ inputs.slice_count }})
-||||||| 939e45c91d
-      - name: Run tests
-=======
       - name: Check SQLite runs WAL
         # Hermes picks DELETE journal mode on a SQLite with the WAL-reset
         # bug. If this interpreter links one, every WAL test silently runs
@@ -148,24 +143,7 @@ jobs:
         run: |
           .venv/bin/python -c "import sqlite3, sys, hermes_state_wal as w; v = w.is_sqlite_wal_reset_vulnerable(); print(f'Python {sys.version.split()[0]}, SQLite {sqlite3.sqlite_version}, WAL-reset vulnerable: {v}'); sys.exit(1 if v else 0)"
 
-      - name: Restore per-file duration cache
-        # scripts/run_tests_parallel.py raises a file's timeout to
-        # 3x its last healthy duration (_effective_file_timeout) so a
-        # known-slow file dilated by load is not SIGKILL'd at the flat cap
-        # and laundered into a FLAKY retry. The scaler reads
-        # test_durations.json from the checkout; without this restore the
-        # file is absent on a fresh runner and the scaler is inert.
-        # Exact key never matches (run_id differs); restore-keys picks the
-        # most recent cache saved by a main push. PRs read, only main writes.
-        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
-        with:
-          path: test_durations.json
-          key: test-durations-never-exact
-          restore-keys: |
-            test-durations-
-
-      - name: Run tests
->>>>>>> f97608f178
+      - name: Run tests (slice ${{ matrix.slice.index }}/${{ inputs.slice_count }})
         # Per-file isolation via scripts/run_tests.sh: each test file runs
         # in its own freshly-spawned `python -m pytest <file>` subprocess
         # with bounded parallelism. No xdist, no shared workers, no
@@ -184,7 +162,6 @@ jobs:
           OPENAI_API_KEY: ""
           NOUS_API_KEY: ""
 
-<<<<<<< HEAD
       - name: Upload per-slice durations
         # Advisory artifact (feeds slice balancing) — a transient artifact-
         # service blip must not fail an otherwise-green test slice.
@@ -224,13 +201,6 @@ jobs:
           "
 
       - name: Save merged duration cache
-||||||| 939e45c91d
-=======
-      - name: Save per-file duration cache (main only)
-        # Only green first-attempt durations are written by the runner, so
-        # a hang on main cannot ratchet its own bound upward.
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && hashFiles('test_durations.json') != ''
->>>>>>> f97608f178
         uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: test_durations.json

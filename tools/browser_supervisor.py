@@ -361,13 +361,7 @@ class CDPSupervisor(DialogSupervisionMixin, FrameTrackingMixin):
             return False
         logger.warning("CDP supervisor %s: stopped after %s failed reconnect attempts: %s",
                        self.task_id, failures, _redact_cdp_error_text(e))
-<<<<<<< HEAD
         SUPERVISOR_REGISTRY._remove_if_same(self.task_id, self)
-||||||| 939e45c91d
-=======
-        if SUPERVISOR_REGISTRY.get(self.task_id) is self:
-            SUPERVISOR_REGISTRY._pop(self.task_id)
->>>>>>> f97608f178
         return True
 
     async def _run(self) -> None:

@@ -298,14 +298,6 @@ def test_malformed_run_id_refused_but_nonlifecycle_allowed(monkeypatch, worker_e
         assert kb.get_task(conn, worker_env).status == "running"
 
 
-<<<<<<< HEAD
-
-
-
-
-||||||| 939e45c91d
-=======
->>>>>>> f97608f178
 def test_complete_goal_mode_rejected_by_judge(monkeypatch, tmp_path):
     """Goal-mode tasks must pass the auxiliary judge before completion.
     Regression for #38367: workers bypassing the judge via early kanban_complete."""

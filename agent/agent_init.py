@@ -2308,16 +2308,8 @@ _CALLBACK_PARAMS = (
     "tool_progress_callback", "tool_start_callback", "tool_complete_callback",
     "tool_result_metadata_callback",
     "thinking_callback", "reasoning_callback", "clarify_callback",
-<<<<<<< HEAD
     "read_terminal_callback", "read_preview_callback", "drive_preview_callback", "annotate_preview_callback",
-    "read_window_below_callback", "setup_mcp_callback", "tour_callback",
-||||||| 939e45c91d
-    "read_terminal_callback", "read_preview_callback", "drive_preview_callback",
-    "read_window_below_callback", "setup_mcp_callback", "tour_callback",
-=======
-    "read_terminal_callback", "read_preview_callback", "drive_preview_callback",
     "read_window_below_callback", "connection_callback", "tour_callback",
->>>>>>> f97608f178
     "step_callback", "stream_delta_callback", "interim_assistant_callback",
     "status_callback", "notice_callback", "notice_clear_callback",
     "event_callback", "reaction_callback", "tool_gen_callback",
@@ -2340,14 +2332,8 @@ def init_agent(
     thinking_callback: callable = None, reasoning_callback: callable = None,
     clarify_callback: callable = None, read_terminal_callback: callable = None,
     read_preview_callback: callable = None, drive_preview_callback: callable = None,
-<<<<<<< HEAD
     annotate_preview_callback: callable = None,
-    read_window_below_callback: callable = None, setup_mcp_callback: callable = None,
-||||||| 939e45c91d
-    read_window_below_callback: callable = None, setup_mcp_callback: callable = None,
-=======
     read_window_below_callback: callable = None, connection_callback: callable = None,
->>>>>>> f97608f178
     tour_callback: callable = None, step_callback: callable = None,
     stream_delta_callback: callable = None, interim_assistant_callback: callable = None,
     tool_gen_callback: callable = None, status_callback: callable = None,

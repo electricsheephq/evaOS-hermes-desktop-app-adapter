@@ -31,7 +31,6 @@ _CHROMIUM_MISSING_DOCKER_HINT = ("Chromium browser is missing. You're running in
 _CHROMIUM_MISSING_HINT = f"Chromium browser is missing. Install it with: {_CHROMIUM_INSTALL}"
 
 
-<<<<<<< HEAD
 def _is_browser_capacity_error(code: Any, status_code: Any) -> bool:
     """Return whether provider metadata identifies transient browser capacity."""
     normalized_code = str(code or "").strip()
@@ -41,20 +40,6 @@ def _is_browser_capacity_error(code: Any, status_code: Any) -> bool:
     )
 
 
-def _needs_chromium_sandbox_bypass() -> bool:
-    """True when Chromium needs --no-sandbox to start reliably (root, Docker, AppArmor userns)."""
-    if hasattr(os, "geteuid") and os.geteuid() == 0:
-        return True
-    if _install._running_in_docker():
-        return True
-||||||| 939e45c91d
-def _needs_chromium_sandbox_bypass() -> bool:
-    """True when Chromium needs --no-sandbox to start reliably (root, Docker, AppArmor userns)."""
-    if hasattr(os, "geteuid") and os.geteuid() == 0:
-        return True
-    if _install._running_in_docker():
-        return True
-=======
 # THE Chromium startup flags for a host where its sandbox cannot work; agent-browser gets them through
 # AGENT_BROWSER_ARGS and the Bot Desktop dock's Browser icon (same binary, same profile) through
 # ``tools.bot_desktop.browser.dock_argv`` — one list, or the human's click dies while the agent's works.
@@ -64,7 +49,6 @@ CHROMIUM_SANDBOX_BYPASS_ARGS = ("--no-sandbox", "--disable-dev-shm-usage")
 def apparmor_restricts_unprivileged_userns() -> bool:
     """Ubuntu 23.10+ default: unprivileged user namespaces are denied, so a Chromium whose
     ``chrome_sandbox`` helper is not setuid (Playwright's bundle) dies with 'No usable sandbox'."""
->>>>>>> f97608f178
     try:
         with open("/proc/sys/kernel/apparmor_restrict_unprivileged_userns", encoding="utf-8") as f:
             return f.read().strip() == "1"
@@ -684,118 +668,6 @@ def _spawn_and_collect(
     return _interpret_browser_command_output(command, stdout, stderr, proc.returncode)
 
 
-<<<<<<< HEAD
-def _dispatch_browser_command(
-    task_id: str, session_info: Dict[str, Any], browser_cmd: str, command: str, args: List[str],
-    timeout: int, _engine_override: Optional[str],
-) -> "tuple[str, Dict[str, Any]]":
-    """Build the agent-browser argv for ``session_info`` and run it once → ``(engine, result)``."""
-    # Cleanup stops the supervisor before closing the backend; keep it stopped.
-    if command != "close" and session_info.get("cdp_url"):
-        _cdp._ensure_cdp_supervisor(task_id)
-
-    # Cloud/CDP: ``--cdp <ws_url>`` (NEVER with --session: agent-browser >=0.13
-    # would create a local browser and silently ignore --cdp). Local: ``--session <name>``.
-    # Engine injection keys off the resolved session backend, not global provider
-    # state: hybrid routing can create a local sidecar while a cloud provider stays configured.
-    engine = _engine_override or _cloud._get_browser_engine()
-    if session_info.get("cdp_url"):
-        backend_args = ["--cdp", session_info["cdp_url"]]
-    else:
-        backend_args = ["--session", session_info["session_name"]]
-        if _cloud._is_headed_mode():
-            backend_args.append("--headed")
-        if engine != "auto" and not _bt._is_camofox_mode():
-            backend_args += ["--engine", engine]
-
-    cmd_parts = _agent_browser_argv(browser_cmd) + backend_args + ["--json", command] + args
-
-    try:
-        result = _spawn_and_collect(task_id, session_info, cmd_parts, command, engine, timeout)
-    except Exception as e:
-        _bt.logger.warning("browser '%s' exception: %s", command, e, exc_info=True)
-        result = {"success": False, "error": str(e)}
-    return engine, result
-
-
-def _run_browser_command(
-    task_id: str,
-    command: str,
-    args: List[str] = None,
-    timeout: Optional[int] = None,
-    _engine_override: Optional[str] = None,
-) -> Dict[str, Any]:
-    """Run one agent-browser CLI command against the task's session; returns its parsed JSON.
-    ``timeout=None`` reads ``browser.command_timeout``; ``_engine_override`` forces an engine
-    for this call only (Lightpanda fallback retries with Chrome without touching global state)."""
-    if timeout is None:
-        timeout = _bt._safe_command_timeout()
-    args = args or []
-
-    preflight = _browser_command_preflight()
-    if "browser_cmd" not in preflight:
-        return preflight
-    browser_cmd = preflight["browser_cmd"]
-
-    for attempt in range(2):
-        try:
-            session_info = _get_session_info(task_id)
-        except Exception as e:
-            _bt.logger.warning("Failed to create browser session for task=%s: %s", task_id, e)
-            return {"success": False, "error": f"Failed to create browser session: {str(e)}"}
-        engine, result = _dispatch_browser_command(task_id, session_info, browser_cmd, command, args, timeout,
-                                                   _engine_override)
-||||||| 939e45c91d
-def _run_browser_command(
-    task_id: str,
-    command: str,
-    args: List[str] = None,
-    timeout: Optional[int] = None,
-    _engine_override: Optional[str] = None,
-) -> Dict[str, Any]:
-    """Run one agent-browser CLI command against the task's session; returns its parsed JSON.
-    ``timeout=None`` reads ``browser.command_timeout``; ``_engine_override`` forces an engine
-    for this call only (Lightpanda fallback retries with Chrome without touching global state)."""
-    if timeout is None:
-        timeout = _bt._safe_command_timeout()
-    args = args or []
-
-    preflight = _browser_command_preflight()
-    if "browser_cmd" not in preflight:
-        return preflight
-    browser_cmd = preflight["browser_cmd"]
-
-    try:
-        session_info = _get_session_info(task_id)
-    except Exception as e:
-        _bt.logger.warning("Failed to create browser session for task=%s: %s", task_id, e)
-        return {"success": False, "error": f"Failed to create browser session: {str(e)}"}
-    # Cleanup stops the supervisor before closing the backend; keep it stopped.
-    if command != "close" and session_info.get("cdp_url"):
-        _cdp._ensure_cdp_supervisor(task_id)
-
-    # Cloud/CDP: ``--cdp <ws_url>`` (NEVER with --session: agent-browser >=0.13
-    # would create a local browser and silently ignore --cdp). Local: ``--session <name>``.
-    # Engine injection keys off the resolved session backend, not global provider
-    # state: hybrid routing can create a local sidecar while a cloud provider stays configured.
-    engine = _engine_override or _cloud._get_browser_engine()
-    if session_info.get("cdp_url"):
-        backend_args = ["--cdp", session_info["cdp_url"]]
-    else:
-        backend_args = ["--session", session_info["session_name"]]
-        if _cloud._is_headed_mode():
-            backend_args.append("--headed")
-        if engine != "auto" and not _bt._is_camofox_mode():
-            backend_args += ["--engine", engine]
-
-    cmd_parts = _agent_browser_argv(browser_cmd) + backend_args + ["--json", command] + args
-
-    try:
-        result = _spawn_and_collect(task_id, session_info, cmd_parts, command, engine, timeout)
-    except Exception as e:
-        _bt.logger.warning("browser '%s' exception: %s", command, e, exc_info=True)
-        result = {"success": False, "error": str(e)}
-=======
 def run_fenced(session_info: Dict[str, Any], fn: Callable[[], Dict[str, Any]]) -> Dict[str, Any]:
     """Run ``fn`` under the Bot Desktop lease fence when ``session_info`` is the bot's LOCAL browser.
 
@@ -924,7 +796,6 @@ def _run_browser_command(
             task_id, session_info, browser_cmd, command, args, timeout, _engine_override))
         if result.get("code") == "human_has_control":
             return result
->>>>>>> f97608f178
         # #115184: a protocol-level failure (exit 101 on a stale session daemon, empty/non-JSON
         # output) poisons the cached local session record exactly like a timeout — recycle it
         # the same way and retry once on the replacement before handing the caller the error.

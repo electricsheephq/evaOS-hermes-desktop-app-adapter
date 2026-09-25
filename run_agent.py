@@ -282,17 +282,9 @@ class AIAgent(
         tool_complete_callback: callable = None, thinking_callback: callable = None,
         reasoning_callback: callable = None, clarify_callback: callable = None,
         read_terminal_callback: callable = None, read_preview_callback: callable = None,
-<<<<<<< HEAD
         drive_preview_callback: callable = None, annotate_preview_callback: callable = None,
         read_window_below_callback: callable = None,
-        setup_mcp_callback: callable = None, tour_callback: callable = None, step_callback: callable = None,
-||||||| 939e45c91d
-        drive_preview_callback: callable = None, read_window_below_callback: callable = None,
-        setup_mcp_callback: callable = None, tour_callback: callable = None, step_callback: callable = None,
-=======
-        drive_preview_callback: callable = None, read_window_below_callback: callable = None,
         connection_callback: callable = None, tour_callback: callable = None, step_callback: callable = None,
->>>>>>> f97608f178
         stream_delta_callback: callable = None, interim_assistant_callback: callable = None,
         tool_gen_callback: callable = None, status_callback: callable = None,
         notice_callback: callable = None, notice_clear_callback: callable = None,

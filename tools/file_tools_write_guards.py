@@ -14,13 +14,8 @@ import fnmatch
 import os
 from pathlib import Path
 
-<<<<<<< HEAD
-||||||| 939e45c91d
-from tools.binary_extensions import has_opaque_document_extension, is_pdf_path
-=======
 from agent.file_safety import get_nt_namespace_error
 from tools import file_state
->>>>>>> f97608f178
 from tools.binary_extensions import (
     has_binary_extension,
     has_opaque_document_extension,

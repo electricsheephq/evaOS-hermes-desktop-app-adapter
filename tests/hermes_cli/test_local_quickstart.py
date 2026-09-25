@@ -127,11 +127,6 @@ def test_quickstart_refuses_when_nothing_fits(client, monkeypatch):
     assert "Local Models" in r.json()["detail"]
 
 
-<<<<<<< HEAD
-def test_quickstart_runs_all_three_legs(client, quickstart_ready, monkeypatch, tmp_path):
-||||||| 939e45c91d
-def test_quickstart_runs_all_three_legs(client, monkeypatch, tmp_path):
-=======
 @pytest.fixture
 def capable_hardware(monkeypatch):
     """Success-path orchestration tests need a model to fit, independent of host load."""
@@ -146,8 +141,7 @@ def capable_hardware(monkeypatch):
     monkeypatch.setattr(hardware, "probe_budget", lambda **kw: budget)
 
 
-def test_quickstart_runs_all_three_legs(client, capable_hardware, monkeypatch, tmp_path):
->>>>>>> f97608f178
+def test_quickstart_runs_all_three_legs(client, quickstart_ready, capable_hardware, monkeypatch, tmp_path):
     """Fresh machine: install runtime -> download recommended -> activate.
     Each leg is asserted by its observable call, in order."""
     calls: list[str] = []
@@ -208,13 +202,7 @@ def test_quickstart_runs_all_three_legs(client, capable_hardware, monkeypatch, t
     assert load_config()["local_runtime"]["enabled"] is True
 
 
-<<<<<<< HEAD
-def test_quickstart_skips_satisfied_legs(client, quickstart_ready, monkeypatch):
-||||||| 939e45c91d
-def test_quickstart_skips_satisfied_legs(client, monkeypatch):
-=======
-def test_quickstart_skips_satisfied_legs(client, capable_hardware, monkeypatch):
->>>>>>> f97608f178
+def test_quickstart_skips_satisfied_legs(client, quickstart_ready, capable_hardware, monkeypatch):
     """Runtime present and model already staged: the response says so and
     the job goes straight to activation."""
     calls: list[str] = []

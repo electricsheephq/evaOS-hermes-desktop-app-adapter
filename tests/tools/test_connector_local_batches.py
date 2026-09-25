@@ -65,13 +65,7 @@ def test_single_local_unwrap_keeps_session_db_todo_store_and_setup_callback(tmp_
         return None
 
     agent = SimpleNamespace(
-<<<<<<< HEAD
-        enabled_toolsets=["todo", "session_search", "desktop_ui", "desktop_ui_v2"], disabled_toolsets=[],
-||||||| 939e45c91d
-        enabled_toolsets=["todo", "session_search", "desktop_ui"], disabled_toolsets=[],
-=======
         enabled_toolsets=["todo", "session_search", "connections"], disabled_toolsets=[],
->>>>>>> f97608f178
         session_id="current-session", _todo_store=TodoStore(), _memory_manager=None,
         _get_session_db_for_recall=lambda: db, connection_callback=connection,
     )

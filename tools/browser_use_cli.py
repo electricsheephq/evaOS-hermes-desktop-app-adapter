@@ -572,14 +572,10 @@ def _resolve_real_profile_cdp(env: dict, force_local: bool) -> Optional[str]:
     cdp, err = _real_profile_cdp()
     if cdp and not err:
         _set_cdp_env(env, cdp)
-<<<<<<< HEAD
+        env[_BOT_DESKTOP_BROWSER_SENTINEL] = "1"
     elif force_local and not err:
         return ("local=true needs a desktop browser profile on this host and none exists; omit `local` "
                 "to use the configured browser backend.")
-||||||| 939e45c91d
-=======
-        env[_BOT_DESKTOP_BROWSER_SENTINEL] = "1"
->>>>>>> f97608f178
     return err or None
 
 
@@ -702,20 +698,12 @@ def browser_exec(code: str, session: str = "", timeout_s: int = _DEFAULT_TIMEOUT
         env["BU_NAME"] = session
     route_err = _route_backend(env, session, task_id, bool(local))
     if route_err:
-<<<<<<< HEAD
         return tool_error(
             route_err,
             code=getattr(route_err, "code", "browser_backend_error"),
             retryable=bool(getattr(route_err, "retryable", False)),
         )
-    _attach_vault_supervisor(env, task_id)
-||||||| 939e45c91d
-        return tool_error(route_err)
-    _attach_vault_supervisor(env, task_id)
-=======
-        return tool_error(route_err)
     bot_desktop_browser = bool(env.pop(_BOT_DESKTOP_BROWSER_SENTINEL, None))
->>>>>>> f97608f178
 
     # SHARED browser (/browser connect CDP override): pin each named session to its own tab (see
     # _OWN_TAB_PREAMBLE). Private per-name browsers skip this — nothing to collide with.
@@ -735,10 +723,6 @@ def browser_exec(code: str, session: str = "", timeout_s: int = _DEFAULT_TIMEOUT
     timeout = _clamp_timeout(timeout_s)
     started = time.time()
 
-<<<<<<< HEAD
-||||||| 939e45c91d
-    result = {"success": proc.returncode == 0, "exit_code": proc.returncode, "output": proc.stdout}
-=======
     def dispatch() -> Dict[str, Any]:
         _attach_vault_supervisor(env, task_id)
         try:
@@ -763,7 +747,6 @@ def browser_exec(code: str, session: str = "", timeout_s: int = _DEFAULT_TIMEOUT
         return tool_result(dispatched)
     proc = dispatched["proc"]
 
->>>>>>> f97608f178
     # browser_vault_fill registers injected values with this forced model-egress
     # boundary. Preserve raw stdout only for screenshot-path detection below.
     result = {

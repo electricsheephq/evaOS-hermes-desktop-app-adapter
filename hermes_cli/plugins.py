@@ -1367,17 +1367,22 @@ class PluginManager(PluginLoaderMixin, PluginDispatchMixin, PluginLedgerMixin):
 
     def _discover_and_load_inner(self) -> None:
         """The actual discovery sweep — see :meth:`discover_and_load`."""
-        manifests: List[PluginManifest] = self._collect_directory_manifests()
+        # evaOS: managed identities are filtered over directory AND entry-point candidates first, so
+        # an operator-owned entry point displaces a same-name profile/project directory shadow; the
+        # directory-over-entry-point rule below then applies to the survivors only.
+        candidates = managed_scope.filter_managed_plugin_candidates(
+            [*self._collect_directory_manifests(), *self._scan_entry_points()], manifest_key)
+        manifests: List[PluginManifest] = [m for m in candidates if m.source != "entrypoint"]
         # Entry points are separate from the directory scan: the startup MCP probe must not import
         # or register them.
         # An installed directory plugin keeps its identity when its own pip dependency also ships an
         # entry point under the same name (the pyproject wrapper shape): the directory is what the
         # user installed, carries catalog provenance and is what update/remove act on.
         directory_keys = {manifest_key(m) for m in manifests}
-        ep_manifests = [m for m in self._scan_entry_points() if manifest_key(m) not in directory_keys]
+        ep_manifests = [m for m in candidates
+                        if m.source == "entrypoint" and manifest_key(m) not in directory_keys]
         logger.debug("  entrypoints: %d manifest(s)", len(ep_manifests))
         manifests.extend(ep_manifests)
-        manifests = managed_scope.filter_managed_plugin_candidates(manifests, manifest_key)
         disabled = _get_disabled_plugins()
         enabled = _get_enabled_plugins()  # None = opt-in default (nothing enabled)
         stale_relay_keys = legacy_relay_plugin_keys(enabled)

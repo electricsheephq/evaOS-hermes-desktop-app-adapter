@@ -28,6 +28,9 @@ _NON_MIRROR_DIRS = {
     "fakes", "fixtures", "honcho_plugin", "install", "integration", "manual",
     "monitoring", "openviking_plugin", "perf_guards", "scripts", "secret_sources",
     "security", "skills", "verify", "website", "computer_use", "hermes_state",
+    # evaOS adaptation (r34): cross-version compatibility suites run against pinned external
+    # checkouts (tests.yml); they mirror no single source package.
+    "r31_compat", "r31_lcm_compat",
 }
 
 # Root-level modules whose tests sit directly in tests/ (no package to mirror).

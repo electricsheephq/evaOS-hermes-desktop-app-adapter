@@ -470,24 +470,14 @@ def _resolve_container_task_id(task_id: Optional[str]) -> str:
        default-profile gateway sessions share ONE container; other backends key
        ``session:<key>`` so switching profiles can't reuse another profile's
        SSHEnvironment on the wrong host.
-<<<<<<< HEAD
-    4. No session key (CLI): ``shared:<key>`` when opted in (else a CLI run of a
-       keyed profile would split from its gateway sessions), else ``"default"``,
-       which subagent ids collapse onto to share the parent's container.
-
-    In multiplex mode, after the above identity is resolved, the active
-    profile home and backend are appended to the key. Explicit shared-container
-    opt-in remains authoritative and returns before this profile scoping.
-||||||| 939e45c91d
-    4. No session key (CLI): ``shared:<key>`` when opted in (else a CLI run of a
-       keyed profile would split from its gateway sessions), else ``"default"``,
-       which subagent ids collapse onto to share the parent's container.
-=======
     4. No session key (CLI, cron): ``shared:<key>`` when opted in (else a CLI run of a
        keyed profile would split from its gateway sessions); a routed multiplexed profile
        keys its own home (``profile:<name>`` under persistent Docker, matching branch 3);
        else ``"default"``, which subagent ids collapse onto to share the parent's container.
->>>>>>> f97608f178
+
+    In multiplex mode, after the above identity is resolved, the active
+    profile home and backend are appended to the key. Explicit shared-container
+    opt-in remains authoritative and returns before this profile scoping.
     """
     if task_id and _has_isolation_overrides(task_id):
         return task_id
@@ -510,8 +500,7 @@ def _resolve_container_task_id(task_id: Optional[str]) -> str:
         # ONE container/cache slot (and sandbox dir) regardless of profile name (#84671).
         return f"shared:{shared}"
     if not session_key:
-<<<<<<< HEAD
-        resolved_task_id = "default"
+        resolved_task_id = _routed_home_task_key(scope.docker_profile_scoped) or "default"
     elif not scope.docker_profile_scoped:
         resolved_task_id = f"session:{session_key}"
     else:
@@ -535,19 +524,6 @@ def _resolve_container_task_id(task_id: Optional[str]) -> str:
         f"{profile_home}\0{env_type}".encode("utf-8")
     ).hexdigest()[:16]
     return f"{resolved_task_id}-{env_type}-{scope_digest}"
-||||||| 939e45c91d
-        return "default"
-    if not scope.docker_profile_scoped:
-        return f"session:{session_key}"
-    profile = _current_session_profile() or "default"
-    return "default" if profile == "default" else f"profile:{profile}"
-=======
-        return _routed_home_task_key(scope.docker_profile_scoped) or "default"
-    if not scope.docker_profile_scoped:
-        return f"session:{session_key}"
-    profile = _current_session_profile() or "default"
-    return "default" if profile == "default" else f"profile:{profile}"
->>>>>>> f97608f178
 
 
 def resolve_task_overrides(task_id: Optional[str]) -> Dict[str, Any]:

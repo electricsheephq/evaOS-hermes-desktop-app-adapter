@@ -54,7 +54,8 @@ def test_profile_dotenv_cannot_override_managed_runtime_lease_authority(
     for key, value in process_values.items():
         monkeypatch.setenv(key, value)
     monkeypatch.setattr(env_loader, "_apply_external_secret_sources", lambda _path: None)
-    monkeypatch.setattr(env_loader, "_apply_managed_env", lambda: None)
+    # evaOS adaptation (r34): upstream passes ``load_pass=`` to _apply_managed_env.
+    monkeypatch.setattr(env_loader, "_apply_managed_env", lambda **_kwargs: None)
 
     load_hermes_dotenv(hermes_home=home)
 
@@ -83,7 +84,8 @@ def test_profile_dotenv_cannot_create_managed_runtime_lease_authority(
     for key in keys:
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setattr(env_loader, "_apply_external_secret_sources", lambda _path: None)
-    monkeypatch.setattr(env_loader, "_apply_managed_env", lambda: None)
+    # evaOS adaptation (r34): upstream passes ``load_pass=`` to _apply_managed_env.
+    monkeypatch.setattr(env_loader, "_apply_managed_env", lambda **_kwargs: None)
 
     load_hermes_dotenv(hermes_home=home)
 
@@ -111,7 +113,8 @@ def test_profile_dotenv_cannot_override_managed_config_placeholder(
     monkeypatch.setenv("EVAOS_TEST_AGENT_ID", "main")
     managed_scope.invalidate_managed_cache()
     monkeypatch.setattr(env_loader, "_apply_external_secret_sources", lambda _path: None)
-    monkeypatch.setattr(env_loader, "_apply_managed_env", lambda: None)
+    # evaOS adaptation (r34): upstream passes ``load_pass=`` to _apply_managed_env.
+    monkeypatch.setattr(env_loader, "_apply_managed_env", lambda **_kwargs: None)
 
     load_hermes_dotenv(hermes_home=home)
 

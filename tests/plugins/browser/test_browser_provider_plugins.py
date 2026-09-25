@@ -232,13 +232,6 @@ class TestPickerIntegration:
 
         rows = _plugin_browser_providers()
         names = sorted(r.get("browser_provider") for r in rows)
-<<<<<<< HEAD
-        assert names == ["browserbase", "firecrawl"]
-||||||| 939e45c91d
-        assert names == ["browserbase", "firecrawl"]
-
-
-=======
         # Picker rows are exactly the registered plugins that expose a setup schema.
         expected = sorted(
             p.name for p in list_providers() if p.get_setup_schema() is not None
@@ -246,4 +239,3 @@ class TestPickerIntegration:
         assert names and names == expected
 
 
->>>>>>> f97608f178

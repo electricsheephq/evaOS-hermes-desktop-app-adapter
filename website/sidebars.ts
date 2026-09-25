@@ -210,6 +210,7 @@ const sidebars: SidebarsConfig = {
                   collapsed: true,
                   items: [
                     'user-guide/skills/bundled/devops/devops-sdlc-review',
+                    'user-guide/skills/bundled/devops/devops-security-review',
                   ],
                 },
                 {

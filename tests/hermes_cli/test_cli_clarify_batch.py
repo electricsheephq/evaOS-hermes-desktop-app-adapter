@@ -239,14 +239,6 @@ class TestClarifyBatchPanel:
         thread.join(timeout=2)
         assert result["value"] == "a"
 
-<<<<<<< HEAD:tests/cli/test_cli_clarify_batch.py
-    def test_single_question_timeout_returns_canonical_sentinel(self):
-        cli = _make_cli_stub()
-        cli._poll_modal_queue = MagicMock(return_value=_TIMED_OUT)
-
-        assert cli._clarify_callback("Pick?", ["a", "b"]) == TIMEOUT_RESPONSE
-||||||| 939e45c91d:tests/cli/test_cli_clarify_batch.py
-=======
         cli._connection_state = None
         cli._capture_modal_input_snapshot = MagicMock()
         cli._restore_modal_input_snapshot = MagicMock()
@@ -289,7 +281,12 @@ class TestClarifyBatchPanel:
             "env": {"CLIENT_ID": "default-id", "CLIENT_SECRET": "never-render-this"},
         }]}
         cli._connection_close()
->>>>>>> f97608f178:tests/hermes_cli/test_cli_clarify_batch.py
+
+    def test_single_question_timeout_returns_canonical_sentinel(self):
+        cli = _make_cli_stub()
+        cli._poll_modal_queue = MagicMock(return_value=_TIMED_OUT)
+
+        assert cli._clarify_callback("Pick?", ["a", "b"]) == TIMEOUT_RESPONSE
 
 
 class TestClarifyBatchNavigation:
