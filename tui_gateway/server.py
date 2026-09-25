@@ -1922,6 +1922,8 @@ _DESKTOP_UI_EVENT_REQUIREMENTS = {
     "tour": (2, "gui_tour"),
     "layout.apply": (2, "apply_layout"),
     "tip.show": (3, "show_tip"),
+    # evaOS (RE-7): the manage_connections card, the replacement for the fork's mcp.setup.request.
+    "connection.request": (2, "manage_connections"),
 }
 
 

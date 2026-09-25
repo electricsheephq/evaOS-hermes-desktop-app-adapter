@@ -302,3 +302,42 @@ def test_shared_refresh_is_serialized_and_second_profile_adopts_rotated_pair(
         profile_data = json.loads((profile / "auth.json").read_text())
         assert "openai-codex" not in profile_data.get("providers", {})
         assert "openai-codex" not in profile_data.get("credential_pool", {})
+
+
+def test_shared_pool_quota_probe_rotation_writes_back_to_shared_source_without_profile_shadow(
+    managed_profile_env: dict[str, Path], monkeypatch: pytest.MonkeyPatch
+):
+    # evaOS (r34 review, R12): upstream's pre-probe refresh of an expired, quota-exhausted pool entry
+    # must persist the single-use rotation where the borrowed row lives (the managed shared file).
+    import hermes_cli.auth as auth
+    import hermes_cli.auth_codex as auth_codex
+    stale_access = _jwt_with_exp(int(time.time()) - 3600)
+    stale_refresh = _synthetic("pool-quota-refresh")
+    fresh_access = _jwt_with_exp(int(time.time()) + 3600)
+    fresh_refresh = _synthetic("pool-quota-rotated-refresh")
+    shared_data = _auth_store(access_token=None, refresh_token=None)
+    shared_data["credential_pool"]["openai-codex"][0].update(
+        access_token=stale_access, refresh_token=stale_refresh, last_status="exhausted",
+        last_error_code=429, last_error_reason="usage_limit_reached",
+        last_error_reset_at=int(time.time()) + 86400)
+    _write_json(managed_profile_env["shared"], shared_data, managed=True)
+    rotations = []
+
+    def _rotate(access_token, refresh_token, **_kwargs):
+        rotations.append(refresh_token)
+        return {"access_token": fresh_access, "refresh_token": fresh_refresh,
+                "last_refresh": "2026-09-26T00:00:00Z"}
+
+    monkeypatch.setattr(auth_codex, "refresh_codex_oauth_pure", _rotate)
+    monkeypatch.setattr(auth_codex, "_probe_codex_quota_restored", lambda token, **_kw: token == fresh_access)
+    auth_codex._codex_quota_probe_cache.clear()
+
+    resolved = auth.resolve_codex_runtime_credentials()
+
+    assert rotations == [stale_refresh]
+    assert resolved["api_key"] == fresh_access
+    shared_row = json.loads(managed_profile_env["shared"].read_text())["credential_pool"]["openai-codex"][0]
+    assert (shared_row["access_token"], shared_row["refresh_token"]) == (fresh_access, fresh_refresh)
+    profile_data = json.loads((managed_profile_env["profile"] / "auth.json").read_text())
+    assert "openai-codex" not in profile_data.get("providers", {})
+    assert "openai-codex" not in profile_data.get("credential_pool", {})

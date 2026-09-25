@@ -140,6 +140,9 @@ def owned_session(monkeypatch, tmp_path):
             "running": False,
             "attached_images": [],
             "source": "desktop",
+            # evaOS adaptation (r34, RE-7): connection.request is gated at Desktop UI protocol 2 on the
+            # requesting viewer; a real Desktop session stores the protocol it negotiated.
+            "desktop_ui_protocol": 2,
         }
         monkeypatch.setitem(server._sessions, SID, session)
         yield owner, stranger

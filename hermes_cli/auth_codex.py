@@ -888,12 +888,17 @@ def _probe_codex_pool_entry_quota_restored(entry: Dict[str, Any]) -> Optional[bo
     if fresh:
         token = fresh["access_token"]
         try:
-            with _auth_store_lock():
-                auth_store = _load_auth_store()
+            # evaOS: same owner rule as ``clear_codex_pool_quota_cooldowns``. A profile with no Codex
+            # rows borrows the root pool (the managed shared file), so the single-use rotation must
+            # land on that row, not be dropped from the profile store.
+            from agent.credential_pool import _borrowed_single_use_pool_root, _profile_owns_pool_provider
+            target = None if _profile_owns_pool_provider("openai-codex") else _borrowed_single_use_pool_root()
+            with _auth_store_lock(target_path=target):
+                auth_store = _load_auth_store(target)
                 for disk_entry in _codex_pool_dicts(_pool_entries(auth_store, "openai-codex")):
                     if disk_entry.get("id") == entry.get("id"):
                         disk_entry.update(fresh)
-                        _save_auth_store(auth_store)
+                        _save_auth_store(auth_store, target_path=target)
                         break
         except Exception:
             logger.debug("Failed to persist refreshed Codex pool tokens", exc_info=True)

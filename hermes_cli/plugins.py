@@ -1264,6 +1264,11 @@ class PluginManager(PluginLoaderMixin, PluginDispatchMixin, PluginLedgerMixin):
         return registered is not None and bool(registered[1](**kwargs))
 
     def discover_and_load(self, force: bool = False) -> None:
+        # evaOS: upstream's worker re-entry return must come before the fork's process-wide lock. The
+        # sweep holding that lock is waiting on this load-deadline worker, so blocking here only ends at
+        # the deadline, with the plugin disabled.
+        if self._discovered and not force and in_plugin_load_worker():
+            return
         with _PLUGIN_DISCOVERY_LOCK:
             self._discover_and_load_serialized(force=force)
 
