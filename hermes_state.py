@@ -55,11 +55,7 @@ from hermes_state_profile_repair import SessionProfileRepairMixin
 from hermes_state_schema import SessionSchemaMixin
 import hermes_state_holders as _state_holders
 import hermes_state_lockguard as _lockguard
-<<<<<<< HEAD
-||||||| 939e45c91d
-=======
 from hermes_state_lockowners import log_write_lock_holders
->>>>>>> f97608f178
 from hermes_state_dbfile import (
     _connect_tracked_db, _fd_is_truly_unlinked, _prepare_connection_retirement,
     _read_sqlite_application_id, _stat_sqlite_sidecar_identity,

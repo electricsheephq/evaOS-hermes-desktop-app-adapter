@@ -40,20 +40,6 @@ _SHARED_FIRST = _PENDING_BYTE + 2
 _SHARED_SIZE = 510
 _SHM_DMS_BYTE = 128
 
-<<<<<<< HEAD
-try:
-    import fcntl
-    # CPython exports F_OFD_SETLK only from 3.12. The kernel ABI values are stable: 37 on every
-    # Linux arch (asm-generic/fcntl.h), 90 on XNU (bsd/sys/fcntl.h, documented in fcntl(2)).
-    _F_OFD_SETLK: Optional[int] = getattr(
-        fcntl, "F_OFD_SETLK", {"linux": 37, "darwin": 90}.get(sys.platform.rstrip("0123456789")))
-    _F_RDLCK, _F_UNLCK, _SEEK_SET = fcntl.F_RDLCK, fcntl.F_UNLCK, os.SEEK_SET
-except ImportError:  # Windows
-    fcntl = None  # type: ignore[assignment]
-    _F_OFD_SETLK = None
-    _F_RDLCK = _F_UNLCK = _SEEK_SET = 0
-||||||| 939e45c91d
-=======
 # Windows has no POSIX advisory locks, and the module promises to be a no-op there. Gate on the
 # platform FIRST: some Windows installs have a third-party module importable as `fcntl` (stock
 # CPython for Windows ships none), and letting the import decide would arm the guard on a
@@ -81,7 +67,6 @@ else:
         fcntl = None  # type: ignore[assignment]
         _F_OFD_SETLK = None
         _F_RDLCK = _F_UNLCK = _SEEK_SET = 0
->>>>>>> f97608f178
 
 # struct flock differs per libc: glibc/musl put type+whence first, Darwin/BSD last.
 _FLOCK_FORMAT = "@qqihh" if sys.platform == "darwin" or "bsd" in sys.platform else "@hhqqi"

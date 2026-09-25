@@ -138,27 +138,6 @@ def _watched_sqlite_sidecar_paths(db_path) -> Dict[str, str]:
     so a canonical match can be re-``stat``'d for identity rather than trusted as text."""
     literal_base = os.path.abspath(os.fspath(db_path))
     literal = (literal_base + "-wal", literal_base + "-shm")
-<<<<<<< HEAD
-    watched = {_canonical_sqlite_path(path): path for path in literal}
-    # /proc reports the kernel-resolved dentry, so the watched canonicals must also resolve
-    # symlinks -- with abspath alone a symlinked HERMES_HOME makes every deleted sidecar
-    # invisible to the scan. Both spellings are watched: the fully resolved path, which is
-    # where current SQLite places -wal/-shm when the database file itself is a symlink, and
-    # the realpath'd parent with the literal basename, which is where they land when SQLite
-    # names the sidecars after the path it was opened through.
-    resolved_bases = (
-        os.path.join(os.path.realpath(os.path.dirname(literal_base)),
-                     os.path.basename(literal_base)),
-        os.path.realpath(literal_base),
-    )
-    for base in resolved_bases:
-        for suffix in ("-wal", "-shm"):
-            watched.setdefault(_canonical_sqlite_path(base + suffix), base + suffix)
-||||||| 939e45c91d
-    base = os.path.abspath(os.fspath(db_path))
-    literal = (base + "-wal", base + "-shm")
-    return {_canonical_sqlite_path(path): path for path in literal}
-=======
     watched = {canonical_sqlite_path(path): path for path in literal}
     # /proc reports the kernel-resolved dentry, so the watched canonicals must also resolve
     # symlinks -- with abspath alone a symlinked HERMES_HOME makes every deleted sidecar
@@ -174,7 +153,6 @@ def _watched_sqlite_sidecar_paths(db_path) -> Dict[str, str]:
     for base in resolved_bases:
         for suffix in ("-wal", "-shm"):
             watched.setdefault(canonical_sqlite_path(base + suffix), base + suffix)
->>>>>>> f97608f178
     return watched
 
 
@@ -366,17 +344,7 @@ def iter_deleted_sqlite_sidecar_holders(db_path) -> List[Tuple[int, str]]:
         elif sys.platform.startswith("linux"):
             watched = _watched_sqlite_sidecar_paths(db_path)
             for pid, target, fd_path in _iter_proc_fd_targets():
-<<<<<<< HEAD
-                canonical = _canonical_sqlite_path(target)
-||||||| 939e45c91d
-        for pid, target, fd_path in _iter_proc_fd_targets():
-            canonical = _canonical_sqlite_path(target)
-            if (" (deleted)" in target and canonical in watched
-                    and _fd_is_truly_unlinked(fd_path, watched[canonical])):
-                holders.append((pid, target))
-=======
                 canonical = canonical_sqlite_path(target)
->>>>>>> f97608f178
                 if (" (deleted)" in target and canonical in watched
                         and _fd_is_truly_unlinked(fd_path, watched[canonical])):
                     holders.append((pid, target))
