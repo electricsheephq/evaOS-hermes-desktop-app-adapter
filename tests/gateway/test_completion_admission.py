@@ -120,3 +120,85 @@ async def test_unavailable_raw_route_is_quiet_without_hiding_invalid_routes(tmp_
         assert not api._background_tasks and not caplog.records
     finally:
         db.close()
+
+
+@pytest.mark.asyncio
+async def test_completion_accepts_session_store_key_when_adapter_thread_policy_differs(caplog):
+    runner = GatewayRunner(GatewayConfig(thread_sessions_per_user=False))
+    adapter = DiscordAdapter(PlatformConfig(
+        enabled=True,
+        typing_indicator=False,
+        extra={"thread_sessions_per_user": True},
+    ))
+    adapter.set_session_store(runner.session_store)
+    runner.adapters = {Platform.DISCORD: adapter}
+    source = SessionSource(
+        platform=Platform.DISCORD,
+        chat_type="thread",
+        chat_id="thread-348",
+        thread_id="thread-348",
+        user_id="user-348",
+    )
+    key = runner.session_store._generate_session_key(source)
+    assert not key.endswith(f":{source.user_id}")
+    evt = pending(key, "store-key-admitted")
+    evt["user_id"] = source.user_id
+    runner._enrich_async_delegation_routing(evt)
+    received = []
+
+    async def handler(event):
+        received.append(event.text)
+
+    adapter.set_message_handler(handler)
+    caplog.set_level(logging.WARNING)
+    try:
+        outcomes = [await runner._deliver_async_delegation_group([evt]) for _ in range(20)]
+        row = delegation.get_durable_delegation(evt["delegation_id"])
+        route_drops = [
+            record for record in caplog.records
+            if "Dropping internally routed event" in record.message
+        ]
+        assert outcomes == [True] + [None] * 19, (
+            f"outcomes={outcomes}, state={row['delivery_state']}, "
+            f"attempts={row['delivery_attempts']}, route_drops={len(route_drops)}"
+        )
+        await drain(adapter)
+        assert row["delivery_state"] == "delivered"
+        assert len(received) == 1 and evt["summary"] in received[0]
+    finally:
+        await drain(adapter)
+        await runner._cancel_process_completion_batch_tasks()
+
+
+@pytest.mark.asyncio
+async def test_permanent_route_mismatch_exhausts_delivery_attempts(caplog):
+    runner = GatewayRunner(GatewayConfig())
+    adapter = DiscordAdapter(PlatformConfig(enabled=True, typing_indicator=False))
+    adapter.set_session_store(runner.session_store)
+    received = []
+
+    async def handler(event):
+        received.append(event.text)
+
+    adapter.set_message_handler(handler)
+    runner.adapters = {Platform.DISCORD: adapter}
+    wrong = pending("agent:main:discord:dm:other", "wrong-route-exhausted")
+    wrong.update(platform="discord", chat_type="dm", chat_id="42")
+    caplog.set_level(logging.WARNING)
+    try:
+        outcomes = [await runner._deliver_async_delegation_group([wrong]) for _ in range(8)]
+        row = delegation.get_durable_delegation(wrong["delegation_id"])
+        exhausted = [
+            record for record in caplog.records
+            if "exhausted its 8 delivery attempts" in record.message
+        ]
+        assert (row["delivery_state"], row["delivery_attempts"]) == ("dropped", 8), (
+            f"outcomes={outcomes}, state={row['delivery_state']}, attempts={row['delivery_attempts']}"
+        )
+        assert outcomes == [False] * 8
+        assert await runner._deliver_async_delegation_group([wrong]) is None
+        assert len(exhausted) == 1
+        assert received == []
+    finally:
+        await drain(adapter)
+        await runner._cancel_process_completion_batch_tasks()

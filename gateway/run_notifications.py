@@ -1085,7 +1085,7 @@ class GatewayNotificationsMixin:
             return True
         except WakeNotAccepted:
             # Durable callers refund the claim; ordinary watch callers just requeue.
-            if raise_not_accepted:
+            if raise_not_accepted and not getattr(synth_event, "_gateway_route_mismatch", False):
                 raise
             return False
         except Exception as e:
