@@ -203,10 +203,11 @@ def warm_agent_browser_npx_cache(timeout: float = 60.0) -> bool:
 
 
 def _chromium_search_roots() -> List[str]:
-    """Chromium / headless-shell scan roots in agent-browser/Playwright probe order: ``PLAYWRIGHT_BROWSERS_PATH``, then the per-OS default cache."""
+    """Chromium / headless-shell scan roots for agent-browser and Playwright."""
     env_path = os.environ.get("PLAYWRIGHT_BROWSERS_PATH", "").strip()
     home = os.path.expanduser("~")
     roots: List[str] = [env_path] if env_path and env_path != "0" else []
+    roots.append(os.path.join(home, ".agent-browser", "browsers"))
     roots.append(os.path.join(home, ".cache", "ms-playwright"))
     if sys.platform == "darwin":
         roots.append(os.path.join(home, "Library", "Caches", "ms-playwright"))
@@ -217,11 +218,39 @@ def _chromium_search_roots() -> List[str]:
 
 
 def _has_chromium_build(root: str) -> bool:
-    """True when ``root`` holds a Playwright ``chromium-*`` / ``chromium_headless_shell-*`` dir (agent-browser accepts either)."""
+    """True when ``root`` holds an agent-browser or Playwright Chromium build."""
     try:
-        return any(e.startswith(("chromium-", "chromium_headless_shell-")) for e in os.listdir(root))
+        entries = os.listdir(root)
     except OSError:
         return False
+    if any(e.startswith(("chromium-", "chromium_headless_shell-")) for e in entries):
+        return True
+    if sys.platform == "darwin":
+        executable_paths = (
+            ("Google Chrome for Testing.app", "Contents", "MacOS", "Google Chrome for Testing"),
+            (
+                "chrome-mac-arm64", "Google Chrome for Testing.app", "Contents", "MacOS",
+                "Google Chrome for Testing",
+            ),
+            (
+                "chrome-mac-x64", "Google Chrome for Testing.app", "Contents", "MacOS",
+                "Google Chrome for Testing",
+            ),
+        )
+    elif sys.platform == "linux":
+        executable_paths = (("chrome",), ("chrome-linux64", "chrome"))
+    elif sys.platform == "win32":
+        executable_paths = (("chrome.exe",), ("chrome-win64", "chrome.exe"))
+    else:
+        executable_paths = ()
+    for entry in entries:
+        if not entry.startswith("chrome-"):
+            continue
+        for relative_path in executable_paths:
+            executable = os.path.join(root, entry, *relative_path)
+            if os.path.isfile(executable) and (os.name == "nt" or os.access(executable, os.X_OK)):
+                return True
+    return False
 
 
 def _chromium_installed() -> bool:

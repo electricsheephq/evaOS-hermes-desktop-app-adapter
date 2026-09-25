@@ -14,6 +14,8 @@ import time
 from unittest.mock import MagicMock, patch
 
 from cli import HermesCLI
+from hermes_cli.cli_modal_mixin import _TIMED_OUT
+from tools.clarify_tool import TIMEOUT_RESPONSE
 
 
 def _make_cli_stub():
@@ -236,6 +238,12 @@ class TestClarifyBatchPanel:
         cli._clarify_state["response_queue"].put("a")
         thread.join(timeout=2)
         assert result["value"] == "a"
+
+    def test_single_question_timeout_returns_canonical_sentinel(self):
+        cli = _make_cli_stub()
+        cli._poll_modal_queue = MagicMock(return_value=_TIMED_OUT)
+
+        assert cli._clarify_callback("Pick?", ["a", "b"]) == TIMEOUT_RESPONSE
 
 
 class TestClarifyBatchNavigation:

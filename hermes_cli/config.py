@@ -2159,7 +2159,12 @@ def _merge_managed_overlay(expanded: Dict[str, Any]) -> Tuple[Dict[str, Any], An
     if isinstance(managed_normalized.get("model"), str):
         managed_normalized = dict(managed_normalized)
         managed_normalized["model"] = {"default": managed_normalized["model"]}
-    return _deep_merge(expanded, managed_scope.expand_managed_config(managed_normalized)), managed_config
+    managed_expanded = managed_scope.expand_managed_config(managed_normalized)
+    merged = _deep_merge(expanded, managed_expanded)
+    selection = managed_scope.compose_plugin_selection(expanded, managed_expanded)
+    if selection is not None:
+        merged.setdefault("plugins", {}).update(selection)
+    return merged, managed_config
 
 
 def _load_config_impl(*, want_deepcopy: bool) -> Dict[str, Any]:
@@ -2272,10 +2277,27 @@ _FALLBACK_COMMENT = """
 """
 
 
-def _strip_managed_keys_for_save(config: Dict[str, Any]) -> Dict[str, Any]:
+def _strip_managed_keys_for_save(
+    config: Dict[str, Any], *, merge_existing: bool
+) -> Dict[str, Any]:
     """Drop every leaf the managed layer pins (bulk safety net; single-key ``config set``
     hard-rejects) and tell the user what was not saved."""
+    managed_config = managed_scope.load_managed_config()
     managed_keys = managed_scope.managed_config_keys()
+    if not managed_keys:
+        return config
+    managed_expanded = managed_scope.expand_managed_config(managed_config)
+    config = managed_scope.plugin_selection_for_save(
+        config,
+        managed_expanded,
+        read_raw_config(),
+        preserve_missing=merge_existing,
+    )
+    managed_plugins = managed_config.get("plugins") if isinstance(managed_config, dict) else None
+    if isinstance(managed_plugins, dict):
+        managed_keys -= {
+            f"plugins.{key}" for key in ("enabled", "disabled") if key in managed_plugins
+        }
     if not managed_keys:
         return config
     config, _stripped = _strip_dotted_keys(copy.deepcopy(config), managed_keys)
@@ -2311,7 +2333,7 @@ def save_config(
             managed_error("save configuration")
             return
 
-        config = _strip_managed_keys_for_save(config)
+        config = _strip_managed_keys_for_save(config, merge_existing=merge_existing)
 
         ensure_hermes_home()
         config_path = get_config_path()

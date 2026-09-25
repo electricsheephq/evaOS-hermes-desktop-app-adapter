@@ -14,6 +14,7 @@ import threading
 import time as _time
 
 from hermes_cli.callbacks import prompt_for_secret
+from tools.clarify_tool import TIMEOUT_RESPONSE
 from typing import Optional
 
 _TIMED_OUT = object()  # sentinel returned by _poll_modal_queue when the deadline passes
@@ -29,11 +30,6 @@ _APPROVAL_OUTCOME_LABELS = {
     "session": "allowed for session",
     "always": "added to allowlist",
     "deny": "denied"}
-
-_CLARIFY_TIMEOUT_REPLY = (
-    "The user did not provide a response within the time limit. "
-    "Use your best judgement to make the choice and proceed.")
-
 
 def _approval_gate_on(key: str) -> bool:
     """Read ``approvals.<key>`` (default on); any load failure keeps the prompt enabled."""
@@ -574,7 +570,7 @@ class CLIModalMixin:
     def _clarify_callback(self, question, choices, multi_select=False, questions=None):
         """Clarify-tool platform callback (agent thread): show the selection UI (or freetext for
         open-ended questions) and block until the key bindings answer or the timeout dismisses it
-        (the agent is then told to decide). ``multi_select`` shows checkboxes (Space toggles).
+        (the agent is then told to wait and ask again). ``multi_select`` shows checkboxes (Space toggles).
         A non-empty ``questions`` list switches to the batch panel and returns
         ``{"answers": {qid: raw}}`` (plus ``"timed_out": True`` on a partial deadline expiry).
 
@@ -610,8 +606,8 @@ class CLIModalMixin:
             self._persist_prompt_summary("?", "Clarify", question, str(result))
             return result
         self._clarify_teardown()
-        _cprint(f"\n{_DIM}(clarify timed out after {timeout}s — agent will decide){_RST}")
-        return _CLARIFY_TIMEOUT_REPLY
+        _cprint(f"\n{_DIM}(clarify timed out after {timeout}s — still waiting for your answer){_RST}")
+        return TIMEOUT_RESPONSE
 
     # --- Batch clarify (multi-question, issue #18450) -----------------------
     def _clarify_batch_set_active(self, state, index) -> None:

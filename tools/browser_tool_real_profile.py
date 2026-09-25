@@ -137,6 +137,19 @@ def _real_profile_unsupported_reason(browser) -> Optional[str]:
     return None
 
 
+def _has_local_desktop_browser_profile() -> bool:
+    """Whether any supported stable Chromium profile exists on this host."""
+    from hermes_cli.browser_connect import real_profile_data_dir
+
+    return any(
+        path and os.path.isdir(path)
+        for path in (
+            real_profile_data_dir(name)
+            for name in ("chrome", "edge", "brave", "brave-origin", "chromium")
+        )
+    )
+
+
 def _real_profile_snapshot_error(err: str) -> str:
     """User-facing message for a failed profile snapshot; a locked profile adds the approved-close
     command, which the agent must ASK the user about first (it quits their browser)."""
@@ -258,6 +271,14 @@ def _real_profile_cdp() -> tuple:
         _bt._real_profile_cdp_cache.pop("cdp", None)
 
         browser = detect_default_chromium()
+        if browser is None and not _has_local_desktop_browser_profile():
+            if not _bt._real_profile_cdp_cache.get("missing_profile_warned"):
+                _bt.logger.warning(
+                    "browser.use_real_profile is on, but this host has no desktop Chromium profile; "
+                    "continuing with the normal browser backend"
+                )
+                _bt._real_profile_cdp_cache["missing_profile_warned"] = True
+            return None, None
         unsupported = _real_profile_unsupported_reason(browser)
         if unsupported:
             return None, unsupported

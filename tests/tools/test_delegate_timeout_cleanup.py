@@ -8,6 +8,9 @@ from types import SimpleNamespace
 from tools import delegate_tool
 
 
+_FIXTURE_SYNC_TIMEOUT_SECONDS = 30.0
+
+
 class _SlowUnwindingChild:
     def __init__(self) -> None:
         self.tool_progress_callback = None
@@ -31,13 +34,11 @@ class _SlowUnwindingChild:
 
     def run_conversation(self, **_kwargs):
         self.started.set()
-        assert self.interrupted.wait(timeout=1)
+        assert self.interrupted.wait(timeout=_FIXTURE_SYNC_TIMEOUT_SECONDS)
         # Model the real child turn's finally path: it still performs session
         # activity/SQLite cleanup after the parent requests interruption.
         self.unwinding.set()
-        # Keep the synthetic worker alive until the parent assertion releases
-        # it, even when CI scheduling delays the parent beyond two seconds.
-        assert self.allow_finish.wait(timeout=30)
+        assert self.allow_finish.wait(timeout=_FIXTURE_SYNC_TIMEOUT_SECONDS)
         self.finished.set()
         return {
             "final_response": "",
@@ -78,15 +79,15 @@ def test_timeout_does_not_close_child_while_worker_is_unwinding(monkeypatch):
     )
 
     assert result["status"] == "timeout"
-    assert child.unwinding.wait(timeout=1)
+    assert child.unwinding.wait(timeout=_FIXTURE_SYNC_TIMEOUT_SECONDS)
     try:
         assert not child.closed.is_set(), (
             "timed-out child.close() ran before its conversation thread unwound"
         )
     finally:
         child.allow_finish.set()
-    assert child.finished.wait(timeout=1)
-    assert child.closed.wait(timeout=1)
+    assert child.finished.wait(timeout=_FIXTURE_SYNC_TIMEOUT_SECONDS)
+    assert child.closed.wait(timeout=_FIXTURE_SYNC_TIMEOUT_SECONDS)
     assert not child.close_while_running, (
         "timed-out child.close() raced its still-running conversation thread"
     )

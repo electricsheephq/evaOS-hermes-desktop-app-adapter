@@ -666,6 +666,11 @@ _CLARIFY_NON_RESPONSE_PREFIXES = (
     "The user did not provide a response", "[user did not respond",
     "[clarify prompt could not be delivered", "[oneshot mode:",
 )
+_CLARIFY_TIMEOUT_GUIDANCE = (
+    "continue only reversible work inside this conversation; "
+    "do not affect anyone outside it; say you are still waiting and ask again"
+)
+_CLARIFY_TIMEOUT_SUMMARY = f"[clarify] user did not answer; {_CLARIFY_TIMEOUT_GUIDANCE}"
 
 
 def _is_clarify_non_response_sentinel(response: Any) -> bool:
@@ -675,6 +680,10 @@ def _is_clarify_non_response_sentinel(response: Any) -> bool:
     misattributes a user answer)."""
     items = [response] if isinstance(response, str) else response if isinstance(response, list) else ()
     return any(isinstance(s, str) and s.lstrip().startswith(_CLARIFY_NON_RESPONSE_PREFIXES) for s in items)
+
+
+def _is_canonical_clarify_timeout(response: Any) -> bool:
+    return isinstance(response, str) and response.lstrip().startswith(_CLARIFY_NON_RESPONSE_PREFIXES[0])
 
 
 # Ghost-skill defense: the ONE canonical prune marker; emit sites and presence
@@ -1459,6 +1468,10 @@ def _sum_clarify(name, args, content, content_len, line_count):
     truncation_marker = "...[truncated]"
     parsed = _json_dict(content)
     response = parsed.get("user_response")
+    timed_out = _is_canonical_clarify_timeout(response) or (
+        parsed.get("timed_out") is True
+        and _is_canonical_clarify_timeout(parsed.get("timeout_guidance"))
+    )
     # Batch clarify (``questions=[...]``) nests each answer inside ``responses[].user_response``
     # rather than the top level; without this every batch answer was lost and the summarizer only
     # saw "asked user a question" (#106077).
@@ -1479,6 +1492,20 @@ def _sum_clarify(name, args, content, content_len, line_count):
     is_answer_shaped = (isinstance(response, str) and bool(response)) or (
         isinstance(response, list) and bool(response) and all(isinstance(s, str) and s for s in response)
     )
+    if timed_out:
+        # Keep answers locked before a later batch timeout, then preserve the no-consent boundary.
+        if is_answer_shaped and not _is_clarify_non_response_sentinel(response):
+            serialized = json.dumps(response, ensure_ascii=False).encode(
+                "utf-8", errors="backslashreplace"
+            ).decode("utf-8")
+            prefix = "[clarify] user answered before timeout: "
+            suffix = "; " + _CLARIFY_TIMEOUT_GUIDANCE
+            answer_budget = max_summary_chars - len(prefix) - len(suffix)
+            if len(serialized) > answer_budget:
+                serialized = serialized[: answer_budget - len(truncation_marker)].rstrip() + truncation_marker
+            return prefix + serialized + suffix
+        # Preserve the no-consent boundary below the shared prune floor so later passes keep it.
+        return _CLARIFY_TIMEOUT_SUMMARY
     # Timeout / no-user sentinel prose must not be quoted as a user answer.
     if is_answer_shaped and not _is_clarify_non_response_sentinel(response):
         # Escape lone UTF-16 surrogates so the message stays UTF-8/SQLite safe.
@@ -1673,6 +1700,12 @@ Describe agent/tool work only as completed actions, state, or historical work.]"
         "resolved_questions": "[Write exactly: None. No user-authored questions exist.]",
     },
 }
+
+
+def _effective_input_window(context_length: int, max_tokens: int | None = None) -> int:
+    """Return the provider's usable input window, preserving over-reservation fallback."""
+    effective_window = context_length - (max_tokens or 0)
+    return context_length if effective_window <= 0 else effective_window
 
 
 class ContextCompressor(SummaryDispatchMixin, MicroCompactionMixin, ContextEngine):
@@ -2277,9 +2310,7 @@ class ContextCompressor(SummaryDispatchMixin, MicroCompactionMixin, ContextEngin
         the degenerate-window check below both operate on the effective input budget. ``max_tokens=None``
         (provider default) conservatively assumes no reservation (full window).
         """
-        effective_window = context_length - (max_tokens or 0)
-        if effective_window <= 0:
-            effective_window = context_length
+        effective_window = _effective_input_window(context_length, max_tokens)
         pct_value = int(effective_window * threshold_percent)
         floored = max(pct_value, MINIMUM_CONTEXT_LENGTH)
         # The floor must not consume output headroom: cap at 85% when it is the binding term. Near-minimum windows

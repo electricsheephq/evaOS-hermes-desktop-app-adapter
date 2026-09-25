@@ -13,6 +13,37 @@ from agent.session_activity import ActivityProvenance
 logger = logging.getLogger("run_agent")
 
 
+def _overflow_warning_moot_after_compaction(agent, preflight_tokens: int) -> bool:
+    """True when a compaction just succeeded and its result fits the effective input window.
+
+    ``CONTEXT_OVERFLOW_BLOCKED_WARNING_TEMPLATE`` measures against the COMPRESSION THRESHOLD,
+    which is a fraction of the window (35% on many models). A successful compaction arms the
+    anti-thrash breaker, so a result that is over the threshold but inside the effective input window
+    told the user "The model may stop responding" about a context the model answers fine. Only a
+    result still at or past the effective input window keeps that failure-class warning; the dedup key is left
+    unset by the caller so a genuinely over-window turn can still warn. Module-level and fully
+    getattr-guarded: test doubles built via ``object.__new__``/``SimpleNamespace`` carry neither
+    the method nor a compressor, and must keep today's behaviour.
+    """
+    compressor = getattr(agent, "context_compressor", None)
+    if not getattr(compressor, "awaiting_real_usage_after_compression", False):
+        return False
+    context_length = getattr(compressor, "context_length", None)
+    if not isinstance(context_length, int) or context_length <= 0:
+        return False
+    from agent.context_compressor import _effective_input_window
+
+    effective_window = _effective_input_window(context_length, getattr(compressor, "max_tokens", None))
+    if preflight_tokens >= effective_window:
+        return False
+    logger.info(
+        "Compaction ran; ~%s tokens is over the compression threshold but within the model's "
+        "%s-token effective input window — not warning about a stalled model.",
+        preflight_tokens, effective_window,
+    )
+    return True
+
+
 class StatusOutputMixin:
     """Status/warning/notice emission and retry-chatter buffering (see module docstring)."""
 
@@ -87,12 +118,14 @@ class StatusOutputMixin:
         _warn_key = ("ctx_overflow_blocked", _warn_kind)
         if getattr(self, "_last_ctx_overflow_warn", None) == _warn_key:
             return
-        self._last_ctx_overflow_warn = _warn_key
         from agent.conversation_compression import CONTEXT_OVERFLOW_BLOCKED_WARNING_TEMPLATE
 
         # cooldown + anti-thrash (ineffective) are both "compression blocked".
         if _warn_kind in ("cooldown", "ineffective"):
             self._touch_activity(f"compression blocked ({reason})", provenance=ActivityProvenance.AGENT_COMPRESSION_COOLDOWN)
+        if _overflow_warning_moot_after_compaction(self, preflight_tokens):
+            return
+        self._last_ctx_overflow_warn = _warn_key
         self._emit_warning(CONTEXT_OVERFLOW_BLOCKED_WARNING_TEMPLATE.format(
             tokens=preflight_tokens, threshold=threshold_tokens, reason=reason,
         ))

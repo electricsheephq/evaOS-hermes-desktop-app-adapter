@@ -184,7 +184,7 @@ DEFAULT_CONFIG = {
         # Inactivity warning (seconds), once per run before gateway_timeout; no interrupt. 0 = off.
         "gateway_timeout_warning": 900,
         # Max seconds the gateway blocks an agent awaiting a clarify-tool reply; then it unblocks
-        # with "[user did not respond within Xm]". CLI clarify blocks indefinitely and ignores this.
+        # with the canonical clarify timeout response. CLI clarify blocks indefinitely and ignores this.
         # 1h because users step away and a shorter value evicted the entry mid-think so a later
         # button tap hit a dead entry. Lower it to free the running-agent guard sooner.
         # Maximum time (seconds) the gateway will block an agent waiting for a clarify-tool response from

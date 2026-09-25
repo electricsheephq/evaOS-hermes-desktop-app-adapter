@@ -336,7 +336,12 @@ class MCPServerTransportMixin:
             from tools.mcp_oauth_manager import get_manager
             return get_manager().get_or_build_provider(self.name, url, config.get("oauth"))
         except Exception as exc:
-            logger.warning("MCP OAuth setup failed for '%s': %s", self.name, exc)
+            # An `auth: oauth` server with no usable cached tokens fails HERE on every timed
+            # self-probe, before the park is logged, so this warning repeats on the same interval
+            # (#337: two WARNINGs per cycle were measured, not one). Follow the episode latch
+            # without claiming it, so the park message below still carries the episode's WARNING.
+            log = logger.debug if self._parked_log_key is not None else logger.warning
+            log("MCP OAuth setup failed for '%s': %s", self.name, exc)
             raise
 
     def _sse_transport(self, url: str, headers: dict, connect_timeout: float,

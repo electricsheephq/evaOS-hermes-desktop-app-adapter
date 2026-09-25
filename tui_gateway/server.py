@@ -26,6 +26,7 @@ from hermes_constants import (
     get_hermes_home, get_hermes_home_override, profile_name_for_home,
     reset_hermes_home_override, set_hermes_home_override)
 from hermes_cli.env_loader import load_hermes_dotenv
+from hermes_cli.managed_profile_scope import ManagedProfileScopeError
 from utils import is_truthy_value
 from tools.environments.local import hermes_subprocess_env
 from agent.replay_cleanup import sanitize_replay_history
@@ -784,6 +785,12 @@ def handle_request(req: dict) -> dict | None:
     token = _current_rpc_method.set(method)
     try:
         return fn(rid, params)
+    except ManagedProfileScopeError as exc:
+        # A request naming a profile outside this managed gateway's scope is a refusal, not a
+        # server fault. Mirrors the dashboard's 403 in hermes_cli.web_server_profiles
+        # ._managed_profile_or_http; without this the PermissionError escaped the handler and
+        # the ws read loop answered a generic -32603 "internal error" plus a logged traceback.
+        return _err(rid, 4030, str(exc) or "profile is not authorized")
     finally:
         _current_rpc_method.reset(token)
 
@@ -1302,7 +1309,8 @@ def _enable_gateway_prompts() -> None:
 
 
 # Blocking bridges whose `*.respond` tolerates a late reply (allow_expired=True): on timeout the tool
-# returns empty, but a slow renderer could still answer and hit a raw 4009 — `.expire` tears the card down.
+# returns empty (or clarify's canonical sentinel), but a slow renderer could still answer and hit a raw
+# 4009 — `.expire` tears the card down.
 _EXPIRING_REQUESTS = frozenset({
     "secret.request", "sudo.request", "vault.unlock.request", "vault.save_login.request", "vault.code.request", "clarify.request",
     "terminal.read.request",
@@ -1375,6 +1383,9 @@ def _block(
         return json.dumps(result, ensure_ascii=False)
     if not answered and not answer_present and event in _EXPIRING_REQUESTS:
         expire()
+    if not answered and not answer_present and event == "clarify.request":
+        from tools.clarify_tool import TIMEOUT_RESPONSE
+        return TIMEOUT_RESPONSE
     return answer
 
 
