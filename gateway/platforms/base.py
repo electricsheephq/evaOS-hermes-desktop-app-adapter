@@ -3505,6 +3505,7 @@ class BasePlatformAdapter(ABC):
         """Process an incoming message; returns quickly by spawning a background
         task so new messages (and interrupts) can arrive while an agent runs."""
         event._gateway_accepted = False
+        event._gateway_route_mismatch = False
         if not self._message_handler:
             return
         if event.allow_gateway_control:
@@ -3517,9 +3518,15 @@ class BasePlatformAdapter(ABC):
             await asyncio.to_thread(self._apply_topic_recovery, event)
         session_key = self._event_session_key(event)
         if expected_session_key and session_key != expected_session_key:
-            logger.warning("Dropping internally routed event: expected session=%s derived=%s",
-                           expected_session_key, session_key)
-            return
+            try:
+                store_key = self._session_store._generate_session_key(event.source) if event.internal else None
+            except Exception:
+                store_key = None
+            if store_key != expected_session_key:
+                event._gateway_route_mismatch = True
+                logger.warning("Dropping internally routed event: expected session=%s derived=%s store=%s",
+                               expected_session_key, session_key, store_key)
+                return
         # On-entry self-heal: clear a guard whose owner task already exited.
         if session_key in self._active_sessions:
             self._heal_stale_session_lock(session_key)
@@ -3561,14 +3568,32 @@ class BasePlatformAdapter(ABC):
         # blocked on Event.wait, message must reach the resolver before being a new turn.
         # See #4926.
         if not cmd and event.allow_gateway_control:
+            # The waiter is registered under the key the gateway resolver rebuilds
+            # (SessionStore, after the profile stamp).  The adapter's own key can differ:
+            # the store reads the gateway-wide isolation flags while the adapter reads its
+            # own ``config.extra``.  Probe BOTH -- a miss queues the answer and the turn
+            # blocks until the clarify times out, which is the bug this guards.
+            _clarify_hit_key = None
             try:
                 from tools import clarify_gateway as _clarify_mod
-                _has_text_clarify = _clarify_mod.get_pending_for_session(
-                    session_key, include_choice_prompts=True) is not None
+                if _clarify_mod.get_pending_for_session(
+                        session_key, include_choice_prompts=True) is not None:
+                    _clarify_hit_key = session_key
+                else:
+                    _clarify_store = getattr(self, "_session_store", None)
+                    _store_key = (
+                        _clarify_store._generate_session_key(event.source)
+                        if _clarify_store is not None else None
+                    )
+                    if (_store_key and _store_key != session_key
+                            and _clarify_mod.get_pending_for_session(
+                                _store_key, include_choice_prompts=True) is not None):
+                        _clarify_hit_key = _store_key
             except Exception:
-                _has_text_clarify = False
-            if _has_text_clarify:
-                logger.debug("[%s] Routing message to clarify text-intercept for %s", self.name, session_key)
+                logger.debug("[%s] Clarify bypass probe failed", self.name, exc_info=True)
+            if _clarify_hit_key is not None:
+                logger.debug("[%s] Routing message to clarify text-intercept for %s (event key %s)",
+                             self.name, _clarify_hit_key, session_key)
                 try:
                     await self._dispatch_inline_reply(event)
                 except Exception as e:

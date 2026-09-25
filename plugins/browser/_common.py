@@ -16,6 +16,29 @@ from agent.browser_provider import BrowserProvider
 _CLOSE_OK = {200, 201, 204}
 
 
+def _response_error_code(response: requests.Response) -> str:
+    """Return a bounded provider error code without exposing the response body."""
+    try:
+        payload = response.json()
+    except (ValueError, TypeError):
+        payload = {}
+    code = payload.get("code") if isinstance(payload, dict) else None
+    if not code and isinstance(payload, dict) and isinstance(payload.get("error"), dict):
+        code = payload["error"].get("code")
+    raw = str(code or f"http_{response.status_code}").strip()
+    value = "".join(char for char in raw if char.isalnum() or char in "._-")
+    return value[:128] or f"http_{response.status_code}"
+
+
+class CloudBrowserAPIError(RuntimeError):
+    """Sanitized cloud-browser HTTP error with machine-readable retry metadata."""
+
+    def __init__(self, message: str, *, status_code: int, code: str) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.code = code
+
+
 class CloudBrowserProvider(BrowserProvider):
     """Subclasses set ``provider_id``/``label``, ``release_method``/``release_path`` (``{session_id}``
     placeholder appended to ``config["base_url"]``), implement ``_get_config_or_none()`` and
@@ -90,9 +113,13 @@ class CloudBrowserProvider(BrowserProvider):
 
     def _check_created(self, response: requests.Response) -> None:
         if not response.ok:
-            raise RuntimeError(
+            code = _response_error_code(response)
+            raise CloudBrowserAPIError(
                 f"Failed to create {self.label}{self.create_label_suffix} session: "
-                f"{response.status_code} {response.text}")
+                f"HTTP {response.status_code} (code: {code})",
+                status_code=response.status_code,
+                code=code,
+            )
 
     def close_session(self, session_id: str) -> bool:
         try:

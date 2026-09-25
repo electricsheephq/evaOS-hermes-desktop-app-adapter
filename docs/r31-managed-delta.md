@@ -157,3 +157,48 @@ The same implementation checker pair then found that scoped registry/approval me
 Root integration additionally found that profile-scoped shutdown cleared the other profile's retry state. `tests/tools/test_mcp_profile_shutdown.py` failed at `4c9aa95110feda2ad881ffcf448f3362a5b9110b` and passed after scoped selection was restored. It proves selected task removal, the other task/cooldowns untouched, and unchanged global clear-all behavior. At integrated source `8263285980f368e60a8f491e4fc76b87eff3e867`, root re-ran the two focused files serially: 3/3 in 0.8s and 1/1 in 0.6s. Successor exact-head CI and the same checker pair remain required before merge; no app or runtime action was used as this source proof.
 
 These are pre-freeze focused receipts on the correction worktree, not final exact-head CI, review, release or runtime proof. The PR supplies the frozen correction identity and subsequent checks. The unused media-grant codec is retained; optional deletion is not a release requirement. The selected-main browser/apple-touch favicon is retained; it is not the macOS bundle icon. Independent implementation review and the protected canary remain PENDING. Final CI and the release packet must bind the frozen merged tree and final bytes.
+
+## r33.2 picks
+
+Runtime patch release r33.2 on top of the r33.0 pin
+`c942c70c6f463f8692c3d0053a1626d86e6f10f6`, per `docs/architecture/upstream-sync-cadence.md`
+amendment rule 2 (between-pin patch release = cherry-pick critical fixes onto the
+current pinned tree). Each upstream PR was rebase-merged upstream as several
+commits; the whole PR range is squashed into one commit here, with a
+`(cherry picked from commit …)` trailer per upstream commit.
+
+| Upstream PR | Commit | Files |
+|---|---|---|
+| 110544 | `8a50bffb5f` | `hermes_state.py`, `hermes_state_dbfile.py`, `hermes_state_lockguard.py`, `tests/hermes_state/test_deleted_wal_generation_guard.py`, `tests/hermes_state/test_wal_lock_guard.py` |
+| 112293 | `b23c5c51db` | `hermes_cli/plugins_cmd.py`, `hermes_cli/plugins_discovery.py`, `hermes_cli/web_server_dashboard.py`, `plugins/memory/__init__.py`, `plugins/plugin_loader.py`, `tests/hermes_cli/test_plugins_cmd_list.py`, `tests/hermes_cli/test_web_server.py`, `tests/plugins/memory/test_discovery_sources.py`, `tests/plugins/test_plugin_loader_unreadable.py` (the PR's two `apps/desktop/electron/desktop-plugins-root.*` hunks are omitted: this release does not touch `apps/`) |
+| 113261 | `b6ea99dc54` | `tools/browser_use_cli.py`, `tests/tools/test_browser_use_cli.py` |
+| 114220 | `8890182e02` | `tools/binary_extensions.py`, `tools/file_operations.py`, `tools/file_tools_write_guards.py`, `tests/tools/test_binary_document_write_guard.py` |
+| 114897 | `092d706e3a` | `tools/browser_supervisor.py`, `tests/tools/test_browser_supervisor_reconnect.py`, `website/docs/developer-guide/browser-supervisor.md` |
+| 115408 | `a690394abc` | `hermes_state_repair.py`, `tests/test_sqlite_lock_safe_inspection.py`, `tests/test_state_db_write_durability.py` |
+| 115358 | `e7fd699335` | `hermes_state_telegram.py`, `tests/hermes_state/test_telegram_topic_selfheal.py` |
+| 116654 | `99147f878d` | `gateway/run_startup.py`, `tests/gateway/test_restart_resume_pending.py` |
+| 116747 | `3ff4dbbcbf` | `hermes_state_dbfile.py`, `tests/hermes_state/test_deleted_wal_generation_guard.py` |
+| 116743 | `48378d12ca` | `tools/kanban_tools.py`, `tests/tools/test_kanban_tools.py`, `tests/hermes_cli/test_kanban_notify.py` |
+| 116999 | `2b18b8855b` | `cron/scheduler.py`, `gateway/run_shutdown.py`, `tests/gateway/test_restart_drain.py`, `website/docs/getting-started/updating.md` |
+| 117039 | `6630c05e5f` | `tools/browser_tool_session.py`, `tests/tools/test_browser_suspect_recycle.py` |
+| WAL lifecycle follow-up (`274fd56dca`) | `52f5d8f951` | `hermes_state.py`, `hermes_state_dbfile.py`, `hermes_state_lockguard.py`, `tests/hermes_state/test_wal_lock_guard_lifecycle.py` |
+
+Own fixes in the same release:
+
+| Fix | Commit | Files |
+|---|---|---|
+| Telegram polling-error log redaction | `22b50023c0` | `plugins/platforms/telegram/adapter.py`, `tests/gateway/test_telegram_error_redaction.py` |
+| Typed `4030` refusal for an out-of-scope profile on the ws path | `1108e3353e` | `tui_gateway/server.py`, `tests/tui_gateway/test_managed_profile_scope_rpc_refusal.py` |
+| No stall warning when compaction already cleared the model window | `4b3997e751` | `agent/status_output.py`, `tests/agent/test_context_overflow_warning_after_compaction.py` |
+| Atomic browser-supervisor self-removal | `77f26c1a58` | `tools/browser_supervisor.py`, `tests/tools/test_browser_supervisor_reconnect.py` |
+| Effective input-window warning correction | `34ac06417e` | `agent/context_compressor.py`, `agent/status_output.py`, `tests/agent/test_context_overflow_warning_after_compaction.py` |
+
+Not picked, and why: **110213** and **115983** and **116712** and **113789** each
+need upstream code this pin does not carry — 110213 wants the
+`gateway/platforms/_shared.py` gate-helper consolidation that our per-profile
+`_platform_gate_env` predates; 115983 and 116712 are written against a later
+`tools/mcp_tool_server_run.py` run loop (`proof_at`, a `self-probe` wait outcome,
+`_park_reason`) whose revival path our `evaos_lease` MCP auth also uses; 113789
+softens a cron `enabled_toolsets` MCP preflight block that does not exist here, so
+picking it would ADD a new way for a cron job to be marked `blocked_config`.
+116712 is the one Tier-A pick not carried.

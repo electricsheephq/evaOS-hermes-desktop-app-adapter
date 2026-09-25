@@ -1,7 +1,37 @@
 """Unit tests for hermes_cli.managed_scope (resolver + loaders + key helpers)."""
 import textwrap
+from types import SimpleNamespace
 
 import pytest
+
+
+def test_operator_owned_fails_closed_off_posix(monkeypatch):
+    from hermes_cli import managed_scope
+
+    manifest = SimpleNamespace(source="user", path="/managed/plugin")
+    monkeypatch.setattr(managed_scope.os, "name", "nt")
+    monkeypatch.setattr(
+        managed_scope.os,
+        "lstat",
+        lambda _path: pytest.fail("lstat must not run off POSIX"),
+    )
+
+    assert managed_scope._operator_owned(manifest) is False
+
+
+def test_operator_owned_uses_symlink_ownership(monkeypatch):
+    from hermes_cli import managed_scope
+
+    manifest = SimpleNamespace(source="user", path="/managed/plugin")
+    monkeypatch.setattr(managed_scope.os, "name", "posix")
+    monkeypatch.setattr(
+        managed_scope.os, "lstat", lambda _path: SimpleNamespace(st_uid=1000)
+    )
+    monkeypatch.setattr(
+        managed_scope.os, "stat", lambda _path: SimpleNamespace(st_uid=0)
+    )
+
+    assert managed_scope._operator_owned(manifest) is False
 
 
 # ── Directory resolver ───────────────────────────────────────────────────────

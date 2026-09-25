@@ -23,6 +23,8 @@ PR #25182.
 """
 from __future__ import annotations
 
+from unittest.mock import Mock, patch
+
 import pytest
 
 
@@ -148,6 +150,56 @@ class TestBundledPluginsRegister:
         )
 
 
+class TestBrowserbaseLiveView:
+    @pytest.mark.parametrize(
+        "base_url,payload,expected",
+        [
+            (
+                "https://broker.example",
+                {"liveViewUrl": "https://watch.example/broker"},
+                "https://watch.example/broker",
+            ),
+            (
+                "https://api.browserbase.com",
+                {"debuggerFullscreenUrl": "https://watch.example/direct"},
+                "https://watch.example/direct",
+            ),
+        ],
+    )
+    def test_reads_broker_and_direct_live_view_shapes(self, base_url, payload, expected):
+        from plugins.browser.browserbase.provider import BrowserbaseBrowserProvider
+
+        provider = BrowserbaseBrowserProvider()
+        response = Mock(ok=True, status_code=200)
+        response.json.return_value = payload
+        config = {"api_key": "fake-key", "project_id": "fake-project", "base_url": base_url}
+        with patch.object(provider, "_get_config", return_value=config), \
+             patch("requests.get", return_value=response) as get:
+            url = provider.get_live_view_url("session-1")
+
+        assert url == expected
+        get.assert_called_once_with(
+            f"{base_url}/v1/sessions/session-1/debug",
+            headers={"Content-Type": "application/json", "X-BB-API-Key": "fake-key"},
+            timeout=10,
+        )
+
+    def test_create_error_exposes_code_without_response_body(self):
+        from plugins.browser._common import CloudBrowserAPIError
+        from plugins.browser.browserbase.provider import BrowserbaseBrowserProvider
+
+        response = Mock(ok=False, status_code=429, text="upstream body must stay private")
+        response.json.return_value = {"code": "browser_capacity", "detail": "private detail"}
+
+        with pytest.raises(CloudBrowserAPIError) as raised:
+            BrowserbaseBrowserProvider()._check_created(response)
+
+        assert raised.value.code == "browser_capacity"
+        assert raised.value.status_code == 429
+        assert "browser_capacity" in str(raised.value)
+        assert "upstream body" not in str(raised.value)
+        assert "private detail" not in str(raised.value)
+
 
 # ---------------------------------------------------------------------------
 # is_available() behavior
@@ -254,5 +306,3 @@ class TestPickerIntegration:
         rows = _plugin_browser_providers()
         names = sorted(r.get("browser_provider") for r in rows)
         assert names == ["browserbase", "firecrawl"]
-
-

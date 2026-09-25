@@ -32,4 +32,7 @@ def build_security_parser(subparsers, *, cmd_security: Callable) -> None:
     audit_parser.add_argument(
         "--skip-mcp", action="store_true", help="Skip scanning pinned MCP servers in config.yaml")
     audit_parser.set_defaults(func=cmd_security)
+    review_parser = security_subparsers.add_parser(
+        "review", help="Statically review installed plugins, skills, and MCP servers")
+    review_parser.set_defaults(func=cmd_security)
     security_parser.set_defaults(func=cmd_security)

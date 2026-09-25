@@ -41,6 +41,22 @@ def nested_plugin_env(tmp_path):
     return tmp_path
 
 
+@pytest.fixture
+def managed_plugin_policy(tmp_path, monkeypatch):
+    from hermes_cli import managed_scope
+
+    managed_dir = tmp_path / "managed"
+    managed_dir.mkdir()
+    (managed_dir / "config.yaml").write_text(
+        "plugins:\n  enabled: [required]\n  disabled: [blocked]\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HERMES_MANAGED_DIR", str(managed_dir))
+    managed_scope.invalidate_managed_cache()
+    yield
+    managed_scope.invalidate_managed_cache()
+
+
 # ---------------------------------------------------------------------------
 # _resolve_plugin_key
 # ---------------------------------------------------------------------------
@@ -84,14 +100,74 @@ class TestResolvePluginKey:
 
 
 class TestEnableDisableNested:
+    def test_disable_then_enable_persists_profile_selection(
+        self, tmp_path, monkeypatch, managed_plugin_policy
+    ):
+        from hermes_cli import plugins, plugins_cmd
+        from hermes_cli.config import read_raw_config
+
+        home = tmp_path / "home"
+        home.mkdir()
+        (home / "config.yaml").write_text(
+            "plugins:\n  enabled: [example]\n  disabled: []\n",
+            encoding="utf-8",
+        )
+        bundled = tmp_path / "bundled"
+        _make_plugin_dir(bundled, "example", {"name": "example", "version": "1.0.0"})
+        monkeypatch.setenv("HERMES_HOME", str(home))
+        monkeypatch.setattr(plugins, "get_bundled_plugins_dir", lambda: bundled)
+
+        plugins_cmd.cmd_disable("example")
+        plugins_cmd.cmd_enable("example")
+
+        saved = read_raw_config()["plugins"]
+        assert "example" in saved["enabled"]
+        assert "example" not in saved["disabled"]
+
+    def test_enable_managed_denied_reports_effective_state(
+        self, monkeypatch, capsys, managed_plugin_policy
+    ):
+        from hermes_cli import plugins_cmd
+
+        monkeypatch.setattr(
+            plugins_cmd,
+            "_resolve_plugin_key_and_source",
+            lambda _name: ("blocked", "bundled"),
+        )
+        monkeypatch.setattr(plugins_cmd, "_get_enabled_set", lambda: set())
+        monkeypatch.setattr(plugins_cmd, "_get_disabled_set", lambda: {"blocked"})
+        monkeypatch.setattr(plugins_cmd, "_discover_all_plugins", lambda: [])
+        monkeypatch.setattr(plugins_cmd, "_save_plugin_sets", lambda *_args: None)
+
+        plugins_cmd.cmd_enable("blocked")
+
+        output = capsys.readouterr().out
+        assert "is denied by managed policy; it stays disabled" in output
+        assert "enabled. Takes effect when the Hermes agent" not in output
+
+    def test_disable_managed_required_reports_effective_state(
+        self, monkeypatch, capsys, managed_plugin_policy
+    ):
+        from hermes_cli import plugins_cmd
+
+        monkeypatch.setattr(plugins_cmd, "_resolve_plugin_key", lambda _name: "required")
+        monkeypatch.setattr(plugins_cmd, "_get_enabled_set", lambda: {"required"})
+        monkeypatch.setattr(plugins_cmd, "_get_disabled_set", lambda: set())
+        monkeypatch.setattr(plugins_cmd, "_save_plugin_sets", lambda *_args: None)
+
+        plugins_cmd.cmd_disable("required")
+
+        output = capsys.readouterr().out
+        assert "is required by managed policy; it stays enabled" in output
+        assert "disabled. Takes effect when the Hermes agent" not in output
+
     @patch("hermes_cli.plugins.get_bundled_plugins_dir")
     @patch("hermes_cli.plugins_cmd._plugins_dir")
-    @patch("hermes_cli.plugins_cmd._save_disabled_set")
-    @patch("hermes_cli.plugins_cmd._save_enabled_set")
+    @patch("hermes_cli.plugins_cmd._save_plugin_sets")
     @patch("hermes_cli.plugins_cmd._get_disabled_set", return_value=set())
     @patch("hermes_cli.plugins_cmd._get_enabled_set", return_value=set())
     def test_enable_bare_name_writes_key(
-        self, mock_en, mock_dis, mock_save_en, mock_save_dis,
+        self, mock_en, mock_dis, mock_save,
         mock_user, mock_bundled, nested_plugin_env,
     ):
         from hermes_cli.plugins_cmd import cmd_enable
@@ -100,7 +176,7 @@ class TestEnableDisableNested:
 
         cmd_enable("trace_sink", allow_tool_override=False)  # bare name
 
-        saved = mock_save_en.call_args[0][0]
+        saved = mock_save.call_args[0][0]
         # The canonical key — NOT the bare name — must be persisted, because
         # that is what PluginManager matches when deciding to load.
         assert "observability/trace_sink" in saved
@@ -118,12 +194,11 @@ class TestEnableDisableNested:
 
     @patch("hermes_cli.plugins.get_bundled_plugins_dir")
     @patch("hermes_cli.plugins_cmd._plugins_dir")
-    @patch("hermes_cli.plugins_cmd._save_disabled_set")
-    @patch("hermes_cli.plugins_cmd._save_enabled_set")
+    @patch("hermes_cli.plugins_cmd._save_plugin_sets")
     @patch("hermes_cli.plugins_cmd._get_disabled_set", return_value=set())
     @patch("hermes_cli.plugins_cmd._get_enabled_set", return_value=set())
     def test_enable_flat_plugin_unchanged(
-        self, mock_en, mock_dis, mock_save_en, mock_save_dis,
+        self, mock_en, mock_dis, mock_save,
         mock_user, mock_bundled, nested_plugin_env,
     ):
         """Flat plugins keep writing their bare name (key == name) — no regression."""
@@ -132,7 +207,7 @@ class TestEnableDisableNested:
         mock_bundled.return_value = nested_plugin_env / "nonexistent"
 
         cmd_enable("disk-cleanup", allow_tool_override=False)
-        saved = mock_save_en.call_args[0][0]
+        saved = mock_save.call_args[0][0]
         assert "disk-cleanup" in saved
 
 
@@ -205,11 +280,10 @@ class TestCompositeMenuWritesCanonicalKey:
     name is what silently vetoed a bundled backend forever (pi314).
     """
 
-    @patch("hermes_cli.plugins_cmd._save_disabled_set")
-    @patch("hermes_cli.plugins_cmd._save_enabled_set")
+    @patch("hermes_cli.plugins_cmd._save_plugin_sets")
     @patch("hermes_cli.plugins_cmd._get_enabled_set", return_value=set())
     def test_fallback_unchecked_plugin_disables_by_key_not_name(
-        self, mock_en, mock_save_en, mock_save_dis,
+        self, mock_en, mock_save,
     ):
         from hermes_cli.plugins_cmd import _run_composite_fallback
         from rich.console import Console
@@ -227,6 +301,6 @@ class TestCompositeMenuWritesCanonicalKey:
                 set(), [], Console(),
             )
 
-        saved_dis = mock_save_dis.call_args[0][0]
+        saved_dis = mock_save.call_args[0][1]
         assert "web/firecrawl" in saved_dis      # canonical key persisted
         assert "web-firecrawl" not in saved_dis   # never the bare name
