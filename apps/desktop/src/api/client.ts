@@ -47,13 +47,21 @@ export function withDesktopUiProtocol(method: string, params: Record<string, unk
   return { ...params, desktop_ui_protocol: DESKTOP_UI_PROTOCOL }
 }
 
+export const GATEWAY_NOT_CONNECTED_MESSAGE = 'Hermes gateway is not connected'
+
 export class HermesGateway extends JsonRpcGatewayClient {
   constructor() {
     super({
       closedErrorMessage: 'Hermes gateway connection closed',
       connectErrorMessage: 'Could not connect to Hermes gateway',
       createRequestId: nextId => nextId,
-      notConnectedErrorMessage: 'Hermes gateway is not connected',
+      notConnectedErrorMessage: GATEWAY_NOT_CONNECTED_MESSAGE,
+      // The channel already answered -32603; surface the crash in devtools like the dial-failure sink.
+      onRequestHandlerError: (error, request) =>
+        console.error(`[gateway] server request handler crashed for ${request.method} (${request.id}):`, error),
+      // The channel already answered -32601; note the missing registry in devtools.
+      onUnhandledRequest: request =>
+        console.warn(`[gateway] Hermes Desktop has no server-request registry for ${request.method} (${request.id})`),
       requestTimeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS
     })
   }
@@ -100,10 +108,20 @@ export function subscribeApiRequestProfile(listener: (profile: null | string) =>
   return () => apiProfileListeners.delete(listener)
 }
 
-export function profileScoped(profile?: null | string): { profile?: string } {
+// An explicit scope (string or object, not `undefined`/`null`) is a user
+// pointing a scope selector (Settings "Applies to", Capabilities, Messaging)
+// at another profile — a visible action whose cold dial may take the pool's
+// reserved foreground slot (#111651). The ambient path and the deliberate
+// `null` → primary path stay untagged (main's background default) so
+// hydration cannot consume that slot. The tag rides on the scope helper itself
+// so no api/ helper can carry a scope without it.
+export function profileScoped(profile?: null | string): { priority?: 'foreground'; profile?: string } {
   const selected = profile === undefined ? _apiProfile : profile
 
-  return selected ? { profile: selected } : {}
+  return {
+    ...(selected ? { profile: selected } : {}),
+    ...(profile == null ? {} : { priority: 'foreground' as const })
+  }
 }
 
 /** A session's OWNER as a request scope: a profile belongs to ONE gateway, so
@@ -199,7 +217,7 @@ export function hermesApi<T>(request: HermesApiRequest): Promise<T> {
 //
 // A profile is not a machine-global name — it belongs to ONE gateway. The
 // Capabilities surface can be pointed at any (connection, profile) pair
-// (SkillsView's scope selector, Bot Mode's fixedProfile/fixedConnection), so
+// (CapabilitiesView's scope selector, Bot Mode's fixedProfile/fixedConnection), so
 // its REST helpers accept either the legacy string form or an explicit scope
 // object:
 //
@@ -217,14 +235,19 @@ export function hermesApi<T>(request: HermesApiRequest): Promise<T> {
 //     this machine (see apiRequestRegistryConnectionId in Electron main).
 export type ProfileScope = undefined | null | string | { connectionId?: null | string; profile?: null | string }
 
-export function capabilityScoped(scope?: ProfileScope): { connectionId?: string; profile?: string } {
+export function capabilityScoped(scope?: ProfileScope): {
+  connectionId?: string
+  priority?: 'foreground'
+  profile?: string
+} {
   if (scope && typeof scope === 'object') {
     const profile = (scope.profile ?? '').trim()
     const connectionId = (scope.connectionId ?? '').trim()
 
     return {
       ...(profile ? { profile } : {}),
-      ...(connectionId ? { connectionId } : {})
+      ...(connectionId ? { connectionId } : {}),
+      priority: 'foreground'
     }
   }
 

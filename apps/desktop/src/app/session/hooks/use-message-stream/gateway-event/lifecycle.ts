@@ -1,3 +1,4 @@
+import type { GatewayEvent } from '@hermes/shared'
 import type { HermesSkin } from '@hermes/shared/skin'
 
 import {
@@ -23,14 +24,16 @@ export function handleLifecycleEvent(ctx: GatewayEventContext): boolean {
   const { deps, event, payload, fromActiveSource } = ctx
 
   if (event.type === 'gateway.ready') {
+    const ready = (event as GatewayEvent<'gateway.ready'>).payload
+
     // Backends with the change watcher broadcast pet/cron/sessions change
     // events; consumers demote their legacy polls to slow backstops.
     if (fromActiveSource()) {
       // Seed only the active source's skin into the desktop theme registry
       // without applying, so a background profile socket cannot replace the
       // registry entry that later active events update.
-      ingestBackendSkin((payload as { skin?: HermesSkin } | undefined)?.skin, { apply: false })
-      setChangeEventsAvailable(Boolean((payload as { change_events?: boolean } | undefined)?.change_events))
+      ingestBackendSkin(ready?.skin, { apply: false })
+      setChangeEventsAvailable(Boolean(ready?.change_events))
     }
 
     return true

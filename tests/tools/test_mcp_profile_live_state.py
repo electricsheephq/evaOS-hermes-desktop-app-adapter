@@ -112,7 +112,7 @@ def test_real_discovery_keeps_same_name_live_connections_profile_scoped(
             scope = hermes_home_key(home)
             for tool_name in tasks[label]._registered_tool_names:
                 registry.deregister(tool_name, scope=scope)
-                registration._forget_mcp_tool_server(tool_name, registration_home=str(home.resolve()))
+                registration._forget_mcp_tool_server(tool_name)  # evaOS adaptation (r34): upstream 1-arg
         with mcp_tool._lock:
             mcp_tool._servers.clear()
             mcp_tool._server_scope_keys.clear()
@@ -222,7 +222,7 @@ def test_profile_captured_handlers_status_and_reconnect_are_owner_scoped(
             scope = hermes_home_key(home)
             for tool_name in tasks[label]._registered_tool_names:
                 registry.deregister(tool_name, scope=scope)
-                registration._forget_mcp_tool_server(tool_name, registration_home=str(home.resolve()))
+                registration._forget_mcp_tool_server(tool_name)  # evaOS adaptation (r34): upstream 1-arg
         with mcp_tool._lock:
             mcp_tool._servers.clear()
             mcp_tool._server_scope_keys.clear()

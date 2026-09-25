@@ -13,7 +13,6 @@ import {
   reviewCommitContext,
   reviewCreatePr,
   reviewDiff,
-  reviewFetchPrComment,
   reviewList,
   reviewPrList,
   reviewPush,
@@ -119,9 +118,6 @@ export function registerGitIpc({ assertLocalMutationAllowed, resolveGitBinary, r
   ipcMain.handle('hermes:git:review:shipInfo', async (_event, repoPath) => reviewShipInfo(repoPath, resolveGhBinary()))
   ipcMain.handle('hermes:git:review:prList', async (_event, repoPath, branches, numbers) =>
     reviewPrList(repoPath, resolveGhBinary(), branches, numbers)
-  )
-  ipcMain.handle('hermes:git:review:fetchPrComment', async (_event, repoPath, url) =>
-    reviewFetchPrComment(repoPath, resolveGhBinary(), url)
   )
   ipcMain.handle('hermes:git:review:createPr', async (_event, repoPath) => {
     assertLocalMutationAllowed('Creating pull requests from local Git state')

@@ -99,16 +99,25 @@ def _shared_refresh_worker(
         }
 
     auth.refresh_codex_oauth_pure = _refresh
-    original_read = auth._read_codex_tokens
+    # evaOS adaptation (r34): upstream takes the initial read as one locked snapshot inside
+    # auth_codex (#73667) instead of calling ``auth._read_codex_tokens``; hook that snapshot and
+    # wait on the barrier after its lock is released, as the old read hook did.
+    import contextlib
+    import hermes_cli.auth_codex as auth_codex
+    original_transaction = auth_codex._codex_auth_store_transaction
+    initial_read_pending = [True]
 
-    def _read_initial_pair(*_args, **_kwargs):
-        result = original_read(*_args, **_kwargs)
-        with initial_reads.get_lock():
-            initial_reads.value += 1
-        initial_read_barrier.wait(timeout=15)
-        return result
+    @contextlib.contextmanager
+    def _read_initial_pair(*args, **kwargs):
+        with original_transaction(*args, **kwargs) as snapshot:
+            yield snapshot
+        if initial_read_pending[0]:
+            initial_read_pending[0] = False
+            with initial_reads.get_lock():
+                initial_reads.value += 1
+            initial_read_barrier.wait(timeout=15)
 
-    auth._read_codex_tokens = _read_initial_pair
+    auth_codex._codex_auth_store_transaction = _read_initial_pair
     if not start_event.wait(timeout=15):
         result_queue.put(False)
         return
@@ -293,3 +302,42 @@ def test_shared_refresh_is_serialized_and_second_profile_adopts_rotated_pair(
         profile_data = json.loads((profile / "auth.json").read_text())
         assert "openai-codex" not in profile_data.get("providers", {})
         assert "openai-codex" not in profile_data.get("credential_pool", {})
+
+
+def test_shared_pool_quota_probe_rotation_writes_back_to_shared_source_without_profile_shadow(
+    managed_profile_env: dict[str, Path], monkeypatch: pytest.MonkeyPatch
+):
+    # evaOS (r34 review, R12): upstream's pre-probe refresh of an expired, quota-exhausted pool entry
+    # must persist the single-use rotation where the borrowed row lives (the managed shared file).
+    import hermes_cli.auth as auth
+    import hermes_cli.auth_codex as auth_codex
+    stale_access = _jwt_with_exp(int(time.time()) - 3600)
+    stale_refresh = _synthetic("pool-quota-refresh")
+    fresh_access = _jwt_with_exp(int(time.time()) + 3600)
+    fresh_refresh = _synthetic("pool-quota-rotated-refresh")
+    shared_data = _auth_store(access_token=None, refresh_token=None)
+    shared_data["credential_pool"]["openai-codex"][0].update(
+        access_token=stale_access, refresh_token=stale_refresh, last_status="exhausted",
+        last_error_code=429, last_error_reason="usage_limit_reached",
+        last_error_reset_at=int(time.time()) + 86400)
+    _write_json(managed_profile_env["shared"], shared_data, managed=True)
+    rotations = []
+
+    def _rotate(access_token, refresh_token, **_kwargs):
+        rotations.append(refresh_token)
+        return {"access_token": fresh_access, "refresh_token": fresh_refresh,
+                "last_refresh": "2026-09-26T00:00:00Z"}
+
+    monkeypatch.setattr(auth_codex, "refresh_codex_oauth_pure", _rotate)
+    monkeypatch.setattr(auth_codex, "_probe_codex_quota_restored", lambda token, **_kw: token == fresh_access)
+    auth_codex._codex_quota_probe_cache.clear()
+
+    resolved = auth.resolve_codex_runtime_credentials()
+
+    assert rotations == [stale_refresh]
+    assert resolved["api_key"] == fresh_access
+    shared_row = json.loads(managed_profile_env["shared"].read_text())["credential_pool"]["openai-codex"][0]
+    assert (shared_row["access_token"], shared_row["refresh_token"]) == (fresh_access, fresh_refresh)
+    profile_data = json.loads((managed_profile_env["profile"] / "auth.json").read_text())
+    assert "openai-codex" not in profile_data.get("providers", {})
+    assert "openai-codex" not in profile_data.get("credential_pool", {})

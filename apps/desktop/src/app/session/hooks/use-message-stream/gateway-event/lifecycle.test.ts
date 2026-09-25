@@ -30,14 +30,16 @@ type GatewayRequester = <T = unknown>(method: string, params?: Record<string, un
 const SKIN = { id: 'test-skin' }
 
 function gatewayReadyContext(fromActive: boolean, changeEvents: boolean): GatewayEventContext {
+  const payload = { change_events: changeEvents, skin: SKIN }
+
   return {
     deps: {},
-    event: { type: 'gateway.ready' },
+    event: { payload, type: 'gateway.ready' },
     explicitSid: '',
     fromActiveSource: () => fromActive,
     isActiveEvent: false,
     occurredAt: 0,
-    payload: { change_events: changeEvents, skin: SKIN },
+    payload,
     sessionId: null
   } as unknown as GatewayEventContext
 }

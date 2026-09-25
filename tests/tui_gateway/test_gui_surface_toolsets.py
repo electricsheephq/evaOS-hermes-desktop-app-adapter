@@ -28,7 +28,6 @@ GUI_TOOLS_P2 = {
     "annotate_preview",
     "drive_preview",
     "read_window_below",
-    "setup_mcp",
     "gui_tour",
     "apply_layout",
 }

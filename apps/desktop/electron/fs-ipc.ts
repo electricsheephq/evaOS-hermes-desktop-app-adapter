@@ -8,6 +8,7 @@ import path from 'node:path'
 import { ipcMain, shell } from 'electron'
 
 import { installDesktopPluginFromGit, probePluginRepo } from './desktop-plugin-install'
+import { removeDesktopPlugin } from './desktop-plugin-remove'
 import {
   DESKTOP_PLUGINS_DIR,
   ensureDir,
@@ -49,6 +50,9 @@ export function registerFsIpc({
   })
 
   // Reveal a path in the OS file manager (Finder / Explorer / Files).
+  // `showItemInFolder` silently no-ops on a missing item, and a remote
+  // backend's paths are missing here by construction — answer `false` so
+  // the renderer can say so instead of reporting a click that showed nothing.
   ipcMain.handle('hermes:fs:reveal', async (_event, targetPath) => {
     assertLocalAccessAllowed('Revealing local files')
 
@@ -59,7 +63,15 @@ export function registerFsIpc({
     }
 
     try {
-      shell.showItemInFolder(target)
+      // Existence is checked on the tilde-expanded path — the one the file
+      // manager is shown — so `~/…` from the renderer is not a false miss.
+      const local = expandUserPath(target)
+
+      if (!fs.existsSync(local)) {
+        return false
+      }
+
+      shell.showItemInFolder(local)
 
       return true
     } catch {
@@ -174,6 +186,14 @@ export function registerFsIpc({
       await desktopPluginsRoot(),
       Boolean(payload?.force)
     )
+  })
+
+  // Uninstall a standalone desktop plugin by FOLDER NAME under the app-level
+  // root. The renderer never passes a path; containment is re-checked inside.
+  ipcMain.handle('hermes:plugin:removeDesktop', async (_event, payload) => {
+    assertLocalAccessAllowed('Removing local application plugins')
+
+    return removeDesktopPlugin(path.join(hermesHome, DESKTOP_PLUGINS_DIR), payload?.name)
   })
 
   // Rename a file/folder in place. The renderer passes the existing path + a new

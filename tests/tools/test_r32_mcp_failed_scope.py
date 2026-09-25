@@ -35,7 +35,8 @@ def test_same_name_failed_discovery_and_shutdown_are_profile_scoped(tmp_path, mo
         token = set_hermes_home_override(home)
         try:
             assert discovery.get_mcp_status(configured)[0]['status'] == expected
-            key = core._server_state_key('shared')
+            from tools.mcp_tool_scope import _server_key
+            key = _server_key('shared')  # evaOS adaptation (r34): upstream connection key
             assert (key in core._server_connect_retry_after) == (expected == 'failed')
         finally:
             reset_hermes_home_override(token)

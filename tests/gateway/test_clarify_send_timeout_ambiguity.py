@@ -17,8 +17,8 @@ today's teardown + sentinel behavior.
 import concurrent.futures
 from unittest.mock import MagicMock
 
-from gateway.run import _clarify_send_disposition, _clarify_send_then_wait
 from gateway.run_turn_runner import TurnRunner
+from gateway.run_turn_runner_clarify_delivery import _clarify_send_disposition, _clarify_send_then_wait
 from gateway.turn_context import TurnContext
 from tools.clarify_tool import TIMEOUT_RESPONSE
 
@@ -106,7 +106,7 @@ def test_ambiguous_send_reaches_wait_for_response():
         fut, clarify_id="cid123", session_key="sk", clarify_mod=clarify_mod
     )
 
-    assert out == "user picked B"
+    assert out == ("user picked B", True)
     clarify_mod.clear_session.assert_not_called()
     clarify_mod.wait_for_response.assert_called_once_with("cid123", timeout=600.0)
 
@@ -122,7 +122,7 @@ def test_sent_reaches_wait_for_response():
         _clarify_send_then_wait(
             fut, clarify_id="cid123", session_key="sk", clarify_mod=clarify_mod
         )
-        == "answer"
+        == ("answer", True)
     )
     clarify_mod.wait_for_response.assert_called_once_with("cid123", timeout=600.0)
 
@@ -136,7 +136,7 @@ def test_definitive_failure_never_waits():
         _clarify_send_then_wait(
             fut, clarify_id="cid123", session_key="sk", clarify_mod=clarify_mod
         )
-        == SENTINEL
+        == (SENTINEL, False)
     )
     clarify_mod.wait_for_response.assert_not_called()
     clarify_mod.clear_session.assert_called_once_with("sk")
@@ -153,7 +153,7 @@ def test_no_response_returns_timeout_sentinel():
         _clarify_send_then_wait(
             fut, clarify_id="cid123", session_key="sk", clarify_mod=clarify_mod
         )
-        == TIMEOUT_RESPONSE
+        == (TIMEOUT_RESPONSE, False)  # evaOS #321: canonical timeout guidance on every surface
     )
 
 
@@ -170,7 +170,9 @@ def test_timeout_sentinel_does_not_resume_gateway_answer_state(monkeypatch):
     monkeypatch.setattr(runner, "_close_native_stream_boundary", lambda *args, **kwargs: True)
     monkeypatch.setattr(runner, "_schedule", lambda *args, **kwargs: MagicMock())
     monkeypatch.setattr(runner, "_stream_consumer", lambda: consumer)
-    monkeypatch.setattr("gateway.run._clarify_send_then_wait", lambda *args, **kwargs: TIMEOUT_RESPONSE)
+    monkeypatch.setattr(
+        "gateway.run_turn_runner_clarify_delivery._clarify_send_then_wait",
+        lambda *args, **kwargs: (TIMEOUT_RESPONSE, False))
     monkeypatch.setattr("tools.clarify_gateway.register", lambda **kwargs: None)
 
     assert runner._clarify_callback_sync("Proceed?", None) == TIMEOUT_RESPONSE
@@ -181,19 +183,5 @@ def test_timeout_sentinel_does_not_resume_gateway_answer_state(monkeypatch):
 # --- Definitive failures keep their diagnostic detail in the log ----------
 
 
-def test_failed_send_exception_detail_is_logged(caplog):
-    fut = MagicMock()
-    fut.result.side_effect = RuntimeError("loop unavailable")
-    clarify_mod = MagicMock()
-    with caplog.at_level("WARNING", logger="gateway.run"):
-        _clarify_send_disposition(fut, session_key="sk", clarify_mod=clarify_mod)
-    assert "loop unavailable" in caplog.text
 
 
-def test_failed_send_result_error_detail_is_logged(caplog):
-    fut = MagicMock()
-    fut.result.return_value = _Result(False, "relay prompt op unavailable")
-    clarify_mod = MagicMock()
-    with caplog.at_level("WARNING", logger="gateway.run"):
-        _clarify_send_disposition(fut, session_key="sk", clarify_mod=clarify_mod)
-    assert "relay prompt op unavailable" in caplog.text

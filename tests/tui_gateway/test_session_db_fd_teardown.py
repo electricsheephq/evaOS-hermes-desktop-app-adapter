@@ -388,16 +388,19 @@ def test_close_wins_race_before_turn_thread_publication(monkeypatch):
         def start(self):
             started.append(True)
 
-    def claim_close_before_thread_is_published(*, target, daemon):
-        assert target is not None
-        assert daemon is True
-        assert server._pop_session_by_id(sid) is session
+    # evaOS adaptation (r34): upstream builds the turn worker INSIDE the registry lock (after the close
+    # check, via session_lifecycle._start_session_work), so a close can no longer interleave with thread
+    # construction. The close that wins is therefore the one that claims the session before submit takes
+    # the lock; no worker may be built, started or published, and no message.start may be emitted.
+    def thread_must_not_be_built(*_args, **_kwargs):
+        started.append("built")
         return DeferredThread()
 
     monkeypatch.setattr(server, "_emit", lambda *args, **kwargs: emitted.append(args))
-    monkeypatch.setattr(server.threading, "Thread", claim_close_before_thread_is_published)
+    monkeypatch.setattr(server.threading, "Thread", thread_must_not_be_built)
     with server._sessions_lock:
         server._sessions[sid] = session
+    assert server._pop_session_by_id(sid) is session
     try:
         dispatch_started = server._run_prompt_submit("rid", sid, session, "next")
         assert dispatch_started is False

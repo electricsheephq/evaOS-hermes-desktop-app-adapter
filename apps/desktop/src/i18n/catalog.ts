@@ -1,5 +1,8 @@
 import { ar } from './ar'
+import { de } from './de'
 import { en } from './en'
+import { es } from './es'
+import { fr } from './fr'
 import { ja } from './ja'
 import { createManagedTranslations } from './managed-brand'
 import { ru } from './ru'
@@ -13,7 +16,10 @@ export const TRANSLATIONS: Record<Locale, Translations> = {
   'zh-hant': zhHant,
   ja,
   ar,
-  ru
+  ru,
+  fr,
+  de,
+  es
 }
 
 export const MANAGED_TRANSLATIONS: Record<Locale, Translations> = {
@@ -22,5 +28,8 @@ export const MANAGED_TRANSLATIONS: Record<Locale, Translations> = {
   'zh-hant': createManagedTranslations(zhHant),
   ja: createManagedTranslations(ja),
   ar: createManagedTranslations(ar),
-  ru: createManagedTranslations(ru)
+  ru: createManagedTranslations(ru),
+  fr: createManagedTranslations(fr),
+  de: createManagedTranslations(de),
+  es: createManagedTranslations(es)
 }

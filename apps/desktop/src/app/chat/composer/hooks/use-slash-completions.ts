@@ -1,8 +1,9 @@
 import type { Unstable_TriggerAdapter, Unstable_TriggerItem } from '@assistant-ui/core'
 import { useStore } from '@nanostores/react'
-import { useCallback, useEffect } from 'react'
+import { useCallback, useEffect, useMemo } from 'react'
 
 import type { HermesGateway } from '@/hermes'
+import { useI18n } from '@/i18n'
 import { sessionTitle } from '@/lib/chat-runtime'
 import {
   canonicalDesktopSlashCommand,
@@ -59,6 +60,10 @@ const SESSION_INLINE_LIMIT = 7
 /** Live `/` completions backed by the gateway's `complete.slash` RPC. */
 export function useSlashCompletions(options: {
   gateway: HermesGateway | null
+  /** Skill completions are per session: project-local skills follow the
+   *  session's repo, so the catalog and each query are fetched and cached per
+   *  session. */
+  sessionId?: string | null
   /** Desktop theme list — `/skin` is owned client-side, so its arg completions
    *  come from here, not the backend (whose skin list is CLI/TUI-only). */
   skinThemes?: DesktopThemeCommandOption[]
@@ -67,9 +72,12 @@ export function useSlashCompletions(options: {
   adapter: Unstable_TriggerAdapter
   loading: boolean
 } {
-  const { gateway, skinThemes, activeSkin } = options
+  const { gateway, sessionId, skinThemes, activeSkin } = options
+  const { locale } = useI18n()
   const enabled = Boolean(gateway)
   const epoch = useStore($slashCompletionsEpoch)
+  const sessionParams = useMemo(() => (sessionId ? { session_id: sessionId } : {}), [sessionId])
+  const catalogKey = sessionId ? `catalog:${sessionId}` : 'catalog'
 
   // Warm argument_mode before the first `/` so Space treats /review as text.
   useEffect(() => {
@@ -77,14 +85,16 @@ export function useSlashCompletions(options: {
       return
     }
 
-    void cachedSlashCompletion('catalog', () => gateway.request<CommandsCatalogLike>('commands.catalog'))
+    void cachedSlashCompletion(catalogKey, () =>
+      gateway.request<CommandsCatalogLike>('commands.catalog', sessionParams)
+    )
       .then(catalog => {
         filterDesktopCommandsCatalog(catalog)
       })
       .catch(() => {
         // Next keystroke retries; don't block the composer on a warm-up miss.
       })
-  }, [gateway, epoch])
+  }, [gateway, epoch, catalogKey, sessionParams])
 
   const fetcher = useCallback(
     async (query: string): Promise<CompletionPayload> => {
@@ -156,7 +166,9 @@ export function useSlashCompletions(options: {
       try {
         if (!query) {
           const catalog = filterDesktopCommandsCatalog(
-            await cachedSlashCompletion('catalog', () => gateway.request<CommandsCatalogLike>('commands.catalog'))
+            await cachedSlashCompletion(catalogKey, () =>
+              gateway.request<CommandsCatalogLike>('commands.catalog', sessionParams)
+            )
           )
 
           // Prefer the categorized layout so the popover renders section headers
@@ -196,8 +208,11 @@ export function useSlashCompletions(options: {
           return { items, query }
         }
 
-        const result = await cachedSlashCompletion(`slash:${text.toLowerCase()}`, () =>
-          gateway.request<{ items?: CompletionEntry[]; replace_from?: number }>('complete.slash', { text })
+        const result = await cachedSlashCompletion(`slash:${sessionId ?? ''}:${text.toLowerCase()}`, () =>
+          gateway.request<{ items?: CompletionEntry[]; replace_from?: number }>('complete.slash', {
+            text,
+            ...sessionParams
+          })
         )
 
         // Arg-completion items (replace_from > 1) carry just the arg stub —
@@ -263,7 +278,7 @@ export function useSlashCompletions(options: {
         return { items: [], query }
       }
     },
-    [gateway, skinThemes, activeSkin]
+    [gateway, skinThemes, activeSkin, sessionId, catalogKey, sessionParams]
   )
 
   const toItem = useCallback((entry: CompletionEntry, index: number): Unstable_TriggerItem => {
@@ -305,10 +320,10 @@ export function useSlashCompletions(options: {
         return true
       }
 
-      return hasCachedSlashCompletion(query ? `slash:${text.toLowerCase()}` : 'catalog')
+      return hasCachedSlashCompletion(query ? `slash:${sessionId ?? ''}:${text.toLowerCase()}` : catalogKey)
     },
-    [skinThemes]
+    [skinThemes, sessionId, catalogKey]
   )
 
-  return useLiveCompletionAdapter({ enabled, epoch, fetcher, isCached, toItem })
+  return useLiveCompletionAdapter({ enabled, epoch: `${epoch}:${locale}`, fetcher, isCached, toItem })
 }

@@ -12,6 +12,7 @@ import os
 import re
 import sys
 import time
+import weakref
 from contextlib import suppress
 from difflib import SequenceMatcher
 from types import SimpleNamespace
@@ -149,7 +150,7 @@ class GatewayVoiceMixin:
             return None
 
     async def _handle_voice_channel_join(self, event: MessageEvent) -> str:
-        adapter = self._adapter_for_source(event.source)
+        adapter = self._delivery_adapter_for(event.source)
         if not hasattr(adapter, "join_voice_channel"):
             return "Voice channels are not supported on this platform."
         guild_id = self._get_guild_id(event)
@@ -191,7 +192,7 @@ class GatewayVoiceMixin:
                 f"I'll speak my replies and listen to you. Use /voice leave to disconnect.")
 
     async def _handle_voice_channel_leave(self, event: MessageEvent) -> str:
-        adapter = self._adapter_for_source(event.source)
+        adapter = self._delivery_adapter_for(event.source)
         guild_id = self._get_guild_id(event)
         if not (guild_id and hasattr(adapter, "leave_voice_channel")
                 and hasattr(adapter, "is_in_voice_channel")
@@ -250,9 +251,9 @@ class GatewayVoiceMixin:
             return None
         if source.platform != Platform.DISCORD or source.chat_id != str(text_ch_id):
             return None
-        if self._adapter_for_source(source) is not adapter:
-            return None
         source.user_id = source.user_name = str(user_id)
+        # Serialization drops transport provenance; auth must still follow the receiving bot.
+        source._transport_adapter_ref = weakref.ref(adapter)
         return source
 
     async def _handle_voice_channel_input(
@@ -278,11 +279,18 @@ class GatewayVoiceMixin:
         source = self._voice_input_source(adapter, guild_id, user_id, text_ch_id)
         if source is None:
             return
+        # The cached source still carries the previous speaker's identity (per-sender routes,
+        # #106019): drop the pin so the seam re-resolves for THIS speaker.
+        from gateway.session_identity import clear_identity
+        clear_identity(source)
+        if self._canonicalize(source, transport_profile=getattr(adapter, "_owner_profile", None)) is None:
+            logger.warning("Dropping voice input: its profile route targets an unserved profile")
+            return
         # Validate the session owner against the current allowlist before auto-resuming. A session created
         # before TELEGRAM_ALLOWED_USERS (or equivalent) was configured, or before the owner was removed from
         # it, must not silently receive a full agent response on gateway restart just because it has a
         # resume-pending marker (issue #23778).
-        if not self._is_user_authorized(source):
+        if not self._is_user_authorized_for_source(source):
             logger.debug("Unauthorized voice input from user %d, ignoring", user_id)
             return
         profile = self._adapter_profile_for_source(source)
@@ -331,7 +339,7 @@ class GatewayVoiceMixin:
         chat_id = event.source.chat_id
         voice_mode = self._voice_mode.get(self._voice_key_for_source(event.source))
         is_voice_input = event.message_type == MessageType.VOICE
-        adapter = self._adapter_for_source(event.source)
+        adapter = self._delivery_adapter_for(event.source)
         adapter_auto_tts = False
         with suppress(Exception):  # adapters without the probe read as False
             adapter_auto_tts = bool(adapter._should_auto_tts_for_chat(chat_id))
@@ -400,7 +408,7 @@ class GatewayVoiceMixin:
         self, event: MessageEvent, audio_paths: List[str], *, provider_status: Optional[Dict] = None,
     ) -> None:
         """Play the files in the connected voice channel, else send them as voice messages."""
-        adapter = self._adapter_for_source(event.source)
+        adapter = self._delivery_adapter_for(event.source)
         guild_id = self._get_guild_id(event)
         play = getattr(adapter, "play_in_voice_channel", None)
         is_in_vc = getattr(adapter, "is_in_voice_channel", None)

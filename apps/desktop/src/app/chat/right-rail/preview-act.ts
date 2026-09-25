@@ -318,8 +318,11 @@ async function runJson(
     return { error: ACTION_CANCELLED, kind: 'failed' }
   }
 
+  // Pages such as Trendyol replace Promise with ZoneAwarePromise. Electron
+  // awaits native promises only, otherwise IPC clones the thenable's state.
+  // An async function adopts it into a native promise without changing the page.
   const raw = await Promise.race([
-    run(code).catch((error: unknown) => new Error(String(error))),
+    run(`(async () => (${code}))()`).catch((error: unknown) => new Error(String(error))),
     new Promise<undefined>(resolve => setTimeout(resolve, ACT_TIMEOUT_MS))
   ])
 

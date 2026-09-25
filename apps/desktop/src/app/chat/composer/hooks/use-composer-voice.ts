@@ -1,28 +1,32 @@
 import { useStore } from '@nanostores/react'
 import { computed } from 'nanostores'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 
 import { useI18n } from '@/i18n'
 import { chatMessageText, collectUnspokenTurnSpeech } from '@/lib/chat-messages'
 import { triggerHaptic } from '@/lib/haptics'
 import { adoptSpokenReplySession, markAssistantIdSpoken, resolveSpokenReply } from '@/lib/spoken-reply'
 import { CONVERSATION_LEASE, READ_ALOUD_LEASE, syncTtsLease } from '@/lib/tts-lease'
+import { toLiveHistory } from '@/lib/voice-live'
 import { clearWakeIndicator, syncWakeIndicatorWithVoice } from '@/lib/wake-indicator'
 import { $voiceConversationStartRequest, takeVoiceConversationStart } from '@/store/composer'
 import { resetBrowseState } from '@/store/composer-input-history'
 import { $activeGatewayRoute, $gateway } from '@/store/gateway'
 import { notify, notifyError } from '@/store/notifications'
 import { $activeSessionId, $gatewayState, $introSeed } from '@/store/session'
+import { $voiceLiveStatus, refreshVoiceLiveStatus, selectedVoiceChatMode } from '@/store/voice-live'
 import { $autoSpeakReplies, $voiceStopPhrase, setAutoSpeakReplies } from '@/store/voice-prefs'
 import { resumeWakeAfterVoice } from '@/store/wake-word'
 
+import { pinFloatingComposerCapture } from '../floating-target'
 import type { ComposerTarget } from '../focus'
-import { onComposerVoiceToggleRequest } from '../focus'
-import { useComposerScope } from '../scope'
+import { onComposerDictationRequest, onComposerVoiceToggleRequest } from '../focus'
+import { useComposerScope, useComposerSurfaceId } from '../scope'
 import type { ChatBarProps } from '../types'
 
 import { useAutoSpeakReplies } from './use-auto-speak-replies'
 import { useVoiceConversation } from './use-voice-conversation'
+import { useVoiceLiveConversation } from './use-voice-live-conversation'
 import { useVoiceRecorder } from './use-voice-recorder'
 
 interface UseComposerVoiceArgs {
@@ -87,17 +91,18 @@ export function useComposerVoice({
       computed($messages, messages => {
         const last = messages.findLast(message => message.role === 'assistant' && !message.hidden)
 
-        if (!last?.pending || !chatMessageText(last).trim()) {
-          return null
-        }
-
-        return last.id
+        // Runs on every streamed flush: test the parts in place instead of
+        // joining the whole reply into a string just to check it is non-blank.
+        return last?.pending && last.parts.some(part => part.type === 'text' && /\S/.test(part.text)) ? last.id : null
       }),
     [$messages]
   )
 
   useStore($pendingVoiceReplyId)
   const [voiceConversationActive, setVoiceConversationActive] = useState(false)
+  // Engine selection is latched at conversation START (a Settings change
+  // applies to the next conversation, never mid-call).
+  const [liveEngineActive, setLiveEngineActive] = useState(false)
   const ownsWakeIndicatorRef = useRef(false)
   const previousSessionIdRef = useRef(sessionId)
   const voiceStartRequest = useStore($voiceConversationStartRequest)
@@ -142,6 +147,15 @@ export function useComposerVoice({
     voiceSessionOwnershipRef.current = null
     setVoiceConversationActive(false)
   }, [])
+
+  const surfaceId = useComposerSurfaceId()
+  const capturing = voiceConversationActive || voiceStatus !== 'idle'
+
+  useLayoutEffect(() => {
+    if (surfaceId && capturing) {
+      return pinFloatingComposerCapture(surfaceId)
+    }
+  }, [capturing, surfaceId])
 
   /** Auto-speak selector: the latest unspoken reply only — a backlog collapses to the newest. */
   const pendingResponse = () => {
@@ -225,6 +239,32 @@ export function useComposerVoice({
     })
   }
 
+  /** A GPT-Live delegation → Hermes turn. The bubble and the persisted row are
+   *  what the user said; the transcript window rides the model input only. */
+  const submitLiveDelegation = async (text: string, voiceContext: string) => {
+    triggerHaptic('submit')
+    resetBrowseState(sessionId)
+    clearDraft()
+    await onSubmit(text, { surface: 'voice-live', voiceContext })
+  }
+
+  /** Recent text turns of this chat, as GPT-Live startup history. */
+  const seedLiveHistory = () =>
+    toLiveHistory(
+      $messages
+        .get()
+        .filter(m => !m.hidden && (m.role === 'user' || m.role === 'assistant'))
+        .map(m => ({ role: m.role as 'assistant' | 'user', text: chatMessageText(m) }))
+    )
+
+  /** The tool Hermes is running right now, for quiet progress in the voice. */
+  const activeToolLabel = () => {
+    const last = $messages.get().findLast(m => m.role === 'assistant' && !m.hidden)
+    const running = last?.parts.findLast(part => part.type === 'tool-call' && part.result === undefined)
+
+    return running && running.type === 'tool-call' ? running.toolName : null
+  }
+
   const wakePausedRef = useRef(false)
   // Resolves once the in-flight wake.pause round-trip completes (mic released by
   // the wake listener). The conversation awaits this before opening its own mic
@@ -233,10 +273,10 @@ export function useComposerVoice({
   // fail and the conversation never starts listening.
   const wakePauseBarrierRef = useRef<Promise<void> | null>(null)
 
-  const conversation = useVoiceConversation({
+  const chainedConversation = useVoiceConversation({
     busy,
     consumePendingResponse,
-    enabled: voiceConversationActive,
+    enabled: voiceConversationActive && !liveEngineActive,
     onFatalError: stopVoiceConversation,
     // Speaking over the model mid-generation interrupts the in-flight turn —
     // the same seam as the Stop button — so the interjection becomes the next
@@ -254,6 +294,54 @@ export function useComposerVoice({
     // to finish releasing the capture device (see wakePauseBarrierRef).
     beforeMicOpen: () => wakePauseBarrierRef.current ?? undefined
   })
+
+  const liveConversation = useVoiceLiveConversation({
+    activeToolLabel,
+    beforeMicOpen: () => wakePauseBarrierRef.current ?? undefined,
+    busy,
+    consumePendingResponse,
+    enabled: voiceConversationActive && liveEngineActive,
+    onFatalError: stopVoiceConversation,
+    onInterrupt,
+    onStopWord: stopVoiceConversation,
+    onSubmit: submitLiveDelegation,
+    pendingResponse: pendingTurnResponse,
+    seedHistory: seedLiveHistory
+  })
+
+  const conversation = liveEngineActive ? liveConversation : chainedConversation
+
+  /** Turn the conversation on with the engine `voice.voice_chat_mode` selects,
+   *  decided in the same state batch so the other engine never sees a frame of
+   *  `enabled`. gpt-live selected but not startable (no OpenAI key on the
+   *  gateway) falls back to chained with a notice rather than a dead button.
+   *  Starting also records which session the conversation belongs to. */
+  const activateConversation = useCallback(() => {
+    const status = $voiceLiveStatus.get()
+    let live = false
+
+    if (selectedVoiceChatMode(status) === 'gpt-live') {
+      if (status?.available) {
+        live = true
+      } else {
+        notify({
+          id: 'voice-live-unavailable',
+          kind: 'warning',
+          message: t.notifications.voice.liveUnavailable(status?.reason ?? 'not configured')
+        })
+      }
+    }
+
+    setLiveEngineActive(live)
+    startVoiceConversation()
+  }, [startVoiceConversation, t])
+
+  useEffect(() => {
+    if (!voiceConversationActive) {
+      // Prefetch so the first press picks the right engine without a round trip.
+      void refreshVoiceLiveStatus().catch(() => undefined)
+    }
+  }, [voiceConversationActive])
 
   // Stop synchronously at a routing boundary, before pending transcription
   // promises can publish into the newly selected profile or connection.
@@ -329,20 +417,28 @@ export function useComposerVoice({
       stopVoiceConversation()
       void conversation.end()
     } else {
-      startVoiceConversation()
+      activateConversation()
     }
-  }, [conversation, disabled, startVoiceConversation, stopVoiceConversation, voiceConversationActive])
+  }, [activateConversation, conversation, disabled, stopVoiceConversation, voiceConversationActive])
 
   useEffect(
     () => onComposerVoiceToggleRequest(toggled => toggled === target && toggleVoiceConversation()),
     [target, toggleVoiceConversation]
   )
 
+  // The bindable `composer.dictate` action shares the mic button's callback,
+  // including its recording/transcribing state machine. Ignore disabled
+  // composers so an unavailable draft cannot acquire the microphone.
+  useEffect(
+    () => onComposerDictationRequest(requested => requested === target && !disabled && dictate()),
+    [dictate, disabled, target]
+  )
+
   useEffect(() => {
     if (target === 'main' && !disabled && takeVoiceConversationStart(voiceStartRequest) && !voiceConversationActive) {
-      startVoiceConversation()
+      activateConversation()
     }
-  }, [disabled, startVoiceConversation, target, voiceConversationActive, voiceStartRequest])
+  }, [activateConversation, disabled, target, voiceConversationActive, voiceStartRequest])
 
   const resumeWakeIfPaused = useCallback(() => {
     if (!wakePausedRef.current) {
@@ -411,8 +507,8 @@ export function useComposerVoice({
   // lease, and the backend unloads resident local models once no surface holds
   // one. Fire-and-forget — the toggle never waits on or fails from this.
   useEffect(() => {
-    void syncTtsLease(CONVERSATION_LEASE, voiceConversationActive)
-  }, [voiceConversationActive])
+    void syncTtsLease(CONVERSATION_LEASE, voiceConversationActive && !liveEngineActive)
+  }, [liveEngineActive, voiceConversationActive])
 
   useEffect(() => () => void syncTtsLease(CONVERSATION_LEASE, false), [])
 
@@ -427,7 +523,7 @@ export function useComposerVoice({
 
   // Explicit start/end for the on-screen conversation controls (the hotkey uses
   // the gated toggle above).
-  const startConversation = startVoiceConversation
+  const startConversation = activateConversation
 
   const endConversation = useCallback(() => {
     stopVoiceConversation()

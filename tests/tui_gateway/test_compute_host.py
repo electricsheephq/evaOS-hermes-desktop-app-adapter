@@ -19,7 +19,9 @@ def _stdout_queue(proc: subprocess.Popen) -> queue.Queue[dict]:
     return out
 
 
-def _read_json_line(out: queue.Queue[dict], timeout: float = 2.0) -> dict:
+# evaOS adaptation (r34): the host now imports tui_gateway.server before its hello (~4x the
+# startup of the previous base), which overruns 2s on a loaded 4-vCPU CI runner.
+def _read_json_line(out: queue.Queue[dict], timeout: float = 10.0) -> dict:
     try:
         return out.get(timeout=timeout)
     except queue.Empty as exc:

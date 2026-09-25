@@ -1186,12 +1186,12 @@ def test_mcp2_snake_case_tool_schema_is_written_to_cache(monkeypatch):
 
     monkeypatch.setattr(registry_module, "registry", ToolRegistry())
     monkeypatch.setattr(mcp_schema_cache, "write_cache_entry", capture_cache)
+    # evaOS adaptation (r34): upstream's tracker takes (tool_name, server_name); the owning
+    # profile is the connection key's scope, not a third argument.
     monkeypatch.setattr(
         registration_module,
         "_track_mcp_tool_server",
-        lambda tool_name, server_name, registration_home: registrations.append(
-            (tool_name, server_name, registration_home)
-        ),
+        lambda tool_name, server_name: registrations.append((tool_name, server_name)),
     )
     task = MCPServerTask("lease-schema-probe")
     task._tools = [
@@ -1210,7 +1210,7 @@ def test_mcp2_snake_case_tool_schema_is_written_to_cache(monkeypatch):
     )
 
     assert registered == ["mcp__lease_schema_probe__read_sheet"]
-    assert registrations == [(registered[0], task.name, task.registration_home)]
+    assert registrations == [(registered[0], task.name)]
     assert captured["tools"][0]["inputSchema"] == task._tools[0].input_schema
 
 

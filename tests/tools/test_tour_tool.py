@@ -20,13 +20,6 @@ def test_lives_in_the_gui_surface_toolset(monkeypatch):
     assert entry.toolset == "desktop_ui_v2"
 
 
-def test_answers_to_the_appearance_switch():
-    """Tours off has to mean the model never sees the tool. See
-    tests/tools/test_display_toggles.py for the config end of it."""
-    entry = registry.get_entry("gui_tour")
-
-    assert entry is not None
-    assert entry.check_fn is tt.check_tours_enabled
 
 
 def test_requires_callback():

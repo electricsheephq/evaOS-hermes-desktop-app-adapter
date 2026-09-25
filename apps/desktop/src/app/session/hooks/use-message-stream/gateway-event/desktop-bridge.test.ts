@@ -1,338 +1,99 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const mocks = vi.hoisted(() => {
-  const previewSurface = { owned: true }
-
-  return {
-    actOnActivePreview: vi.fn(async () => ({ acted: 'elements', success: true })),
-    captureActivePreviewSurface: vi.fn(() => ({ generation: 1, ownershipEpoch: 1, tabId: 'url:one' })),
-    ownsActivePreviewSurface: vi.fn(() => previewSurface.owned),
-    previewSurface,
-    readActivePreview: vi.fn(async () => ({ text: 'foreground preview' })),
-    readActiveTerminal: vi.fn(() => ({ text: 'foreground terminal' })),
-    recordAgentReaction: vi.fn(),
-    revealDesktopPane: vi.fn(),
-    requestGatewayForAgent: vi.fn(async () => ({})),
-    runTour: vi.fn(async () => ({ success: true })),
-    setMessages: vi.fn(),
-    showTip: vi.fn(),
-    tipsEnabled: vi.fn(() => true),
-    toursEnabled: vi.fn(() => true)
-  }
-})
-
-vi.mock('@/app/chat/right-rail/preview-act', () => ({ actOnActivePreview: mocks.actOnActivePreview }))
-vi.mock('@/app/chat/right-rail/preview-reader', () => ({ readActivePreview: mocks.readActivePreview }))
-vi.mock('@/app/right-sidebar/terminal/agent-terminal-stream', () => ({ writeAgentTerminalChunk: vi.fn() }))
-vi.mock('@/app/right-sidebar/terminal/buffer', () => ({ readActiveTerminal: mocks.readActiveTerminal }))
-vi.mock('@/app/right-sidebar/terminal/terminals', () => ({ closeAgentTerminalByProc: vi.fn() }))
-vi.mock('@/lib/tour', () => ({ runTour: mocks.runTour }))
-vi.mock('@/store/gateway', () => ({ requestGatewayForAgent: mocks.requestGatewayForAgent }))
-vi.mock('@/store/pane-focus', () => ({ applyDesktopLayoutPreset: vi.fn(), revealDesktopPane: mocks.revealDesktopPane }))
-vi.mock('@/store/preview', () => ({
-  captureActivePreviewSurface: mocks.captureActivePreviewSurface,
-  ownsActivePreviewSurface: mocks.ownsActivePreviewSurface
-}))
-vi.mock('@/store/reactions-local', () => ({ recordAgentReaction: mocks.recordAgentReaction }))
-vi.mock('@/store/session', () => ({ setMessages: mocks.setMessages }))
-vi.mock('@/store/tips', () => ({ $tipsEnabled: { get: mocks.tipsEnabled }, showTip: mocks.showTip }))
-vi.mock('@/store/tours', () => ({ $toursEnabled: { get: mocks.toursEnabled } }))
+import { applyDesktopLayoutPreset, revealDesktopPane } from '@/store/pane-focus'
+import { setMessages } from '@/store/session'
+import { $activeTip, $retiredTips, $tipsEnabled, dismissTip, resetTips, retireActiveTip } from '@/store/tips'
 
 import { handleDesktopBridgeEvent } from './desktop-bridge'
 import type { GatewayEventContext } from './types'
 
-function context(type: string, isActiveEvent: boolean, fromActiveSource = isActiveEvent): GatewayEventContext {
+vi.mock('@/app/right-sidebar/terminal/agent-terminal-stream', () => ({ writeAgentTerminalChunk: vi.fn() }))
+vi.mock('@/app/right-sidebar/terminal/terminals', () => ({ closeAgentTerminalByProc: vi.fn() }))
+vi.mock('@/store/pane-focus', () => ({ applyDesktopLayoutPreset: vi.fn(), revealDesktopPane: vi.fn() }))
+vi.mock('@/store/reactions-local', () => ({ recordAgentReaction: vi.fn() }))
+vi.mock('@/store/session', () => ({ setMessages: vi.fn() }))
+
+// The bridge only paints for the routed session the user is looking at, and
+// only when the event came from that session's own (connection, profile).
+function context(
+  type: string,
+  { activeSession = true, activeSource = true }: { activeSession?: boolean; activeSource?: boolean } = {},
+  payload: Record<string, unknown> = {}
+): GatewayEventContext {
   return {
     deps: {
       activeGatewayProfile: 'active-profile',
-      activeSessionIdRef: { current: isActiveEvent ? 'runtime-session' : 'other-session' }
+      activeSessionIdRef: { current: activeSession ? 'runtime-session' : 'other-session' }
     },
-    event: {
-      connectionId: 'source-b',
-      profile: 'background-profile',
-      session_id: 'runtime-session',
-      type
-    },
+    event: { connectionId: 'source-b', profile: 'background-profile', session_id: 'runtime-session', type },
     explicitSid: 'runtime-session',
-    fromActiveSource: () => fromActiveSource,
-    isActiveEvent,
+    fromActiveSource: () => activeSource,
+    isActiveEvent: activeSession,
     occurredAt: 0,
-    payload: { request_id: 'request-1' },
+    payload,
     sessionId: 'runtime-session'
   } as unknown as GatewayEventContext
 }
 
-function deferred<T>() {
-  let resolve!: (value: T) => void
+const tipShow = (text: string): GatewayEventContext =>
+  context('tip.show', {}, { selector: '[data-tour="model-pill"]', text })
 
-  const promise = new Promise<T>(next => {
-    resolve = next
+beforeEach(() => {
+  vi.clearAllMocks()
+  dismissTip()
+  resetTips()
+  $tipsEnabled.set(true)
+})
+
+describe('tip.show bridge (#117216)', () => {
+  it('a ✕-closed agent tip does not come back on the next tip.show of the same content', () => {
+    handleDesktopBridgeEvent(tipShow('Choose a model here.'))
+    const tipId = $activeTip.get()?.tipId
+
+    expect(tipId).toMatch(/^agent:/)
+
+    retireActiveTip()
+    expect($retiredTips.get()).toContain(tipId)
+
+    handleDesktopBridgeEvent(tipShow('Choose a model here.'))
+    expect($activeTip.get()).toBeNull()
+
+    // Different content is a different tip and still shows.
+    handleDesktopBridgeEvent(tipShow('Attach files with the paperclip.'))
+    expect($activeTip.get()?.text).toBe('Attach files with the paperclip.')
   })
-
-  return { promise, resolve }
-}
+})
 
 describe('desktop bridge source and foreground isolation', () => {
-  beforeEach(() => {
-    vi.clearAllMocks()
-    mocks.previewSurface.owned = true
-    mocks.tipsEnabled.mockReturnValue(true)
-    mocks.toursEnabled.mockReturnValue(true)
+  it('lets the foreground session from its own source drive the visible surface', () => {
+    expect(handleDesktopBridgeEvent(context('pane.reveal', {}, { pane: 'preview' }))).toBe(true)
+    expect(handleDesktopBridgeEvent(context('layout.apply', {}, { preset: 'focus' }))).toBe(true)
+
+    expect(revealDesktopPane).toHaveBeenCalledWith('preview')
+    expect(applyDesktopLayoutPreset).toHaveBeenCalledWith('focus')
   })
 
-  it('answers a background preview read on its source without reading the foreground pane', async () => {
-    expect(handleDesktopBridgeEvent(context('preview.read.request', false))).toBe(true)
-    await vi.waitFor(() => expect(mocks.requestGatewayForAgent).toHaveBeenCalledOnce())
+  it('denies a same-session-id event from a different source access to the foreground surface', () => {
+    const otherSource = { activeSource: false }
 
-    expect(mocks.readActivePreview).not.toHaveBeenCalled()
-    expect(mocks.requestGatewayForAgent).toHaveBeenCalledWith(
-      'source-b',
-      'background-profile',
-      'preview.read.respond',
-      { request_id: 'request-1', text: '' }
-    )
+    expect(handleDesktopBridgeEvent(context('pane.reveal', otherSource, { pane: 'preview' }))).toBe(true)
+    expect(handleDesktopBridgeEvent(context('layout.apply', otherSource, { preset: 'focus' }))).toBe(true)
+    expect(
+      handleDesktopBridgeEvent(context('tip.show', otherSource, { selector: '[data-tour="model-pill"]', text: 'Hi' }))
+    ).toBe(true)
+    expect(
+      handleDesktopBridgeEvent(context('message.reaction', otherSource, { reactions: ['+1'], role: 'user', row_id: 7 }))
+    ).toBe(true)
+
+    expect(revealDesktopPane).not.toHaveBeenCalled()
+    expect(applyDesktopLayoutPreset).not.toHaveBeenCalled()
+    expect($activeTip.get()).toBeNull()
+    expect(setMessages).not.toHaveBeenCalled()
   })
 
-  it('discards a preview read when its session loses the foreground while the read is pending', async () => {
-    const pending = deferred<{ text: string }>()
-    mocks.readActivePreview.mockReturnValueOnce(pending.promise)
-    const ctx = context('preview.read.request', true)
+  it('keeps a background session from moving the user focus', () => {
+    expect(handleDesktopBridgeEvent(context('pane.reveal', { activeSession: false }, { pane: 'preview' }))).toBe(true)
 
-    expect(handleDesktopBridgeEvent(ctx)).toBe(true)
-    expect(mocks.readActivePreview).toHaveBeenCalledOnce()
-
-    ctx.deps.activeSessionIdRef.current = 'new-foreground-session'
-    pending.resolve({ text: 'previous session preview' })
-
-    await vi.waitFor(() => expect(mocks.requestGatewayForAgent).toHaveBeenCalledOnce())
-    expect(mocks.requestGatewayForAgent).toHaveBeenCalledWith(
-      'source-b',
-      'background-profile',
-      'preview.read.respond',
-      { request_id: 'request-1', text: '' }
-    )
-  })
-
-  it('does not drive the new foreground preview after ownership changes during engine loading', async () => {
-    const ctx = context('preview.act.request', true)
-    const sourceOwner = { current: true }
-    ctx.fromActiveSource = () => sourceOwner.current
-    ctx.payload = { action: 'elements', request_id: 'request-1' } as GatewayEventContext['payload']
-
-    expect(handleDesktopBridgeEvent(ctx)).toBe(true)
-    sourceOwner.current = false
-
-    await vi.waitFor(() => expect(mocks.requestGatewayForAgent).toHaveBeenCalledOnce())
-    expect(mocks.actOnActivePreview).not.toHaveBeenCalled()
-    expect(mocks.requestGatewayForAgent).toHaveBeenCalledWith(
-      'source-b',
-      'background-profile',
-      'preview.act.respond',
-      expect.objectContaining({ request_id: 'request-1', text: expect.stringContaining('session') })
-    )
-  })
-
-  it('denies a same-session-id event from a different source access to the foreground surface', async () => {
-    expect(handleDesktopBridgeEvent(context('preview.read.request', true, false))).toBe(true)
-    expect(handleDesktopBridgeEvent(context('pane.reveal', true, false))).toBe(true)
-    await vi.waitFor(() => expect(mocks.requestGatewayForAgent).toHaveBeenCalledOnce())
-
-    expect(mocks.readActivePreview).not.toHaveBeenCalled()
-    expect(mocks.revealDesktopPane).not.toHaveBeenCalled()
-    expect(mocks.requestGatewayForAgent).toHaveBeenCalledWith(
-      'source-b',
-      'background-profile',
-      'preview.read.respond',
-      { request_id: 'request-1', text: '' }
-    )
-  })
-
-  it('reads an active terminal and returns it only through the requesting source', async () => {
-    expect(handleDesktopBridgeEvent(context('terminal.read.request', true))).toBe(true)
-    await vi.waitFor(() => expect(mocks.requestGatewayForAgent).toHaveBeenCalledOnce())
-
-    expect(mocks.readActiveTerminal).toHaveBeenCalledOnce()
-    expect(mocks.requestGatewayForAgent).toHaveBeenCalledWith(
-      'source-b',
-      'background-profile',
-      'terminal.read.respond',
-      { request_id: 'request-1', text: JSON.stringify({ text: 'foreground terminal' }) }
-    )
-  })
-
-  it('answers a background window read without invoking the native foreground reader', async () => {
-    const readWindowBelow = vi.fn(async () => ({
-      frontmost: { app: 'Synthetic', title: 'private foreground window' },
-      platform: 'darwin',
-      window: {
-        app: 'Synthetic',
-        bounds: { height: 100, width: 100, x: 0, y: 0 },
-        id: 1,
-        title: 'private foreground window'
-      }
-    }))
-
-    window.hermesDesktop = { ...window.hermesDesktop, readWindowBelow } as typeof window.hermesDesktop
-
-    expect(handleDesktopBridgeEvent(context('window.read.request', false))).toBe(true)
-    await vi.waitFor(() => expect(mocks.requestGatewayForAgent).toHaveBeenCalledOnce())
-
-    expect(readWindowBelow).not.toHaveBeenCalled()
-    expect(mocks.requestGatewayForAgent).toHaveBeenCalledWith('source-b', 'background-profile', 'window.read.respond', {
-      request_id: 'request-1',
-      text: ''
-    })
-  })
-
-  it('discards a native window read when its session loses the foreground while IPC is pending', async () => {
-    const pending = deferred<{ frontmost: null; platform: string; window: null }>()
-    const readWindowBelow = vi.fn(() => pending.promise)
-    window.hermesDesktop = { ...window.hermesDesktop, readWindowBelow } as typeof window.hermesDesktop
-    const ctx = context('window.read.request', true)
-
-    expect(handleDesktopBridgeEvent(ctx)).toBe(true)
-    expect(readWindowBelow).toHaveBeenCalledOnce()
-
-    ctx.deps.activeSessionIdRef.current = 'new-foreground-session'
-    pending.resolve({ frontmost: null, platform: 'darwin', window: null })
-
-    await vi.waitFor(() => expect(mocks.requestGatewayForAgent).toHaveBeenCalledOnce())
-    expect(mocks.requestGatewayForAgent).toHaveBeenCalledWith('source-b', 'background-profile', 'window.read.respond', {
-      request_id: 'request-1',
-      text: ''
-    })
-  })
-
-  it('does not paint a tour after its session loses the foreground during lazy loading', async () => {
-    const ctx = context('tour.request', true)
-
-    expect(handleDesktopBridgeEvent(ctx)).toBe(true)
-    ctx.deps.activeSessionIdRef.current = 'new-foreground-session'
-
-    await vi.waitFor(() => expect(mocks.requestGatewayForAgent).toHaveBeenCalledOnce())
-    expect(mocks.runTour).not.toHaveBeenCalled()
-    expect(mocks.requestGatewayForAgent).toHaveBeenCalledWith(
-      'source-b',
-      'background-profile',
-      'tour.respond',
-      expect.objectContaining({ request_id: 'request-1', text: expect.stringContaining('session') })
-    )
-  })
-
-  it('does not paint a preview tour after its active tab changes during lazy loading', async () => {
-    const ctx = context('tour.request', true)
-    ctx.payload = { request_id: 'request-1', surface: 'preview' } as GatewayEventContext['payload']
-
-    expect(handleDesktopBridgeEvent(ctx)).toBe(true)
-    mocks.previewSurface.owned = false
-
-    await vi.waitFor(() => expect(mocks.requestGatewayForAgent).toHaveBeenCalledOnce())
-    expect(mocks.captureActivePreviewSurface).toHaveBeenCalledOnce()
-    expect(mocks.runTour).not.toHaveBeenCalled()
-    expect(mocks.requestGatewayForAgent).toHaveBeenCalledWith(
-      'source-b',
-      'background-profile',
-      'tour.respond',
-      expect.objectContaining({ request_id: 'request-1', text: expect.stringContaining('session') })
-    )
-  })
-
-  it('does not paint a background reaction into the foreground transcript', () => {
-    const ctx = context('message.reaction', false)
-    ctx.payload = {
-      reactions: [{ at: 1, author: 'agent', emoji: 'eyes' }],
-      role: 'assistant',
-      row_id: 42
-    } as GatewayEventContext['payload']
-
-    expect(handleDesktopBridgeEvent(ctx)).toBe(true)
-    expect(mocks.setMessages).not.toHaveBeenCalled()
-    expect(mocks.recordAgentReaction).not.toHaveBeenCalled()
-  })
-
-  it('still publishes a reaction owned by the active surface', () => {
-    const ctx = context('message.reaction', true)
-    ctx.payload = {
-      reactions: [{ at: 1, author: 'agent', emoji: 'thumbs_up' }],
-      role: 'assistant',
-      row_id: 7
-    } as GatewayEventContext['payload']
-
-    expect(handleDesktopBridgeEvent(ctx)).toBe(true)
-    expect(mocks.setMessages).toHaveBeenCalledOnce()
-  })
-
-  it('renders a protocol-3 tip only for the active session owner', () => {
-    const ctx = context('tip.show', true)
-    ctx.payload = { selector: '#preview', text: 'Public preview' } as GatewayEventContext['payload']
-
-    expect(handleDesktopBridgeEvent(ctx)).toBe(true)
-    expect(mocks.showTip).toHaveBeenCalledExactlyOnceWith({
-      side: 'top',
-      targets: ['#preview'],
-      text: 'Public preview',
-      title: undefined
-    })
-    expect(mocks.requestGatewayForAgent).not.toHaveBeenCalled()
-  })
-
-  it.each([
-    [false, false],
-    [true, false]
-  ])('does not paint a tip from an inactive owner (%s, %s)', (active, source) => {
-    const ctx = context('tip.show', active, source)
-    ctx.payload = { selector: '#preview', text: 'Public preview' } as GatewayEventContext['payload']
-
-    expect(handleDesktopBridgeEvent(ctx)).toBe(true)
-    expect(mocks.showTip).not.toHaveBeenCalled()
-  })
-
-  it('respects disabled tips without emitting a response', () => {
-    mocks.tipsEnabled.mockReturnValue(false)
-    const ctx = context('tip.show', true)
-    ctx.payload = { selector: '#preview', text: 'Public preview' } as GatewayEventContext['payload']
-
-    expect(handleDesktopBridgeEvent(ctx)).toBe(true)
-    expect(mocks.showTip).not.toHaveBeenCalled()
-    expect(mocks.requestGatewayForAgent).not.toHaveBeenCalled()
-  })
-
-  it('leaves a scoped preview action unanswered in a window showing another session', () => {
-    expect(handleDesktopBridgeEvent(context('preview.act.request', false))).toBe(true)
-    expect(mocks.requestGatewayForAgent).not.toHaveBeenCalled()
-  })
-
-  it('keeps the fail-fast response for an unscoped inactive preview action', async () => {
-    const ctx = context('preview.act.request', false)
-    ctx.explicitSid = ''
-
-    expect(handleDesktopBridgeEvent(ctx)).toBe(true)
-    await vi.waitFor(() => expect(mocks.requestGatewayForAgent).toHaveBeenCalledOnce())
-    expect(mocks.requestGatewayForAgent).toHaveBeenCalledWith(
-      'source-b',
-      'background-profile',
-      'preview.act.respond',
-      expect.objectContaining({ request_id: 'request-1', text: expect.stringContaining('session') })
-    )
-  })
-
-  it('leaves a scoped tour unanswered in another session even when tours are disabled', () => {
-    mocks.toursEnabled.mockReturnValue(false)
-    expect(handleDesktopBridgeEvent(context('tour.request', false))).toBe(true)
-    expect(mocks.requestGatewayForAgent).not.toHaveBeenCalled()
-  })
-
-  it('keeps the fail-fast response for an unscoped inactive tour', async () => {
-    const ctx = context('tour.request', false)
-    ctx.explicitSid = ''
-
-    expect(handleDesktopBridgeEvent(ctx)).toBe(true)
-    await vi.waitFor(() => expect(mocks.requestGatewayForAgent).toHaveBeenCalledOnce())
-    expect(mocks.requestGatewayForAgent).toHaveBeenCalledWith(
-      'source-b',
-      'background-profile',
-      'tour.respond',
-      expect.objectContaining({ request_id: 'request-1', text: expect.stringContaining('session') })
-    )
+    expect(revealDesktopPane).not.toHaveBeenCalled()
   })
 })

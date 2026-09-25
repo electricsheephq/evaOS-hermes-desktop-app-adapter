@@ -194,6 +194,8 @@ export async function resolveSpeakStreamUrl(owner?: OwnerScope): Promise<null | 
 export interface SpeechStreamSession {
   /** Feed more reply text as it streams in. Safe after `finish` (no-op). */
   append: (text: string) => void
+  /** Release a sealed bubble's tail without ending the turn (client-direct). */
+  flush?: () => void
   /** No more text coming — resolves `done` once the audio drains. */
   finish: () => void
   /**
@@ -314,7 +316,7 @@ function openClientDirectSpeechSession(tts: DirectTtsConfig, options: VoicePlayb
   }
 
   const ingest = (flush: boolean) => {
-    const cut = cutSentences(buffer, flush)
+    const cut = cutSentences(buffer, flush, tts.min_len)
     buffer = cut.rest
 
     if (cut.sentences.length > 0) {
@@ -339,6 +341,11 @@ function openClientDirectSpeechSession(tts: DirectTtsConfig, options: VoicePlayb
       if (text && !finished && !settled) {
         buffer += text
         ingest(false)
+      }
+    },
+    flush: () => {
+      if (!finished && !settled) {
+        ingest(true)
       }
     },
     finish: () => {

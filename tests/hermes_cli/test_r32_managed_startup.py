@@ -41,7 +41,8 @@ def test_managed_startup_preserves_config40_and_soul_unmanaged_migrates(tmp_path
         config.migrate_config(interactive=False, quiet=True)
         config.load_config()
         migrated = yaml.safe_load(cfg.read_text())
-        assert migrated['_config_version'] == 42 == config.DEFAULT_CONFIG['_config_version']
+        # evaOS adaptation (r34): upstream's current schema is v46; the unmanaged path migrates to it.
+        assert migrated['_config_version'] == config.DEFAULT_CONFIG['_config_version'] >= 42
         assert 'model_drift_guard' not in migrated.get('cron', {})
         for profile in (home, sibling):
             changed = (profile / 'SOUL.md').read_bytes()

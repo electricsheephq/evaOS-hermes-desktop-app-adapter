@@ -141,10 +141,12 @@ def _normalize_questions(questions) -> tuple:
     return normalized, None
 
 
-def _batch_result(normalized: List[dict], answers: dict, timed_out: bool) -> str:
+def _batch_result(normalized: List[dict], answers: dict, timed_out: bool, notice: Optional[str] = None) -> str:
     """Batch result JSON; unanswered -> "". The top-level ``timed_out`` flag (present only when
     true) tells the agent whether blanks are deliberate skips or the user walking away, while
-    ``timeout_guidance`` carries the canonical safety guidance for that case."""
+    ``timeout_guidance`` carries the canonical safety guidance for that case; ``notice``
+    (surface-supplied, only beside ``timed_out``) says WHY the wait ended, so an undeliverable
+    prompt never reads as user inactivity."""
     responses = []
     for entry in normalized:
         raw = answers.get(entry["qid"])
@@ -156,6 +158,8 @@ def _batch_result(normalized: List[dict], answers: dict, timed_out: bool) -> str
     if timed_out:
         result["timed_out"] = True
         result["timeout_guidance"] = TIMEOUT_RESPONSE
+        if notice:
+            result["notice"] = str(notice)
     return json.dumps(result, ensure_ascii=False)
 
 
@@ -168,6 +172,7 @@ def _run_batch(normalized: List[dict], callback, question: str) -> str:
     walked away so the loop aborts instead of pestering them; earlier answers are kept."""
     answers: dict = {}
     timed_out = False
+    notice = None
     if _accepts_kwarg(callback, "questions"):
         raw = callback(question, None, questions=normalized)
         timed_out = _is_timeout(raw)
@@ -176,7 +181,8 @@ def _run_batch(normalized: List[dict], callback, question: str) -> str:
         if isinstance(raw, dict):
             answers = dict(raw.get("answers") or {})
             timed_out = bool(raw.get("timed_out"))
-        return _batch_result(normalized, answers, timed_out)
+            notice = raw.get("notice")
+        return _batch_result(normalized, answers, timed_out, notice)
     for entry in normalized:
         raw = _invoke_callback(callback, entry["question"], entry["choices"], entry["multi_select"])
         if _is_timeout(raw):
@@ -259,7 +265,8 @@ CLARIFY_SCHEMA = {
         "enumerated inside the question text (choices render as pickable "
         "rows; options written into the question are dead prose the user "
         "can't click). Result: {responses: [...]} in question order (plus "
-        "timed_out=true and timeout_guidance if the user stopped part-way). Prefer deciding "
+        "timed_out=true and timeout_guidance, and a notice saying why, if the "
+        "user stopped part-way or the prompt could not be delivered). Prefer deciding "
         "low-stakes questions yourself; don't use this for dangerous-command "
         "confirmation (the terminal tool handles that)."
     ),

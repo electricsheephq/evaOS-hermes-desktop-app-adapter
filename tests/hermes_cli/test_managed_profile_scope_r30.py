@@ -60,6 +60,9 @@ def managed_profile_env(tmp_path, monkeypatch):
     default_home = tmp_path / ".hermes"
     profile_home = default_home / "profiles" / "main"
     profile_home.mkdir(parents=True)
+    # evaOS adaptation (r34): upstream only treats a named profile dir as live once it carries an
+    # identity marker (hermes_constants.named_profile_is_live); provisioned profiles always have one.
+    (profile_home / "config.yaml").write_text("{}\n", encoding="utf-8")
     shared_auth = default_home / "shared-auth" / "auth.json"
     shared_auth.parent.mkdir()
     shared_auth.write_text("{}", encoding="utf-8")

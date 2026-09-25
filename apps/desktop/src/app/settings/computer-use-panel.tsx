@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { Button } from '@/components/ui/button'
 import { getActionStatus, getComputerUseStatus, grantComputerUsePermissions } from '@/hermes'
+import { useI18n } from '@/i18n'
 import { isManagedEvaosAgent, sanitizeManagedBrandText } from '@/i18n/managed-brand'
 import { AlertTriangle, Check, ExternalLink, Loader2, RefreshCw, X } from '@/lib/icons'
 import { upsertDesktopActionTask } from '@/store/activity'
@@ -62,6 +63,7 @@ function PermissionRow({ granted, label, hint }: { granted: boolean | null; labe
  * below this card (the generic ToolsetConfigPanel).
  */
 export function ComputerUsePanel({ onConfiguredChange }: ComputerUsePanelProps) {
+  const { t } = useI18n()
   const managedEva = isManagedEvaosAgent()
   const [status, setStatus] = useState<ComputerUseStatus | null>(null)
   const [loading, setLoading] = useState(true)
@@ -195,17 +197,17 @@ export function ComputerUsePanel({ onConfiguredChange }: ComputerUsePanelProps) 
           <PermissionRow
             granted={status.accessibility}
             hint="Lets cua-driver post clicks, keystrokes, and read the accessibility tree."
-            label="Accessibility"
+            label={t.settings.computerUse.accessibility}
           />
           <PermissionRow
             granted={status.screen_recording}
             hint="Lets cua-driver capture screenshots of app windows."
-            label="Screen Recording"
+            label={t.settings.computerUse.screenRecording}
           />
         </>
       ) : (
         <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-background/55 p-2.5">
-          <span className="text-sm font-medium">Driver health</span>
+          <span className="text-sm font-medium">{t.settings.computerUse.driverHealth}</span>
           <Pill tone={tone(status.ready)}>
             <GrantIcon granted={status.ready} />
             {status.ready === true ? 'Ready' : status.ready === false ? 'Not ready' : 'Unknown'}

@@ -1,6 +1,7 @@
 import { useEffect, useReducer, useRef } from 'react'
 
 import { useI18n } from '@/i18n'
+import { isSubmitEnter } from '@/lib/ime'
 import {
   initialQuickComposerState,
   QUICK_TARGET_CURRENT,
@@ -125,7 +126,7 @@ export function QuickEntryApp() {
             }}
             onChange={event => dispatch({ draft: event.target.value, type: 'edit' })}
             onKeyDown={event => {
-              if (event.key === 'Enter' && !event.shiftKey) {
+              if (isSubmitEnter(event) && !event.shiftKey) {
                 event.preventDefault()
                 dispatch({ type: 'submit' })
               } else if (event.key === 'Escape') {

@@ -1,13 +1,12 @@
+import { isRecord } from '@hermes/shared/i18n'
+import { atom } from 'nanostores'
+
 import { MANAGED_TRANSLATIONS, TRANSLATIONS } from './catalog'
 import { DEFAULT_LOCALE } from './languages'
 import { isManagedEvaosAgent } from './managed-brand'
 import type { Locale } from './types'
 
-let runtimeLocale: Locale = DEFAULT_LOCALE
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
+const $runtimeLocale = atom<Locale>(DEFAULT_LOCALE)
 
 /** Walk a dot-path (`a.b.c`) into a nested message tree. */
 function resolvePath(source: unknown, key: string): unknown {
@@ -53,17 +52,20 @@ export function translateFrom(
 }
 
 export function setRuntimeI18nLocale(locale: Locale) {
-  runtimeLocale = locale
+  $runtimeLocale.set(locale)
 }
+
+/** Observe changes to the locale used by non-React plugin contributions. */
+export const subscribeRuntimeI18nLocale = $runtimeLocale.listen
 
 /** The locale module-level translators resolve against (the app's active
  *  `display.language`). Plugin `ctx.i18n.t` reads this too. */
 export function getRuntimeI18nLocale(): Locale {
-  return runtimeLocale
+  return $runtimeLocale.get()
 }
 
 export function translateNow(key: string, ...args: unknown[]): string {
   const catalog = isManagedEvaosAgent() ? MANAGED_TRANSLATIONS : TRANSLATIONS
 
-  return translateFrom(locale => catalog[locale], runtimeLocale, key, args)
+  return translateFrom(locale => catalog[locale], $runtimeLocale.get(), key, args)
 }

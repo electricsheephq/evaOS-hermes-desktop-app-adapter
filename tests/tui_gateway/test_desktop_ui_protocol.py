@@ -19,6 +19,9 @@ from toolsets import resolve_toolset
 import tui_gateway.server as server
 
 
+# evaOS adaptation (r34): upstream routes GUI reads/drive through the ``_ask`` server request
+# (method names without ``.request``; per-session fanout instead of a pinned transport) and deleted
+# setup_mcp (COVERED-UPSTREAM by connection.*). Assertions below follow those seams.
 PROTOCOL_1_TOOLS = {
     "read_terminal",
     "close_terminal",
@@ -31,7 +34,6 @@ PROTOCOL_2_TOOLS = {
     "drive_preview",
     "annotate_preview",
     "read_window_below",
-    "setup_mcp",
     "gui_tour",
     "apply_layout",
 }
@@ -109,7 +111,7 @@ def test_legacy_reused_session_rejects_read_before_wait(monkeypatch):
     server._sessions[sid] = {"source": "desktop", "desktop_ui_protocol": 1}
     monkeypatch.setattr(
         server,
-        "_block",
+        "_ask",
         lambda *args, **kwargs: calls.append((args, kwargs)) or json.dumps({"ok": True}),
     )
     try:
@@ -133,7 +135,7 @@ def test_legacy_reused_session_names_annotate_upgrade_error(caplog, monkeypatch)
     server._sessions[sid] = {"source": "desktop", "desktop_ui_protocol": 1}
     monkeypatch.setattr(
         server,
-        "_block",
+        "_ask",
         lambda *args, **kwargs: calls.append((args, kwargs)) or "unexpected",
     )
     try:
@@ -167,7 +169,7 @@ def test_matched_session_makes_exactly_one_renderer_request(monkeypatch):
     }
     monkeypatch.setattr(
         server,
-        "_block",
+        "_ask",
         lambda *args, **kwargs: calls.append((args, kwargs))
         or json.dumps({"title": "Example Domain"}),
     )
@@ -179,8 +181,8 @@ def test_matched_session_makes_exactly_one_renderer_request(monkeypatch):
     assert json.loads(raw) == {"title": "Example Domain"}
     assert calls == [
         (
-            ("preview.read.request", sid, {}),
-            {"timeout": 45, "transport": transport},
+            ("preview.read", sid, {}),
+            {"timeout": 45},
         )
     ]
 
@@ -198,13 +200,13 @@ def test_matched_open_read_drive_round_trip(monkeypatch):
 
     def fake_block(event, current_sid, payload, timeout=None, **_kwargs):
         blocked.append((event, current_sid, payload, timeout))
-        if event == "preview.read.request":
+        if event == "preview.read":
             return json.dumps({"title": "Example Domain", "text": "Example Domain"})
         return json.dumps(
             {"action": "elements", "elements": [{"ref": "lnk-more", "role": "link"}]}
         )
 
-    monkeypatch.setattr(server, "_block", fake_block)
+    monkeypatch.setattr(server, "_ask", fake_block)
     desktop_ui.set_protocol_resolver(server._desktop_ui_emitter_protocol_error)
     desktop_ui.set_emitter(
         lambda current_sid, event, payload: emitted.append(
@@ -237,8 +239,8 @@ def test_matched_open_read_drive_round_trip(monkeypatch):
         (sid, "preview.close", {"url": ""}),
     ]
     assert blocked == [
-        ("preview.read.request", sid, {}, 45),
-        ("preview.act.request", sid, {"action": "elements"}, 45),
+        ("preview.read", sid, {}, 45),
+        ("preview.act", sid, {"action": "elements"}, 45),
     ]
 
 
@@ -248,7 +250,7 @@ def test_non_desktop_session_cannot_reuse_a_protocol_two_callback(monkeypatch):
     server._sessions[sid] = {"source": "tui", "desktop_ui_protocol": 2}
     monkeypatch.setattr(
         server,
-        "_block",
+        "_ask",
         lambda *args, **kwargs: calls.append((args, kwargs)) or "unexpected",
     )
     try:
@@ -303,7 +305,7 @@ def test_create_and_activate_store_and_rebind_protocol(monkeypatch):
         calls = []
         monkeypatch.setattr(
             server,
-            "_block",
+            "_ask",
             lambda *args, **kwargs: calls.append((args, kwargs)) or "unexpected",
         )
         activated = server._methods["session.activate"](
@@ -371,10 +373,11 @@ def test_rebind_publishes_protocol_and_transport_as_one_snapshot(monkeypatch):
     server._sessions[sid] = session
 
     def fake_block(_event, _sid, _payload, **kwargs):
-        blocked_transports.append(kwargs.get("transport"))
+        # Upstream server requests fan out per session; record the transport the request ran under.
+        blocked_transports.append(session.get("transport"))
         return json.dumps({"title": "Example Domain"})
 
-    monkeypatch.setattr(server, "_block", fake_block)
+    monkeypatch.setattr(server, "_ask", fake_block)
 
     def rebind():
         try:
@@ -497,7 +500,7 @@ def test_fire_and_forget_reports_failed_transport_write(
         lambda name, default="": sid if name == "HERMES_UI_SESSION_ID" else default,
     )
     monkeypatch.setattr(
-        server, "_block",
+        server, "_ask",
         lambda *_args, **_kwargs: pytest.fail("fire-and-forget must not wait"),
     )
     try:
@@ -770,6 +773,8 @@ def test_reload_mcp_preserves_session_protocol_surface(monkeypatch):
             {
                 "enabled_override": ["desktop_ui", "desktop_ui_v2"],
                 "quiet_mode": True,
+                # evaOS adaptation (r34): upstream's session refresh also passes preserve_prefix.
+                "preserve_prefix": False,
             },
         )
     ]
@@ -786,7 +791,7 @@ def test_legacy_open_preview_description_does_not_name_v2_only_tools():
 def test_lifecycle_logs_exclude_payload_and_raw_session(caplog, monkeypatch):
     sid = "raw-session-secret"
     server._sessions[sid] = {"source": "desktop", "desktop_ui_protocol": 2}
-    monkeypatch.setattr(server, "_block", lambda *_args, **_kwargs: "")
+    monkeypatch.setattr(server, "_ask", lambda *_args, **_kwargs: "")
     try:
         with caplog.at_level(logging.DEBUG, logger=server.logger.name):
             server._agent_cbs(sid)["drive_preview_callback"](

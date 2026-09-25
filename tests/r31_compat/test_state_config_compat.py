@@ -231,15 +231,24 @@ def _object_map(snapshot: dict[str, Any]) -> dict[str, str]:
     return {name: sql for _kind, name, sql in snapshot["objects"]}
 
 
+# evaOS adaptation (r34): upstream FTS storage v3 (hermes_state_common.FTS_STORAGE_VERSION) re-points a
+# settled external layout's word index at the ``messages_fts_src`` projection view and stamps "3" on open.
+# The old runtime still reads, appends and searches that layout (this round trip), so the marker and the
+# word-index source are accepted in either form; the trigram layout assertions are unchanged.
+def _fts_word_source(sql):
+    body = sql["messages_fts"].lower().replace(" ", "")
+    return next((c for c in ("content='messages_fts_src'", "content='messages'") if c in body), None)
+
+
 def _assert_external_v1(snapshot: dict[str, Any]) -> None:
     names = {name for _kind, name, _sql in snapshot["objects"]}
     sql = _object_map(snapshot)
-    assert snapshot["meta"].get("fts_storage_version") in (None, "1")
+    assert snapshot["meta"].get("fts_storage_version") in (None, "1", "3")
     assert "messages_fts_trigram_src" in names
     assert "fts_rebuild_high_water" not in snapshot["meta"]
     assert "fts_rebuild_progress" not in snapshot["meta"]
     assert not any(name.startswith("fts_v22_trash_") for name in names)
-    assert "content='messages'" in sql["messages_fts"].lower().replace(" ", "")
+    assert _fts_word_source(sql) in ("content='messages'", "content='messages_fts_src'")
     assert "content='messages_fts_trigram_src'" in sql["messages_fts_trigram"].lower().replace(" ", "")
     assert "tool_calls" in sql["messages_fts_trigram"].lower()
 def _assert_external_v2(snapshot: dict[str, Any]) -> None:
@@ -247,9 +256,9 @@ def _assert_external_v2(snapshot: dict[str, Any]) -> None:
     sql = _object_map(snapshot)
     # The old runtime stamps its own marker after a compatible append.  The
     # physical v2 layout is the compatibility invariant; the marker is not.
-    assert snapshot["meta"].get("fts_storage_version") in (None, "1", "2")
+    assert snapshot["meta"].get("fts_storage_version") in (None, "1", "2", "3")
     assert "messages_fts_trigram_src" in names
-    assert "content='messages'" in sql["messages_fts"].lower().replace(" ", "")
+    assert _fts_word_source(sql) in ("content='messages'", "content='messages_fts_src'")
     assert "content='messages_fts_trigram_src'" in sql["messages_fts_trigram"].lower().replace(" ", "")
     assert "tool_calls" not in sql["messages_fts_trigram"].lower()
 def test_state_round_trip_old_new_old_and_candidate_readback(tmp_path: Path) -> None:

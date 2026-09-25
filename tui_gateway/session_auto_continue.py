@@ -93,6 +93,7 @@ def _maybe_schedule_auto_continue(sid: str, session: dict, session_key: str) -> 
                 session["_auto_continue_scheduled"] = False  # a real user prompt beat us; it clears the marker
                 return
             session["running"] = True
+            session["_turn_requester_transport"] = None  # evaOS (RE-7): no client prompt, no requester
             session["last_active"] = time.time()
         # Ownership admission BEFORE message.start: a sibling backend sharing this HERMES_HOME may have written the
         # marker and still be mid-turn. Leave the marker so a later resume retries.
@@ -109,13 +110,21 @@ def _maybe_schedule_auto_continue(sid: str, session: dict, session_key: str) -> 
             # nested notes). Set here, not at schedule time, so a bail above leaves nothing for a racing user turn.
             session["_auto_continue_attempt"], session["_auto_continue_prompt"] = attempt, marker["prompt"]
         try:
-            _emit("status.update", sid, {"kind": "process", "text": "Resuming interrupted turn…"})
-            _emit("message.start", sid)
-            _run_prompt_submit(rid, sid, session, text, display_kind="auto_continue")
+            from gateway.warning_notifications import render_notification
+            diagnostic = marker.get("notification_category") == "diagnostic"
+            with _session_profile_runtime_scope(session):
+                def announce():
+                    _emit("status.update", sid, {"kind": "process", "text": "Resuming interrupted turn…"})
+                    _emit("message.start", sid)
+                render_notification(announce, platform="tui", diagnostic=diagnostic)
+                _run_prompt_submit(rid, sid, session, text, display_kind="auto_continue",
+                    **({"display_metadata": {"notification_category": "diagnostic"}} if diagnostic else {}))
         except Exception as exc:
             _notif_log_failure("auto-continue dispatch failed", exc)
             _notif_release_turn(session)  # rebound from session_notifications
-    threading.Thread(target=kickoff, daemon=True).start()
+    if _start_session_work(kickoff, name=f"auto-continue-{sid}") is None:
+        session["_auto_continue_scheduled"] = False
+        return None
     logger.info("auto-continue scheduled for session %s (attempt %d, interrupted %.0fs ago)", session_key, attempt, age)
     return {"attempt": attempt, "interrupted_at": marker["started_at"]}
 
@@ -286,8 +295,8 @@ def _handle_busy_submit(rid, sid: str, session: dict, text: Any, transport: Any,
 def _drain_queued_prompt(rid, sid: str, session: dict) -> bool:
     """Fire a queued next-turn prompt if one is waiting and the session is idle. True when dispatched: the caller
     skips lower-priority follow-ups this cycle (the user's message wins)."""
-    with session["history_lock"]:
-        if session.get("_closing") or not (queued := session.get("queued_prompt")) or session.get("running"):
+    with _session_turn_admission(session) as admitted:
+        if not admitted or session.get("_closing") or not (queued := session.get("queued_prompt")) or session.get("running"):
             return False
         queue_generation = int(session.get("_queued_prompt_generation", 0))
         _ac_set_queue(session, session.get("queued_prompts") or [])
@@ -299,6 +308,9 @@ def _drain_queued_prompt(rid, sid: str, session: dict) -> bool:
         # prompt still runs, only the dead pin is dropped.
         if queued_transport is not None and not _transport_is_dead(queued_transport):
             _attach_session_transport(session, queued_transport)
+        # evaOS (RE-7): the queuer is the drained turn's requester (none when its peer is gone).
+        session["_turn_requester_transport"] = (
+            queued_transport if queued_transport is not None and not _transport_is_dead(queued_transport) else None)
     use_compute_host = _session_uses_compute_host(session)
     with session["history_lock"]:
         if int(session.get("_queued_prompt_generation", 0)) != queue_generation:
@@ -345,6 +357,10 @@ def _inflight_snapshot(session: dict) -> dict | None:
     if not (user or assistant or streaming or error):
         return None
     snapshot = {"assistant": assistant, "streaming": streaming, "user": user}
+    if isinstance(display_kind := turn.get("display_kind"), str) and display_kind:
+        snapshot["display_kind"] = display_kind
+    if isinstance(display_metadata := turn.get("display_metadata"), dict):
+        snapshot["display_metadata"] = dict(display_metadata)
     raw_offsets = turn.get("correction_offsets") or []
     correction_pairs = [(str(c), raw_offsets[i] if i < len(raw_offsets) else None)
                         for i, c in enumerate(turn.get("corrections") or []) if str(c).strip()]
@@ -373,13 +389,14 @@ def _emit_terminal_turn_error(
         with contextlib.suppress(Exception):
             from agent.error_surface import build_error_surface_from_exception
             error_surface = build_error_surface_from_exception(
-                error, provider=str(getattr(agent, "provider", "") or ""), model=str(getattr(agent, "model", "") or ""))
+                error, provider=str(getattr(agent, "provider", "") or ""), model=str(getattr(agent, "model", "") or ""),
+                api_key=getattr(agent, "api_key", None))
     with session["history_lock"]:
         _fail_inflight_turn(session, error, error_surface=error_surface)
         turn = session.get("inflight_turn") or {}
         message, partial = str(turn.get("error") or "turn failed"), str(turn.get("assistant") or "")
         cols = int(session.get("cols", 80))
-    text = partial or f"Error: {message}"
+    text = partial or turn_error_text(message, error_surface)
     rendered = ""
     with contextlib.suppress(Exception):
         rendered = render_message(text, cols)

@@ -21,8 +21,11 @@ it('keeps both recognition paths on the tile owner and localizes fallback', asyn
   const owner = { connectionId: 'secondary', profile: 'default' }
   const audio = new Blob(['fixture'], { type: 'audio/webm' })
   expect(await tileTranscribeAudio(audio, owner)).toBe('fixture')
-  expect(transcribeAudioClientDirect).toHaveBeenCalledWith(audio, owner)
-  expect(transcribeAudio).toHaveBeenCalledWith(expect.stringContaining('data:'), 'audio/webm', owner)
+  expect(transcribeAudioClientDirect).toHaveBeenCalledWith(audio, { ...owner, priority: 'foreground' })
+  expect(transcribeAudio).toHaveBeenCalledWith(expect.stringContaining('data:'), 'audio/webm', {
+    ...owner,
+    priority: 'foreground'
+  })
   expect(notifyVoiceFallback).toHaveBeenCalledWith('quota')
 })
 it('discards stale direct results before calling the relay', async () => {
@@ -64,6 +67,7 @@ it('retains an explicit tile route when the stored ID exists on multiple gateway
   await tileTranscribeAudio(new Blob(['fixture']), owner)
   expect(transcribeAudioClientDirect).toHaveBeenCalledWith(expect.any(Blob), {
     connectionId: 'secondary',
+    priority: 'foreground',
     profile: 'default'
   })
 })
