@@ -2119,37 +2119,48 @@ class _FanoutPeerRoute:
         return self._fanout.write_to(self._peer, frame)
 
 
-def _desktop_ui_emit_to_requester(sid: str, event: str, payload: dict) -> bool:
+def _emit_requester_card(sid: str, event: str, payload: dict) -> bool:
     """evaOS (RE-7): deliver a card only to the viewer whose prompt started the running turn.
 
-    The requester is ``_turn_requester_transport`` (set where a turn is claimed from a client prompt). It must
-    still be attached to the session and must itself have negotiated the event's Desktop UI protocol. The
-    frame goes to that peer's own mailbox, never through the session fanout. No resolvable requester: the
-    card is refused, as the protocol guard refuses it.
+    The requester is ``_turn_requester_transport`` (set where a turn is claimed from a client prompt), and its
+    OWN ``viewers`` entry decides; the session-level ``source`` is the last attacher's and never does.
+    - Desktop requester: its own peer transport only, and only at the event's Desktop UI protocol.
+    - Any other requester (the TUI renders the card): its own peer transport only, upstream frame, no gate.
+    - No resolvable requester: the upstream session emit when no Desktop viewer is attached; otherwise refused
+      (a card is never fanned out to a Desktop that did not negotiate it).
     """
     required, tool_name = _DESKTOP_UI_EVENT_REQUIREMENTS[event]
     with _sessions_lock:
         session = _sessions.get(sid)
     session = session if isinstance(session, dict) else {}
+    viewers = session.get("viewers") or {}
     requester = session.get("_turn_requester_transport")
-    viewer = (session.get("viewers") or {}).get(requester) if requester is not None else None
-    protocol = viewer.get("desktop_ui_protocol") if isinstance(viewer, dict) else None
+    viewer = viewers.get(requester) if requester is not None else None
+    if not isinstance(viewer, dict):
+        if not any(isinstance(entry, dict) and entry.get("source") == "desktop" and not _transport_is_dead(peer)
+                   for peer, entry in list(viewers.items())):
+            return _emit(event, sid, payload) is not False
+        _log_desktop_ui_lifecycle(sid, tool_name, "protocol_blocked", required_protocol=required,
+                                  negotiated_protocol=0)
+        return False
+    desktop = viewer.get("source") == "desktop"
+    protocol = viewer.get("desktop_ui_protocol")
     protocol = protocol if type(protocol) is int else 0
     route = session.get("transport")
     if isinstance(route, FanoutTransport) and route.contains(requester):
         target = _FanoutPeerRoute(route, requester)
-    elif requester is not None and route is requester:
+    elif route is requester:
         target = requester
     else:
         target = None
-    if (target is None or protocol < required or viewer.get("source") != "desktop"
-            or _transport_is_dead(requester)):
+    if target is None or _transport_is_dead(requester) or (desktop and protocol < required):
         _log_desktop_ui_lifecycle(sid, tool_name, "protocol_blocked", required_protocol=required,
                                   negotiated_protocol=protocol)
         return False
     dispatched = _emit(event, sid, payload, transport=target) is not False
-    _log_desktop_ui_lifecycle(sid, tool_name, "dispatched" if dispatched else "transport_unavailable",
-                              required_protocol=required, negotiated_protocol=protocol)
+    if desktop:
+        _log_desktop_ui_lifecycle(sid, tool_name, "dispatched" if dispatched else "transport_unavailable",
+                                  required_protocol=required, negotiated_protocol=protocol)
     return dispatched
 
 

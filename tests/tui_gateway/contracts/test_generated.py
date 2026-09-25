@@ -44,7 +44,9 @@ _SIDE_AGENT = re.compile(r"_spawn_side_agent\((?:[^()]|\([^()]*\))*?\"([a-z_][a-
 _SUBAGENT_RELAY = re.compile(r"\"(subagent\.[a-z_]+)\"")
 _DESKTOP_UI_EMIT = re.compile(r"desktop_ui\.(?:emit|emit_or_error)\(\s*\"([a-z_][a-z0-9_.]*)\"")
 # evaOS: the protocol-gated emitter ``_desktop_ui_emit(sid, "event", payload)`` (event name second).
-_GATED_DESKTOP_UI_EMIT = re.compile(r"\b_desktop_ui_emit\(\s*[^,()]+(?:\([^()]*\))?\s*,\s*\"([a-z_][a-z0-9_.]*)\"")
+# evaOS (r34, RE-7): ``_emit_requester_card(sid, "event", payload)`` has the same shape.
+_GATED_DESKTOP_UI_EMIT = re.compile(
+    r"\b(?:_desktop_ui_emit|_emit_requester_card)\(\s*[^,()]+(?:\([^()]*\))?\s*,\s*\"([a-z_][a-z0-9_.]*)\"")
 _BROKER_FRAME = re.compile(r"^FRAME_[A-Z_]+ = \"(browser\.controller\.[a-z_]+)\"", re.M)
 _SETUP_READY = re.compile(r"^SETUP_READY_EVENT = \"([a-z_.]+)\"", re.M)
 

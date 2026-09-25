@@ -145,3 +145,76 @@ def test_tui_session_keeps_the_upstream_session_emit(monkeypatch):
     server._agent_cbs(sid)["connection_callback"](dict(PAYLOAD))
 
     assert _types(fanout) == ["connection.request"]
+
+
+def _mixed_session(monkeypatch, sid, *, requester_source, other_source, session_source):
+    """Two viewers with DIFFERENT sources on one fanout; ``session["source"]`` is the last attacher's."""
+    requester, other = _Viewer(), _Viewer()
+    route = FanoutTransport(requester, other)
+    entry = lambda source: {"attached_at": time.time(), "source": source,  # noqa: E731
+                            "desktop_ui_protocol": 2 if source == "desktop" else 0}
+    monkeypatch.setitem(server._sessions, sid, {
+        "source": session_source, "desktop_ui_protocol": 2 if session_source == "desktop" else 0,
+        "transport": route, "viewers": {requester: entry(requester_source), other: entry(other_source)},
+        "_turn_requester_transport": requester,
+    })
+    return requester, other, route
+
+
+def test_desktop_requester_with_a_later_tui_attacher_alone_receives_the_card(monkeypatch):
+    sid = "connection-mixed-desktop-requester"
+    fanout = _fanout(monkeypatch)
+    requester, other, route = _mixed_session(
+        monkeypatch, sid, requester_source="desktop", other_source="tui", session_source="tui")
+
+    server._agent_cbs(sid)["connection_callback"](dict(PAYLOAD))
+    server._emit("marker", sid, {}, transport=route)
+    _settle(requester, other, marker_sid=sid)
+
+    assert requester.types() == ["connection.request", "marker"]
+    assert other.types() == ["marker"]
+    assert fanout == []
+
+
+def test_tui_requester_with_a_later_desktop_attacher_alone_receives_the_upstream_card(monkeypatch):
+    sid = "connection-mixed-tui-requester"
+    fanout = _fanout(monkeypatch)
+    requester, other, route = _mixed_session(
+        monkeypatch, sid, requester_source="tui", other_source="desktop", session_source="desktop")
+
+    server._agent_cbs(sid)["connection_callback"](dict(PAYLOAD))
+    server._emit("marker", sid, {}, transport=route)
+    _settle(requester, other, marker_sid=sid)
+
+    assert requester.types() == ["connection.request", "marker"]
+    params = requester.frames[0]["params"]  # the event_replay ``seq`` stamp rides on every routed frame
+    assert (params["type"], params["session_id"], params["payload"]) == ("connection.request", sid, PAYLOAD)
+    assert other.types() == ["marker"]
+    assert fanout == []
+
+
+def test_no_requester_with_a_desktop_viewer_attached_refuses_the_card(monkeypatch):
+    sid = "connection-mixed-no-requester"
+    fanout = _fanout(monkeypatch)
+    requester, other, route = _mixed_session(
+        monkeypatch, sid, requester_source="tui", other_source="desktop", session_source="tui")
+    server._sessions[sid]["_turn_requester_transport"] = None
+
+    server._agent_cbs(sid)["connection_callback"](dict(PAYLOAD))
+    server._emit("marker", sid, {}, transport=route)
+    _settle(requester, other, marker_sid=sid)
+
+    assert requester.types() == ["marker"]
+    assert other.types() == ["marker"]
+    assert fanout == []
+
+
+def test_no_requester_in_a_pure_tui_session_keeps_the_upstream_session_emit(monkeypatch):
+    sid = "connection-pure-tui-no-requester"
+    fanout = _fanout(monkeypatch)
+    _mixed_session(monkeypatch, sid, requester_source="tui", other_source="tui", session_source="tui")
+    server._sessions[sid]["_turn_requester_transport"] = None
+
+    server._agent_cbs(sid)["connection_callback"](dict(PAYLOAD))
+
+    assert _types(fanout) == ["connection.request"]

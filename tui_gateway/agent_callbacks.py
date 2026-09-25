@@ -161,12 +161,10 @@ def _agent_cbs(sid: str) -> dict:
             lambda _transport: _ask("window.read", sid, {}, timeout=30)),
         # manage_connections card. Fire-and-forget: the tool thread waits on its own operation
         # (tools/connectors/run.py), and the card drives it through connection.respond by op_id.
-        # evaOS (RE-7): a Desktop session gets the card only on the requesting viewer's own transport, and
-        # only when that viewer negotiated protocol 2+; other surfaces (the TUI renders it) keep the session emit.
-        "connection_callback": lambda payload: (
-            _desktop_ui_emit_to_requester(sid, "connection.request", dict(payload))
-            if _desktop_ui_attachment_for_session(sid)[0] == "desktop"
-            else _emit("connection.request", sid, dict(payload))) and None,
+        # evaOS (RE-7): only the viewer whose prompt started the turn gets the card, keyed on that viewer's own
+        # source/protocol (see _emit_requester_card); a session with no Desktop viewer keeps upstream's emit.
+        "connection_callback": lambda payload: _emit_requester_card(
+            sid, "connection.request", dict(payload)) and None,
         # tour (desktop GUI): renderer drives driver.js and answers the ``tour`` request.
         "tour_callback": lambda payload: _desktop_ui_request(
             sid, "gui_tour", 2,
