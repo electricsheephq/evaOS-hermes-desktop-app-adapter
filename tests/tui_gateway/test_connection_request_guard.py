@@ -212,7 +212,8 @@ def test_no_requester_with_a_desktop_viewer_attached_refuses_the_card(monkeypatc
 def test_no_requester_in_a_pure_tui_session_keeps_the_upstream_session_emit(monkeypatch):
     sid = "connection-pure-tui-no-requester"
     fanout = _fanout(monkeypatch)
-    _mixed_session(monkeypatch, sid, requester_source="tui", other_source="tui", session_source="tui")
+    # A stale session-level source (a Desktop attached and left): routing must read the live viewers only.
+    _mixed_session(monkeypatch, sid, requester_source="tui", other_source="tui", session_source="desktop")
     server._sessions[sid]["_turn_requester_transport"] = None
 
     server._agent_cbs(sid)["connection_callback"](dict(PAYLOAD))
