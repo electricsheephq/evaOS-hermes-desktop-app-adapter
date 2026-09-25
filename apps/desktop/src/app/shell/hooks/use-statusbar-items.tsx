@@ -40,12 +40,8 @@ import { copyFilePath, revealFile, shouldOfferLocalReveal } from '@/store/file-a
 import { $freeTierStatus, FREE_TIER_MODEL } from '@/store/free-tier'
 import { openFreeTierSignIn } from '@/store/free-tier-sign-in'
 import { revealFileInTree } from '@/store/layout'
-<<<<<<< HEAD
 import { notifyError } from '@/store/notifications'
-||||||| 939e45c91d
-=======
 import { $onboardingGate, guidedOnboardingActive } from '@/store/onboarding-gate'
->>>>>>> f97608f178
 import { $activeGatewayProfile } from '@/store/profile'
 import { $profileRailVisible } from '@/store/profile-rail-prefs'
 import { $projectTree, projectNameForCwd } from '@/store/projects'

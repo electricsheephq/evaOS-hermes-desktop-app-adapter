@@ -1,23 +1,12 @@
-<<<<<<< HEAD
-import { translateNow } from '@/i18n'
-import { isManagedEvaosAgent } from '@/i18n/managed-brand'
-||||||| 939e45c91d
-import { translateNow } from '@/i18n'
-=======
 import { isSessionNotOwnedError } from '@/app/session/hooks/use-prompt-actions/utils'
 import { translateNow, TRANSLATIONS } from '@/i18n'
+import { isManagedEvaosAgent } from '@/i18n/managed-brand'
 import { getRuntimeI18nLocale } from '@/i18n/runtime'
->>>>>>> f97608f178
 import { textPart } from '@/lib/chat-messages'
 import { coerceGatewayText } from '@/lib/chat-runtime'
-<<<<<<< HEAD
 import { classifyCodexReloginText } from '@/lib/codex-relogin-text'
-import { parseErrorSurface } from '@/lib/error-surface'
-||||||| 939e45c91d
-=======
-import type { ErrorSurface } from '@/lib/error-surface'
+import { type ErrorSurface, parseErrorSurface } from '@/lib/error-surface'
 import { errorCardText } from '@/lib/error-surface-copy'
->>>>>>> f97608f178
 import { isProviderSetupErrorMessage } from '@/lib/provider-setup-errors'
 import { type AgentNoticePayload, clearAgentNotice, nativeNoticeInput, showAgentNotice } from '@/store/agent-notices'
 import { clearClarifyRequest } from '@/store/clarify'
@@ -266,13 +255,7 @@ export function handleStatusEvent(ctx: GatewayEventContext): boolean {
 
     if (sessionId) {
       flushQueuedDeltas(sessionId)
-<<<<<<< HEAD
-      failAssistantMessage(sessionId, errorMessage, occurredAt, errorSurface)
-||||||| 939e45c91d
-      failAssistantMessage(sessionId, errorMessage, occurredAt)
-=======
-      failAssistantMessage(sessionId, errorMessage, occurredAt, surface)
->>>>>>> f97608f178
+      failAssistantMessage(sessionId, errorMessage, occurredAt, errorSurface ?? surface)
     }
 
     if (isActiveEvent) {

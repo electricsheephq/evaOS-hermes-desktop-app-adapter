@@ -12,14 +12,8 @@ import { HighlightMatches } from '@/components/ui/highlight-matches'
 import { Switch } from '@/components/ui/switch'
 import type { HermesGateway } from '@/hermes'
 import { useI18n } from '@/i18n'
-<<<<<<< HEAD
 import { isManagedEvaosAgent, managedProviderDisplayValue } from '@/i18n/managed-brand'
-import { Search } from '@/lib/icons'
-||||||| 939e45c91d
-import { Search } from '@/lib/icons'
-=======
 import { Plus, Search, X } from '@/lib/icons'
->>>>>>> f97608f178
 import { modelOptionsQueryKey, requestModelOptions } from '@/lib/model-options'
 import { displayModelName, modelDisplayParts } from '@/lib/model-status-label'
 import { foldIncludes, normalize } from '@/lib/text'
@@ -78,21 +72,13 @@ export function ModelVisibilityDialog({
 
   const providers = useMemo(
     () =>
-<<<<<<< HEAD
-      (modelOptions.data?.providers ?? []).filter(
-        provider => (provider.models ?? []).length > 0 && (!managedEva || provider.slug !== 'llamacpp')
-      ),
-    [managedEva, modelOptions.data]
-||||||| 939e45c91d
-    () => (modelOptions.data?.providers ?? []).filter(provider => (provider.models ?? []).length > 0),
-    [modelOptions.data]
-=======
       withCustomModels(
-        (modelOptions.data?.providers ?? []).filter(provider => (provider.models ?? []).length > 0),
+        (modelOptions.data?.providers ?? []).filter(
+          provider => (provider.models ?? []).length > 0 && (!managedEva || provider.slug !== 'llamacpp')
+        ),
         customModels
       ),
-    [modelOptions.data, customModels]
->>>>>>> f97608f178
+    [managedEva, modelOptions.data, customModels]
   )
 
   useEffect(() => seedKnownModels(providers), [providers])

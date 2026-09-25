@@ -28,22 +28,9 @@ import {
   endGatewaySwitch,
   recoverActiveSourceAfterFailedGatewaySwitch
 } from '@/store/gateway-switch'
-<<<<<<< HEAD
-import { notifyError } from '@/store/notifications'
-import {
-  $activeGatewayProfile,
-  $profiles,
-  adoptActiveGatewayProfile,
-  ensureGatewayProfile
-} from '@/store/profile'
-||||||| 939e45c91d
-import { notifyError } from '@/store/notifications'
-import { $activeGatewayProfile, $profiles, ensureGatewayProfile } from '@/store/profile'
-=======
 import { $notifications, clearNotifications, notifyError } from '@/store/notifications'
-import { $activeGatewayProfile, $profiles, ensureGatewayProfile } from '@/store/profile'
+import { $activeGatewayProfile, $profiles, adoptActiveGatewayProfile, ensureGatewayProfile } from '@/store/profile'
 import { $backendRestartRequest } from '@/store/recovery-requests'
->>>>>>> f97608f178
 import {
   $activeSessionId,
   $awaitingResponse,
@@ -310,14 +297,8 @@ function GatewayBootHarness({
 }: HarnessProps = {}) {
   useGatewayBoot({
     beforeConnectionSwitch,
-<<<<<<< HEAD
     handleGatewayEvent,
-||||||| 939e45c91d
-    handleGatewayEvent: () => undefined,
-=======
-    handleGatewayEvent: () => undefined,
     handleServerRequest: () => false,
->>>>>>> f97608f178
     onConnectionReady: () => undefined,
     onGatewayReady,
     refreshHermesConfig,
@@ -905,7 +886,6 @@ describe('shared host backend event provenance', () => {
 })
 
 describe('useGatewayBoot remote reconnect loop (real hook, fake socket)', () => {
-<<<<<<< HEAD
   it('adopts a delegated-support profile before the first managed connection request', async () => {
     const calls: string[] = []
     const rememberLog = vi.spyOn(console, 'info').mockImplementation(() => undefined)
@@ -1099,7 +1079,7 @@ describe('useGatewayBoot remote reconnect loop (real hook, fake socket)', () => 
       await vi.advanceTimersByTimeAsync(90_000)
     })
 
-    expect($desktopBoot.get().error).toBe('Lost connection to the gateway')
+    expect($desktopBoot.get().error).toBe('evaOS Agent lost its connection')
     expect($desktopBoot.get().running).toBe(false)
     expect($desktopBoot.get().visible).toBe(true)
 
@@ -1113,7 +1093,7 @@ describe('useGatewayBoot remote reconnect loop (real hook, fake socket)', () => 
       timestamp: Date.now()
     })
 
-    expect($desktopBoot.get().error).toBe('Lost connection to the gateway')
+    expect($desktopBoot.get().error).toBe('evaOS Agent lost its connection')
     expect($desktopBoot.get().running).toBe(false)
     expect($desktopBoot.get().visible).toBe(true)
   })
@@ -1148,8 +1128,8 @@ describe('useGatewayBoot remote reconnect loop (real hook, fake socket)', () => 
     expect(currentLocation).toBe('/settings')
     expect(FakeWebSocket.instances).toHaveLength(1)
     expect(FakeWebSocket.instances[0].readyState).toBe(FakeWebSocket.OPEN)
-||||||| 939e45c91d
-=======
+  })
+
   it('parks rejected primary auth across timers and wake signals until explicit recovery', async () => {
     const desktop = fakeDesktop()
     desktop.getConnection.mockResolvedValue({ ...primaryConn, authMode: 'oauth' })
@@ -1176,7 +1156,6 @@ describe('useGatewayBoot remote reconnect loop (real hook, fake socket)', () => 
     await flushAsync()
     expect($gatewayState.get()).toBe('open')
     expect($desktopBoot.get().error).toBeNull()
->>>>>>> f97608f178
   })
 
   it('INITIAL boot against a dead VPS: getConnection hangs (waitForHermes) → app sits in the connecting combo, then fails', async () => {

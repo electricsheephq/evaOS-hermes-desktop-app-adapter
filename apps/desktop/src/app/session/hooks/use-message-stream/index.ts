@@ -942,18 +942,7 @@ export function useMessageStream({
   )
 
   const failAssistantMessage = useCallback(
-<<<<<<< HEAD
-    (
-      sessionId: string,
-      errorMessage: string,
-      occurredAt = Date.now() / 1000,
-      errorSurface?: ErrorSurface | null
-    ) => {
-||||||| 939e45c91d
-    (sessionId: string, errorMessage: string, occurredAt = Date.now() / 1000) => {
-=======
     (sessionId: string, errorMessage: string, occurredAt = Date.now() / 1000, surface?: ErrorSurface | null) => {
->>>>>>> f97608f178
       updateSessionState(sessionId, state => {
         const streamId = state.streamId ?? `assistant-error-${Date.now()}`
         const groupId = state.pendingBranchGroup ?? undefined
@@ -975,12 +964,7 @@ export function useMessageStream({
                     ...message,
                     completedAt: occurredAt,
                     error,
-<<<<<<< HEAD
-                    ...(errorSurface ? { errorSurface } : {}),
-||||||| 939e45c91d
-=======
                     ...errorSurface,
->>>>>>> f97608f178
                     parts: completeOpenTimelineParts(message.parts, occurredAt),
                     pending: false,
                     ...(durationS !== undefined ? { durationS } : {})
@@ -996,12 +980,7 @@ export function useMessageStream({
                 timestamp: occurredAt,
                 completedAt: occurredAt,
                 error,
-<<<<<<< HEAD
-                ...(errorSurface ? { errorSurface } : {}),
-||||||| 939e45c91d
-=======
                 ...errorSurface,
->>>>>>> f97608f178
                 pending: false,
                 branchGroupId: groupId,
                 ...(durationS !== undefined ? { durationS } : {})

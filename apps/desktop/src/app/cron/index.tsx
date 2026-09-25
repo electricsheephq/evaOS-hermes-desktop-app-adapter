@@ -1395,32 +1395,9 @@ function CronEditorDialog({
                     )}
                     {modelProviders.map(provider => (
                       <SelectGroup key={provider.slug}>
-<<<<<<< HEAD
                         <SelectLabel>
                           {managedProviderDisplayValue(provider.slug, provider.name, isManagedEvaosAgent())}
                         </SelectLabel>
-                        {(provider.models ?? []).map(model => (
-                          <SelectItem
-                            className="font-mono"
-                            key={`${provider.slug}:${model}`}
-                            value={`${provider.slug}:${model}`}
-                          >
-                            {model}
-                          </SelectItem>
-                        ))}
-||||||| 939e45c91d
-                        <SelectLabel>{provider.name}</SelectLabel>
-                        {(provider.models ?? []).map(model => (
-                          <SelectItem
-                            className="font-mono"
-                            key={`${provider.slug}:${model}`}
-                            value={`${provider.slug}:${model}`}
-                          >
-                            {model}
-                          </SelectItem>
-                        ))}
-=======
-                        <SelectLabel>{provider.name}</SelectLabel>
                         {(provider.models ?? []).map(model => {
                           const value = cronModelChoiceValue(provider.slug, model)
 
@@ -1430,7 +1407,6 @@ function CronEditorDialog({
                             </SelectItem>
                           )
                         })}
->>>>>>> f97608f178
                       </SelectGroup>
                     ))}
                   </SelectContent>

@@ -12,13 +12,8 @@ import type {
   DesktopCloudAgent,
   DesktopCloudOrg,
   DesktopConnectionProbeResult,
-<<<<<<< HEAD
+  DesktopRegistryConnection,
   EvaManagedStatus
-||||||| 939e45c91d
-import type { DesktopAuthProvider, DesktopCloudAgent, DesktopCloudOrg, DesktopConnectionProbeResult } from '@/global'
-=======
-  DesktopRegistryConnection
->>>>>>> f97608f178
 } from '@/global'
 import { useI18n } from '@/i18n'
 import { managedVendorDisplayName } from '@/i18n/managed-brand'
@@ -276,7 +271,6 @@ function ModeCard({
   )
 }
 
-<<<<<<< HEAD
 // Managed evaOS Agent connections are assigned by Electric Sheep. Keep the
 // local/remote/cloud/SSH connection editor out of this path: those controls
 // would expose unsupported endpoint, token, or profile overrides.
@@ -395,8 +389,10 @@ function EvaManagedGatewaySettings({ embedded = false }: { embedded?: boolean } 
           )}
         </div>
       </div>
-||||||| 939e45c91d
-=======
+    </SettingsContent>
+  )
+}
+
 interface GatewaySettingsProps {
   embedded?: boolean
   subpage?: string
@@ -404,6 +400,10 @@ interface GatewaySettingsProps {
 
 export function GatewaySettings({ embedded = false, subpage }: GatewaySettingsProps = {}) {
   useSettingDeepLink('gateway', page => subpage === undefined || page === subpage)
+
+  if (window.hermesDesktop?.eva) {
+    return <EvaManagedGatewaySettings embedded={embedded} />
+  }
 
   // Recovery always keeps the complete connection form, regardless of a
   // settings destination. Other tasks never mount that form or its probes.
@@ -474,7 +474,6 @@ function GatewayManagedUpdates() {
           title={t.settings.managedUpdates.title}
         />
       )}
->>>>>>> f97608f178
     </SettingsContent>
   )
 }
@@ -483,21 +482,7 @@ function GatewayManagedUpdates() {
 // card: the outer title/intro, the "Save for next restart" action, and the
 // Diagnostics row are redundant there (the card owns its header + a single
 // reconnect action), so only the connection controls render.
-<<<<<<< HEAD
-export function GatewaySettings({ embedded = false }: { embedded?: boolean } = {}) {
-  if (window.hermesDesktop?.eva) {
-    return <EvaManagedGatewaySettings embedded={embedded} />
-  }
-
-  return <UnmanagedGatewaySettings embedded={embedded} />
-}
-
-function UnmanagedGatewaySettings({ embedded = false }: { embedded?: boolean } = {}) {
-||||||| 939e45c91d
-export function GatewaySettings({ embedded = false }: { embedded?: boolean } = {}) {
-=======
 function GatewayConnectionSettings({ embedded, standalone }: { embedded: boolean; standalone: boolean }) {
->>>>>>> f97608f178
   const { t } = useI18n()
   const g = t.settings.gateway
   const [loading, setLoading] = useState(true)

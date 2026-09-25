@@ -1,9 +1,4 @@
-<<<<<<< HEAD
-import { type GatewayWsUrlResult, resolveGatewayWsUrl } from '@hermes/shared'
-||||||| 939e45c91d
-=======
-import { reconnectBackoffDelayMs } from '@hermes/shared'
->>>>>>> f97608f178
+import { type GatewayWsUrlResult, reconnectBackoffDelayMs, resolveGatewayWsUrl } from '@hermes/shared'
 
 import type { HermesConnection } from '@/global'
 import { RECONNECT_ATTEMPT_TIMEOUT_MS, withTimeout } from '@/lib/with-timeout'

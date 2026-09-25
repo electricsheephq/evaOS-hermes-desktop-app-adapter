@@ -7,15 +7,14 @@ import { group, split } from '@/components/pane-shell/tree/model'
 import { $layoutTree, noteActiveTreeGroup } from '@/components/pane-shell/tree/store'
 import { SidebarProvider } from '@/components/ui/sidebar'
 import { registry } from '@/contrib/registry'
-<<<<<<< HEAD
-import { $cronJobErrors, setCronJobs } from '@/store/cron'
-import { setSidebarCronOpen } from '@/store/layout'
-import { $selectedStoredSessionId, $sessions } from '@/store/session'
-||||||| 939e45c91d
-import { $selectedStoredSessionId, $sessions } from '@/store/session'
-=======
 import { $connectionsRegistry } from '@/store/connection-registry-state'
-import { $sidebarMessagingOpenIds, setSidebarAgentsGrouped, setSidebarGrouping } from '@/store/layout'
+import { $cronJobErrors, setCronJobs } from '@/store/cron'
+import {
+  $sidebarMessagingOpenIds,
+  setSidebarAgentsGrouped,
+  setSidebarCronOpen,
+  setSidebarGrouping
+} from '@/store/layout'
 import { $activeGatewayProfile, $profiles, setShowAllProfiles } from '@/store/profile'
 import { $projectScope, $projectTree, ALL_PROJECTS } from '@/store/projects'
 import {
@@ -28,7 +27,6 @@ import {
   $sessionsLoading,
   $workspaceCwdOwner
 } from '@/store/session'
->>>>>>> f97608f178
 import { $removedSessionIds } from '@/store/session-removal'
 import { SIDEBAR_NAV_PREFS_AREA } from '@/store/sidebar-nav'
 import { makeSessionInfo } from '@/test/session-info'

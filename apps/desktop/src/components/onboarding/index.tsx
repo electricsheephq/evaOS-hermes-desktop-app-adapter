@@ -633,17 +633,9 @@ export function Picker({ ctx }: { ctx: OnboardingContext }) {
   }
 
   const ordered = useMemo(() => (providers ? sortProviders(providers) : []), [providers])
-<<<<<<< HEAD
   const availableProviders = managedEva ? managedOAuthProviders(ordered, true) : ordered
   const hasOauth = availableProviders.length > 0
-  const apiKeyOptions = useApiKeyCatalog()
-||||||| 939e45c91d
-  const hasOauth = ordered.length > 0
-  const apiKeyOptions = useApiKeyCatalog()
-=======
-  const hasOauth = ordered.length > 0
   const apiKeyOptions = useApiKeyCatalog(ctx.scope)
->>>>>>> f97608f178
 
   // localEndpoint forces the key form regardless of `mode` (which a manual
   // provider refresh may flip back to 'oauth'); it preselects the local option

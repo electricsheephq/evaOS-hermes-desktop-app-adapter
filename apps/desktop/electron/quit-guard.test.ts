@@ -81,15 +81,6 @@ test('quitPromptFor warns about lost work when the app owns the backend (local)'
   assert.deepEqual(prompt.buttons, ['Keep Running', 'Quit Anyway'])
 })
 
-<<<<<<< HEAD
-test('quitPromptFor uses the managed native app identity when supplied', () => {
-  const prompt = quitPromptFor({ count: 2, titles: [] }, false, 'evaOS Agent')
-
-  assert.ok(prompt)
-  assert.equal(prompt.message, 'evaOS Agent is still working on 2 chats.')
-})
-||||||| 939e45c91d
-=======
 for (const primaryRouteKind of ['remote', 'cloud'] as const) {
   test(`quitPromptFor says the agent keeps running on a ${primaryRouteKind} backend`, () => {
     const owned = backendOwnedByApp({ ownedBackendCount: 0, primaryRouteKind })
@@ -102,4 +93,10 @@ for (const primaryRouteKind of ['remote', 'cloud'] as const) {
     assert.notDeepEqual(prompt.buttons, ['Keep Running', 'Quit Anyway'])
   })
 }
->>>>>>> f97608f178
+
+test('quitPromptFor uses the managed native app identity when supplied', () => {
+  const prompt = quitPromptFor({ count: 2, titles: [] }, false, true, 'evaOS Agent')
+
+  assert.ok(prompt)
+  assert.equal(prompt.message, 'evaOS Agent is still working on 2 chats.')
+})

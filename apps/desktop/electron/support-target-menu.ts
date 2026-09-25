@@ -29,7 +29,7 @@ export function switchSupportTargetMenuItem(deps: {
 export function supportTargetMenuPlacement<T extends SupportTargetMenuEntry>(
   item: T,
   options: { isMac: boolean; managed: boolean }
-): { appMenu: (T | { type: string })[]; fileMenu: (T | { type: string })[] } {
+): { appMenu: (T | { type: 'separator' })[]; fileMenu: (T | { type: 'separator' })[] } {
   if (!options.managed) {
     return { appMenu: [], fileMenu: [] }
   }

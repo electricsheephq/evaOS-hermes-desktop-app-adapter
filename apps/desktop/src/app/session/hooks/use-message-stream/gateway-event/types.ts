@@ -4,12 +4,6 @@ import type { MutableRefObject } from 'react'
 
 import type { GatewayEventPayload } from '@/lib/chat-messages'
 import type { ErrorSurface } from '@/lib/error-surface'
-<<<<<<< HEAD
-import type { RpcEvent } from '@/types/hermes'
-||||||| 939e45c91d
-import type { RpcEvent } from '@/types/hermes'
-=======
->>>>>>> f97608f178
 
 import type { ClientSessionState } from '../../../../types'
 
@@ -35,17 +29,6 @@ export interface GatewayEventDeps {
     occurredAt?: number,
     surface?: ErrorSurface | null
   ) => void
-<<<<<<< HEAD
-  failAssistantMessage: (
-    sessionId: string,
-    errorMessage: string,
-    occurredAt?: number,
-    errorSurface?: ErrorSurface | null
-  ) => void
-||||||| 939e45c91d
-  failAssistantMessage: (sessionId: string, errorMessage: string, occurredAt?: number) => void
-=======
->>>>>>> f97608f178
   flushQueuedDeltas: (sessionId?: string) => void
   dropQueuedDeltas: (sessionId?: string) => void
   finalizeInterimAssistantMessage: (sessionId: string, text: string, occurredAt?: number) => void

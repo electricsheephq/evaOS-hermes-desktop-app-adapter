@@ -71,7 +71,6 @@ afterEach(() => {
 })
 
 describe('BootFailureOverlay', () => {
-<<<<<<< HEAD
   it('reloads only after managed sign-in succeeds', async () => {
     const reload = vi.fn()
 
@@ -148,8 +147,8 @@ describe('BootFailureOverlay', () => {
         writable: true
       })
     }
-||||||| 939e45c91d
-=======
+  })
+
   it('keeps keyboard focus inside the recovery surface', () => {
     render(
       <>
@@ -167,7 +166,6 @@ describe('BootFailureOverlay', () => {
 
     expect(recoverySurface.getAttribute('aria-modal')).toBe('true')
     expect(recoverySurface.contains(globalThis.document.activeElement)).toBe(true)
->>>>>>> f97608f178
   })
 
   it('swaps to the in-place gateway settings view (no route nav) and back', async () => {

@@ -26,15 +26,9 @@ import {
   toggleSidebarOpen
 } from '@/store/layout'
 import { $unreadSessionCount } from '@/store/session-dot-state'
-<<<<<<< HEAD
 import { $statusbarVisible } from '@/store/statusbar-prefs'
 import { $evaManagedStatus, activeSupportSession, formatSupportRemaining } from '@/store/support-picker'
-import { $titlebarAppActionsSide } from '@/store/titlebar-app-actions'
-||||||| 939e45c91d
-import { $titlebarAppActionsSide } from '@/store/titlebar-app-actions'
-=======
 import { $titlebarAppActionsSide, TITLEBAR_FIXED_TOOLS } from '@/store/titlebar-app-actions'
->>>>>>> f97608f178
 
 import { appViewForPath, hidesFixedTitlebarClusters, isOverlayView } from '../routes'
 
@@ -151,13 +145,9 @@ export function TitlebarControls({ leftTools = [], tools = [], onOpenSettings }:
   const sidebarOpen = useStore($sidebarOpen)
   const unreadCount = useStore($unreadSessionCount)
   const appActionsSide = useStore($titlebarAppActionsSide)
-<<<<<<< HEAD
+  const interfaceMode = useStore($interfaceMode)
   const statusbarVisible = useStore($statusbarVisible)
   const supportSession = activeSupportSession(useStore($evaManagedStatus))
-||||||| 939e45c91d
-=======
-  const interfaceMode = useStore($interfaceMode)
->>>>>>> f97608f178
   const unreadBadge = unreadCount > 0 ? unreadCount : undefined
   const unreadHint = unreadBadge ? ` · ${t.titlebar.unreadSessions(unreadBadge)}` : ''
   // One filter for every cluster: a tool's own `hidden`, then the mode's tier.
@@ -274,15 +264,6 @@ export function TitlebarControls({ leftTools = [], tools = [], onOpenSettings }:
 
   const view = appViewForPath(location.pathname)
 
-<<<<<<< HEAD
-  // Overlay clusters stay hidden unless they are the only remaining acting-for disclosure.
-  if (isOverlayView(view) && (statusbarVisible || !supportSession)) {
-||||||| 939e45c91d
-  // Overlays own the window. These clusters are `fixed` at a higher z-index
-  // than the overlay card, so they'd otherwise bleed over it — hide them (and
-  // the nested titleBar slots) and let the overlay's own chrome take over.
-  if (isOverlayView(view)) {
-=======
   // Route changes can replace measured clusters without resizing the panels.
   useEffect(() => {
     window.dispatchEvent(new CustomEvent(TITLEBAR_CHROME_CHANGED_EVENT))
@@ -291,12 +272,11 @@ export function TitlebarControls({ leftTools = [], tools = [], onOpenSettings }:
   // Overlays own the window. These clusters are `fixed` at a higher z-index
   // than the overlay card, so they'd otherwise bleed over it — hide them (and
   // the nested titleBar slots) and let the overlay's own chrome take over.
-  if (isOverlayView(view)) {
->>>>>>> f97608f178
+  // Overlay clusters stay hidden unless they are the only remaining acting-for disclosure.
+  if (isOverlayView(view) && (statusbarVisible || !supportSession)) {
     return null
   }
 
-<<<<<<< HEAD
   const supportIndicator =
     !statusbarVisible && supportSession ? (
       <Button
@@ -313,26 +293,6 @@ export function TitlebarControls({ leftTools = [], tools = [], onOpenSettings }:
     return supportIndicator
   }
 
-  const titlebarSlots = (
-    <>
-      <Slot area="titleBar.left" />
-      <Slot area="titleBar.center" />
-      {supportIndicator}
-      <Slot area="titleBar.right" />
-    </>
-  )
-
-||||||| 939e45c91d
-  const titlebarSlots = (
-    <>
-      <Slot area="titleBar.left" />
-      <Slot area="titleBar.center" />
-      <Slot area="titleBar.right" />
-    </>
-  )
-
-=======
->>>>>>> f97608f178
   const leftClusterClass = cn(
     titlebarToolClusterClass,
     'left-(--titlebar-controls-left) top-(--titlebar-controls-top) translate-y-(--titlebar-controls-y-nudge)'
@@ -355,6 +315,7 @@ export function TitlebarControls({ leftTools = [], tools = [], onOpenSettings }:
             <TitlebarToolButton key={tool.id} navigate={navigate} tool={tool} />
           ))}
           <Slot area="titleBar.left" />
+          {supportIndicator}
         </div>
         <div
           className={cn(titlebarToolClusterClass, 'right-(--titlebar-tools-right) top-(--titlebar-controls-top)')}

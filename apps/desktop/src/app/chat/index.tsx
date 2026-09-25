@@ -261,8 +261,14 @@ export function ChatRuntimeBoundary({
     ? getSessionOwnerHint(storedId, connectionId ? { connectionId, profile: activeProfile } : undefined)
     : undefined
 
-<<<<<<< HEAD
   const { connectionId: ownerConnection, profile: ownerProfile, voiceOwnerUnavailable } = useSessionVoiceOwner(storedId)
+  const routeConnection = ownerRoute?.connectionId
+  const routeProfile = ownerRoute?.targetProfile || ownerRoute?.profile
+
+  const tailProfile = useMemo(
+    () => (routeProfile ? { connectionId: routeConnection, profile: routeProfile } : undefined),
+    [routeConnection, routeProfile]
+  )
 
   // A Bot chat opened IN PLACE in the main pane (openStoredBotChat) keeps the
   // active profile, so the ambient scope carries no owner. Publish the session
@@ -278,32 +284,6 @@ export function ChatRuntimeBoundary({
     [ownerConnection, ownerProfile, parentScope, voiceOwnerUnavailable]
   )
 
-  const storeMessages = useMessagesWhileVisible(view.$messages)
-||||||| 939e45c91d
-  const storeMessages = useMessagesWhileVisible(view.$messages)
-=======
-  const ownerConnection = ownerRoute?.connectionId
-  const ownerProfile = ownerRoute?.targetProfile || ownerRoute?.profile
-
-  const tailProfile = useMemo(
-    () => (ownerProfile ? { connectionId: ownerConnection, profile: ownerProfile } : undefined),
-    [ownerConnection, ownerProfile]
-  )
-
-  // A Bot chat opened IN PLACE in the main pane (openStoredBotChat) keeps the
-  // active profile, so the ambient scope carries no owner. Publish the session
-  // owner hint's (connection, profile) here so voice playback speaks with the
-  // Bot's own voice; a tile's scope already names its owner and is kept as is.
-  const parentScope = useComposerScope()
-
-  const composerScope = useMemo(
-    () =>
-      parentScope.profile || !ownerProfile
-        ? parentScope
-        : { ...parentScope, connectionId: ownerConnection || undefined, profile: ownerProfile },
-    [ownerConnection, ownerProfile, parentScope]
-  )
-
   const history = useHistoryWindow({
     scopeKey: JSON.stringify([runtimeId, storedId, tailProfile, connectionId, activeProfile, suppressMessages]),
     storedId,
@@ -314,7 +294,6 @@ export function ChatRuntimeBoundary({
   // History is a static display page. The live store continues streaming but
   // no delta subscribes/reconverts this historical runtime until return.
   const storeMessages = useMessagesWhileVisible(view.$messages, !history.page)
->>>>>>> f97608f178
   const messages = suppressMessages ? NO_MESSAGES : storeMessages
 
   const [windowPages, setWindowPages] = useState(1)
@@ -354,19 +333,6 @@ export function ChatRuntimeBoundary({
     return next.window
   }, [messages, windowPages])
 
-<<<<<<< HEAD
-  const runtimeMessageRepository = useRuntimeMessageRepository(windowedMessages)
-
-  // Subscribed so the backfill affordance follows tail hydration state.
-||||||| 939e45c91d
-  const runtimeMessageRepository = useRuntimeMessageRepository(windowedMessages)
-
-  const storedId = useStore(view.$storedId)
-  const connection = useStore($connection)
-  const activeProfile = useStore($activeGatewayProfile)
-  // Subscribed (not read imperatively) so the "Show earlier" affordance
-  // appears/retires as tail hydrations and backfill pages record their state.
-=======
   const currentMessages = history.page?.messages ?? windowedMessages
   // Release the store's paged-through history (persisted rows older than the
   // window) instead of retaining it for the window's lifetime (#77311). A
@@ -382,27 +348,7 @@ export function ChatRuntimeBoundary({
   const runtimeMessageRepository = useRuntimeMessageRepository(currentMessages)
   // Subscribed (not read imperatively) so the "Show earlier" affordance
   // appears/retires as tail hydrations and backfill pages record their state.
->>>>>>> f97608f178
   const transcriptTailStates = useStore($transcriptTailBySessionId)
-<<<<<<< HEAD
-
-  const tailProfile = ownerRoute
-    ? { connectionId: ownerRoute.connectionId, profile: ownerRoute.targetProfile || ownerRoute.profile }
-    : undefined
-
-||||||| 939e45c91d
-  const connectionId = connection?.connectionId || (connection?.mode === 'local' ? 'local' : '')
-
-  const ownerRoute = storedId
-    ? getSessionOwnerHint(storedId, connectionId ? { connectionId, profile: activeProfile } : undefined)
-    : undefined
-
-  const tailProfile = ownerRoute
-    ? { connectionId: ownerRoute.connectionId, profile: ownerRoute.targetProfile || ownerRoute.profile }
-    : undefined
-
-=======
->>>>>>> f97608f178
   const tailState = storedId && transcriptTailStates ? transcriptTailState(storedId, tailProfile) : undefined
   const restBackfillAvailable = Boolean(tailState?.possiblyTruncated)
 

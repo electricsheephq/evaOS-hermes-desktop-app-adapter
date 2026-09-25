@@ -1,12 +1,6 @@
 import { useStore } from '@nanostores/react'
 import { computed } from 'nanostores'
-<<<<<<< HEAD
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-||||||| 939e45c91d
-import { useCallback, useEffect, useRef, useState } from 'react'
-=======
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
->>>>>>> f97608f178
 
 import { useI18n } from '@/i18n'
 import { chatMessageText, collectUnspokenTurnSpeech } from '@/lib/chat-messages'
@@ -19,12 +13,8 @@ import { $voiceConversationStartRequest, takeVoiceConversationStart } from '@/st
 import { resetBrowseState } from '@/store/composer-input-history'
 import { $activeGatewayRoute, $gateway } from '@/store/gateway'
 import { notify, notifyError } from '@/store/notifications'
-<<<<<<< HEAD
 import { $activeSessionId, $gatewayState, $introSeed } from '@/store/session'
-||||||| 939e45c91d
-=======
 import { $voiceLiveStatus, refreshVoiceLiveStatus, selectedVoiceChatMode } from '@/store/voice-live'
->>>>>>> f97608f178
 import { $autoSpeakReplies, $voiceStopPhrase, setAutoSpeakReplies } from '@/store/voice-prefs'
 import { resumeWakeAfterVoice } from '@/store/wake-word'
 
@@ -101,18 +91,9 @@ export function useComposerVoice({
       computed($messages, messages => {
         const last = messages.findLast(message => message.role === 'assistant' && !message.hidden)
 
-<<<<<<< HEAD
-        if (!last?.pending || !chatMessageText(last).trim()) {
-          return null
-        }
-
-        return last.id
-||||||| 939e45c91d
-=======
         // Runs on every streamed flush: test the parts in place instead of
         // joining the whole reply into a string just to check it is non-blank.
         return last?.pending && last.parts.some(part => part.type === 'text' && /\S/.test(part.text)) ? last.id : null
->>>>>>> f97608f178
       }),
     [$messages]
   )
@@ -139,7 +120,6 @@ export function useComposerVoice({
     onTranscribeAudio
   })
 
-<<<<<<< HEAD
   const voiceSessionOwnershipRef = useRef<VoiceSessionOwnership | null>(null)
 
   const currentRuntimeSessionId = useCallback(
@@ -167,8 +147,7 @@ export function useComposerVoice({
     voiceSessionOwnershipRef.current = null
     setVoiceConversationActive(false)
   }, [])
-||||||| 939e45c91d
-=======
+
   const surfaceId = useComposerSurfaceId()
   const capturing = voiceConversationActive || voiceStatus !== 'idle'
 
@@ -177,7 +156,6 @@ export function useComposerVoice({
       return pinFloatingComposerCapture(surfaceId)
     }
   }, [capturing, surfaceId])
->>>>>>> f97608f178
 
   /** Auto-speak selector: the latest unspoken reply only — a backlog collapses to the newest. */
   const pendingResponse = () => {
@@ -298,16 +276,8 @@ export function useComposerVoice({
   const chainedConversation = useVoiceConversation({
     busy,
     consumePendingResponse,
-<<<<<<< HEAD
-    enabled: voiceConversationActive,
-    onFatalError: stopVoiceConversation,
-||||||| 939e45c91d
-    enabled: voiceConversationActive,
-    onFatalError: () => setVoiceConversationActive(false),
-=======
     enabled: voiceConversationActive && !liveEngineActive,
-    onFatalError: () => setVoiceConversationActive(false),
->>>>>>> f97608f178
+    onFatalError: stopVoiceConversation,
     // Speaking over the model mid-generation interrupts the in-flight turn —
     // the same seam as the Stop button — so the interjection becomes the next
     // turn instead of waiting behind a reply the user already rejected.
@@ -325,7 +295,54 @@ export function useComposerVoice({
     beforeMicOpen: () => wakePauseBarrierRef.current ?? undefined
   })
 
-<<<<<<< HEAD
+  const liveConversation = useVoiceLiveConversation({
+    activeToolLabel,
+    beforeMicOpen: () => wakePauseBarrierRef.current ?? undefined,
+    busy,
+    consumePendingResponse,
+    enabled: voiceConversationActive && liveEngineActive,
+    onFatalError: stopVoiceConversation,
+    onInterrupt,
+    onStopWord: stopVoiceConversation,
+    onSubmit: submitLiveDelegation,
+    pendingResponse: pendingTurnResponse,
+    seedHistory: seedLiveHistory
+  })
+
+  const conversation = liveEngineActive ? liveConversation : chainedConversation
+
+  /** Turn the conversation on with the engine `voice.voice_chat_mode` selects,
+   *  decided in the same state batch so the other engine never sees a frame of
+   *  `enabled`. gpt-live selected but not startable (no OpenAI key on the
+   *  gateway) falls back to chained with a notice rather than a dead button.
+   *  Starting also records which session the conversation belongs to. */
+  const activateConversation = useCallback(() => {
+    const status = $voiceLiveStatus.get()
+    let live = false
+
+    if (selectedVoiceChatMode(status) === 'gpt-live') {
+      if (status?.available) {
+        live = true
+      } else {
+        notify({
+          id: 'voice-live-unavailable',
+          kind: 'warning',
+          message: t.notifications.voice.liveUnavailable(status?.reason ?? 'not configured')
+        })
+      }
+    }
+
+    setLiveEngineActive(live)
+    startVoiceConversation()
+  }, [startVoiceConversation, t])
+
+  useEffect(() => {
+    if (!voiceConversationActive) {
+      // Prefetch so the first press picks the right engine without a round trip.
+      void refreshVoiceLiveStatus().catch(() => undefined)
+    }
+  }, [voiceConversationActive])
+
   // Stop synchronously at a routing boundary, before pending transcription
   // promises can publish into the newly selected profile or connection.
   useEffect(() => {
@@ -367,55 +384,6 @@ export function useComposerVoice({
       void conversation.end()
     }
   }, [conversation.end, disabled, ownsCurrentSession, stopVoiceConversation, voiceConversationActive])
-||||||| 939e45c91d
-=======
-  const liveConversation = useVoiceLiveConversation({
-    activeToolLabel,
-    beforeMicOpen: () => wakePauseBarrierRef.current ?? undefined,
-    busy,
-    consumePendingResponse,
-    enabled: voiceConversationActive && liveEngineActive,
-    onFatalError: () => setVoiceConversationActive(false),
-    onInterrupt,
-    onStopWord: () => setVoiceConversationActive(false),
-    onSubmit: submitLiveDelegation,
-    pendingResponse: pendingTurnResponse,
-    seedHistory: seedLiveHistory
-  })
-
-  const conversation = liveEngineActive ? liveConversation : chainedConversation
-
-  /** Turn the conversation on with the engine `voice.voice_chat_mode` selects,
-   *  decided in the same state batch so the other engine never sees a frame of
-   *  `enabled`. gpt-live selected but not startable (no OpenAI key on the
-   *  gateway) falls back to chained with a notice rather than a dead button. */
-  const activateConversation = useCallback(() => {
-    const status = $voiceLiveStatus.get()
-    let live = false
-
-    if (selectedVoiceChatMode(status) === 'gpt-live') {
-      if (status?.available) {
-        live = true
-      } else {
-        notify({
-          id: 'voice-live-unavailable',
-          kind: 'warning',
-          message: t.notifications.voice.liveUnavailable(status?.reason ?? 'not configured')
-        })
-      }
-    }
-
-    setLiveEngineActive(live)
-    setVoiceConversationActive(true)
-  }, [t])
-
-  useEffect(() => {
-    if (!voiceConversationActive) {
-      // Prefetch so the first press picks the right engine without a round trip.
-      void refreshVoiceLiveStatus().catch(() => undefined)
-    }
-  }, [voiceConversationActive])
->>>>>>> f97608f178
 
   // eslint-disable-next-line no-restricted-syntax -- ownership token used only by unmount cleanup
   useEffect(() => {
@@ -449,21 +417,9 @@ export function useComposerVoice({
       stopVoiceConversation()
       void conversation.end()
     } else {
-<<<<<<< HEAD
-      startVoiceConversation()
-||||||| 939e45c91d
-      setVoiceConversationActive(true)
-=======
       activateConversation()
->>>>>>> f97608f178
     }
-<<<<<<< HEAD
-  }, [conversation, disabled, startVoiceConversation, stopVoiceConversation, voiceConversationActive])
-||||||| 939e45c91d
-  }, [conversation, disabled, voiceConversationActive])
-=======
-  }, [activateConversation, conversation, disabled, voiceConversationActive])
->>>>>>> f97608f178
+  }, [activateConversation, conversation, disabled, stopVoiceConversation, voiceConversationActive])
 
   useEffect(
     () => onComposerVoiceToggleRequest(toggled => toggled === target && toggleVoiceConversation()),
@@ -480,21 +436,9 @@ export function useComposerVoice({
 
   useEffect(() => {
     if (target === 'main' && !disabled && takeVoiceConversationStart(voiceStartRequest) && !voiceConversationActive) {
-<<<<<<< HEAD
-      startVoiceConversation()
-||||||| 939e45c91d
-      setVoiceConversationActive(true)
-=======
       activateConversation()
->>>>>>> f97608f178
     }
-<<<<<<< HEAD
-  }, [disabled, startVoiceConversation, target, voiceConversationActive, voiceStartRequest])
-||||||| 939e45c91d
-  }, [disabled, target, voiceConversationActive, voiceStartRequest])
-=======
   }, [activateConversation, disabled, target, voiceConversationActive, voiceStartRequest])
->>>>>>> f97608f178
 
   const resumeWakeIfPaused = useCallback(() => {
     if (!wakePausedRef.current) {
@@ -579,13 +523,7 @@ export function useComposerVoice({
 
   // Explicit start/end for the on-screen conversation controls (the hotkey uses
   // the gated toggle above).
-<<<<<<< HEAD
-  const startConversation = startVoiceConversation
-||||||| 939e45c91d
-  const startConversation = useCallback(() => setVoiceConversationActive(true), [])
-=======
   const startConversation = activateConversation
->>>>>>> f97608f178
 
   const endConversation = useCallback(() => {
     stopVoiceConversation()

@@ -630,15 +630,10 @@ interface UnionAgentRow {
   handle?: string
   managedSource?: boolean
   profile?: string
-<<<<<<< HEAD
-  profileMetadata?: { display_name?: string }
-||||||| 939e45c91d
-=======
   /** Credential-free metadata Electron enumerates alongside the name — the
    *  only source of a REMOTE row's title, since profiles.list is asked of the
    *  active gateway alone. */
   profileMetadata?: Pick<RosterRow, 'display_name' | 'has_avatar' | 'title' | 'ui_meta'>
->>>>>>> f97608f178
   targetProfile?: string
 }
 
@@ -941,15 +936,10 @@ function mergeMultiSourceRoster(
 
     profiles.push({
       name: profile,
-<<<<<<< HEAD
-      ...(agent.profileMetadata?.display_name ? { display_name: agent.profileMetadata.display_name } : {}),
-||||||| 939e45c91d
-=======
       // A remote row's title/display_name ride the union enumeration; without
       // them a remote default titled "CoS Bot" only ever tags as @hermes(-device)
       // and its title slug is unknown to the composer (#103731).
       ...(agent.profileMetadata || {}),
->>>>>>> f97608f178
       handle: agent.handle,
       connectionId,
       connectionKind: agent.connectionKind,

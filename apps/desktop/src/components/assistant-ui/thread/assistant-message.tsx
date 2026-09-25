@@ -12,11 +12,7 @@ import { useStore } from '@nanostores/react'
 import { type FC, type ReactNode, useCallback, useContext, useEffect, useMemo, useState } from 'react'
 import { useInRouterContext, useNavigate } from 'react-router'
 
-<<<<<<< HEAD
-||||||| 939e45c91d
-=======
 import { requestModelMenuToggle } from '@/app/chat/composer/focus'
->>>>>>> f97608f178
 import { useComposerScope } from '@/app/chat/composer/scope'
 import { useSessionView } from '@/app/chat/session-view'
 import { SETTINGS_ROUTE } from '@/app/routes'
@@ -1050,12 +1046,7 @@ const ReadAloudButton: FC<{ getText: () => string; messageId: string }> = ({ get
   const view = useSessionView()
   const sessionId = useStore(view.$runtimeId)
   // A Bot chat's session owns its own (connection, profile) → its own TTS voice.
-<<<<<<< HEAD
   const { connectionId, profile, voiceOwnerUnavailable } = useComposerScope()
-||||||| 939e45c91d
-=======
-  const { connectionId, profile } = useComposerScope()
->>>>>>> f97608f178
 
   const readAloudStatus =
     voicePlayback.source === 'read-aloud' && voicePlayback.messageId === messageId ? voicePlayback.status : 'idle'
@@ -1074,18 +1065,11 @@ const ReadAloudButton: FC<{ getText: () => string; messageId: string }> = ({ get
     }
 
     try {
-<<<<<<< HEAD
       await playSpeechText(text, { connectionId, messageId, profile, voiceOwnerUnavailable, source: 'read-aloud' })
-||||||| 939e45c91d
-      await playSpeechText(text, { messageId, source: 'read-aloud' })
-=======
-      await playSpeechText(text, { connectionId, messageId, profile, source: 'read-aloud' })
->>>>>>> f97608f178
       markAssistantIdSpoken(sessionId, view.$messages.get(), messageId)
     } catch (error) {
       notifyError(error, copy.readAloudFailed)
     }
-<<<<<<< HEAD
   }, [
     connectionId,
     copy.readAloudFailed,
@@ -1096,11 +1080,6 @@ const ReadAloudButton: FC<{ getText: () => string; messageId: string }> = ({ get
     view.$messages,
     voiceOwnerUnavailable
   ])
-||||||| 939e45c91d
-  }, [copy.readAloudFailed, getText, messageId, sessionId, view.$messages])
-=======
-  }, [connectionId, copy.readAloudFailed, getText, messageId, profile, sessionId, view.$messages])
->>>>>>> f97608f178
 
   return (
     <TooltipIconButton

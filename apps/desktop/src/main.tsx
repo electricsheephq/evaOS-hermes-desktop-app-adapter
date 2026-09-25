@@ -24,14 +24,8 @@ import App from './app'
 import { RootErrorBoundary } from './components/error-boundary'
 import { HapticsProvider } from './components/haptics-provider'
 import { RootTooltipProvider } from './components/ui/tooltip'
-<<<<<<< HEAD
-import { I18nProvider } from './i18n'
 import { isManagedEvaosAgent, sanitizeManagedBrandText } from './i18n/managed-brand'
-||||||| 939e45c91d
-import { I18nProvider } from './i18n'
-=======
 import { ProfileI18nProvider as I18nProvider } from './i18n/profile-provider'
->>>>>>> f97608f178
 import { installClipboardShim } from './lib/clipboard'
 import { queryClient } from './lib/query-client'
 import { installRendererAnimationPauseState } from './lib/renderer-loop-pause'

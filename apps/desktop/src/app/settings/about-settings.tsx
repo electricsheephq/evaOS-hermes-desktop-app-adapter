@@ -50,7 +50,6 @@ function relativeTime(ms: number | undefined, a: Translations['settings']['about
   return a.daysAgo(Math.round(diff / 86_400_000))
 }
 
-<<<<<<< HEAD
 function ManagedAboutSettings() {
   const { t } = useI18n()
   const a = t.settings.about
@@ -110,16 +109,16 @@ function ManagedAboutSettings() {
   )
 }
 
-function UnmanagedAboutSettings() {
-||||||| 939e45c91d
-export function AboutSettings() {
-=======
 interface AboutSettingsProps {
   subpage?: string
 }
 
 export function AboutSettings({ subpage }: AboutSettingsProps = {}) {
   useSettingDeepLink('about', page => subpage === undefined || page === subpage)
+
+  if (isManagedEvaosAgent()) {
+    return <ManagedAboutSettings />
+  }
 
   if (subpage === 'uninstall') {
     return (
@@ -133,7 +132,6 @@ export function AboutSettings({ subpage }: AboutSettingsProps = {}) {
 }
 
 function AppUpdatesSettings({ includeUninstall }: { includeUninstall: boolean }) {
->>>>>>> f97608f178
   const { t } = useI18n()
   const a = t.settings.about
   const version = useStore($desktopVersion)
@@ -322,8 +320,4 @@ function AppUpdatesSettings({ includeUninstall }: { includeUninstall: boolean })
       </div>
     </SettingsContent>
   )
-}
-
-export function AboutSettings() {
-  return isManagedEvaosAgent() ? <ManagedAboutSettings /> : <UnmanagedAboutSettings />
 }

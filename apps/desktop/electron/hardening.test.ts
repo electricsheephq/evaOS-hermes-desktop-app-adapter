@@ -1076,22 +1076,6 @@ test('homeRelativeAttachmentCandidates normalizes Windows backslashes before joi
   assert.equal(candidates[0], path.join('/Users/alice', 'AppData/Local/hermes/attachments/foo.xlsx'))
 })
 
-<<<<<<< HEAD
-test('connection-config save and apply IPC handlers route payloads through coerceDesktopConnectionConfig', () => {
-  const source = readMain()
-
-  for (const channel of ['hermes:connection-config:save', 'hermes:connection-config:apply']) {
-    const handlerStart = source.indexOf(`ipcMain.handle('${channel}'`)
-    assert.notEqual(handlerStart, -1, `${channel} handler must exist`)
-    const handlerBody = source.slice(handlerStart, handlerStart + 400)
-    assert.match(
-      handlerBody,
-      /coerceDesktopConnectionConfig\(payload(?:, previousConfig)?\)/,
-      `${channel} must coerce its payload (the propagation seam) before persisting`
-    )
-  }
-})
-
 test('decryptSafeStorageValue preserves the ES17 eager macOS credential read', () => {
   let decrypts = 0
 
@@ -1219,70 +1203,10 @@ test('decryptSafeStorageValue reports only fixed failure categories without expo
   )
 })
 
-test('whenReady enables basic password-store encryption before createWindow', () => {
-  const source = readMain()
-  const enableIndex = source.indexOf('enableBasicPasswordStoreEncryption({')
-  assert.notEqual(enableIndex, -1, 'whenReady must call enableBasicPasswordStoreEncryption')
-
-  const call = source.slice(enableIndex, enableIndex + 240)
-  assert.match(call, /platform: process\.platform/, 'the real platform must be forwarded')
-  assert.match(
-    call,
-    /passwordStoreSwitch: app\.commandLine\.getSwitchValue\('password-store'\)/,
-    'the real --password-store switch value must be forwarded'
-  )
-  assert.match(call, /safeStorageApi: safeStorage/, 'the real safeStorage must be forwarded')
-
-  // Ordering matters: the switch must take effect before anything touches
-  // safeStorage, so the enable call must precede the first createWindow().
-  const createWindowIndex = source.indexOf('createWindow()', enableIndex)
-  assert.notEqual(createWindowIndex, -1, 'whenReady must call createWindow after enabling encryption')
-  assert.ok(
-    enableIndex < createWindowIndex,
-    'enableBasicPasswordStoreEncryption must run before createWindow() so the switch is applied first'
-||||||| 939e45c91d
-test('connection-config save and apply IPC handlers route payloads through coerceDesktopConnectionConfig', () => {
-  const source = readMain()
-
-  for (const channel of ['hermes:connection-config:save', 'hermes:connection-config:apply']) {
-    const handlerStart = source.indexOf(`ipcMain.handle('${channel}'`)
-    assert.notEqual(handlerStart, -1, `${channel} handler must exist`)
-    const handlerBody = source.slice(handlerStart, handlerStart + 400)
-    assert.match(
-      handlerBody,
-      /coerceDesktopConnectionConfig\(payload(?:, previousConfig)?\)/,
-      `${channel} must coerce its payload (the propagation seam) before persisting`
-    )
-  }
-})
-
-test('whenReady enables basic password-store encryption before createWindow', () => {
-  const source = readMain()
-  const enableIndex = source.indexOf('enableBasicPasswordStoreEncryption({')
-  assert.notEqual(enableIndex, -1, 'whenReady must call enableBasicPasswordStoreEncryption')
-
-  const call = source.slice(enableIndex, enableIndex + 240)
-  assert.match(call, /platform: process\.platform/, 'the real platform must be forwarded')
-  assert.match(
-    call,
-    /passwordStoreSwitch: app\.commandLine\.getSwitchValue\('password-store'\)/,
-    'the real --password-store switch value must be forwarded'
-  )
-  assert.match(call, /safeStorageApi: safeStorage/, 'the real safeStorage must be forwarded')
-
-  // Ordering matters: the switch must take effect before anything touches
-  // safeStorage, so the enable call must precede the first createWindow().
-  const createWindowIndex = source.indexOf('createWindow()', enableIndex)
-  assert.notEqual(createWindowIndex, -1, 'whenReady must call createWindow after enabling encryption')
-  assert.ok(
-    enableIndex < createWindowIndex,
-    'enableBasicPasswordStoreEncryption must run before createWindow() so the switch is applied first'
-=======
 test('homeRelativeAttachmentCandidates returns nothing for an absolute path', () => {
   assert.deepEqual(
     homeRelativeAttachmentCandidates('/already/absolute/foo.xlsx', '/Users/alice', '/Users/alice/.hermes'),
     []
->>>>>>> f97608f178
   )
 })
 

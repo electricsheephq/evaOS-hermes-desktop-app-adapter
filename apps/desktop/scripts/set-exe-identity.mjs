@@ -42,11 +42,6 @@ import { rcedit } from 'rcedit'
 
 import { isMain } from './utils.mjs'
 
-<<<<<<< HEAD
-// Stamp the evaOS Agent icon + identity onto `exe`. Resolves on success, throws on
-||||||| 939e45c91d
-// Stamp the Hermes icon + identity onto `exe`. Resolves on success, throws on
-=======
 // A real-time file scanner (AV/EDR) holds a short exclusive handle on a freshly
 // written exe; rcedit's resource commit then fails with "Unable to commit
 // changes" and succeeds seconds later on identical input. Delays sized to the
@@ -67,21 +62,14 @@ function wait(delay) {
   return new Promise(resolve => setTimeout(resolve, delay))
 }
 
-// Stamp the Hermes icon + identity onto `exe`. Resolves on success, throws on
->>>>>>> f97608f178
+// Stamp the evaOS Agent icon + identity onto `exe`. Resolves on success, throws on
 // failure. `desktopRoot` defaults to this script's package root so the icon and
 // the rcedit dependency resolve regardless of cwd.
-<<<<<<< HEAD
-async function stampExeIdentity(exe, desktopRoot = resolve(import.meta.dirname, '..'), editExecutable = rcedit) {
-||||||| 939e45c91d
-async function stampExeIdentity(exe, desktopRoot = resolve(import.meta.dirname, '..')) {
-=======
 async function stampExeIdentity(
   exe,
   desktopRoot = resolve(import.meta.dirname, '..'),
   { rcedit: runRcedit = rcedit, sleep = wait } = {}
 ) {
->>>>>>> f97608f178
   if (!exe || !existsSync(exe)) {
     throw new Error(`target exe not found: ${exe}`)
   }
@@ -94,13 +82,7 @@ async function stampExeIdentity(
   console.log(`[set-exe-identity] stamping ${exe}`)
   console.log(`[set-exe-identity] icon: ${icon}`)
 
-<<<<<<< HEAD
-  await editExecutable(exe, {
-||||||| 939e45c91d
-  await rcedit(exe, {
-=======
   const options = {
->>>>>>> f97608f178
     icon,
     'version-string': {
       ProductName: 'evaOS Agent',

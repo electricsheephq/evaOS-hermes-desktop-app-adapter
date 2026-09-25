@@ -1,30 +1,32 @@
-<<<<<<< HEAD
+import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { expect, it } from 'vitest'
+import { expect, it, test } from 'vitest'
 
 import { stampExeIdentity } from './set-exe-identity.mjs'
 
-it('Windows executable stamping uses the Eva icon and Electric Sheep metadata', async () => {
+function makeDesktopRoot() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-exe-identity-'))
+  fs.mkdirSync(path.join(root, 'assets'))
+  fs.writeFileSync(path.join(root, 'assets', 'eva.ico'), 'icon')
+  const exe = path.join(root, 'evaOS Agent.exe')
+  fs.writeFileSync(exe, 'exe')
+  return { exe, root }
+}
+
+it('Windows executable stamping uses the Eva icon and Electric Sheep metadata', async () => {
+  const { exe, root } = makeDesktopRoot()
 
   try {
-    const assets = path.join(root, 'assets')
-    const exe = path.join(root, 'evaOS Agent.exe')
-    const icon = path.join(assets, 'eva.ico')
-    fs.mkdirSync(assets, { recursive: true })
-    fs.writeFileSync(exe, 'fake executable')
-    fs.writeFileSync(icon, 'fake icon')
-
     const calls = []
-    await stampExeIdentity(exe, root, async (...args) => calls.push(args))
+    await stampExeIdentity(exe, root, { rcedit: async (...args) => calls.push(args) })
 
     expect(calls).toEqual([
       [
         exe,
         {
-          icon,
+          icon: path.join(root, 'assets', 'eva.ico'),
           'version-string': {
             ProductName: 'evaOS Agent',
             FileDescription: 'evaOS Agent',
@@ -36,24 +38,8 @@ it('Windows executable stamping uses the Eva icon and Electric Sheep metadata', 
     ])
   } finally {
     fs.rmSync(root, { force: true, recursive: true })
-||||||| 939e45c91d
-=======
-import assert from 'node:assert/strict'
-import fs from 'node:fs'
-import os from 'node:os'
-import path from 'node:path'
-import { test } from 'vitest'
-
-import { stampExeIdentity } from './set-exe-identity.mjs'
-
-function makeDesktopRoot() {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hermes-exe-identity-'))
-  fs.mkdirSync(path.join(root, 'assets'))
-  fs.writeFileSync(path.join(root, 'assets', 'icon.ico'), 'icon')
-  const exe = path.join(root, 'Hermes.exe')
-  fs.writeFileSync(exe, 'exe')
-  return { exe, root }
-}
+  }
+})
 
 test('retries transient rcedit commit failures with bounded backoff', async () => {
   const { exe, root } = makeDesktopRoot()
@@ -123,6 +109,5 @@ test('does not retry when the rcedit binary itself cannot be spawned (ENOENT/EAC
     assert.deepEqual(delays, [])
   } finally {
     fs.rmSync(root, { recursive: true, force: true })
->>>>>>> f97608f178
   }
 })

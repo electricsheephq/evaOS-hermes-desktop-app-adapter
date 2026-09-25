@@ -474,6 +474,9 @@ export const de = defineLocale({
       signInIncompleteTitle: 'Sign-in unvollständig',
       signInIncompleteMessage: 'Das Anmeldefenster wurde geschlossen, bevor die Authentifizierung abgeschlossen war.',
       signInFailed: 'Sign-in fehlgeschlagen',
+      managedAssignmentHint:
+        'Ihre Geschäftszuweisung wird von Electric Sheep festgelegt. Melden Sie sich erneut an, wenn der Zugriff geändert oder widerrufen wurde.',
+      managedSignInFailed: 'Anmeldung beim verwalteten Zugriff fehlgeschlagen. Versuchen Sie es erneut.',
       signInToRemoteGateway: 'Beim Remote-Gateway anmelden',
       signInWithProvider: provider => `Mit ${provider} anmelden`,
       identityProvider: 'Ihr Identity-Provider'
@@ -580,6 +583,24 @@ export const de = defineLocale({
   remoteDisplayBanner: {
     message: reason =>
       `Software-Rendering aktiv — Remote-Display erkannt (${reason}). GPU-Beschleunigung ist deaktiviert, um Flackern zu verhindern.`
+  },
+  delegatedSupport: {
+    sessionTitle: 'Support-Sitzung',
+    actingForCustomer: customer => `Im Auftrag von ${customer}`,
+    assignedAgent: agent => `Zugewiesener Agent: ${agent}`,
+    endsIn: countdown => `Endet in ${countdown}`,
+    indicator: (customer, countdown) => `Im Auftrag von ${customer} · ${countdown}`,
+    openSettings: 'Einstellungen der Support-Sitzung öffnen',
+    endSession: 'Support-Sitzung beenden',
+    endingSession: 'Support-Sitzung wird beendet…',
+    unavailable: 'Der Status der Support-Sitzung ist nicht verfügbar.',
+    endFailed: 'Die Support-Sitzung konnte nicht beendet werden. Versuchen Sie es erneut.',
+    switchTarget: 'Support-Ziel wechseln…',
+    switchingTarget: 'Anmeldung wird geöffnet…',
+    switchTargetFailed: 'Der Wechsel des Support-Ziels konnte nicht gestartet werden. Versuchen Sie es erneut.',
+    noPersonalAgent: 'Kein persönlicher Agent für dieses Konto',
+    noPersonalAgentHint: 'Verwenden Sie „Support-Ziel wechseln“, um einen Kunden-Agent zu öffnen.',
+    cleanupPending: 'Eine frühere Support-Sitzung muss noch beendet werden.'
   },
   billingBlock: {
     titleNous: 'Keine Nous-Credits mehr',

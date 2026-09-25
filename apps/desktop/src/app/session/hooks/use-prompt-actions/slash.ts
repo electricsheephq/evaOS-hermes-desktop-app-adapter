@@ -18,12 +18,8 @@ import {
   resolveDesktopCommand
 } from '@/lib/desktop-slash-commands'
 import { isMissingRpcMethod } from '@/lib/gateway-rpc'
-<<<<<<< HEAD
 import { sanitizeDesktopSlashOutput } from '@/lib/managed-slash-output'
-||||||| 939e45c91d
-=======
 import { applyReasoningSlashResult, reasoningSlashParams } from '@/lib/reasoning-slash'
->>>>>>> f97608f178
 import { setSessionYolo } from '@/lib/yolo-session'
 import { openCommandPalettePage } from '@/store/command-palette'
 import { setComposerDraft } from '@/store/composer'

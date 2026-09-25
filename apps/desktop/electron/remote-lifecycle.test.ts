@@ -829,16 +829,6 @@ test('buildSpawnCommand is headless serve, detached, token not in argv', () => {
   assert.ok(!cmd.includes('HERMES_DASHBOARD_SESSION_TOKEN'), 'token env var must not appear')
 })
 
-<<<<<<< HEAD
-test('buildSpawnCommand always uses serve (legacy dashboard path removed)', () => {
-  const cmd = buildSpawnCommand('/x/hermes', 'work', { logPath: spawnLogPath(OWNERSHIP_ID, SPAWN_NONCE) })
-  assert.match(cmd, /serve --isolated/)
-  assert.match(cmd, /--host 127\.0\.0\.1 --port 0/)
-  assert.doesNotMatch(cmd, /dashboard/)
-  assert.doesNotMatch(cmd, /--skip-build/)
-  assert.match(cmd, /setsid/)
-})
-
 test('buildSpawnCommand atomically reserves the ownership slot through spawn and lock publication', () => {
   const cmd = buildSpawnCommand('/x/hermes', 'work', {
     hermesHome: '~/.hermes',
@@ -879,57 +869,6 @@ test('buildSpawnCommand atomically reserves the ownership slot through spawn and
   assert.ok(cmd.indexOf('lock_json') > cmd.indexOf('serve --isolated'))
 })
 
-||||||| 939e45c91d
-test('buildSpawnCommand always uses serve (legacy dashboard path removed)', () => {
-  const cmd = buildSpawnCommand('/x/hermes', 'work', { logPath: spawnLogPath(OWNERSHIP_ID, SPAWN_NONCE) })
-  assert.match(cmd, /serve --isolated/)
-  assert.match(cmd, /--host 127\.0\.0\.1 --port 0/)
-  assert.doesNotMatch(cmd, /dashboard/)
-  assert.doesNotMatch(cmd, /--skip-build/)
-  assert.match(cmd, /setsid/)
-})
-
-test('buildSpawnCommand atomically reserves the ownership slot through spawn and lock publication', () => {
-  const cmd = buildSpawnCommand('/x/hermes', 'work', {
-    hermesHome: '~/.hermes',
-    logPath: spawnLogPath(OWNERSHIP_ID, SPAWN_NONCE),
-    ownershipId: OWNERSHIP_ID,
-    reservationNonce: SPAWN_NONCE,
-    spawnNonce: SPAWN_NONCE,
-    tokenFilePath: spawnTokenPath(OWNERSHIP_ID, SPAWN_NONCE),
-    lockMetadata: {
-      ownershipId: OWNERSHIP_ID,
-      spawnNonce: SPAWN_NONCE,
-      port: 0,
-      profile: 'work',
-      hermesPath: '/x/hermes',
-      hermesHome: '~/.hermes',
-      logPath: spawnLogPath(OWNERSHIP_ID, SPAWN_NONCE),
-      tokenFingerprint: fingerprintToken('stored-token'),
-      protocolVersion: PROTOCOL_VERSION,
-      startedAt: '2026-07-14T00:00:00.000Z'
-    }
-  })
-
-  assert.ok(cmd.includes('.connect.lock'))
-  assert.ok(cmd.includes('.hermes-update-in-progress.mutex'))
-  assert.match(cmd, /fcntl\.flock\(fd,fcntl\.LOCK_EX\)/)
-  assert.match(cmd, /os\.O_CLOEXEC/)
-  assert.match(
-    cmd,
-    /subprocess\.run\(\["sh","-c",payload,"hermes-update-mutex",str\(fd\)\],pass_fds=\(fd,\),check=False\)/
-  )
-  assert.doesNotMatch(cmd, /os\.set_inheritable\(fd,True\)/)
-  assert.match(cmd, /hermes-update-child "\$1"/)
-  assert.match(cmd, /eval "exec \$1>&-"/)
-  assert.ok(cmd.includes('backend.lock.json'))
-  assert.match(cmd, /lock_json/)
-  assert.match(cmd, /trap .*rm -rf/)
-  assert.ok(cmd.indexOf('lock_json') > cmd.indexOf('serve --isolated'))
-})
-
-=======
->>>>>>> f97608f178
 test.skipIf(process.platform === 'win32')('detached backend does not inherit the update mutex descriptor', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'hermes-update-mutex-'))
   const hermesPath = path.join(directory, 'hermes')

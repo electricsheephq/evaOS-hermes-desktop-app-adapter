@@ -36,17 +36,9 @@ import { RemoteDisplayBanner } from '@/components/remote-display-banner'
 import { SendDiagnosticsHost } from '@/components/send-diagnostics-dialog'
 import { TipHost } from '@/components/tips'
 import { emitGatewayEvent } from '@/contrib/events'
-<<<<<<< HEAD
-import { getLatestSessionMessages } from '@/hermes'
-import { isManagedEvaosAgent } from '@/i18n/managed-brand'
-import { type ChatMessage, chatMessageText, preserveLocalAssistantErrors, toChatMessages } from '@/lib/chat-messages'
-||||||| 939e45c91d
-import { getLatestSessionMessages } from '@/hermes'
-import { type ChatMessage, chatMessageText, preserveLocalAssistantErrors, toChatMessages } from '@/lib/chat-messages'
-=======
 import { translateNow } from '@/i18n'
+import { isManagedEvaosAgent } from '@/i18n/managed-brand'
 import { type ChatMessage, chatMessageText } from '@/lib/chat-messages'
->>>>>>> f97608f178
 import { isMessagingSource } from '@/lib/session-source'
 import { activateWakeIndicator } from '@/lib/wake-indicator'
 import { playWakeSound } from '@/lib/wake-sound'
@@ -1120,17 +1112,9 @@ export function ContribWiring({ children }: { children: ReactNode }) {
     onEdit: editMessage,
     onLoadMoreMessaging: loadMoreMessagingForPlatform,
     onLoadMoreSessions: loadMoreSessions,
-<<<<<<< HEAD
+    onRetrySessions: () => refreshSessions().catch(() => undefined),
     onManageCronJob: job => {
       setCronFocusJobId(cronJobIdentity(job))
-||||||| 939e45c91d
-    onManageCronJob: jobId => {
-      setCronFocusJobId(jobId)
-=======
-    onRetrySessions: () => refreshSessions().catch(() => undefined),
-    onManageCronJob: jobId => {
-      setCronFocusJobId(jobId)
->>>>>>> f97608f178
       navigate(CRON_ROUTE)
     },
     onNavigate: selectSidebarItem,

@@ -1,10 +1,4 @@
-<<<<<<< HEAD
 import { assertVoiceOwnerAvailable, type OwnerScope, ownerScoped, profileScopeKey } from '@/api/client'
-||||||| 939e45c91d
-import { profileScoped } from '@/api/client'
-=======
-import { type OwnerScope, ownerScoped } from '@/api/client'
->>>>>>> f97608f178
 import { getApiRequestConnection, getApiRequestProfile, hermesApi } from '@/hermes'
 
 /**
@@ -79,17 +73,10 @@ let inflight: { key: string; promise: Promise<null | VoiceClientConfig> } | null
 // `owner` is the speaking session's (connection, profile) — a Bot chat runs
 // on its own profile, on its own gateway; missing halves → the active scope.
 function scopeKey(owner?: OwnerScope): string {
-<<<<<<< HEAD
   return profileScopeKey({
     connectionId: owner?.connectionId || getApiRequestConnection(),
     profile: owner?.profile || getApiRequestProfile()
   })
-||||||| 939e45c91d
-function scopeKey(): string {
-  return `${getApiRequestConnection() ?? 'local'}::${getApiRequestProfile() ?? 'default'}`
-=======
-  return `${owner?.connectionId || getApiRequestConnection() || 'local'}::${owner?.profile || getApiRequestProfile() || 'default'}`
->>>>>>> f97608f178
 }
 
 /** Drop cached credentials (used by tests; scope changes rotate the key). */
@@ -99,13 +86,7 @@ export function clearVoiceClientConfigCache(): void {
 }
 
 export async function fetchVoiceClientConfig(owner?: OwnerScope): Promise<null | VoiceClientConfig> {
-<<<<<<< HEAD
   assertVoiceOwnerAvailable(owner)
-||||||| 939e45c91d
-export async function fetchVoiceClientConfig(): Promise<null | VoiceClientConfig> {
-  const key = scopeKey()
-=======
->>>>>>> f97608f178
   const key = scopeKey(owner)
 
   if (cached && cached.key === key && Date.now() - cached.at < CONFIG_TTL_MS) {

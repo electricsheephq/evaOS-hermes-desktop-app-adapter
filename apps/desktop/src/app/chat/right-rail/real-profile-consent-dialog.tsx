@@ -91,13 +91,7 @@ export function RealProfileConsentDialog({ tabId }: RealProfileConsentDialogProp
     } finally {
       setBusy(false)
     }
-<<<<<<< HEAD
-  }, [busy, config, copy, enableAllowed, setConfig])
-||||||| 939e45c91d
-  }, [busy, config, copy, setConfig])
-=======
-  }, [busy, config, copy, setConfig, writeScope])
->>>>>>> f97608f178
+  }, [busy, config, copy, enableAllowed, setConfig, writeScope])
 
   // Config not loaded yet, feature already on, opted out, or another pane
   // owns the prompt — render nothing. `enabled` flipping true after a

@@ -10,12 +10,8 @@ import { getElevenLabsVoices, getHermesConfigSchema, saveHermesConfig } from '@/
 import { useI18n } from '@/i18n'
 import { isManagedEvaosAgent } from '@/i18n/managed-brand'
 import { triggerHaptic } from '@/lib/haptics'
-<<<<<<< HEAD
-import { isManagedConfigFieldVisible } from '@/lib/managed-ui-policy'
-||||||| 939e45c91d
-=======
 import { isSubmitEnter } from '@/lib/ime'
->>>>>>> f97608f178
+import { isManagedConfigFieldVisible } from '@/lib/managed-ui-policy'
 import { confirm } from '@/store/confirm'
 import {
   $dataUrlReadMaxMb,
@@ -114,14 +110,6 @@ function ConfigSettingsInner({
   // from — and saved back through — the shared config cache, so edits are visible
   // in the MCP/model surfaces and reopening the page doesn't reload-flash.
   const [config, setConfig] = useState<HermesConfigRecord | null>(null)
-<<<<<<< HEAD
-  const { data: loadedConfig, isError: configLoadFailed, refetch: refetchConfig } = useHermesConfigRecord(scopeProfile)
-||||||| 939e45c91d
-  const { data: loadedConfig, isError: configLoadFailed, refetch: refetchConfig } = useHermesConfigRecord(scopeProfile)
-  // Writes land on the same cache key the query above reads (base key when
-  // following the active profile, suffixed when a scope override is set).
-  const writeConfigCache = useMemo(() => hermesConfigCacheWriter(scopeProfile), [scopeProfile])
-=======
 
   const {
     data: loadedConfig,
@@ -129,11 +117,6 @@ function ConfigSettingsInner({
     refetch: refetchConfig,
     writeScope
   } = useHermesConfigRecord(scopeProfile)
-
-  // Writes land on the same cache key the query above reads (base key when
-  // following the active profile, suffixed when a scope override is set).
-  const writeConfigCache = useMemo(() => hermesConfigCacheWriter(scopeProfile), [scopeProfile])
->>>>>>> f97608f178
 
   const {
     data: schemaResponse,
@@ -309,15 +292,10 @@ function ConfigSettingsInner({
     return sectionFieldEntries(schema, config)
   }, [schema, config])
 
-<<<<<<< HEAD
-  const fields = (sectionFields.get(activeSectionId) ?? []).filter(([key]) =>
-    isManagedConfigFieldVisible(key, managedEva)
-  )
-||||||| 939e45c91d
-  const fields = sectionFields.get(activeSectionId) ?? []
-=======
   const fields = (sectionFields.get(activeSectionId) ?? []).filter(
-    ([key]) => subpage === undefined || configSubpageForField(activeSectionId, key) === subpage
+    ([key]) =>
+      isManagedConfigFieldVisible(key, managedEva) &&
+      (subpage === undefined || configSubpageForField(activeSectionId, key) === subpage)
   )
 
   const showModelSettings =
@@ -325,7 +303,6 @@ function ConfigSettingsInner({
 
   const showDesktopSettings = activeSectionId === 'advanced' && (subpage === undefined || subpage === 'desktop')
   const showAttachments = activeSectionId === 'chat' && (subpage === undefined || subpage === 'attachments')
->>>>>>> f97608f178
 
   // Deep-link target from the command palette (?field=<key>): scroll the row
   // into view and flash it, then drop the param so it doesn't re-fire.
@@ -381,13 +358,7 @@ function ConfigSettingsInner({
     )
 
     return () => window.clearTimeout(timeout)
-<<<<<<< HEAD
-  }, [config, managedEva, schema, setSearchParams, targetField])
-||||||| 939e45c91d
-  }, [config, schema, setSearchParams, targetField])
-=======
-  }, [activeSectionId, config, schema, setSearchParams, subpage, targetField])
->>>>>>> f97608f178
+  }, [activeSectionId, config, managedEva, schema, setSearchParams, subpage, targetField])
 
   function handleImport(e: ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]

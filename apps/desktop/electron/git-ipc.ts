@@ -119,27 +119,11 @@ export function registerGitIpc({ assertLocalMutationAllowed, resolveGitBinary, r
   ipcMain.handle('hermes:git:review:prList', async (_event, repoPath, branches, numbers) =>
     reviewPrList(repoPath, resolveGhBinary(), branches, numbers)
   )
-<<<<<<< HEAD
-  ipcMain.handle('hermes:git:review:fetchPrComment', async (_event, repoPath, url) =>
-    reviewFetchPrComment(repoPath, resolveGhBinary(), url)
-  )
   ipcMain.handle('hermes:git:review:createPr', async (_event, repoPath) => {
     assertLocalMutationAllowed('Creating pull requests from local Git state')
 
     return reviewCreatePr(repoPath, resolveGitBinary(), resolveGhBinary())
   })
-||||||| 939e45c91d
-  ipcMain.handle('hermes:git:review:fetchPrComment', async (_event, repoPath, url) =>
-    reviewFetchPrComment(repoPath, resolveGhBinary(), url)
-  )
-  ipcMain.handle('hermes:git:review:createPr', async (_event, repoPath) =>
-    reviewCreatePr(repoPath, resolveGitBinary(), resolveGhBinary())
-  )
-=======
-  ipcMain.handle('hermes:git:review:createPr', async (_event, repoPath) =>
-    reviewCreatePr(repoPath, resolveGitBinary(), resolveGhBinary())
-  )
->>>>>>> f97608f178
 
   // Repo-first project discovery: scan bounded roots for git repos (pure fs walk,
   // no native addon). Never throws to the renderer — failures yield an empty list.

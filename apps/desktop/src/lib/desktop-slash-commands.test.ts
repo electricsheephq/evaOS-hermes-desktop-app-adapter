@@ -106,23 +106,7 @@ describe('desktop slash command curation', () => {
   it('does not run /login on desktop before the catalog is loaded', () => {
     rememberDesktopCommandsCatalog(undefined)
     expect(isDesktopSlashCommand('/login')).toBe(false)
-<<<<<<< HEAD
-    expect(desktopSlashUnavailableMessage('/login')).toBe('/login is managed from the desktop sidebar.')
-  })
-
-  it('routes /wake through the desktop wake action instead of the slash worker', () => {
-    expect(resolveDesktopCommand('/wake')?.surface).toEqual({ kind: 'action', action: 'wake' })
-    expect(desktopSlashCommandArgumentMode('/wake')).toBe('options')
-    expect(isDesktopSlashSuggestion('/wake')).toBe(true)
-    expect(isDesktopSlashCommand('/wake')).toBe(true)
-    expect(desktopSlashUnavailableMessage('/wake')).toBeNull()
-  })
-
-  it('routes /stop through the desktop action that cancels the active turn', () => {
-    expect(resolveDesktopCommand('/stop')?.surface).toEqual({ kind: 'action', action: 'stop' })
-    expect(isDesktopSlashSuggestion('/stop')).toBe(true)
-    expect(isDesktopSlashCommand('/stop')).toBe(true)
-    expect(desktopSlashUnavailableMessage('/stop')).toBeNull()
+    expect(desktopSlashUnavailableMessage('/login')).not.toBeNull()
   })
 
   it('routes /restart through a desktop action instead of the unavailable list', () => {
@@ -130,48 +114,6 @@ describe('desktop slash command curation', () => {
     expect(isDesktopSlashSuggestion('/restart')).toBe(true)
     expect(isDesktopSlashCommand('/restart')).toBe(true)
     expect(desktopSlashUnavailableMessage('/restart')).toBeNull()
-  })
-
-  it('treats /browser as an executable action command (local-gateway connect)', () => {
-    // /browser used to be terminal-only; it now resolves to a desktop action
-    // handler that routes browser.manage RPC when the gateway is local.
-    expect(isDesktopSlashCommand('/browser')).toBe(true)
-    expect(isDesktopSlashSuggestion('/browser')).toBe(true)
-    expect(desktopSlashUnavailableMessage('/browser')).toBeNull()
-    expect(resolveDesktopCommand('/browser')?.surface).toEqual({ kind: 'action', action: 'browser' })
-    // Bare /browser expands to its sub-action options in the popover.
-    expect(desktopSlashCommandArgumentMode('/browser')).toBe('options')
-||||||| 939e45c91d
-    expect(desktopSlashUnavailableMessage('/login')).toBe('/login is managed from the desktop sidebar.')
-  })
-
-  it('routes /wake through the desktop wake action instead of the slash worker', () => {
-    expect(resolveDesktopCommand('/wake')?.surface).toEqual({ kind: 'action', action: 'wake' })
-    expect(desktopSlashCommandArgumentMode('/wake')).toBe('options')
-    expect(isDesktopSlashSuggestion('/wake')).toBe(true)
-    expect(isDesktopSlashCommand('/wake')).toBe(true)
-    expect(desktopSlashUnavailableMessage('/wake')).toBeNull()
-  })
-
-  it('routes /stop through the desktop action that cancels the active turn', () => {
-    expect(resolveDesktopCommand('/stop')?.surface).toEqual({ kind: 'action', action: 'stop' })
-    expect(isDesktopSlashSuggestion('/stop')).toBe(true)
-    expect(isDesktopSlashCommand('/stop')).toBe(true)
-    expect(desktopSlashUnavailableMessage('/stop')).toBeNull()
-  })
-
-  it('treats /browser as an executable action command (local-gateway connect)', () => {
-    // /browser used to be terminal-only; it now resolves to a desktop action
-    // handler that routes browser.manage RPC when the gateway is local.
-    expect(isDesktopSlashCommand('/browser')).toBe(true)
-    expect(isDesktopSlashSuggestion('/browser')).toBe(true)
-    expect(desktopSlashUnavailableMessage('/browser')).toBeNull()
-    expect(resolveDesktopCommand('/browser')?.surface).toEqual({ kind: 'action', action: 'browser' })
-    // Bare /browser expands to its sub-action options in the popover.
-    expect(desktopSlashCommandArgumentMode('/browser')).toBe('options')
-=======
-    expect(desktopSlashUnavailableMessage('/login')).not.toBeNull()
->>>>>>> f97608f178
   })
 
   it('routes /compress through the session-compression action', () => {
@@ -411,7 +353,10 @@ describe('registry-derived block-list (contract with hermes_cli/commands.py)', (
 
   it('marks every registry row with a reason unavailable offline, without a hand-typed copy', () => {
     for (const [name, reason] of Object.entries(desktopSlashRegistry)) {
-      if (reason === null || reason === 'hidden') {
+      // /restart is a desktop action here (reconnects the desktop after the
+      // gateway restarts), so it is offered even though the registry marks it
+      // terminal-only.
+      if (reason === null || reason === 'hidden' || name === '/restart') {
         continue
       }
 

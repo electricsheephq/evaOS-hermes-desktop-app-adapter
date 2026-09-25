@@ -63,7 +63,6 @@ afterEach(() => {
 })
 
 describe('GatewaySettings', () => {
-<<<<<<< HEAD
   it('runs the active support-session card controls and live countdown', async () => {
     vi.useFakeTimers()
     vi.setSystemTime('2030-01-01T00:00:00.000Z')
@@ -110,8 +109,6 @@ describe('GatewaySettings', () => {
     expect(screen.queryByRole('region', { name: 'Support session' })).toBeNull()
   })
 
-||||||| 939e45c91d
-=======
   it('reconnects a moved agent under its new team without replacing its saved identity or changing another default', async () => {
     const saved = {
       id: 'saved-b',
@@ -172,7 +169,7 @@ describe('GatewaySettings', () => {
     expect(saveConnectionConfig).not.toHaveBeenCalled()
     registry.value = null
   })
->>>>>>> f97608f178
+
   it('keeps saved Cloud instances usable without discovery and marks the live source, not the default', async () => {
     getConnectionConfig.mockResolvedValue({ ...localConnection, mode: 'cloud', remoteUrl: 'https://a.example' })
     registry.value = {

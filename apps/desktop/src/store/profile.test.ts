@@ -18,7 +18,6 @@ let primaryGatewaySource: null | string = null
 
 vi.mock('@/store/gateway', () => ({
   $gateway,
-  activeGatewayConnectionId: () => null,
   // Activation now verifies the socket's route before publishing the profile.
   activeGatewayConnectionId: () => activeGatewaySource,
   activeGatewayProfileKey: () => ensureGatewayForProfile.mock.lastCall?.[0] ?? $activeGatewayProfile.get(),

@@ -94,17 +94,12 @@ export function backendOwnedByApp({ ownedBackendCount, primaryRouteKind }: Backe
  * `backendOwned` (see backendOwnedByApp) picks the copy: an owned backend dies
  * with the app, a remote/cloud one keeps working after it closes.
  */
-<<<<<<< HEAD
-export function quitPromptFor(work: ActiveWork, quittingForHandoff: boolean, appName = 'Hermes'): null | QuitPrompt {
-||||||| 939e45c91d
-export function quitPromptFor(work: ActiveWork, quittingForHandoff: boolean): null | QuitPrompt {
-=======
 export function quitPromptFor(
   work: ActiveWork,
   quittingForHandoff: boolean,
-  backendOwned: boolean = true
+  backendOwned: boolean = true,
+  appName = 'Hermes'
 ): null | QuitPrompt {
->>>>>>> f97608f178
   if (quittingForHandoff || work.count < 1) {
     return null
   }
@@ -124,7 +119,7 @@ export function quitPromptFor(
       lines.length > 0 ? '' : null,
       backendOwned
         ? 'Quitting stops the agent mid-turn. Any work it has not finished writing is lost.'
-        : 'The agent keeps running on the remote backend. Quitting only closes Hermes on this computer; reconnect later to see the results.'
+        : `The agent keeps running on the remote backend. Quitting only closes ${appName} on this computer; reconnect later to see the results.`
     ]
       .filter(line => line !== null)
       .join('\n')

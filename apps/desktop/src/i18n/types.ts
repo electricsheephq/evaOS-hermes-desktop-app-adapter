@@ -1992,14 +1992,10 @@ export interface Translations {
       nousAuthDoneTitle: string
       nousAuthDoneMessage: string
       nousAuthFailed: string
-<<<<<<< HEAD
-      managedUnavailableTitle: string
-      managedUnavailableMessage: (provider: string) => string
-||||||| 939e45c91d
-=======
       nousAuthFailedMessage: string
       nousAuthTryAgain: string
->>>>>>> f97608f178
+      managedUnavailableTitle: string
+      managedUnavailableMessage: (provider: string) => string
       noApiKeyRequired: string
       postSetupHint: (step: string) => string
       postSetupInstalledHint: string

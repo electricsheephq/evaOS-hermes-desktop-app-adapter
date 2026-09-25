@@ -17,8 +17,6 @@ import { $bargeInThresholdMultiplier } from '@/store/voice-prefs'
 
 import { useComposerScope } from '../scope'
 
-import { useComposerScope } from '../scope'
-
 import { useMicRecorder } from './use-mic-recorder'
 
 export type ConversationStatus = 'idle' | 'listening' | 'transcribing' | 'thinking' | 'speaking'
@@ -65,7 +63,6 @@ export function useVoiceConversation({
   const { t } = useI18n()
   const voiceCopy = t.notifications.voice
   const { handle, level } = useMicRecorder(voiceCopy)
-<<<<<<< HEAD
   const micHandleRef = useRef(handle)
   // The scope's session owner (a Bot's own connection + profile) picks the TTS
   // voice; a ref keeps the long-lived turn closures below reading the current
@@ -73,15 +70,6 @@ export function useVoiceConversation({
   const { connectionId: ownerConnectionId, profile: ownerProfile, voiceOwnerUnavailable } = useComposerScope()
   const ownerRef = useRef({ connectionId: ownerConnectionId, profile: ownerProfile, voiceOwnerUnavailable })
   ownerRef.current = { connectionId: ownerConnectionId, profile: ownerProfile, voiceOwnerUnavailable }
-||||||| 939e45c91d
-=======
-  // The scope's session owner (a Bot's own connection + profile) picks the TTS
-  // voice; a ref keeps the long-lived turn closures below reading the current
-  // value.
-  const { connectionId: ownerConnectionId, profile: ownerProfile } = useComposerScope()
-  const ownerRef = useRef({ connectionId: ownerConnectionId, profile: ownerProfile })
-  ownerRef.current = { connectionId: ownerConnectionId, profile: ownerProfile }
->>>>>>> f97608f178
   const [status, setStatus] = useState<ConversationStatus>('idle')
   const [muted, setMuted] = useState(false)
   const turnTimeoutRef = useRef<number | null>(null)
@@ -672,7 +660,9 @@ export function useVoiceConversation({
       })().catch(error => {
         window.clearInterval(feedTimer)
 
-        if (responseIdRef.current !== responseId) {return}
+        if (responseIdRef.current !== responseId) {
+          return
+        }
         stopVoicePlayback()
         dropSpeechSession()
         awaitingSpokenResponseRef.current = false

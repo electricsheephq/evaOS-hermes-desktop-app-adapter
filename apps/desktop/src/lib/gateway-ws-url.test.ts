@@ -35,7 +35,7 @@ describe('desktop connection scope', () => {
     const desktop = fakeDesktop()
 
     await expect(resolveDesktopGatewayWsUrl(desktop, aliasConnection(authMode))).resolves.toContain('legacy.invalid')
-    expect(desktop.getGatewayWsUrl).toHaveBeenCalledWith('client-alias')
+    expect(desktop.getGatewayWsUrl).toHaveBeenCalledWith('client-alias', '/api/ws')
     expect(desktop.getGatewayWsUrlFor).not.toHaveBeenCalled()
   })
 
@@ -57,7 +57,7 @@ describe('desktop connection scope', () => {
     const scopedWithoutId = { ...registeredConnection('token'), connectionId: undefined } as HermesConnection
 
     await expect(resolveDesktopGatewayWsUrl(desktop, scopedWithoutId)).resolves.toContain('legacy.invalid')
-    expect(desktop.getGatewayWsUrl).toHaveBeenCalledWith('remote-profile')
+    expect(desktop.getGatewayWsUrl).toHaveBeenCalledWith('remote-profile', '/api/ws')
     expect(desktop.getGatewayWsUrlFor).not.toHaveBeenCalled()
   })
 

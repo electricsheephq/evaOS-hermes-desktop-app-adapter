@@ -28,5 +28,8 @@ export const MANAGED_TRANSLATIONS: Record<Locale, Translations> = {
   'zh-hant': createManagedTranslations(zhHant),
   ja: createManagedTranslations(ja),
   ar: createManagedTranslations(ar),
-  ru: createManagedTranslations(ru)
+  ru: createManagedTranslations(ru),
+  fr: createManagedTranslations(fr),
+  de: createManagedTranslations(de),
+  es: createManagedTranslations(es)
 }

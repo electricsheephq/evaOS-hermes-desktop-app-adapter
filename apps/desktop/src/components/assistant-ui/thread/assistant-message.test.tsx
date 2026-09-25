@@ -148,7 +148,6 @@ function oauthExpiredMessage(): ThreadMessage {
   } as unknown as ThreadMessage
 }
 
-<<<<<<< HEAD
 function codexExpiredMessage(): ThreadMessage {
   return {
     ...oauthExpiredMessage(),
@@ -175,8 +174,8 @@ function codexExpiredMessage(): ThreadMessage {
       }
     }
   } as unknown as ThreadMessage
-||||||| 939e45c91d
-=======
+}
+
 /** A failed turn carrying an arbitrary error_surface descriptor. */
 function failedMessage(errorSurface: Record<string, unknown>, error = 'HTTP 400: raw provider body'): ThreadMessage {
   return {
@@ -200,7 +199,6 @@ function LocationProbe() {
   const location = useLocation()
 
   return <span data-testid="location">{`${location.pathname}${location.search}`}</span>
->>>>>>> f97608f178
 }
 
 function Harness({

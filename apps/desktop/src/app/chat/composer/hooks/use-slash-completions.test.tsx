@@ -148,9 +148,9 @@ describe('useSlashCompletions', () => {
   })
 
   it('prefix-completes desktop-only action commands missing from the backend catalog', async () => {
-    const request = vi.fn().mockImplementation((method: string) =>
-      Promise.resolve(method === 'commands.catalog' ? CATALOG : { items: [] })
-    )
+    const request = vi
+      .fn()
+      .mockImplementation((method: string) => Promise.resolve(method === 'commands.catalog' ? CATALOG : { items: [] }))
 
     const api = harness({ request } as unknown as HermesGateway)
 
@@ -200,7 +200,7 @@ describe('useSlashCompletions', () => {
       (items.find(item => (item.metadata as { command?: string })?.command === command)?.metadata as { group?: string })
         ?.group
 
-    expect(commandsOf(items)).toEqual(['/refine', '/compress', '/restart', '/docx'])
+    expect(commandsOf(items)).toEqual(['/refine', '/compress', '/reasoning', '/restart', '/docx'])
     expect(groupOf('/refine')).toBe('Commands')
     expect(groupOf('/compress')).toBe('Commands')
     expect(groupOf('/docx')).toBe('Skills')

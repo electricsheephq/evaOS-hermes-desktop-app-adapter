@@ -23,12 +23,7 @@ import {
   setYoloActive
 } from '@/store/session'
 import {
-<<<<<<< HEAD
-||||||| 939e45c91d
-import { $sessionStates, $sessionTiles, publishSessionState, releaseSessionTranscript } from '@/store/session-states'
-=======
   $parkedTileStoredIds,
->>>>>>> f97608f178
   $sessionStates,
   $sessionTiles,
   isSessionInForeground,

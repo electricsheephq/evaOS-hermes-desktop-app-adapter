@@ -23,12 +23,8 @@ import { Skeleton } from '@/components/ui/skeleton'
 import type { HermesGateway } from '@/hermes'
 import { getLocalModelsStatus } from '@/hermes'
 import { useI18n } from '@/i18n'
-<<<<<<< HEAD
 import { isManagedEvaosAgent, managedProviderDisplayValue } from '@/i18n/managed-brand'
-||||||| 939e45c91d
-=======
 import { isSubmitEnter } from '@/lib/ime'
->>>>>>> f97608f178
 import { catalogProviderMatches, modelOptionsQueryKey, requestModelOptions } from '@/lib/model-options'
 import { displayModelName, modelDisplayParts } from '@/lib/model-status-label'
 import { reasoningEffortLabel } from '@/lib/reasoning-effort'

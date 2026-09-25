@@ -86,13 +86,7 @@ export function BrowserRealProfilePanel({ profile }: BrowserRealProfilePanelProp
         setBusy(false)
       }
     },
-<<<<<<< HEAD
-    [config, copy, enableAllowed, profile, setConfig]
-||||||| 939e45c91d
-    [config, copy, profile, setConfig]
-=======
-    [config, copy, profile, setConfig, writeScope]
->>>>>>> f97608f178
+    [config, copy, enableAllowed, profile, setConfig, writeScope]
   )
 
   return (

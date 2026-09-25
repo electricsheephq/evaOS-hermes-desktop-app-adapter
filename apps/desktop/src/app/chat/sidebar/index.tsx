@@ -31,14 +31,8 @@ import { normalizeSessionSource, sessionSourceLabel } from '@/lib/session-source
 import { cn } from '@/lib/utils'
 import { $connectionsRegistry } from '@/store/connection-registry-state'
 import { $activeConnectionId } from '@/store/connections'
-<<<<<<< HEAD
 import { $cronJobErrors, $cronJobs } from '@/store/cron'
-||||||| 939e45c91d
-import { $cronJobs } from '@/store/cron'
-=======
-import { $cronJobs } from '@/store/cron'
 import { $interfaceMode, $showsAdvancedChrome, shownInMode } from '@/store/interface-mode'
->>>>>>> f97608f178
 import { $bindings } from '@/store/keybinds'
 import {
   $dismissedAutoProjectIds,
@@ -2043,13 +2037,10 @@ export function ChatSidebar({
                 )
               })}
 
-<<<<<<< HEAD
-            {!trimmedQuery && !worktreeGroupingActive && (cronJobs.length > 0 || cronJobErrors.length > 0) && (
-||||||| 939e45c91d
-            {!trimmedQuery && !worktreeGroupingActive && cronJobs.length > 0 && (
-=======
-            {!trimmedQuery && !worktreeGroupingActive && showsAdvancedChrome && cronJobs.length > 0 && (
->>>>>>> f97608f178
+            {!trimmedQuery &&
+              !worktreeGroupingActive &&
+              showsAdvancedChrome &&
+              (cronJobs.length > 0 || cronJobErrors.length > 0) && (
               <SidebarCronJobsSection
                 errors={cronJobErrors}
                 jobs={cronJobs}

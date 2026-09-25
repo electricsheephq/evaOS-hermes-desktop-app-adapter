@@ -3,14 +3,8 @@ import { atom, computed } from 'nanostores'
 import { readJson, readKey, writeKey } from '@/lib/storage'
 import { normalize } from '@/lib/text'
 
-<<<<<<< HEAD
 import { $rightRailActiveTabEpoch, $rightRailActiveTabId, type RightRailTabId, selectRightRailTab } from './layout'
-||||||| 939e45c91d
-import { $rightRailActiveTabId, type RightRailTabId, selectRightRailTab } from './layout'
-=======
-import { $rightRailActiveTabId, type RightRailTabId, selectRightRailTab } from './layout'
 import { normalizeProfileKey } from './profile'
->>>>>>> f97608f178
 import { canOpenBrowserWindow, openBrowserInNewWindow } from './windows'
 
 /**

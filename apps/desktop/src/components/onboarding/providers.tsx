@@ -20,9 +20,8 @@ const PROVIDER_ORDER: Record<string, number> = {
 
 const assetPath = (path: string) => `${import.meta.env.BASE_URL}${path.replace(/^\/+/, '')}`
 
-<<<<<<< HEAD
 export const providerTitle = (p: OAuthProvider) =>
-  managedProviderDisplayValue(p.id, PROVIDER_DISPLAY[p.id]?.title ?? p.name)
+  managedProviderDisplayValue(p.id, PROVIDER_DISPLAY_NAMES[p.id] ?? p.name)
 
 export const managedOAuthProviders = (providers: OAuthProvider[], managed = isManagedEvaosAgent()) =>
   managed ? providers.filter(provider => provider.id !== 'nous') : providers
@@ -31,14 +30,7 @@ export const isManagedLocalCliProviderUnavailable = (
   provider: OAuthProvider,
   managed = isManagedEvaosAgent()
 ): boolean => managed && provider.flow === 'external'
-const orderOf = (p: OAuthProvider) => PROVIDER_DISPLAY[p.id]?.order ?? 99
-||||||| 939e45c91d
-export const providerTitle = (p: OAuthProvider) => PROVIDER_DISPLAY[p.id]?.title ?? p.name
-const orderOf = (p: OAuthProvider) => PROVIDER_DISPLAY[p.id]?.order ?? 99
-=======
-export const providerTitle = (p: OAuthProvider) => PROVIDER_DISPLAY_NAMES[p.id] ?? p.name
 const orderOf = (p: OAuthProvider) => PROVIDER_ORDER[p.id] ?? 99
->>>>>>> f97608f178
 
 export const sortProviders = (providers: OAuthProvider[]) =>
   [...providers].sort((a, b) => orderOf(a) - orderOf(b) || a.name.localeCompare(b.name))

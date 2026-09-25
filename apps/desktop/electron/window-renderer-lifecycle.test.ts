@@ -3,13 +3,7 @@ import assert from 'node:assert/strict'
 import { test } from 'vitest'
 
 import {
-<<<<<<< HEAD
   decideChildProcessGoneRecovery,
-  describeRendererLifecycleEvent,
-||||||| 939e45c91d
-  describeRendererLifecycleEvent,
-=======
->>>>>>> f97608f178
   installWindowRendererLifecycle,
   pruneReloadTimes,
   shouldReloadAfterFailedLoad,
@@ -91,13 +85,6 @@ test('pruneReloadTimes drops timestamps outside the rolling window', () => {
   assert.deepEqual(pruneReloadTimes([], now, 60_000), [])
 })
 
-<<<<<<< HEAD
-test('pushReloadTime records the timestamp', () => {
-  const times: number[] = []
-
-  assert.deepEqual(pushReloadTime(times, 42), [42])
-})
-
 test('decideChildProcessGoneRecovery recovers abnormal GPU exits within the shared budget', () => {
   for (const reason of ['crashed', 'oom', 'killed', 'abnormal-exit', 'launch-failed', 'integrity-failure']) {
     assert.deepEqual(
@@ -177,15 +164,6 @@ test('decideChildProcessGoneRecovery keeps Windows, non-GPU, and unusable window
   )
 })
 
-||||||| 939e45c91d
-test('pushReloadTime records the timestamp', () => {
-  const times: number[] = []
-
-  assert.deepEqual(pushReloadTime(times, 42), [42])
-})
-
-=======
->>>>>>> f97608f178
 test('shouldReloadAfterRendererGone reloads crashed/oom on a live window', () => {
   assert.deepEqual(shouldReloadAfterRendererGone({ reason: 'crashed', isDestroyed: false, recentReloadTimes: [] }), {
     reload: true

@@ -126,7 +126,6 @@ describe('settings helpers', () => {
   })
 
   describe('providerGroup', () => {
-<<<<<<< HEAD
     it('maps a provider env var to its labeled group', () => {
       expect(providerGroup('XAI_API_KEY')).toBe('xAI')
       expect(providerGroup('NOUS_API_KEY')).toBe('Electric Sheep account')
@@ -134,16 +133,6 @@ describe('settings helpers', () => {
       expect(providerGroup('OPENROUTER_API_KEY')).toBe('OpenRouter')
     })
 
-||||||| 939e45c91d
-    it('maps a provider env var to its labeled group', () => {
-      expect(providerGroup('XAI_API_KEY')).toBe('xAI')
-      expect(providerGroup('NOUS_API_KEY')).toBe('Nous Portal')
-      expect(providerGroup('FIREWORKS_API_KEY')).toBe('Fireworks AI')
-      expect(providerGroup('OPENROUTER_API_KEY')).toBe('OpenRouter')
-    })
-
-=======
->>>>>>> f97608f178
     it('prefers the longest matching prefix so CN/regional buckets win', () => {
       // MINIMAX_CN_ must beat the generic MINIMAX_ prefix.
       expect(providerGroup('MINIMAX_CN_API_KEY')).toBe('MiniMax (China)')

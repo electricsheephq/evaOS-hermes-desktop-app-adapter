@@ -6,6 +6,8 @@ import { MemoryRouter } from 'react-router'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type * as ConfigApi from '@/api/config'
+import { hermesConfigKey } from '@/app/hooks/use-config-record'
+import { queryClient } from '@/lib/query-client'
 import { $settingsRequestProfile } from '@/store/settings-scope'
 
 import type { ConfigSettings as ConfigSettingsType } from './config-settings'
@@ -13,8 +15,6 @@ import type { ConfigSettings as ConfigSettingsType } from './config-settings'
 // The vi.mock factory below replaces the computed (read-only) atom with a
 // writable one; narrow the import back so tests can drive it.
 const scopeProfileMock = $settingsRequestProfile as unknown as { set: (value: string) => void }
-
-import { queryClient } from '@/lib/query-client'
 
 const getHermesConfigRecord = vi.fn()
 const getHermesConfigSchema = vi.fn()
@@ -84,31 +84,13 @@ afterEach(() => {
   vi.clearAllMocks()
 })
 
-<<<<<<< HEAD
-async function renderConfigSettings() {
-  const { ConfigSettings } = await import('./config-settings')
-||||||| 939e45c91d
-async function renderConfigSettings() {
-  const { ConfigSettings } = await import('./config-settings')
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-=======
 function renderConfigSettings(activeSectionId = 'safety') {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
->>>>>>> f97608f178
   const importInputRef = createRef<HTMLInputElement>()
 
   render(
     <MemoryRouter>
-<<<<<<< HEAD
       <QueryClientProvider client={queryClient}>
-        <ConfigSettings activeSectionId="safety" importInputRef={importInputRef} />
-||||||| 939e45c91d
-      <QueryClientProvider client={client}>
-        <ConfigSettings activeSectionId="safety" importInputRef={importInputRef} />
-=======
-      <QueryClientProvider client={client}>
         <ConfigSettings activeSectionId={activeSectionId} importInputRef={importInputRef} />
->>>>>>> f97608f178
       </QueryClientProvider>
     </MemoryRouter>
   )
@@ -140,9 +122,10 @@ describe('ConfigSettings autosave', () => {
       })
 
       await waitFor(() => expect(saveHermesConfig).toHaveBeenCalledTimes(1))
-      expect(saveHermesConfig).toHaveBeenCalledWith({ checkpoints: { enabled: true } }, undefined)
+      // Settings requests carry the concrete active profile key (upstream #118432).
+      expect(saveHermesConfig).toHaveBeenCalledWith({ checkpoints: { enabled: true } }, 'default')
       await waitFor(() =>
-        expect(queryClient.getQueryData(['hermes-config-record'])).toEqual({
+        expect(queryClient.getQueryData(hermesConfigKey('default'))).toEqual({
           checkpoints: { enabled: true },
           model: { default: 'external-model' }
         })

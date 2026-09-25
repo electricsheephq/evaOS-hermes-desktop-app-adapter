@@ -474,6 +474,9 @@ export const fr = defineLocale({
       signInIncompleteTitle: 'Connexion incomplète',
       signInIncompleteMessage: "La fenêtre de connexion s'est fermée avant la fin de l'authentification.",
       signInFailed: 'Échec de la connexion',
+      managedAssignmentHint:
+        "Votre affectation professionnelle est choisie par Electric Sheep. Reconnectez-vous si l'accès a été modifié ou révoqué.",
+      managedSignInFailed: "Impossible de se connecter à l'accès géré. Réessayez.",
       signInToRemoteGateway: 'Se connecter au gateway distante',
       signInWithProvider: provider => `Se connecter avec ${provider}`,
       identityProvider: "votre fournisseur d'identité"
@@ -579,6 +582,24 @@ export const fr = defineLocale({
   remoteDisplayBanner: {
     message: reason =>
       `Rendu logiciel actif — affichage distant détecté (${reason}). L'accélération GPU est désactivée pour éviter les scintillements.`
+  },
+  delegatedSupport: {
+    sessionTitle: 'Session d’assistance',
+    actingForCustomer: customer => `Au nom de ${customer}`,
+    assignedAgent: agent => `Agent : ${agent}`,
+    endsIn: countdown => `Se termine dans ${countdown}`,
+    indicator: (customer, countdown) => `Au nom de ${customer} · ${countdown}`,
+    openSettings: 'Ouvrir les paramètres de la session d’assistance',
+    endSession: 'Terminer la session d’assistance',
+    endingSession: 'Fin de la session d’assistance…',
+    unavailable: 'L’état de la session d’assistance est indisponible.',
+    endFailed: 'Impossible de terminer la session d’assistance. Réessayez.',
+    switchTarget: 'Changer de cible d’assistance…',
+    switchingTarget: 'Ouverture de la connexion…',
+    switchTargetFailed: 'Impossible de lancer le changement de cible d’assistance. Réessayez.',
+    noPersonalAgent: 'Aucun agent personnel pour ce compte',
+    noPersonalAgentHint: 'Utilisez Changer de cible d’assistance pour ouvrir un agent client.',
+    cleanupPending: 'Une session d’assistance précédente doit encore être terminée.'
   },
   billingBlock: {
     titleNous: 'Plus de crédits Nous',

@@ -353,16 +353,8 @@ describe('useGatewayRequest', () => {
       await expect(result.current.requestGateway('session.resume')).resolves.toEqual({ recovered: true })
     })
 
-<<<<<<< HEAD
-    expect(desktop.getConnection).toHaveBeenCalledWith('default')
-    expect(desktop.getGatewayWsUrl).toHaveBeenCalledWith('default', '/api/ws')
-||||||| 939e45c91d
-    expect(desktop.getConnection).toHaveBeenCalledWith('default')
-    expect(desktop.getGatewayWsUrl).toHaveBeenCalledWith('default')
-=======
     expect(desktop.getConnection).toHaveBeenCalledWith()
-    expect(desktop.getGatewayWsUrl).toHaveBeenCalledWith('default')
->>>>>>> f97608f178
+    expect(desktop.getGatewayWsUrl).toHaveBeenCalledWith('default', '/api/ws')
     expect(desktop.getConnectionFor).not.toHaveBeenCalled()
     expect(desktop.getGatewayWsUrlFor).not.toHaveBeenCalled()
   })

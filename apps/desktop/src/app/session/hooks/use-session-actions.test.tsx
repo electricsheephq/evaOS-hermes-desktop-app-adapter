@@ -783,22 +783,6 @@ describe('createBackendSessionForSend profile routing', () => {
     expect(params).toMatchObject({ profile: 'analyst' })
   })
 
-<<<<<<< HEAD
-  it('passes the default profile for single-profile users (backend resolves it to launch)', async () => {
-    const params = await createWith(() => {
-      $activeGatewayProfile.set('default')
-      $newChatProfile.set(null)
-    })
-
-    expect(params).toMatchObject({ profile: 'default' })
-  })
-
-  it('tags new desktop chats as desktop sessions', async () => {
-    const params = await createWith(() => {})
-
-    expect(params).toMatchObject({ source: 'desktop' })
-  })
-
   it('signals the created runtime before publishing its selection', async () => {
     const activeSessionIdRef: MutableRefObject<string | null> = { current: null }
     const selectedStoredSessionIdRef: MutableRefObject<string | null> = { current: null }
@@ -839,24 +823,6 @@ describe('createBackendSessionForSend profile routing', () => {
     expect(navigate).toHaveBeenCalledWith(sessionRoute('stored-new'), { replace: true })
   })
 
-||||||| 939e45c91d
-  it('passes the default profile for single-profile users (backend resolves it to launch)', async () => {
-    const params = await createWith(() => {
-      $activeGatewayProfile.set('default')
-      $newChatProfile.set(null)
-    })
-
-    expect(params).toMatchObject({ profile: 'default' })
-  })
-
-  it('tags new desktop chats as desktop sessions', async () => {
-    const params = await createWith(() => {})
-
-    expect(params).toMatchObject({ source: 'desktop' })
-  })
-
-=======
->>>>>>> f97608f178
   // Regression (Settings → Model doesn't stick): a stale composer selection
   // must not be shipped as a per-session override on a NEW chat.
   //

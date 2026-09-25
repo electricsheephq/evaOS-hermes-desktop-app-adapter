@@ -190,9 +190,11 @@ export function registerFsIpc({
 
   // Uninstall a standalone desktop plugin by FOLDER NAME under the app-level
   // root. The renderer never passes a path; containment is re-checked inside.
-  ipcMain.handle('hermes:plugin:removeDesktop', async (_event, payload) =>
-    removeDesktopPlugin(path.join(hermesHome, DESKTOP_PLUGINS_DIR), payload?.name)
-  )
+  ipcMain.handle('hermes:plugin:removeDesktop', async (_event, payload) => {
+    assertLocalAccessAllowed('Removing local application plugins')
+
+    return removeDesktopPlugin(path.join(hermesHome, DESKTOP_PLUGINS_DIR), payload?.name)
+  })
 
   // Rename a file/folder in place. The renderer passes the existing path + a new
   // base name; the destination is resolved in the SAME parent dir so a rename can

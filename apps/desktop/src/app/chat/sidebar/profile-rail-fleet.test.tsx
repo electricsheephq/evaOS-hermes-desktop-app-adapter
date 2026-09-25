@@ -131,15 +131,9 @@ const connectionsRegistry = connectionsStore.$connectionsRegistry as ReturnType<
   typeof atom<DesktopConnectionsRegistry | null>
 >
 
-<<<<<<< HEAD
-const { $activeGatewayProfile, $profileErrors, $profiles, $profileScope } = await import('@/store/profile')
+const { $activeGatewayProfile, $profileErrors, $profileOrder, $profiles, $profileScope } = await import('@/store/profile')
 const activeGatewayProfile = $activeGatewayProfile as ReturnType<typeof atom<string>>
 const profileErrors = $profileErrors as ReturnType<typeof atom<Array<{ profile: string; error: string }>>>
-||||||| 939e45c91d
-const { $profiles, $profileScope } = await import('@/store/profile')
-=======
-const { $profileOrder, $profiles, $profileScope } = await import('@/store/profile')
->>>>>>> f97608f178
 const profiles = $profiles as ReturnType<typeof atom<Array<{ is_default: boolean; name: string }>>>
 const profileScope = $profileScope as ReturnType<typeof atom<string>>
 const { _resetFleetRosterForTests } = await import('@/store/fleet-roster')

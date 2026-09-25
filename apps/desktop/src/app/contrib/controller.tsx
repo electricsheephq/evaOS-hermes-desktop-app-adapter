@@ -40,14 +40,8 @@ import { discoverBundledPlugins } from '@/contrib/plugins'
 import { Slot } from '@/contrib/react/slot'
 import { registry } from '@/contrib/registry'
 import { discoverRuntimePlugins } from '@/contrib/runtime-loader'
-<<<<<<< HEAD
-import { translateNow } from '@/i18n'
-import { isManagedEvaosAgent } from '@/i18n/managed-brand'
-||||||| 939e45c91d
-import { translateNow } from '@/i18n'
-=======
 import { LocalizedTabTitle, translateNow } from '@/i18n'
->>>>>>> f97608f178
+import { isManagedEvaosAgent } from '@/i18n/managed-brand'
 import { NEW_SESSION_TITLE, sessionTitle as storedSessionTitle } from '@/lib/chat-runtime'
 import {
   Download,
@@ -594,40 +588,22 @@ bindPaneVisibility(
 )
 
 // ⌃` / statusbar toggle — the terminal COLLAPSES to a rail (tab stays), not
-<<<<<<< HEAD
-// hides; PTYs stay alive while collapsed (see PersistentTerminal).
+// hides; PTYs stay alive while collapsed (see PersistentTerminal). Simple has
+// no terminal: where chrome is off a closed one hides, rail and all, and ⌃`
+// is the door for the session.
 if (terminalUiVisible) {
   bindToolPaneCollapse(
     'terminal',
     $terminalTakeover,
     () => setTerminalTakeover(false),
-    () => setTerminalTakeover(true)
+    () => setTerminalTakeover(true),
+    $showsAdvancedChrome
   )
 }
 
-||||||| 939e45c91d
-// hides; PTYs stay alive while collapsed (see PersistentTerminal).
-bindToolPaneCollapse(
-  'terminal',
-  $terminalTakeover,
-  () => setTerminalTakeover(false),
-  () => setTerminalTakeover(true)
-)
-=======
-// hides; PTYs stay alive while collapsed (see PersistentTerminal). Simple has
-// no terminal: where chrome is off a closed one hides, rail and all, and ⌃`
-// is the door for the session.
-bindToolPaneCollapse(
-  'terminal',
-  $terminalTakeover,
-  () => setTerminalTakeover(false),
-  () => setTerminalTakeover(true),
-  $showsAdvancedChrome
-)
 // Without the statusbar, the rail is the only way to switch profiles or gateways.
 $profiles.subscribe(profiles => setModeContext({ profileCount: profiles.length }))
 $connectionsRegistry.subscribe(registry => setModeContext({ connectionCount: registry?.connections.length ?? 0 }))
->>>>>>> f97608f178
 // ⌘K door onto the same pane the keybind and statusbar pill flip — was a
 // one-way "open" row under Go to, so it never showed on/off and couldn't hide.
 // Reads the TREE like every other pane toggle: `$terminalTakeover` stays true

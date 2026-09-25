@@ -58,14 +58,9 @@ export const $activeProfile = atom<string>('default')
 
 // Cached profile list for the picker. Refreshed lazily; the dropdown also
 // re-fetches on open so a profile created elsewhere shows up.
-<<<<<<< HEAD
-export const $profiles = atom<ProfileInfo[]>([])
-export const $profileErrors = atom<Array<{ profile: string; error: string }>>([])
-||||||| 939e45c91d
-export const $profiles = atom<ProfileInfo[]>([])
-=======
 const NO_PROFILES: ProfileInfo[] = []
 export const $profiles = atom<ProfileInfo[]>(NO_PROFILES)
+export const $profileErrors = atom<Array<{ profile: string; error: string }>>([])
 
 // Successful lists belong to their source, not whichever gateway is active
 // when a rail renders. A re-home repaints from this cache until the incoming
@@ -83,7 +78,6 @@ function profileListSource(connection: HermesConnection | null): null | string {
 
   return connection.connectionId ?? `${connection.mode ?? 'local'}:${connection.baseUrl}`
 }
->>>>>>> f97608f178
 
 export function setActiveProfile(name: string): void {
   $activeProfile.set(name || 'default')
@@ -132,30 +126,23 @@ export function refreshProfiles(): Promise<ProfileInfo[]> {
 
         if (epoch === profileListEpoch) {
           batch(() => {
-<<<<<<< HEAD
-            $profiles.set(profiles)
-            $profileErrors.set(errors)
-          })
-          const active = normalizeProfileKey($activeGatewayProfile.get())
-          const source = activeGatewayConnectionId()
-          if (
-            delegatedSupportGatewayProfile === null &&
-            (source === null || source === primaryGatewayConnectionId()) &&
-            !profiles.some(profile => normalizeProfileKey(profile.name) === active) &&
-            !errors.some(error => normalizeProfileKey(error.profile) === active)
-          ) {
-            selectProfile($activeProfile.get())
-          }
-||||||| 939e45c91d
-          $profiles.set(profiles)
-=======
             if (source !== null) {
               $profilesByConnection.set(new Map($profilesByConnection.get()).set(source, profiles))
             }
 
             $profiles.set(profiles)
+            $profileErrors.set(errors)
           })
->>>>>>> f97608f178
+          const active = normalizeProfileKey($activeGatewayProfile.get())
+          const activeSource = activeGatewayConnectionId()
+          if (
+            delegatedSupportGatewayProfile === null &&
+            (activeSource === null || activeSource === primaryGatewayConnectionId()) &&
+            !profiles.some(profile => normalizeProfileKey(profile.name) === active) &&
+            !errors.some(error => normalizeProfileKey(error.profile) === active)
+          ) {
+            selectProfile($activeProfile.get())
+          }
         }
 
         return profiles

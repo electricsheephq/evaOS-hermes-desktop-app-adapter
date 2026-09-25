@@ -107,13 +107,8 @@ export function SettingsView({ onClose, onConfigSaved, onMainModelChanged }: Set
     }
   }, [navigate, search])
 
-<<<<<<< HEAD
   const availableViews = managedEva ? MANAGED_SETTINGS_VIEWS : SETTINGS_VIEWS
-  const [activeView, setActiveView] = useRouteEnumParam('tab', availableViews, 'config:model' as SettingsViewId)
-||||||| 939e45c91d
-  const [activeView, setActiveView] = useRouteEnumParam('tab', SETTINGS_VIEWS, 'config:model' as SettingsViewId)
-=======
-  const [activeView] = useRouteEnumParam('tab', SETTINGS_VIEWS, 'config:model' as SettingsViewId)
+  const [activeView] = useRouteEnumParam('tab', availableViews, 'config:model' as SettingsViewId)
   const params = new URLSearchParams(search)
   const requestedSubpage = params.get('page')
   const subpage = resolveSettingsSubpage(activeView, params)
@@ -158,7 +153,6 @@ export function SettingsView({ onClose, onConfigSaved, onMainModelChanged }: Set
   )
 
   const setActiveView = useCallback((view: SettingsViewId) => openSettingsPage(view), [openSettingsPage])
->>>>>>> f97608f178
 
   // Connections merged into the unified Gateways page: land old
   // `?tab=connections` routes/bookmarks there instead of a dead entry.
@@ -252,24 +246,12 @@ export function SettingsView({ onClose, onConfigSaved, onMainModelChanged }: Set
     }
   }
 
-<<<<<<< HEAD
   const allNavGroups: OverlayNavGroup[] = useMemo(
-    () => [
-      ...SECTIONS.flatMap(s => {
-        const view = `config:${s.id}` as SettingsViewId
-||||||| 939e45c91d
-  const navGroups: OverlayNavGroup[] = useMemo(
-    () => [
-      ...SECTIONS.flatMap(s => {
-        const view = `config:${s.id}` as SettingsViewId
-=======
-  const navGroups: OverlayNavGroup[] = useMemo(
     () =>
       (
         [
           ...SECTIONS.flatMap(s => {
             const view = `config:${s.id}` as SettingsViewId
->>>>>>> f97608f178
 
             const entry = {
               active: activeView === view,
@@ -279,111 +261,11 @@ export function SettingsView({ onClose, onConfigSaved, onMainModelChanged }: Set
               onSelect: () => setActiveView(view)
             }
 
-<<<<<<< HEAD
-        return [entry]
-      }),
-      {
-        active: activeView === 'notifications',
-        icon: Bell,
-        id: 'notifications',
-        label: t.settings.nav.notifications,
-        onSelect: () => setActiveView('notifications')
-      },
-      {
-        active: activeView === 'billing',
-        icon: BarChart3,
-        id: 'billing',
-        label: t.settings.nav.billing,
-        onSelect: () => setActiveView('billing')
-      },
-      {
-        active: activeView === 'providers',
-        children: [
-          {
-            active: activeView === 'providers' && providerView === 'accounts',
-            icon: codiconIcon('account'),
-            id: 'pview:accounts',
-            label: t.settings.nav.providerAccounts,
-            onSelect: () => openProviderView('accounts')
-          },
-          {
-            active: activeView === 'providers' && providerView === 'keys',
-            icon: KeyRound,
-            id: 'pview:keys',
-            label: t.settings.nav.providerApiKeys,
-            onSelect: () => openProviderView('keys')
-          },
-          ...(!managedEva
-            ? [
-                {
-                  active: activeView === 'providers' && providerView === 'custom-endpoints',
-                  icon: Globe,
-                  id: 'pview:custom-endpoints',
-                  label: t.settings.nav.providerCustomEndpoints,
-                  onSelect: () => openProviderView('custom-endpoints')
-                }
-              ]
-            : []),
-          // Local models ships behind the --local launch flag: no flag, no
-          // nav entry (the pane itself also refuses to render, so a stale
-          // ?pview=local deep link falls back to accounts-shaped emptiness
-          // rather than a hidden feature).
-          ...($localModelsEnabled.get() && !managedEva
-            ? [
-||||||| 939e45c91d
-        return [entry]
-      }),
-      {
-        active: activeView === 'notifications',
-        icon: Bell,
-        id: 'notifications',
-        label: t.settings.nav.notifications,
-        onSelect: () => setActiveView('notifications')
-      },
-      {
-        active: activeView === 'billing',
-        icon: BarChart3,
-        id: 'billing',
-        label: t.settings.nav.billing,
-        onSelect: () => setActiveView('billing')
-      },
-      {
-        active: activeView === 'providers',
-        children: [
-          {
-            active: activeView === 'providers' && providerView === 'accounts',
-            icon: codiconIcon('account'),
-            id: 'pview:accounts',
-            label: t.settings.nav.providerAccounts,
-            onSelect: () => openProviderView('accounts')
-          },
-          {
-            active: activeView === 'providers' && providerView === 'keys',
-            icon: KeyRound,
-            id: 'pview:keys',
-            label: t.settings.nav.providerApiKeys,
-            onSelect: () => openProviderView('keys')
-          },
-          {
-            active: activeView === 'providers' && providerView === 'custom-endpoints',
-            icon: Globe,
-            id: 'pview:custom-endpoints',
-            label: t.settings.nav.providerCustomEndpoints,
-            onSelect: () => openProviderView('custom-endpoints')
-          },
-          // Local models ships behind the --local launch flag: no flag, no
-          // nav entry (the pane itself also refuses to render, so a stale
-          // ?pview=local deep link falls back to accounts-shaped emptiness
-          // rather than a hidden feature).
-          ...($localModelsEnabled.get()
-            ? [
-=======
             // Credential Vault lives beside the Browser section: it feeds the
             // browser's model-blind vault fill, so the two are one mental unit.
             if (s.id === 'browser') {
               return [
                 entry,
->>>>>>> f97608f178
                 {
                   active: activeView === 'vault',
                   icon: ShieldLock,
@@ -447,18 +329,22 @@ export function SettingsView({ onClose, onConfigSaved, onMainModelChanged }: Set
                 label: t.settings.nav.providerApiKeys,
                 onSelect: () => openProviderView('keys')
               },
-              {
-                active: activeView === 'providers' && providerView === 'custom-endpoints',
-                icon: Globe,
-                id: 'pview:custom-endpoints',
-                label: t.settings.nav.providerCustomEndpoints,
-                onSelect: () => openProviderView('custom-endpoints')
-              },
+              ...(!managedEva
+                ? [
+                    {
+                      active: activeView === 'providers' && providerView === 'custom-endpoints',
+                      icon: Globe,
+                      id: 'pview:custom-endpoints',
+                      label: t.settings.nav.providerCustomEndpoints,
+                      onSelect: () => openProviderView('custom-endpoints')
+                    }
+                  ]
+                : []),
               // Local models ships behind the --local launch flag: no flag, no
               // nav entry (the pane itself also refuses to render, so a stale
               // ?pview=local deep link falls back to accounts-shaped emptiness
               // rather than a hidden feature).
-              ...($localModelsEnabled.get()
+              ...($localModelsEnabled.get() && !managedEva
                 ? [
                     {
                       active: activeView === 'providers' && providerView === 'local',
@@ -528,55 +414,6 @@ export function SettingsView({ onClose, onConfigSaved, onMainModelChanged }: Set
             label: t.settings.nav.about,
             onSelect: () => setActiveView('about')
           }
-<<<<<<< HEAD
-        ],
-        icon: KeyRound,
-        id: 'keys',
-        label: t.settings.nav.apiKeys,
-        onSelect: () => setActiveView('keys')
-      },
-      {
-        active: activeView === 'sessions',
-        icon: Archive,
-        id: 'sessions',
-        label: t.settings.nav.archivedChats,
-        onSelect: () => setActiveView('sessions')
-      },
-      {
-        active: activeView === 'about',
-        gapBefore: true,
-        icon: Info,
-        id: 'about',
-        label: t.settings.nav.about,
-        onSelect: () => setActiveView('about')
-      }
-    ],
-    [activeView, keysView, managedEva, providerView, t, setActiveView, openProviderView, openKeysView]
-||||||| 939e45c91d
-        ],
-        icon: KeyRound,
-        id: 'keys',
-        label: t.settings.nav.apiKeys,
-        onSelect: () => setActiveView('keys')
-      },
-      {
-        active: activeView === 'sessions',
-        icon: Archive,
-        id: 'sessions',
-        label: t.settings.nav.archivedChats,
-        onSelect: () => setActiveView('sessions')
-      },
-      {
-        active: activeView === 'about',
-        gapBefore: true,
-        icon: Info,
-        id: 'about',
-        label: t.settings.nav.about,
-        onSelect: () => setActiveView('about')
-      }
-    ],
-    [activeView, keysView, providerView, t, setActiveView, openProviderView, openKeysView]
-=======
         ] as OverlayNavGroup[]
       ).map(group => {
         const view = group.id as SettingsViewId
@@ -600,6 +437,7 @@ export function SettingsView({ onClose, onConfigSaved, onMainModelChanged }: Set
       billingView,
       canViewPlans,
       keysView,
+      managedEva,
       providerView,
       subpage,
       t,
@@ -609,18 +447,14 @@ export function SettingsView({ onClose, onConfigSaved, onMainModelChanged }: Set
       openSettingsPage,
       openSubView
     ]
->>>>>>> f97608f178
   )
 
-<<<<<<< HEAD
   const navGroups = managedEva
     ? allNavGroups.filter(group => isManagedSettingsViewVisible(group.id, true))
     : allNavGroups
-||||||| 939e45c91d
-=======
+
   const activeGroup = navGroups.find(group => group.active)
   const activeChild = activeGroup?.children?.find(child => child.active)
->>>>>>> f97608f178
 
   // Type-to-search: printable keystrokes on the Settings surface (outside any
   // field) open the settings-scoped palette, seeded with the character — same

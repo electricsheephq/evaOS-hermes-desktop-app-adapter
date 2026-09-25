@@ -469,12 +469,6 @@ export function PetOverlayApp() {
                 top: 0,
                 width: 24
               }}
-<<<<<<< HEAD
-              title="Open in evaOS Agent"
-||||||| 939e45c91d
-              title="Open in Hermes"
-=======
->>>>>>> f97608f178
               type="button"
             >
               <Mail style={{ height: 13, width: 13 }} />

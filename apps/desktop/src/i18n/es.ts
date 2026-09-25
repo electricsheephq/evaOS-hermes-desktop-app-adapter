@@ -474,6 +474,9 @@ export const es = defineLocale({
       signInIncompleteTitle: 'Inicio de sesión incompleto',
       signInIncompleteMessage: 'La ventana de inicio de sesión se cerró antes de que terminara la autenticación.',
       signInFailed: 'No se pudo iniciar sesión',
+      managedAssignmentHint:
+        'Electric Sheep selecciona tu asignación de negocio. Vuelve a iniciar sesión si el acceso cambió o se revocó.',
+      managedSignInFailed: 'No se pudo iniciar sesión en el acceso gestionado. Inténtalo de nuevo.',
       signInToRemoteGateway: 'Iniciar sesión en el gateway remoto',
       signInWithProvider: provider => `Iniciar sesión con ${provider}`,
       identityProvider: 'tu proveedor de identidad'
@@ -580,6 +583,24 @@ export const es = defineLocale({
   remoteDisplayBanner: {
     message: reason =>
       `Renderizado por software activo — se detectó una pantalla remota (${reason}). Se desactivó la aceleración por GPU para evitar parpadeos.`
+  },
+  delegatedSupport: {
+    sessionTitle: 'Sesión de soporte',
+    actingForCustomer: customer => `Actuando en nombre de ${customer}`,
+    assignedAgent: agent => `Agente: ${agent}`,
+    endsIn: countdown => `Termina en ${countdown}`,
+    indicator: (customer, countdown) => `En nombre de ${customer} · ${countdown}`,
+    openSettings: 'Abrir la configuración de la sesión de soporte',
+    endSession: 'Finalizar la sesión de soporte',
+    endingSession: 'Finalizando la sesión de soporte…',
+    unavailable: 'El estado de la sesión de soporte no está disponible.',
+    endFailed: 'No se pudo finalizar la sesión de soporte. Inténtalo de nuevo.',
+    switchTarget: 'Cambiar destino de soporte…',
+    switchingTarget: 'Abriendo el inicio de sesión…',
+    switchTargetFailed: 'No se pudo iniciar el cambio de destino de soporte. Inténtalo de nuevo.',
+    noPersonalAgent: 'No hay un agente personal para esta cuenta',
+    noPersonalAgentHint: 'Usa Cambiar destino de soporte para abrir un agente de cliente.',
+    cleanupPending: 'Aún hay que finalizar una sesión de soporte anterior.'
   },
   billingBlock: {
     titleNous: 'Sin créditos de Nous',

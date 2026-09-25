@@ -80,7 +80,7 @@ vi.mock('@/store/voice-prefs', async () => {
 vi.mock('@/store/gateway', async () => {
   const { atom } = await import('nanostores')
 
-  return { $gateway: atom(null) }
+  return { $activeGatewayRoute: atom(null), $gateway: atom(null) }
 })
 vi.mock('@/store/composer-input-history', () => ({ resetBrowseState: vi.fn() }))
 vi.mock('@/store/wake-word', () => ({ resumeWakeAfterVoice: vi.fn(async () => undefined) }))

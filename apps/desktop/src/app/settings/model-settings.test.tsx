@@ -132,7 +132,6 @@ describe('ModelSettings profile scope', () => {
 })
 
 describe('ModelSettings', () => {
-<<<<<<< HEAD
   it('renders backend Nous labels and setup copy with managed customer branding', async () => {
     Object.defineProperty(window, 'hermesDesktop', {
       configurable: true,
@@ -158,39 +157,6 @@ describe('ModelSettings', () => {
     expect(screen.queryByText(/Nous Portal|Hermes runs the flow/)).toBeNull()
   })
 
-  it('loads the current main model and lists configured providers only', async () => {
-    await renderModelSettings()
-
-    await waitFor(() => expect(getGlobalModelInfo).toHaveBeenCalled())
-    await waitFor(() => expect(getGlobalModelOptions).toHaveBeenCalled())
-
-    // Open the provider Select — only configured providers should be listed.
-    const triggers = await screen.findAllByRole('combobox')
-    fireEvent.click(triggers[0])
-
-    // "Nous" shows in both the trigger and the open list.
-    expect((await screen.findAllByText('Nous')).length).toBeGreaterThan(0)
-    expect(screen.queryByText(/DeepSeek/)).toBeNull()
-  })
-
-||||||| 939e45c91d
-  it('loads the current main model and lists configured providers only', async () => {
-    await renderModelSettings()
-
-    await waitFor(() => expect(getGlobalModelInfo).toHaveBeenCalled())
-    await waitFor(() => expect(getGlobalModelOptions).toHaveBeenCalled())
-
-    // Open the provider Select — only configured providers should be listed.
-    const triggers = await screen.findAllByRole('combobox')
-    fireEvent.click(triggers[0])
-
-    // "Nous" shows in both the trigger and the open list.
-    expect((await screen.findAllByText('Nous')).length).toBeGreaterThan(0)
-    expect(screen.queryByText(/DeepSeek/)).toBeNull()
-  })
-
-=======
->>>>>>> f97608f178
   it.each(['custom', 'local', 'custom:lab'])(
     'opens local endpoint setup when %s has no inventory row',
     async provider => {

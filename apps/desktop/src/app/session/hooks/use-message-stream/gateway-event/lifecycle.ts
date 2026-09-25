@@ -24,32 +24,17 @@ export function handleLifecycleEvent(ctx: GatewayEventContext): boolean {
   const { deps, event, payload, fromActiveSource } = ctx
 
   if (event.type === 'gateway.ready') {
-<<<<<<< HEAD
-||||||| 939e45c91d
-    // Seed the active skin into the desktop theme registry without applying,
-    // so a fresh connect never overrides the user's persisted desktop theme.
-    ingestBackendSkin((payload as { skin?: HermesSkin } | undefined)?.skin, { apply: false })
-=======
     const ready = (event as GatewayEvent<'gateway.ready'>).payload
-    // Seed the active skin into the desktop theme registry without applying,
-    // so a fresh connect never overrides the user's persisted desktop theme.
-    ingestBackendSkin(ready?.skin, { apply: false })
->>>>>>> f97608f178
+
     // Backends with the change watcher broadcast pet/cron/sessions change
     // events; consumers demote their legacy polls to slow backstops.
-<<<<<<< HEAD
     if (fromActiveSource()) {
       // Seed only the active source's skin into the desktop theme registry
       // without applying, so a background profile socket cannot replace the
       // registry entry that later active events update.
-      ingestBackendSkin((payload as { skin?: HermesSkin } | undefined)?.skin, { apply: false })
-      setChangeEventsAvailable(Boolean((payload as { change_events?: boolean } | undefined)?.change_events))
+      ingestBackendSkin(ready?.skin, { apply: false })
+      setChangeEventsAvailable(Boolean(ready?.change_events))
     }
-||||||| 939e45c91d
-    setChangeEventsAvailable(Boolean((payload as { change_events?: boolean } | undefined)?.change_events))
-=======
-    setChangeEventsAvailable(Boolean(ready?.change_events))
->>>>>>> f97608f178
 
     return true
   }

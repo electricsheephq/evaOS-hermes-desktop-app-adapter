@@ -272,20 +272,13 @@ function TileChat({
       $awaitingInput: sessionAwaitingInput(runtimeId),
       $messages: view.$messages,
       attachments,
-<<<<<<< HEAD
       connectionId: voiceOwner.connectionId,
       profile: voiceOwner.profile,
       voiceOwnerUnavailable: voiceOwner.voiceOwnerUnavailable,
-||||||| 939e45c91d
-=======
-      connectionId: ownerRoute?.connectionId || undefined,
-      profile: ownerRoute?.targetProfile || ownerRoute?.profile || undefined,
->>>>>>> f97608f178
       target: `tile:${storedSessionId}`
     }),
     [
       attachments,
-<<<<<<< HEAD
       voiceOwner.connectionId,
       voiceOwner.profile,
       voiceOwner.voiceOwnerUnavailable,
@@ -323,17 +316,6 @@ function TileChat({
         }
       ),
     [scope]
-||||||| 939e45c91d
-    [attachments, runtimeId, storedSessionId, view.$messages]
-=======
-      ownerRoute?.connectionId,
-      ownerRoute?.profile,
-      ownerRoute?.targetProfile,
-      runtimeId,
-      storedSessionId,
-      view.$messages
-    ]
->>>>>>> f97608f178
   )
 
   // Tile actions must keep the persisted owner route. The ambient gateway hook
@@ -453,14 +435,8 @@ function TileChat({
           onSubmit={actions.submitText}
           onThreadMessagesChange={actions.handleThreadMessagesChange}
           onToggleSelectedPin={noop}
-<<<<<<< HEAD
           onTranscribeAudio={transcribeTileAudio}
-||||||| 939e45c91d
-          onTranscribeAudio={tileTranscribeAudio}
-=======
-          onTranscribeAudio={tileTranscribeAudio}
           reasoningMenuContent={reasoningMenuContent}
->>>>>>> f97608f178
           requestModelOptionsForOwner={requestTileGateway}
         />
       </ComposerScopeProvider>

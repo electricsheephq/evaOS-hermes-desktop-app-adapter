@@ -1,3 +1,4 @@
+import type { GatewayEvent } from '@hermes/shared'
 import { QueryClient } from '@tanstack/react-query'
 import { act, cleanup, render, waitFor } from '@testing-library/react'
 import { useEffect, useRef } from 'react'
@@ -7,7 +8,6 @@ import type { ClientSessionState } from '@/app/types'
 import { createClientSessionState } from '@/lib/chat-runtime'
 import { dispatchNativeNotification } from '@/store/native-notifications'
 import { $notifications, clearNotifications } from '@/store/notifications'
-import type { RpcEvent } from '@/types/hermes'
 
 import { useMessageStream } from './index'
 
@@ -17,7 +17,7 @@ vi.mock('@/store/native-notifications', () => ({
 
 const SID = 'session-1'
 
-let handleEvent: ((event: RpcEvent) => void) | null = null
+let handleEvent: ((event: GatewayEvent) => void) | null = null
 let queryClient: QueryClient
 
 function Harness() {

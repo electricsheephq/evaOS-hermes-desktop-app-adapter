@@ -25,7 +25,7 @@ it.each([
   setApiRequestConnection('gw-active')
   setApiRequestProfile('default')
   setSessionOwnerHint('bot-session', { connectionId, profile, mode: 'remote' })
-  expect(ownerScoped(sessionVoiceOwner('bot-session'))).toEqual({ connectionId, profile })
+  expect(ownerScoped(sessionVoiceOwner('bot-session'))).toEqual({ connectionId, priority: 'foreground', profile })
 })
 
 it('rejects ambiguous ownership before configuration, credentials or speech routing', async () => {

@@ -67,12 +67,8 @@ export type DesktopActionId =
   | 'new'
   | 'pet'
   | 'profile'
-<<<<<<< HEAD
   | 'restart'
-||||||| 939e45c91d
-=======
   | 'reasoning'
->>>>>>> f97608f178
   | 'skin'
   | 'stop'
   | 'title'
@@ -300,116 +296,6 @@ const DESKTOP_COMMAND_SPECS: readonly DesktopCommandSpec[] = [
   }
 ]
 
-<<<<<<< HEAD
-// Known commands with no desktop surface (and no alias) — a flat name list
-// per reason beats 40 identical object literals.
-const NO_DESKTOP_SURFACE: Record<DesktopUnavailableReason, readonly string[]> = {
-  terminal: [
-    '/busy',
-    '/clear',
-    '/config',
-    '/copy',
-    '/cron',
-    '/density',
-    '/details',
-    '/exit',
-    '/footer',
-    '/gateway',
-    '/history',
-    '/image',
-    '/indicator',
-    '/logs',
-    '/mouse',
-    '/paste',
-    '/platforms',
-    '/plugins',
-    '/quit',
-    '/redraw',
-    '/reload',
-    '/sb',
-    '/set-home',
-    '/sethome',
-    '/snap',
-    '/snapshot',
-    '/statusbar',
-    '/toolsets',
-    '/update',
-    '/verbose'
-  ],
-  messaging: ['/approve', '/deny'],
-  settings: ['/skills', '/pets', '/login'],
-  advanced: [
-    '/curator',
-    '/fast',
-    '/insights',
-    '/kanban',
-    '/reasoning',
-    '/reload-mcp',
-    '/reload_mcp',
-    '/reload-skills',
-    '/reload_skills'
-  ],
-  // /voice arms SERVER-side capture (voice.record → PortAudio on the backend
-  // host) — meaningless on desktop, which has its own composer-native voice
-  // conversation (mic menu / Ctrl+B) with client-side capture and playback.
-  // Point the user at the button instead of a generic "advanced" shrug.
-  'composer-voice': ['/voice']
-||||||| 939e45c91d
-// Known commands with no desktop surface (and no alias) — a flat name list
-// per reason beats 40 identical object literals.
-const NO_DESKTOP_SURFACE: Record<DesktopUnavailableReason, readonly string[]> = {
-  terminal: [
-    '/busy',
-    '/clear',
-    '/config',
-    '/copy',
-    '/cron',
-    '/density',
-    '/details',
-    '/exit',
-    '/footer',
-    '/gateway',
-    '/history',
-    '/image',
-    '/indicator',
-    '/logs',
-    '/mouse',
-    '/paste',
-    '/platforms',
-    '/plugins',
-    '/quit',
-    '/redraw',
-    '/reload',
-    '/restart',
-    '/sb',
-    '/set-home',
-    '/sethome',
-    '/snap',
-    '/snapshot',
-    '/statusbar',
-    '/toolsets',
-    '/update',
-    '/verbose'
-  ],
-  messaging: ['/approve', '/deny'],
-  settings: ['/skills', '/pets', '/login'],
-  advanced: [
-    '/curator',
-    '/fast',
-    '/insights',
-    '/kanban',
-    '/reasoning',
-    '/reload-mcp',
-    '/reload_mcp',
-    '/reload-skills',
-    '/reload_skills'
-  ],
-  // /voice arms SERVER-side capture (voice.record → PortAudio on the backend
-  // host) — meaningless on desktop, which has its own composer-native voice
-  // conversation (mic menu / Ctrl+B) with client-side capture and playback.
-  // Point the user at the button instead of a generic "advanced" shrug.
-  'composer-voice': ['/voice']
-=======
 /**
  * Offline fallback for the registry's `desktop=` metadata, dumped from
  * `hermes_cli/commands.py::desktop_surface_registry` by
@@ -463,7 +349,6 @@ function registryDerivedSpecs(): DesktopCommandSpec[] {
 
     return reason ? [{ name, surface: unavailable(reason) }] : []
   })
->>>>>>> f97608f178
 }
 
 const ALL_SPECS: readonly DesktopCommandSpec[] = [

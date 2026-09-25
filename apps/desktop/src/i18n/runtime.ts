@@ -1,13 +1,7 @@
-<<<<<<< HEAD
-import { MANAGED_TRANSLATIONS, TRANSLATIONS } from './catalog'
-||||||| 939e45c91d
-import { TRANSLATIONS } from './catalog'
-=======
 import { isRecord } from '@hermes/shared/i18n'
 import { atom } from 'nanostores'
 
-import { TRANSLATIONS } from './catalog'
->>>>>>> f97608f178
+import { MANAGED_TRANSLATIONS, TRANSLATIONS } from './catalog'
 import { DEFAULT_LOCALE } from './languages'
 import { isManagedEvaosAgent } from './managed-brand'
 import type { Locale } from './types'
@@ -71,13 +65,7 @@ export function getRuntimeI18nLocale(): Locale {
 }
 
 export function translateNow(key: string, ...args: unknown[]): string {
-<<<<<<< HEAD
   const catalog = isManagedEvaosAgent() ? MANAGED_TRANSLATIONS : TRANSLATIONS
 
-  return translateFrom(locale => catalog[locale], runtimeLocale, key, args)
-||||||| 939e45c91d
-  return translateFrom(locale => TRANSLATIONS[locale], runtimeLocale, key, args)
-=======
-  return translateFrom(locale => TRANSLATIONS[locale], $runtimeLocale.get(), key, args)
->>>>>>> f97608f178
+  return translateFrom(locale => catalog[locale], $runtimeLocale.get(), key, args)
 }

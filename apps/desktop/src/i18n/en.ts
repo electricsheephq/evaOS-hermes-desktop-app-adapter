@@ -2356,17 +2356,11 @@ export const en: Translations = {
       nousAuthSignIn: 'Sign in',
       nousAuthDoneTitle: 'Nous account connected',
       nousAuthDoneMessage: 'Your subscription backends are now active.',
-<<<<<<< HEAD
-      nousAuthFailed: 'Nous Portal sign-in did not complete',
-      managedUnavailableTitle: 'Provider unavailable',
-      managedUnavailableMessage: provider => `${provider} is not available for your managed agent.`,
-||||||| 939e45c91d
-      nousAuthFailed: 'Nous Portal sign-in did not complete',
-=======
       nousAuthFailed: 'Nous sign-in did not complete',
       nousAuthFailedMessage: 'Try again.',
       nousAuthTryAgain: 'Try again',
->>>>>>> f97608f178
+      managedUnavailableTitle: 'Provider unavailable',
+      managedUnavailableMessage: provider => `${provider} is not available for your managed agent.`,
       noApiKeyRequired: 'No API key required.',
       postSetupHint: step =>
         `This backend needs a one-time install (${step}). Runs on this machine — may take a few minutes.`,

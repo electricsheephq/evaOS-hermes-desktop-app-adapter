@@ -95,22 +95,14 @@ export interface I18nProviderProps {
   scopeKey?: string
 }
 
-<<<<<<< HEAD
-export function I18nProvider({ children, configClient = defaultConfigClient, initialLocale }: I18nProviderProps) {
-  const managed = isManagedEvaosAgent()
-  const [locale, setLocaleState] = useState<Locale>(() => (managed ? DEFAULT_LOCALE : normalizeLocale(initialLocale)))
-||||||| 939e45c91d
-export function I18nProvider({ children, configClient = defaultConfigClient, initialLocale }: I18nProviderProps) {
-  const [locale, setLocaleState] = useState<Locale>(() => normalizeLocale(initialLocale))
-=======
 export function I18nProvider({
   children,
   configClient = defaultConfigClient,
   initialLocale,
   scopeKey
 }: I18nProviderProps) {
-  const [locale, setLocaleState] = useState<Locale>(() => normalizeLocale(initialLocale))
->>>>>>> f97608f178
+  const managed = isManagedEvaosAgent()
+  const [locale, setLocaleState] = useState<Locale>(() => (managed ? DEFAULT_LOCALE : normalizeLocale(initialLocale)))
   const [isLoadingConfig, setIsLoadingConfig] = useState(false)
   const [isSavingLocale, setIsSavingLocale] = useState(false)
   const [configLoadError, setConfigLoadError] = useState<Error | null>(null)
@@ -211,13 +203,7 @@ export function I18nProvider({
         clearTimeout(retryTimer)
       }
     }
-<<<<<<< HEAD
-  }, [configClient, initialLocale, managed])
-||||||| 939e45c91d
-  }, [configClient, initialLocale])
-=======
-  }, [configClient, initialLocale, scopeKey])
->>>>>>> f97608f178
+  }, [configClient, initialLocale, managed, scopeKey])
 
   const setLocale = useCallback(
     async (next: Locale) => {

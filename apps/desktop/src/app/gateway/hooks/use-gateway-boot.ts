@@ -17,21 +17,13 @@ import { HermesGateway } from '@/hermes'
 import { translateNow } from '@/i18n'
 import { isManagedEvaosAgent } from '@/i18n/managed-brand'
 import { desktopDefaultCwd } from '@/lib/desktop-fs'
-<<<<<<< HEAD
-import { decideLivenessForceClose, LIVENESS_REPROBE_DELAY_MS } from '@/lib/gateway-liveness-policy'
-import { stripIpcErrorPrefix } from '@/lib/ipc-error'
-import { reconnectBackoffDelayMs } from '@/lib/reconnect-backoff'
-||||||| 939e45c91d
-import { decideLivenessForceClose, LIVENESS_REPROBE_DELAY_MS } from '@/lib/gateway-liveness-policy'
-import { reconnectBackoffDelayMs } from '@/lib/reconnect-backoff'
-=======
 import {
   decideLivenessForceClose,
   LIVENESS_PROBE_TIMEOUT_MS,
   LIVENESS_REPROBE_DELAY_MS
 } from '@/lib/gateway-liveness-policy'
 import { resolveDesktopGatewayWsUrl } from '@/lib/gateway-ws-url'
->>>>>>> f97608f178
+import { stripIpcErrorPrefix } from '@/lib/ipc-error'
 import { BACKEND_BOOT_WAIT_TIMEOUT_MS, RECONNECT_ATTEMPT_TIMEOUT_MS, withTimeout } from '@/lib/with-timeout'
 import {
   $desktopBoot,
@@ -206,15 +198,11 @@ export function useGatewayBoot({
   refreshHermesConfig,
   refreshSessions
 }: GatewayBootOptions) {
-<<<<<<< HEAD
   const navigate = useNavigate()
   const navigateRef = useRef(navigate)
   navigateRef.current = navigate
-||||||| 939e45c91d
-=======
   useDefaultProfilePreference()
   useConnectionsRegistry()
->>>>>>> f97608f178
 
   const callbacksRef = useRef({
     beforeConnectionSwitch,
@@ -662,20 +650,8 @@ export function useGatewayBoot({
     // URL: the HUD is opened ON a conversation, and when that conversation
     // belongs to a non-primary profile, adopting the primary here resolves the
     // session id against the wrong backend — the HUD then falls back to the
-<<<<<<< HEAD
     // default profile's last session (#82285). The override wins over an
     // ordinary stored preference, but never over a delegated-support grant.
-    async function adoptPrimaryProfile(shouldPublish: () => boolean = () => true): Promise<null | string> {
-      const override = windowProfileOverride()
-      let adoptedProfile: null | string = null
-||||||| 939e45c91d
-    // default profile's last session (#82285). The override wins over the
-    // stored preference; absent, behavior is unchanged.
-    async function adoptPrimaryProfile(shouldPublish: () => boolean = () => true): Promise<boolean> {
-      const override = windowProfileOverride()
-=======
-    // default profile's last session (#82285). The override wins over the
-    // stored preference; absent, behavior is unchanged.
     async function getWindowBackend(startup = false): Promise<HermesConnection> {
       const profile = windowProfileOverride()
       const peer = isPeerInstanceWindow()
@@ -696,13 +672,15 @@ export function useGatewayBoot({
     }
 
     async function adoptPrimaryProfile(
-      connection: HermesConnection,
+      connection: HermesConnection | null,
       shouldPublish: () => boolean = () => true
-    ): Promise<boolean> {
+    ): Promise<null | string> {
       // The resolved descriptor reflects the explicit startup default. The
       // legacy profile.get preference only remembers the last workspace used.
-      const override = windowProfileOverride() ?? connection.profile
->>>>>>> f97608f178
+      // Managed boot adopts its assignment before dialing, so it has no
+      // descriptor yet.
+      const override = windowProfileOverride() ?? connection?.profile ?? null
+      let adoptedProfile: null | string = null
 
       try {
         const profileRecord = await desktop.profile?.get?.()
@@ -723,7 +701,6 @@ export function useGatewayBoot({
         const key = adoptActiveGatewayProfile(profileKey, delegatedSupport)
         adoptedProfile = key
         supportGrantedProfile = delegatedSupport ? key : null
-        sourceProfile = key
         console.info(`[gateway-profile-adoption] source=${source} value=${JSON.stringify(key)}`)
         setPrimaryGateway(gateway, key)
         void ensureGatewayForProfile(key)
@@ -735,7 +712,6 @@ export function useGatewayBoot({
         const fallback = normalizeProfileKey(override)
         adoptedProfile = fallback
         supportGrantedProfile = null
-        sourceProfile = fallback
         adoptActiveGatewayProfile(fallback, false)
 
         // A managed build must never keep using the previous renderer profile
@@ -813,13 +789,7 @@ export function useGatewayBoot({
         // shared backend-boot budget rather than the reconnect budget because
         // ensureBackend may cold-spawn a pooled helper backend here.
         const conn = await withTimeout(
-<<<<<<< HEAD
-          desktop.getConnection(supportGrantedProfile ?? windowProfileOverride() ?? undefined),
-||||||| 939e45c91d
-          desktop.getConnection(windowProfileOverride() ?? undefined),
-=======
-          getWindowBackend(),
->>>>>>> f97608f178
+          supportGrantedProfile ? desktop.getConnection(supportGrantedProfile) : getWindowBackend(),
           BACKEND_BOOT_WAIT_TIMEOUT_MS,
           'Timed out reconnecting to Hermes backend'
         )
@@ -1104,18 +1074,12 @@ export function useGatewayBoot({
       }
     })
 
-<<<<<<< HEAD
-    let sourceProfile = normalizeProfileKey(survivor?.profile ?? $activeGatewayProfile.get())
-    let supportGrantedProfile: null | string = null
-||||||| 939e45c91d
-    const sourceProfile = normalizeProfileKey($activeGatewayProfile.get())
-=======
     // Read PER EVENT, never once at boot: under multiplex-only this one socket
     // serves every local profile, and the profile moves under it while the
     // socket stays open. A boot-time capture stamps every later profile's
     // events with whatever was active when the gateway booted.
     const sourceProfileNow = () => normalizeProfileKey($activeGatewayProfile.get())
->>>>>>> f97608f178
+    let supportGrantedProfile: null | string = null
 
     const offEvent = gateway.onEvent(event => {
       const connectionId = activeGatewayConnectionId()
@@ -1390,7 +1354,7 @@ export function useGatewayBoot({
         // A managed connection is assigned to one authoritative profile. Adopt
         // that grant before asking main to dial so the first RPC window cannot
         // inherit the renderer store's default profile.
-        const managedProfile = isManagedEvaosAgent() ? await adoptPrimaryProfile() : null
+        const managedProfile = isManagedEvaosAgent() ? await adoptPrimaryProfile(null) : null
 
         if (isManagedEvaosAgent() && (!managedProfile || cancelled)) {
           return
@@ -1404,21 +1368,13 @@ export function useGatewayBoot({
         // rides out a full backend cold spawn, so it gets the shared 45s
         // backend-boot budget, not the 20s reconnect budget.
         const conn = await withTimeout(
-<<<<<<< HEAD
-          desktop.getConnection(supportGrantedProfile ?? windowProfileOverride() ?? managedProfile ?? undefined),
+          isManagedEvaosAgent()
+            ? desktop.getConnection(supportGrantedProfile ?? windowProfileOverride() ?? managedProfile ?? undefined)
+            : getWindowBackend(true),
           isManagedEvaosAgent() ? MANAGED_INITIAL_CONNECTION_DEADLINE_MS : BACKEND_BOOT_WAIT_TIMEOUT_MS,
           isManagedEvaosAgent()
             ? translateNow('boot.errors.gatewayConnectionLost')
             : 'Timed out connecting to Hermes backend'
-||||||| 939e45c91d
-          desktop.getConnection(windowProfileOverride() ?? undefined),
-          BACKEND_BOOT_WAIT_TIMEOUT_MS,
-          'Timed out connecting to Hermes backend'
-=======
-          getWindowBackend(true),
-          BACKEND_BOOT_WAIT_TIMEOUT_MS,
-          'Timed out connecting to Hermes backend'
->>>>>>> f97608f178
         )
 
         if (cancelled) {
@@ -1479,15 +1435,9 @@ export function useGatewayBoot({
         // (cwd seed, config, sessions) are independent REST calls — running
         // them serially added their sum to time-to-populated-sidebar when only
         // the max is needed.
-<<<<<<< HEAD
         if (!isManagedEvaosAgent()) {
-          await adoptPrimaryProfile()
+          await adoptPrimaryProfile(conn)
         }
-||||||| 939e45c91d
-        await adoptPrimaryProfile()
-=======
-        await adoptPrimaryProfile(conn)
->>>>>>> f97608f178
 
         setDesktopBootStep({
           phase: 'renderer.config',

@@ -43,7 +43,6 @@ export function useAutoSpeakReplies({
   const enabled = useStore($autoSpeakReplies)
   // Wake on THIS composer's transcript: a tile subscribed to the primary's
   // would never fire on its own replies (and would fire on someone else's).
-<<<<<<< HEAD
   const { $messages, connectionId, profile, voiceOwnerUnavailable } = useComposerScope()
 
   const latest = useRef({
@@ -65,15 +64,6 @@ export function useAutoSpeakReplies({
     profile,
     voiceOwnerUnavailable
   }
-||||||| 939e45c91d
-  const { $messages } = useComposerScope()
-  const latest = useRef({ conversationActive, failureLabel, markSpoken, pendingReply })
-  latest.current = { conversationActive, failureLabel, markSpoken, pendingReply }
-=======
-  const { $messages, connectionId, profile } = useComposerScope()
-  const latest = useRef({ connectionId, conversationActive, failureLabel, markSpoken, pendingReply, profile })
-  latest.current = { connectionId, conversationActive, failureLabel, markSpoken, pendingReply, profile }
->>>>>>> f97608f178
 
   useEffect(() => {
     if (!enabled) {
@@ -85,7 +75,6 @@ export function useAutoSpeakReplies({
     latest.current.markSpoken()
 
     const speakLatest = () => {
-<<<<<<< HEAD
       const {
         connectionId,
         conversationActive,
@@ -95,11 +84,6 @@ export function useAutoSpeakReplies({
         profile,
         voiceOwnerUnavailable
       } = latest.current
-||||||| 939e45c91d
-      const { conversationActive, failureLabel, markSpoken, pendingReply } = latest.current
-=======
-      const { connectionId, conversationActive, failureLabel, markSpoken, pendingReply, profile } = latest.current
->>>>>>> f97608f178
 
       if (conversationActive || $voicePlayback.get().status !== 'idle') {
         return
@@ -117,7 +101,6 @@ export function useAutoSpeakReplies({
       // ran in every window, so peers just stay quiet.
       void ownsAmbientCue(`speak:${reply.id}`).then(owns => {
         if (owns) {
-<<<<<<< HEAD
           void playSpeechText(reply.text, {
             connectionId,
             messageId: reply.id,
@@ -125,15 +108,6 @@ export function useAutoSpeakReplies({
             voiceOwnerUnavailable,
             source: 'read-aloud'
           }).catch(error => notifyError(error, failureLabel))
-||||||| 939e45c91d
-          void playSpeechText(reply.text, { messageId: reply.id, source: 'read-aloud' }).catch(error =>
-            notifyError(error, failureLabel)
-          )
-=======
-          void playSpeechText(reply.text, { connectionId, messageId: reply.id, profile, source: 'read-aloud' }).catch(
-            error => notifyError(error, failureLabel)
-          )
->>>>>>> f97608f178
         }
       })
     }

@@ -222,14 +222,10 @@ interface ModelSettingsProps {
 export function ModelSettings({ onMainModelChanged, scopeProfile, subpage }: ModelSettingsProps) {
   const { t } = useI18n()
   const m = t.settings.model
-<<<<<<< HEAD
   const managedEva = isManagedEvaosAgent()
-||||||| 939e45c91d
-=======
   const showMain = subpage === undefined || subpage === 'main'
   const showAuxiliary = subpage === undefined || subpage === 'auxiliary'
   const showMoa = subpage === undefined || subpage === 'moa'
->>>>>>> f97608f178
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [skewRestart, setSkewRestart] = useState(false)
@@ -882,43 +878,6 @@ export function ModelSettings({ onMainModelChanged, scopeProfile, subpage }: Mod
 
   return (
     <div className="grid gap-6">
-<<<<<<< HEAD
-      <section>
-        <p className="mb-3 text-xs text-muted-foreground">{m.appliesDesc}</p>
-        <div className="flex flex-wrap items-center gap-2">
-          <Select onValueChange={setSelectedProvider} value={selectedProvider}>
-            <SelectTrigger className={cn('min-w-40', CONTROL_TEXT)}>
-              <SelectValue placeholder={m.provider} />
-            </SelectTrigger>
-            <SelectContent>
-              {mainProviderOptions.map(provider => (
-                <SelectItem key={provider.slug || 'none'} value={provider.slug || 'none'}>
-                  {managedProviderDisplayValue(provider.slug, provider.name, managedEva)}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          {needsSetup ? (
-            setupIsApiKey ? (
-||||||| 939e45c91d
-      <section>
-        <p className="mb-3 text-xs text-muted-foreground">{m.appliesDesc}</p>
-        <div className="flex flex-wrap items-center gap-2">
-          <Select onValueChange={setSelectedProvider} value={selectedProvider}>
-            <SelectTrigger className={cn('min-w-40', CONTROL_TEXT)}>
-              <SelectValue placeholder={m.provider} />
-            </SelectTrigger>
-            <SelectContent>
-              {mainProviderOptions.map(provider => (
-                <SelectItem key={provider.slug || 'none'} value={provider.slug || 'none'}>
-                  {provider.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          {needsSetup ? (
-            setupIsApiKey ? (
-=======
       {!showMain && errorNotice}
       {showMain && (
         <section>
@@ -931,7 +890,7 @@ export function ModelSettings({ onMainModelChanged, scopeProfile, subpage }: Mod
               <SelectContent>
                 {mainProviderOptions.map(provider => (
                   <SelectItem key={provider.slug || 'none'} value={provider.slug || 'none'}>
-                    {provider.name}
+                    {managedProviderDisplayValue(provider.slug, provider.name, managedEva)}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -963,11 +922,16 @@ export function ModelSettings({ onMainModelChanged, scopeProfile, subpage }: Mod
                 </>
               ) : (
                 <Button onClick={startProviderSetup} size="sm" variant="textStrong">
-                  {m.setUpProvider(selectedProviderRow?.name ?? m.setupProviderFallback)}
+                  {m.setUpProvider(
+                    managedProviderDisplayValue(
+                      selectedProviderRow?.slug,
+                      selectedProviderRow?.name ?? m.setupProviderFallback,
+                      managedEva
+                    )
+                  )}
                 </Button>
               )
             ) : (
->>>>>>> f97608f178
               <>
                 <ModelSelect
                   className="min-w-60"
@@ -986,227 +950,19 @@ export function ModelSettings({ onMainModelChanged, scopeProfile, subpage }: Mod
                   {applying ? m.applying : t.common.apply}
                 </Button>
               </>
-<<<<<<< HEAD
-            ) : (
-              <Button onClick={startProviderSetup} size="sm" variant="textStrong">
-                Set up{' '}
-                {managedProviderDisplayValue(
-                  selectedProviderRow?.slug,
-                  selectedProviderRow?.name ?? 'provider',
-                  managedEva
-                )}
-              </Button>
-            )
-          ) : (
-            <>
-              <Select onValueChange={setSelectedModel} value={selectedModel}>
-                <SelectTrigger className={cn('min-w-60', CONTROL_TEXT)}>
-                  <SelectValue placeholder={m.model} />
-                </SelectTrigger>
-                <SelectContent>
-                  {withActive(selectedProviderModels, selectedModel).map(model => (
-                    <SelectItem key={model} value={model}>
-                      {model}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <Button
-                disabled={!selectedProvider || !selectedModel || applying}
-                onClick={() => void applyMainModel()}
-                size="sm"
-              >
-                {applying && <Loader2 className="size-3.5 animate-spin" />}
-                {applying ? m.applying : t.common.apply}
-              </Button>
-            </>
-||||||| 939e45c91d
-            ) : (
-              <Button onClick={startProviderSetup} size="sm" variant="textStrong">
-                Set up {selectedProviderRow?.name ?? 'provider'}
-              </Button>
-            )
-          ) : (
-            <>
-              <Select onValueChange={setSelectedModel} value={selectedModel}>
-                <SelectTrigger className={cn('min-w-60', CONTROL_TEXT)}>
-                  <SelectValue placeholder={m.model} />
-                </SelectTrigger>
-                <SelectContent>
-                  {withActive(selectedProviderModels, selectedModel).map(model => (
-                    <SelectItem key={model} value={model}>
-                      {model}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <Button
-                disabled={!selectedProvider || !selectedModel || applying}
-                onClick={() => void applyMainModel()}
-                size="sm"
-              >
-                {applying && <Loader2 className="size-3.5 animate-spin" />}
-                {applying ? m.applying : t.common.apply}
-              </Button>
-            </>
-=======
             )}
           </div>
           {needsSetup && !setupIsApiKey && selectedProviderRow && (
             <p className="mt-2 text-xs text-muted-foreground">
               {selectedProviderRow?.auth_type === 'api_key'
-                ? `${selectedProviderRow?.name} needs an API key — set it up to choose a model.`
-                : `${selectedProviderRow?.name} signs in through your browser — Hermes runs the flow for you.`}
+                ? `${managedProviderDisplayValue(selectedProviderRow.slug, selectedProviderRow.name, managedEva)} needs an API key — set it up to choose a model.`
+                : managedEva
+                  ? sanitizeManagedBrandText(
+                      `${managedProviderDisplayValue(selectedProviderRow.slug, selectedProviderRow.name, true)} signs in through your browser — Hermes runs the flow for you.`
+                    )
+                  : `${selectedProviderRow.name} signs in through your browser — Hermes runs the flow for you.`}
             </p>
->>>>>>> f97608f178
           )}
-<<<<<<< HEAD
-        </div>
-        {needsSetup && !setupIsApiKey && selectedProviderRow && (
-          <p className="mt-2 text-xs text-muted-foreground">
-            {selectedProviderRow?.auth_type === 'api_key'
-              ? `${managedProviderDisplayValue(selectedProviderRow.slug, selectedProviderRow.name, managedEva)} needs an API key — set it up to choose a model.`
-              : managedEva
-                ? sanitizeManagedBrandText(
-                    `${managedProviderDisplayValue(selectedProviderRow.slug, selectedProviderRow.name, true)} signs in through your browser — Hermes runs the flow for you.`
-                  )
-                : `${selectedProviderRow.name} signs in through your browser — Hermes runs the flow for you.`}
-          </p>
-        )}
-        {config && mainModel && (reasoningSupported || fastSupported) && (
-          <div className="mt-3 flex flex-wrap items-center gap-x-6 gap-y-3">
-            <span className="text-xs text-muted-foreground">{m.defaultsLabel}</span>
-            {reasoningSupported && (
-              <div className="flex items-center gap-2 text-xs">
-                {m.reasoning}
-                <Select
-                  onValueChange={value => void writeAgentDefault('agent.reasoning_effort', value)}
-                  value={effortValue}
-                >
-                  <SelectTrigger className={cn('min-w-28', CONTROL_TEXT)}>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {REASONING_EFFORT_VALUES.map(value => (
-                      <SelectItem key={value} value={value}>
-                        {value === 'none' ? m.reasoningOff : t.shell.modelOptions[value]}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            )}
-            {fastSupported && (
-              <label className="flex items-center gap-2 text-xs">
-                {t.shell.modelOptions.fast}
-                <Switch
-                  checked={fastOn}
-                  onCheckedChange={checked => void writeAgentDefault('agent.service_tier', checked ? 'fast' : 'normal')}
-                  size="xs"
-                />
-              </label>
-            )}
-          </div>
-        )}
-        {error && (
-          <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-destructive">
-            <span>{error}</span>
-            {skewRestart && (
-              <Button
-                disabled={restartingBackend}
-                onClick={() => void recycleStaleBackend()}
-                size="sm"
-                variant="textStrong"
-              >
-                {restartingBackend && <Loader2 className="size-3.5 animate-spin" />}
-                {restartingBackend ? m.restartingBackend : m.restartBackend}
-              </Button>
-            )}
-          </div>
-        )}
-        {switchStaleAux.length > 0 && (
-          <div className="mt-2">
-            <StaleAuxWarning
-              applying={applying}
-              onReset={() => void resetAuxiliaryModels()}
-              slots={switchStaleAux}
-              taskLabel={auxiliaryTaskLabel}
-            />
-          </div>
-        )}
-      </section>
-||||||| 939e45c91d
-        </div>
-        {needsSetup && !setupIsApiKey && selectedProviderRow && (
-          <p className="mt-2 text-xs text-muted-foreground">
-            {selectedProviderRow?.auth_type === 'api_key'
-              ? `${selectedProviderRow?.name} needs an API key — set it up to choose a model.`
-              : `${selectedProviderRow?.name} signs in through your browser — Hermes runs the flow for you.`}
-          </p>
-        )}
-        {config && mainModel && (reasoningSupported || fastSupported) && (
-          <div className="mt-3 flex flex-wrap items-center gap-x-6 gap-y-3">
-            <span className="text-xs text-muted-foreground">{m.defaultsLabel}</span>
-            {reasoningSupported && (
-              <div className="flex items-center gap-2 text-xs">
-                {m.reasoning}
-                <Select
-                  onValueChange={value => void writeAgentDefault('agent.reasoning_effort', value)}
-                  value={effortValue}
-                >
-                  <SelectTrigger className={cn('min-w-28', CONTROL_TEXT)}>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {REASONING_EFFORT_VALUES.map(value => (
-                      <SelectItem key={value} value={value}>
-                        {value === 'none' ? m.reasoningOff : t.shell.modelOptions[value]}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            )}
-            {fastSupported && (
-              <label className="flex items-center gap-2 text-xs">
-                {t.shell.modelOptions.fast}
-                <Switch
-                  checked={fastOn}
-                  onCheckedChange={checked => void writeAgentDefault('agent.service_tier', checked ? 'fast' : 'normal')}
-                  size="xs"
-                />
-              </label>
-            )}
-          </div>
-        )}
-        {error && (
-          <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-destructive">
-            <span>{error}</span>
-            {skewRestart && (
-              <Button
-                disabled={restartingBackend}
-                onClick={() => void recycleStaleBackend()}
-                size="sm"
-                variant="textStrong"
-              >
-                {restartingBackend && <Loader2 className="size-3.5 animate-spin" />}
-                {restartingBackend ? m.restartingBackend : m.restartBackend}
-              </Button>
-            )}
-          </div>
-        )}
-        {switchStaleAux.length > 0 && (
-          <div className="mt-2">
-            <StaleAuxWarning
-              applying={applying}
-              onReset={() => void resetAuxiliaryModels()}
-              slots={switchStaleAux}
-              taskLabel={auxiliaryTaskLabel}
-            />
-          </div>
-        )}
-      </section>
-=======
           {config && mainModel && (reasoningSupported || fastSupported) && (
             <div className="mt-3 flex flex-wrap items-center gap-x-6 gap-y-3">
               <span className="text-xs text-muted-foreground">{m.defaultsLabel}</span>
@@ -1257,257 +1013,8 @@ export function ModelSettings({ onMainModelChanged, scopeProfile, subpage }: Mod
           )}
         </section>
       )}
->>>>>>> f97608f178
 
-<<<<<<< HEAD
-      <section>
-        <div className="mb-2.5 flex items-center justify-between">
-          <SectionHeading icon={Cpu} title={m.auxiliaryTitle} />
-          <Button
-            disabled={!mainModel || applying}
-            onClick={() => void resetAuxiliaryModels()}
-            size="sm"
-            variant="textStrong"
-          >
-            {m.resetAllToMain}
-          </Button>
-        </div>
-        <p className="mb-2 text-xs text-muted-foreground">{m.auxiliaryDesc}</p>
-        {switchStaleAux.length === 0 && persistentStaleAux.length > 0 && (
-          <div className="mb-2.5">
-            <StaleAuxWarning
-              applying={applying}
-              onReset={() => void resetAuxiliaryModels()}
-              slots={persistentStaleAux}
-              taskLabel={auxiliaryTaskLabel}
-            />
-          </div>
-        )}
-        <div className="grid gap-1">
-          {AUX_TASKS.map(meta => {
-            const copy = m.tasks[meta.key] ?? { label: meta.key, hint: meta.key }
-            const current = auxiliary?.tasks.find(entry => entry.task === meta.key)
-            const isAuto = !current || !current.provider || current.provider === 'auto'
-            const isEditing = editingAuxTask === meta.key
-
-            return (
-              <div className="scroll-mt-6 rounded-lg" id={`aux-task-${meta.key}`} key={meta.key}>
-                <ListRow
-                  action={
-                    !isEditing && (
-                      <div className="flex shrink-0 items-center gap-1.5">
-                        <Button
-                          disabled={!mainModel || applying}
-                          onClick={() => void setAuxiliaryToMain(meta.key)}
-                          size="sm"
-                          variant="text"
-                        >
-                          {m.setToMain}
-                        </Button>
-                        <Button
-                          disabled={!providers.length || applying}
-                          onClick={() => beginAuxiliaryEdit(meta.key)}
-                          size="sm"
-                          variant="textStrong"
-                        >
-                          {m.change}
-                        </Button>
-                      </div>
-                    )
-                  }
-                  below={
-                    isEditing && (
-                      <div className="mt-2 flex flex-wrap items-center gap-2 pt-1">
-                        <Select
-                          onValueChange={value => setAuxDraft(prev => ({ ...prev, provider: value, model: '' }))}
-                          value={auxDraft.provider}
-                        >
-                          <SelectTrigger className={cn('min-w-32', CONTROL_TEXT)}>
-                            <SelectValue placeholder={m.provider} />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {providerOptions.map(provider => (
-                              <SelectItem key={provider.slug || 'none'} value={provider.slug || 'none'}>
-                                {managedProviderDisplayValue(provider.slug, provider.name, managedEva)}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                        <Select
-                          onValueChange={value => setAuxDraft(prev => ({ ...prev, model: value }))}
-                          value={auxDraft.model}
-                        >
-                          <SelectTrigger className={cn('min-w-48', CONTROL_TEXT)}>
-                            <SelectValue placeholder={m.model} />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {withActive(auxDraftProviderModels, auxDraft.model).map(model => (
-                              <SelectItem key={model} value={model}>
-                                {model}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                        <Button
-                          disabled={!auxDraft.provider || !auxDraft.model || applying}
-                          onClick={() => void applyAuxiliaryDraft(meta.key)}
-                          size="sm"
-                        >
-                          {applying ? m.applying : t.common.apply}
-                        </Button>
-                        <Button onClick={() => setEditingAuxTask(null)} size="sm" variant="ghost">
-                          {t.common.cancel}
-                        </Button>
-                      </div>
-                    )
-                  }
-                  description={
-                    <span className="font-mono text-[0.68rem]">
-                      {isAuto ? m.autoUseMain : `${current.provider} · ${current.model || m.providerDefault}`}
-                      {!isAuto && current.base_url && (
-                        <span className="text-muted-foreground"> · {current.base_url}</span>
-                      )}
-                    </span>
-                  }
-                  title={
-                    <span className="flex items-baseline gap-2">
-                      {copy.label}
-                      <Pill>{copy.hint}</Pill>
-                    </span>
-                  }
-                />
-              </div>
-            )
-          })}
-        </div>
-      </section>
-      {moa && currentMoaPreset && (
-||||||| 939e45c91d
-      <section>
-        <div className="mb-2.5 flex items-center justify-between">
-          <SectionHeading icon={Cpu} title={m.auxiliaryTitle} />
-          <Button
-            disabled={!mainModel || applying}
-            onClick={() => void resetAuxiliaryModels()}
-            size="sm"
-            variant="textStrong"
-          >
-            {m.resetAllToMain}
-          </Button>
-        </div>
-        <p className="mb-2 text-xs text-muted-foreground">{m.auxiliaryDesc}</p>
-        {switchStaleAux.length === 0 && persistentStaleAux.length > 0 && (
-          <div className="mb-2.5">
-            <StaleAuxWarning
-              applying={applying}
-              onReset={() => void resetAuxiliaryModels()}
-              slots={persistentStaleAux}
-              taskLabel={auxiliaryTaskLabel}
-            />
-          </div>
-        )}
-        <div className="grid gap-1">
-          {AUX_TASKS.map(meta => {
-            const copy = m.tasks[meta.key] ?? { label: meta.key, hint: meta.key }
-            const current = auxiliary?.tasks.find(entry => entry.task === meta.key)
-            const isAuto = !current || !current.provider || current.provider === 'auto'
-            const isEditing = editingAuxTask === meta.key
-
-            return (
-              <div className="scroll-mt-6 rounded-lg" id={`aux-task-${meta.key}`} key={meta.key}>
-                <ListRow
-                  action={
-                    !isEditing && (
-                      <div className="flex shrink-0 items-center gap-1.5">
-                        <Button
-                          disabled={!mainModel || applying}
-                          onClick={() => void setAuxiliaryToMain(meta.key)}
-                          size="sm"
-                          variant="text"
-                        >
-                          {m.setToMain}
-                        </Button>
-                        <Button
-                          disabled={!providers.length || applying}
-                          onClick={() => beginAuxiliaryEdit(meta.key)}
-                          size="sm"
-                          variant="textStrong"
-                        >
-                          {m.change}
-                        </Button>
-                      </div>
-                    )
-                  }
-                  below={
-                    isEditing && (
-                      <div className="mt-2 flex flex-wrap items-center gap-2 pt-1">
-                        <Select
-                          onValueChange={value => setAuxDraft(prev => ({ ...prev, provider: value, model: '' }))}
-                          value={auxDraft.provider}
-                        >
-                          <SelectTrigger className={cn('min-w-32', CONTROL_TEXT)}>
-                            <SelectValue placeholder={m.provider} />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {providerOptions.map(provider => (
-                              <SelectItem key={provider.slug || 'none'} value={provider.slug || 'none'}>
-                                {provider.name}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                        <Select
-                          onValueChange={value => setAuxDraft(prev => ({ ...prev, model: value }))}
-                          value={auxDraft.model}
-                        >
-                          <SelectTrigger className={cn('min-w-48', CONTROL_TEXT)}>
-                            <SelectValue placeholder={m.model} />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {withActive(auxDraftProviderModels, auxDraft.model).map(model => (
-                              <SelectItem key={model} value={model}>
-                                {model}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                        <Button
-                          disabled={!auxDraft.provider || !auxDraft.model || applying}
-                          onClick={() => void applyAuxiliaryDraft(meta.key)}
-                          size="sm"
-                        >
-                          {applying ? m.applying : t.common.apply}
-                        </Button>
-                        <Button onClick={() => setEditingAuxTask(null)} size="sm" variant="ghost">
-                          {t.common.cancel}
-                        </Button>
-                      </div>
-                    )
-                  }
-                  description={
-                    <span className="font-mono text-[0.68rem]">
-                      {isAuto ? m.autoUseMain : `${current.provider} · ${current.model || m.providerDefault}`}
-                      {!isAuto && current.base_url && (
-                        <span className="text-muted-foreground"> · {current.base_url}</span>
-                      )}
-                    </span>
-                  }
-                  title={
-                    <span className="flex items-baseline gap-2">
-                      {copy.label}
-                      <Pill>{copy.hint}</Pill>
-                    </span>
-                  }
-                />
-              </div>
-            )
-          })}
-        </div>
-      </section>
-      {moa && currentMoaPreset && (
-=======
       {showAuxiliary && (
->>>>>>> f97608f178
         <section>
           <div className={cn('mb-2.5 flex items-center', subpage === undefined ? 'justify-between' : 'justify-end')}>
             {subpage === undefined && <SectionHeading icon={Cpu} title={m.auxiliaryTitle} />}
@@ -1580,7 +1087,7 @@ export function ModelSettings({ onMainModelChanged, scopeProfile, subpage }: Mod
                               <SelectContent>
                                 {providerOptions.map(provider => (
                                   <SelectItem key={provider.slug || 'none'} value={provider.slug || 'none'}>
-                                    {provider.name}
+                                    {managedProviderDisplayValue(provider.slug, provider.name, managedEva)}
                                   </SelectItem>
                                 ))}
                               </SelectContent>

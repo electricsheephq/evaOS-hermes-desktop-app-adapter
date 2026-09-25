@@ -2,19 +2,9 @@
   "name": "evaos-agent",
   "productName": "evaOS Agent",
   "private": true,
-<<<<<<< HEAD
   "version": "2026.9.5-es.1",
   "description": "Managed business agent client by Electric Sheep.",
   "author": "Electric Sheep",
-||||||| 939e45c91d
-  "version": "0.17.2",
-  "description": "Native desktop shell for Hermes Agent.",
-  "author": "Nous Research",
-=======
-  "version": "0.17.6",
-  "description": "Native desktop shell for Hermes Agent.",
-  "author": "Nous Research",
->>>>>>> f97608f178
   "repository": {
     "type": "git",
     "url": "git+https://github.com/electricsheephq/evaOS-hermes-desktop-app-adapter.git"
@@ -84,20 +74,12 @@
     "test:e2e": "npm run build && playwright test e2e/",
     "test:e2e:visual": "npm run build && WLR_BACKENDS=headless WLR_NO_HARDWARE_CURSORS=1 cage -- npx playwright test e2e/ --reporter=list",
     "test:e2e:update-snapshots": "npm run build && WLR_BACKENDS=headless WLR_NO_HARDWARE_CURSORS=1 cage -- npx playwright test e2e/ --reporter=list --update-snapshots",
-<<<<<<< HEAD
     "repro:short-session-hang": "node scripts/run-short-session-hang-repro.mjs",
-    "repro:short-session-hang:test": "node --test scripts/run-short-session-hang-repro.test.mjs",
     "dist:mac:arm64:release": "npm run build && cross-env EVAOS_MANAGED_RELEASE=1 npm run builder -- --mac --arm64",
     "test:managed": "node --test electron/eva-app-updater.test.cjs electron/eva-managed-main-contract.test.cjs electron/eva-managed-scenarios.test.cjs electron/eva-managed.test.cjs electron/eva-protocol-handler.test.cjs electron/eva-runtime.test.cjs electron/eva-ws-relay.test.cjs electron/r31-managed-profile-bypass.test.cjs e2e/verify-managed-reports.test.mjs scripts/notarize.test.mjs scripts/sign-mac.test.mjs scripts/verify-managed-update-release.test.mjs",
     "release:refresh-and-verify:mac": "node scripts/refresh-managed-update-metadata.mjs",
     "release:verify:mac": "node scripts/verify-managed-update-release.mjs",
     "check:test:managed": "npm run test:managed"
-||||||| 939e45c91d
-    "repro:short-session-hang": "node scripts/run-short-session-hang-repro.mjs",
-    "repro:short-session-hang:test": "node --test scripts/run-short-session-hang-repro.test.mjs"
-=======
-    "repro:short-session-hang": "node scripts/run-short-session-hang-repro.mjs"
->>>>>>> f97608f178
   },
   "dependencies": {
     "@assistant-ui/core": "0.2.23",
