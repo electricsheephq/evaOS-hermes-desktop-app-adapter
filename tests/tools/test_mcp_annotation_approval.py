@@ -261,9 +261,12 @@ def test_multiplex_write_approval_uses_owning_profile_mode(tmp_path, monkeypatch
     assert "did not approve" in json.loads(blocked)["error"]
 
 
-def test_missing_approval_home_resolves_unique_profile_mode_off(tmp_path, monkeypatch):
+def test_routed_scope_approval_uses_owning_profile_mode_off(tmp_path, monkeypatch):
+    """evaOS adaptation (r34): connection keys are deterministic per registry scope, so the
+    approval home is the key's owning scope. The profile's ``approvals.mode: off`` applies."""
     from agent import secret_scope
     from hermes_cli import config as config_module
+    from hermes_constants import hermes_home_key
 
     pool_home = tmp_path / "pool"
     profile_home = tmp_path / "profiles" / "jane"
@@ -277,9 +280,9 @@ def test_missing_approval_home_resolves_unique_profile_mode_off(tmp_path, monkey
         "approvals:\n  mode: off\n",
         encoding="utf-8",
     )
-    monkeypatch.setenv("HERMES_HOME", str(pool_home))
+    monkeypatch.setenv("HERMES_HOME", str(profile_home))
     monkeypatch.setattr(secret_scope, "_MULTIPLEX_ACTIVE", True)
-    state_key = (str(profile_home.resolve()), "pipedream")
+    state_key = (hermes_home_key(profile_home), "pipedream")
     mcp_tool._tool_read_only_hints[state_key] = {"send_email": False}
     config_module._LOAD_CONFIG_CACHE.clear()
 
@@ -292,21 +295,32 @@ def test_missing_approval_home_resolves_unique_profile_mode_off(tmp_path, monkey
     assert result is None
 
 
-def test_missing_approval_home_blocks_ambiguous_multiplex_owner(
+def test_routed_scope_never_borrows_a_sibling_profiles_approval_metadata(
     tmp_path, monkeypatch
 ):
+    """evaOS adaptation (r34): the fork's ambiguous-owner denial is moot once keys are
+    deterministic. A scope with no metadata of its own resolves to its own key and never
+    reads a sibling profile's metadata or policy."""
     from agent import secret_scope
+    from hermes_constants import hermes_home_key
+    from tools.mcp_tool_scope import _resolve_server_key
 
+    pool_home = tmp_path / "pool"
+    pool_home.mkdir()
+    monkeypatch.setenv("HERMES_HOME", str(pool_home))
     monkeypatch.setattr(secret_scope, "_MULTIPLEX_ACTIVE", True)
     for profile in ("jane", "louis"):
         state_key = (str(tmp_path / profile), "pipedream")
         mcp_tool._tool_read_only_hints[state_key] = {"send_email": False}
 
-    result = _mcp_handlers._trust_gate_check(
-        "pipedream", "send_email", {"to": "owner@example.com"}
-    )
+    assert _resolve_server_key("pipedream") == (hermes_home_key(pool_home), "pipedream")
+    with patch.object(_approval_prompt, "request_elicitation_consent") as consent:
+        result = _mcp_handlers._trust_gate_check(
+            "pipedream", "send_email", {"to": "owner@example.com"}
+        )
 
-    assert "profile approval scope could not be resolved" in json.loads(result)["error"]
+    consent.assert_not_called()
+    assert result is None
 
 
 def test_lazy_profile_owned_server_scopes_approval_when_process_is_not_multiplex(

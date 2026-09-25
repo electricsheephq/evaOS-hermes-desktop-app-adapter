@@ -15,9 +15,11 @@ def test_scoped_shutdown_only_clears_selected_profile_state(tmp_path: Path, monk
     home_a.mkdir()
     home_b.mkdir()
     monkeypatch.setattr(secret_scope, "_MULTIPLEX_ACTIVE", True)
-    key_a = mcp_tool._server_state_key("shared", str(home_a))
-    key_b = mcp_tool._server_state_key("shared", str(home_b))
+    from tools.mcp_tool_scope import _server_key
+
     scope_a, scope_b = hermes_home_key(home_a), hermes_home_key(home_b)
+    # evaOS adaptation (r34): upstream connection keys are (owner_scope, name).
+    key_a, key_b = _server_key("shared", scope_a), _server_key("shared", scope_b)
     calls = []
 
     async def shutdown_a():

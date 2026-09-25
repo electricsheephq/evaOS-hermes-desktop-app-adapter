@@ -207,6 +207,10 @@ def test_untrusted_adopter_of_a_full_profiles_connection_keeps_its_own_trust_gat
     asked = []
     monkeypatch.setattr(approval_prompt, "request_elicitation_consent",
                         lambda *a, **k: asked.append(a) or "deny")
+    # evaOS adaptation: native MCP write approval also prompts FULL-trust write tools under the
+    # default ``approvals.mode: manual``; mode off isolates the trust-tier gate this test pins.
+    import tools.approval_context as approval_context
+    monkeypatch.setattr(approval_context, "_get_approval_mode", lambda: "off")
 
     two_profiles("a")
     srv_a = _server("x", cfg_a)

@@ -419,8 +419,11 @@ def _connection_identity(config: dict) -> tuple:
     def _frozen(value):
         return json.dumps(value or {}, sort_keys=True, default=str)
 
+    lease_identity = tuple(config.get(field) for field in (
+        "app_slug", "account_id", "external_user_id", "customer_id", "agent_id"))
     return (config_fingerprint(config), _frozen(config.get("env")), _frozen(config.get("headers")),
-            _auth_type(config), _frozen(config.get("client_cert")), _frozen(config.get("client_key")))
+            _auth_type(config), _frozen(config.get("client_cert")), _frozen(config.get("client_key")),
+            lease_identity)
 
 
 def _auth_type(config: dict) -> str:
@@ -428,15 +431,17 @@ def _auth_type(config: dict) -> str:
 
 
 def _same_server_route(server: Any, config: dict, *, cross_profile: bool = False) -> bool:
-    """Whether *server* matches *config*, with OAuth connections never reusable across profiles.
+    """Whether *server* matches *config*, with OAuth and managed-lease connections never reusable
+    across profiles.
 
     OAuth credentials live in the owning profile's token storage rather than the static config,
     so identical OAuth configs cannot prove that two profiles authenticate as the same account.
     """
     if _connection_identity(getattr(server, "_config", {}) or {}) != _connection_identity(config):
         return False
-    # Identities match, so both sides carry the same normalised auth type.
-    return not (cross_profile and _auth_type(config) == "oauth")
+    # Identities match, so both sides carry the same normalised auth type. A managed lease
+    # (``auth: evaos_lease``) is minted for the owning profile's route, like an OAuth grant.
+    return not (cross_profile and _auth_type(config) in ("oauth", "evaos_lease"))
 
 
 def register_connected_into_current_scope(servers: dict) -> int:

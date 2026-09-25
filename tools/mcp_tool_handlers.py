@@ -15,6 +15,9 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from hermes_platform import declaration
 from tools.registry import invalidate_check_fn_cache, tool_error
 from tools.ansi_strip import strip_unicode_tags
+from tools import approval_context as _approval_context
+from tools import approval_prompt as _approval_prompt
+from tools import approval_smart as _approval_smart
 from tools.mcp_tool_common import _exc_str, _sanitize_error, mcp_field, _core
 from tools import mcp_tool_loop as _loop
 from tools.mcp_tool_content import (
@@ -56,14 +59,9 @@ def _tool_is_read_only(server_name: str, tool_name: str) -> bool:
     return _core._tool_read_only_hints.get(_resolve_server_key(server_name), {}).get(tool_name) is True
 
 
-def _trust_gate_check(server_name: str, tool_name: str) -> Optional[str]:
-    """Approval gate for write-capable tools on ``trust: untrusted`` servers. None to proceed,
-    else a ``tool_error``. Fail-closed: approval-system errors block."""
-    from tools.mcp_tool_scope import _server_key
-    # Trust is the calling profile's own policy (an adopter of a shared connection keeps its own tier).
-    trust = _core._server_trust_levels.get(_server_key(server_name), _core._TRUST_FULL)
-    if trust != _core._TRUST_UNTRUSTED or _tool_is_read_only(server_name, tool_name):
-        return None
+def _trust_prompt(server_name: str, tool_name: str) -> Optional[str]:
+    """The explicit ``trust: untrusted`` prompt for one write-capable tool. None to proceed, else a
+    ``tool_error``. Fail-closed: approval-system errors block."""
     try:  # lazy: tools.approval routes the prompt to whichever surface owns the session
         from tools.approval_prompt import request_elicitation_consent
         answer = request_elicitation_consent(
@@ -82,6 +80,107 @@ def _trust_gate_check(server_name: str, tool_name: str) -> Optional[str]:
                 "cancelled" if answer == "cancel" else "denied", tool_name, server_name)
     return tool_error(f"The user did not approve running write-capable MCP tool '{tool_name}' on untrusted server "
                       f"'{server_name}'. The command was NOT run. Do not retry without explicit user direction.")
+
+
+def _native_mcp_approval(server_name: str, tool_name: str, args: Optional[dict],
+                         trust: str) -> Optional[str]:
+    """Apply the released native mode/yolo approval contract to one write call."""
+    from agent.redact import redact_sensitive_text
+    from tools import approval
+
+    # Explicit trust-tier protection remains in force when mode=off or session yolo
+    # would otherwise bypass the native approval path.
+    if approval.is_approval_bypass_active():
+        return _trust_prompt(server_name, tool_name) if trust == _core._TRUST_UNTRUSTED else None
+
+    sensitive_keys = {
+        "authorization", "proxy-authorization", "access_token", "refresh_token", "id_token",
+        "token", "api_key", "apikey", "client_secret", "password", "passwd", "auth", "jwt",
+        "secret", "private_key", "key", "credential", "credentials",
+    }
+    normalized_sensitive_keys = {item.replace("-", "_") for item in sensitive_keys}
+
+    def _approval_safe(value: Any, key: str = "") -> Any:
+        normalized_key = key.strip().lower().replace("-", "_")
+        if (normalized_key in normalized_sensitive_keys
+                or normalized_key.endswith(("_token", "_secret", "_password", "_credential"))):
+            return "«redacted-secret»"
+        if isinstance(value, dict):
+            return {str(child_key): _approval_safe(child_value, str(child_key))
+                    for child_key, child_value in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [_approval_safe(item) for item in value]
+        if isinstance(value, str):
+            return redact_sensitive_text(value, force=True, redact_url_credentials=True)
+        return value
+
+    try:
+        encoded_args = json.dumps(
+            _approval_safe(args if isinstance(args, dict) else {}),
+            ensure_ascii=False, sort_keys=True, default=str,
+        )
+    except Exception:
+        encoded_args = "{}"
+    display_target = redact_sensitive_text(
+        f"MCP {server_name}.{tool_name}\narguments: {encoded_args}",
+        force=True, redact_url_credentials=True,
+    )
+    description = (
+        f"MCP tool '{tool_name}' on server '{server_name}' can modify external state because "
+        "readOnlyHint=true was not supplied."
+    )
+
+    if _approval_context._get_approval_mode() == "smart":
+        verdict = _approval_smart._smart_approve(display_target, description)
+        if verdict == "approve":
+            return None
+        if verdict == "deny":
+            return tool_error(
+                f"MCP tool '{tool_name}' on server '{server_name}' was BLOCKED by smart approval. "
+                "The RPC was NOT sent. Do not retry without explicit user direction."
+            )
+
+    try:
+        answer = _approval_prompt.request_elicitation_consent(
+            display_target, description, surface=f"mcp-tool/{server_name}"
+        )
+    except Exception as exc:
+        logger.error("MCP native approval failed for %s.%s: %s", server_name, tool_name, exc, exc_info=True)
+        return tool_error(f"MCP tool '{tool_name}' on server '{server_name}' was blocked: the approval system "
+                          "was unavailable (fail-closed).")
+    if answer == "accept":
+        return None
+    return tool_error(
+        f"The user did not approve MCP tool '{tool_name}' on server '{server_name}'. The RPC was NOT sent. "
+        "Do not retry without explicit user direction."
+    )
+
+
+def _trust_gate_check(server_name: str, tool_name: str, args: Optional[dict] = None,
+                      server_key=None) -> Optional[str]:
+    """Approval gate for write-capable MCP tools. None to proceed, else a ``tool_error``.
+
+    Tools without discovery metadata keep the upstream ``trust: untrusted`` prompt. Tools with
+    metadata and no ``readOnlyHint=true`` go through Hermes' native approval mode (manual / smart /
+    off, session yolo) resolved in the OWNING profile's home, with redacted arguments, before any
+    transport work."""
+    from tools.mcp_tool_scope import _key_scope, _resolve_server_key, _server_key
+    key = server_key if server_key is not None else _resolve_server_key(server_name)
+    # Trust is the calling profile's own policy (an adopter of a shared connection keeps its own tier).
+    own = server_key if server_key is not None else _server_key(server_name)
+    hints = _core._tool_read_only_hints.get(key)
+    trust = _core._server_trust_levels.get(own, _core._TRUST_FULL)
+    if hints is not None and hints.get(tool_name) is True:
+        return None
+    if hints is None:
+        return _trust_prompt(server_name, tool_name) if trust == _core._TRUST_UNTRUSTED else None
+    from hermes_constants import get_hermes_home, reset_hermes_home_override, set_hermes_home_override
+    approval_home = _key_scope(own) or str(get_hermes_home())
+    token = set_hermes_home_override(approval_home)
+    try:
+        return _native_mcp_approval(server_name, tool_name, args, trust)
+    finally:
+        reset_hermes_home_override(token)
 
 
 def _check_circuit_breaker(server_name: str) -> Optional[str]:
@@ -555,10 +654,15 @@ def _render_call_tool_result(result, server_name: str) -> str:
 def _make_tool_handler(server_name: str, tool_name: str, tool_timeout: float):
     """Sync registry handler (``handler(args_dict, **kwargs) -> str``) calling an MCP tool via the background loop."""
     op = f"tools/call {tool_name}"
+    # A handler is built for the profile scope that registers it; a captured copy called under
+    # another profile must not reach this profile's connection or approval policy.
+    owner_scope = _core._mcp_registry_scope()
 
     def _handler(args: dict, **kwargs) -> str:
-        # Security boundary: untrusted-server write tools need approval before ANY transport work (incl. lazy spawn).
-        error = _trust_gate_check(server_name, tool_name) or _check_circuit_breaker(server_name)
+        if _core._mcp_registry_scope() != owner_scope:
+            return tool_error(f"MCP tool '{tool_name}' is not registered for the active profile")
+        # Security boundary: write tools need approval before ANY transport work (incl. lazy spawn).
+        error = _trust_gate_check(server_name, tool_name, args) or _check_circuit_breaker(server_name)
         if error is not None:
             return error
         server, error = _acquire_call_server(server_name, tool_timeout)
@@ -595,7 +699,11 @@ def _make_utility_handler(op: str, log_label: str, rpc, render, required: Option
     server_name)`` awaited under ``_rpc_lock``, ``render(result, server_name)`` -> JSON-able
     payload, ``required`` validated before any transport work."""
     def _factory(server_name: str, tool_timeout: float):
+        owner_scope = _core._mcp_registry_scope()
+
         def _handler(args: dict, **kwargs) -> str:
+            if _core._mcp_registry_scope() != owner_scope:
+                return tool_error(f"MCP tool for server '{server_name}' is not registered for the active profile")
             from tools import mcp_tool_discovery as _discovery  # lazy: import cycle
             server = _discovery._get_connected_server_for_call(server_name)
             if not server or not server.session:
