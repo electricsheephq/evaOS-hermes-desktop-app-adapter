@@ -24,6 +24,8 @@ concurrency:
 jobs:
   core:
     name: Desktop core E2E (Linux)
+    # fork: upstream e2e suites never passed on the fork; opt-in until #363 is triaged (https://github.com/electricsheephq/evaOS-hermes-desktop-app-adapter/issues/363).
+    if: vars.RUN_UPSTREAM_E2E == 'true'
     # evaOS: the fork has no larger runners (a larger-runner label queues forever); standard runner as for every fork job.
     runs-on: ubuntu-latest
     timeout-minutes: 30
