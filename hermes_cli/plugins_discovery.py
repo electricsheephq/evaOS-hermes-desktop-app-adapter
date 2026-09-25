@@ -116,12 +116,6 @@ def scan_directory(
     manifests: List[PluginManifest] = []
     if not path.is_dir():
         return manifests
-<<<<<<< HEAD
-    for child in sorted(path.iterdir()):
-||||||| 939e45c91d
-    for child in sorted(path.iterdir()):
-        if not child.is_dir() or (depth == 0 and skip_names and child.name in skip_names):
-=======
     try:
         children = sorted(path.iterdir())
     except OSError as exc:
@@ -139,7 +133,6 @@ def scan_directory(
             continue
         # pathlib.Path.is_dir() swallows OSError, but injected Path-likes
         # and test doubles can still raise. Fail closed per child.
->>>>>>> f97608f178
         try:
             if not child.is_dir() or (depth == 0 and skip_names and child.name in skip_names):
                 continue

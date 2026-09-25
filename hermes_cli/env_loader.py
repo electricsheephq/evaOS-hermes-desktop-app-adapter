@@ -502,14 +502,8 @@ def load_hermes_dotenv(
     _restore_managed_runtime_authority(managed_runtime_authority)
     if load_external_secrets and not _early_recovery._should_skip_external_secret_sources():
         _apply_external_secret_sources(home_path)
-<<<<<<< HEAD
     _restore_managed_runtime_authority(managed_runtime_authority)
-    _apply_managed_env()
-||||||| 939e45c91d
-    _apply_managed_env()
-=======
     _apply_managed_env(load_pass=load_pass)
->>>>>>> f97608f178
 
     # config.yaml owns terminal.*, but the override=True loads above let a stale TERMINAL_ENV=docker in
     # ~/.hermes/.env win on every reload and flip the backend mid-session in long-lived processes.
@@ -539,18 +533,8 @@ def _reapply_terminal_config_bridge(home_path: Path) -> None:
         pass
 
 
-<<<<<<< HEAD
-def _apply_managed_env() -> None:
-    """Apply the process home's managed env, never a routed profile's private mapping."""
-||||||| 939e45c91d
-def _apply_managed_env() -> None:
-    """Apply the managed-scope .env last, with override, so it beats user/shell. Does NOT stop the agent
-    from later mutating os.environ (v1 relies on filesystem permissions). Fail-open: never blocks startup."""
-=======
 def _apply_managed_env(*, load_pass: int | None = None) -> None:
-    """Apply the managed-scope .env last, with override, so it beats user/shell. Does NOT stop the agent
-    from later mutating os.environ (v1 relies on filesystem permissions). Fail-open: never blocks startup."""
->>>>>>> f97608f178
+    """Apply the process home's managed env, never a routed profile's private mapping."""
     try:
         from hermes_cli import managed_scope
         from hermes_constants import get_hermes_home, get_hermes_home_override

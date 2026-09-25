@@ -2264,9 +2264,17 @@ def _load_config_cache_hit(path_key: str, cache_sig: Any) -> Optional[Dict[str, 
         except OSError:
             return hit
     env_snapshot = cached[9] if len(cached) > 9 else {}
-    if all(_env_ref_lookup(k) == v for k, v in env_snapshot.items()):
-        return hit
-    return None
+    if not all(_env_ref_lookup(k) == v for k, v in env_snapshot.items()):
+        return None
+    # Managed ${VAR}s expand against the managed .env (then process env), so a rotated managed
+    # value must invalidate the cache just like a changed process env value.
+    managed_snapshot = cached[10] if len(cached) > 10 else {}
+    if managed_snapshot:
+        managed_env = dict(os.environ)
+        managed_env.update(managed_scope.load_managed_env())
+        if not all(managed_env.get(k) == v for k, v in managed_snapshot.items()):
+            return None
+    return hit
 
 
 def _load_config_impl(*, want_deepcopy: bool) -> Dict[str, Any]:
@@ -2294,37 +2302,9 @@ def _load_config_impl(*, want_deepcopy: bool) -> Dict[str, Any]:
 
         user_sig, cache_sig = _load_config_cache_sig(config_path)
 
-<<<<<<< HEAD
-        cached = _LOAD_CONFIG_CACHE.get(path_key)
-        if cached is not None and cache_sig is not None and cached[:4] == cache_sig:
-            # Signatures match, but the cached expansion is only valid if every ${VAR} it was
-            # expanded against still has the same value — otherwise a load before
-            # load_hermes_dotenv() pins unexpanded literals for the process lifetime.
-            # Without this, a load_config() that ran before load_hermes_dotenv() pins unexpanded literals
-            # (e.g. auxiliary.<task>.api_key) for the life of the process (#58514).
-            env_snapshot = cached[5] if len(cached) > 5 else {}
-            managed_snapshot = cached[6] if len(cached) > 6 else {}
-            managed_env = dict(os.environ)
-            managed_env.update(managed_scope.load_managed_env())
-            if (all(_env_ref_lookup(k) == v for k, v in env_snapshot.items())
-                    and all(managed_env.get(k) == v for k, v in managed_snapshot.items())):
-                return copy.deepcopy(cached[4]) if want_deepcopy else cached[4]
-||||||| 939e45c91d
-        cached = _LOAD_CONFIG_CACHE.get(path_key)
-        if cached is not None and cache_sig is not None and cached[:4] == cache_sig:
-            # Signatures match, but the cached expansion is only valid if every ${VAR} it was
-            # expanded against still has the same value — otherwise a load before
-            # load_hermes_dotenv() pins unexpanded literals for the process lifetime.
-            # Without this, a load_config() that ran before load_hermes_dotenv() pins unexpanded literals
-            # (e.g. auxiliary.<task>.api_key) for the life of the process (#58514).
-            env_snapshot = cached[5] if len(cached) > 5 else {}
-            if all(_env_ref_lookup(k) == v for k, v in env_snapshot.items()):
-                return copy.deepcopy(cached[4]) if want_deepcopy else cached[4]
-=======
         hit = _load_config_cache_hit(path_key, cache_sig)
         if hit is not None:
             return copy.deepcopy(hit) if want_deepcopy else hit
->>>>>>> f97608f178
 
         config = copy.deepcopy(DEFAULT_CONFIG)
 
@@ -2482,15 +2462,9 @@ def save_config(
             managed_error("save configuration")
             return
 
-<<<<<<< HEAD
-        config = _strip_managed_keys_for_save(config, merge_existing=merge_existing)
-||||||| 939e45c91d
-        config = _strip_managed_keys_for_save(config)
-=======
         config_path = get_config_path()
         _refuse_failed_read(config_path, config)
-        config = _strip_managed_keys_for_save(config)
->>>>>>> f97608f178
+        config = _strip_managed_keys_for_save(config, merge_existing=merge_existing)
 
         ensure_hermes_home()
         # Explicit user paths come from the RAW dict BEFORE normalisation (which may inject

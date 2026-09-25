@@ -327,16 +327,12 @@ def _config_profile_scope(profile: Optional[str]):
     Explicit names resolving to the process home retain current-profile semantics.
     Still enter the requested home so a nested scope cannot retain another profile.
     """
-<<<<<<< HEAD
     profile = _managed_profile_or_http(profile)
-||||||| 939e45c91d
-=======
     from agent.secret_scope import build_profile_secret_scope, reset_secret_scope, set_secret_scope
     from hermes_cli.env_loader import hydrate_profile_secret_sources
     from tui_gateway.launch_profile_policy import activate_multi_profile_hosting, launch_secret_scope
 
     process_home = get_process_hermes_home()
->>>>>>> f97608f178
     if _is_current_profile(profile):
         profile_dir, scoped = None, None  # the dashboard's own profile: no home override
     else:

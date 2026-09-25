@@ -481,7 +481,6 @@ def get_profiles_sessions_sidebar(
 
     See #42651, #65710, #70629.
     """
-<<<<<<< HEAD
     from hermes_cli import profiles as profiles_mod
 
     managed_name = _managed_profile_or_http(None)
@@ -492,12 +491,7 @@ def get_profiles_sessions_sidebar(
     if managed_name:
         targets = [(managed_name, profiles_mod.get_profile_dir(managed_name))]
     else:
-        targets = _profile_targets("GET /api/profiles/sessions/sidebar", lightweight=True)
-||||||| 939e45c91d
-    targets = _profile_targets("GET /api/profiles/sessions/sidebar", lightweight=True)
-=======
-    targets = _profile_targets("GET /api/profiles/sessions/sidebar")
->>>>>>> f97608f178
+        targets = _profile_targets("GET /api/profiles/sessions/sidebar")
 
     recents_scope = (recents_profile or "all").strip() or "all"
     recents_exclude_list = [s for s in (recents_exclude or "").split(",") if s.strip()]
@@ -646,18 +640,12 @@ def get_profiles_projects_tree(preview_limit: int = 3, session_limit: int = 2000
     scoped_session_ids: List[str] = []
     errors: List[Dict[str, str]] = []
 
-<<<<<<< HEAD
     targets = (
         [(managed_name, profiles_mod.get_profile_dir(managed_name))]
         if managed_name
-        else _profile_targets("GET /api/profiles/projects/tree", lightweight=False)
+        else _profile_targets("GET /api/profiles/projects/tree")
     )
     for name, home in targets:
-||||||| 939e45c91d
-    for name, home in _profile_targets("GET /api/profiles/projects/tree", lightweight=False):
-=======
-    for name, home in _profile_targets("GET /api/profiles/projects/tree"):
->>>>>>> f97608f178
         def _read(db, name=name, home=home):
             with _hermes_home_scope(home):
                 tree, _active_id = gateway_server._build_project_tree(
@@ -711,18 +699,12 @@ def post_profiles_sessions_pull_requests(body: SessionPrScanBody):
                 # Oldest-first, so a later `gh pr create` (the replacement PR) wins.
                 found[pr["session_id"]] = {"number": parsed[0], "url": parsed[1]}
 
-<<<<<<< HEAD
     targets = (
         [(managed_name, profiles_mod.get_profile_dir(managed_name))]
         if managed_name
-        else _profile_targets("POST /api/profiles/sessions/pull-requests", lightweight=False)
+        else _profile_targets("POST /api/profiles/sessions/pull-requests")
     )
     for name, home in targets:
-||||||| 939e45c91d
-    for name, home in _profile_targets("POST /api/profiles/sessions/pull-requests", lightweight=False):
-=======
-    for name, home in _profile_targets("POST /api/profiles/sessions/pull-requests"):
->>>>>>> f97608f178
         _read_profile_db(name, home, None, _read)
 
     # ``scanned``: every id looked at, so the caller can remember "nothing there".
@@ -739,6 +721,7 @@ def _read_profiles():
                 managed_name,
                 profiles_mod.get_profile_dir(managed_name),
                 is_default=managed_name == "default",
+                lazy_skill_count=True,
             )
             return {"profiles": [_profile_to_dict(profile)]}
         except Exception:
@@ -935,20 +918,14 @@ async def rename_profile_endpoint(name: str, body: ProfileRename):
 @router.delete("/api/profiles/{name}")
 async def delete_profile_endpoint(name: str):
     """The dashboard collects the user's confirmation in its own dialog, so ``yes=True``
-<<<<<<< HEAD
-    always skips the CLI's interactive prompt."""
-    if _managed_profile_or_http(None):
-        raise HTTPException(status_code=403, detail="profile lifecycle is managed by evaOS")
-||||||| 939e45c91d
-    always skips the CLI's interactive prompt."""
-=======
     always skips the CLI's interactive prompt.
 
     A delete whose identity settlement stays pending answers ``ok`` with ``settlement_pending``
     and the retry command: the profile directory is already gone, and folding that state into
     the generic 500 made a dashboard client read a completed delete as a failure (its retry
     then 404'd)."""
->>>>>>> f97608f178
+    if _managed_profile_or_http(None):
+        raise HTTPException(status_code=403, detail="profile lifecycle is managed by evaOS")
     from hermes_cli import profiles as profiles_mod
     try:
         with _profile_errors("DELETE /api/profiles/%s failed", name):

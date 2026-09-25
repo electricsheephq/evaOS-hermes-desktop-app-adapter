@@ -1378,7 +1378,6 @@ class TestEnvWriteDenylist:
         assert protected_key not in load_env()
 
     @pytest.mark.parametrize(
-<<<<<<< HEAD
         "protected_key",
         ["HERMES_MANAGED_DIR", "HERMES_SHARED_AUTH_FILE", "CREDENTIALS_DIRECTORY"],
     )
@@ -1399,8 +1398,8 @@ class TestEnvWriteDenylist:
             f"{protected_key}=operator-owned\n"
         )
         assert os.environ[protected_key] == "process-owned"
-||||||| 939e45c91d
-=======
+
+    @pytest.mark.parametrize(
         "allowed_key",
         [
             # Non-exec git env names a user may legitimately persist.
@@ -1424,7 +1423,6 @@ class TestEnvWriteDenylist:
         monkeypatch.setattr(config_mod, "_IS_WINDOWS", True)
         with pytest.raises(ValueError, match="denylist"):
             save_env_value(protected_key, "1")
->>>>>>> f97608f178
 
     def test_preexisting_optional_mcps_override_still_loads(self, tmp_path):
         """The writer gate must not migrate or ignore operator-owned .env state."""

@@ -447,17 +447,11 @@ class PluginLoaderMixin:
         registration_start = len(self._registration_order)
         module_name = self._policy_module_name(manifest)
         self._track_tool_override_policy(manifest, module_name)
-<<<<<<< HEAD
-        try:
-            self._assert_scoped_override_policy(manifest, module_name)
-||||||| 939e45c91d
-        try:
-=======
         ctx = PluginContext(manifest, self)
 
         def _import_and_register() -> bool:
             """Import + register() — the part a plugin controls, so the part the deadline covers."""
->>>>>>> f97608f178
+            self._assert_scoped_override_policy(manifest, module_name)
             # Reuse a deferred platform's already-imported package so its body doesn't run twice.
             # See #78050.
             module = self._predeclared_modules.pop(plugin_key, None)

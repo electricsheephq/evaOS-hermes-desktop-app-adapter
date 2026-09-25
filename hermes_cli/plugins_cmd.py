@@ -1361,50 +1361,18 @@ def cmd_enable(name: str, allow_tool_override: Optional[bool] = None) -> None:
         except PluginOperationError as exc:
             _fail(console, f"[red]Error:[/red] {exc}")
 
-<<<<<<< HEAD
-    enabled = _get_enabled_set()
-    disabled = _get_disabled_set()
-    if key in enabled and key not in disabled:
-        console.print(f"[dim]Plugin '{key}' is already enabled.[/dim]")
-    else:
-        enabled.add(key)
-        # The loader's disable check matches BOTH the canonical key (``web/firecrawl``) and the
-        # manifest name (``web-firecrawl``); a stale entry under either form would silently veto
-        # this enable ("explicit disable wins"), so drop the key, its bare leaf, and the name.
-        _discard_key_and_leaf(disabled, key)
-        manifest_name = next((e[0] for e in _discover_all_plugins() if e[5] == key), None)
-        if manifest_name is not None:
-            disabled.discard(manifest_name)
-        _save_plugin_sets(enabled, disabled)
+    if _activate_key(key, enable=True):
         profile = read_raw_config()
         selection = managed_scope.compose_plugin_selection(profile, managed_scope.expand_managed_config())
-        console.print(
-            f"[yellow]⊘[/yellow] Plugin [bold]{key}[/bold] is denied by managed policy; it stays disabled."
-            if selection and key in selection["disabled"] else f"[green]✓[/green] Plugin [bold]{key}[/bold] enabled. Takes effect when the Hermes agent and gateway processes restart (managed agents: ask your operator).")
-||||||| 939e45c91d
-    enabled = _get_enabled_set()
-    disabled = _get_disabled_set()
-    if key in enabled and key not in disabled:
-        console.print(f"[dim]Plugin '{key}' is already enabled.[/dim]")
-    else:
-        enabled.add(key)
-        # The loader's disable check matches BOTH the canonical key (``web/firecrawl``) and the
-        # manifest name (``web-firecrawl``); a stale entry under either form would silently veto
-        # this enable ("explicit disable wins"), so drop the key, its bare leaf, and the name.
-        _discard_key_and_leaf(disabled, key)
-        manifest_name = next((e[0] for e in _discover_all_plugins() if e[5] == key), None)
-        if manifest_name is not None:
-            disabled.discard(manifest_name)
-        _save_plugin_sets(enabled, disabled)
-        console.print(f"[green]✓[/green] Plugin [bold]{key}[/bold] enabled. Takes effect on next session.")
-=======
-    if _activate_key(key, enable=True):
-        from hermes_cli.plugins_activation import activate_plugin_now, activation_hint
-        console.print(f"[green]✓[/green] Plugin [bold]{key}[/bold] enabled. Takes effect on next session.")
-        console.print(f"[dim]{activation_hint(activate_plugin_now(key, in_process=False))}[/dim]")
+        if selection and key in selection["disabled"]:
+            console.print(
+                f"[yellow]⊘[/yellow] Plugin [bold]{key}[/bold] is denied by managed policy; it stays disabled.")
+        else:
+            from hermes_cli.plugins_activation import activate_plugin_now, activation_hint
+            console.print(f"[green]✓[/green] Plugin [bold]{key}[/bold] enabled. Takes effect on next session.")
+            console.print(f"[dim]{activation_hint(activate_plugin_now(key, in_process=False))}[/dim]")
     else:
         console.print(f"[dim]Plugin '{key}' is already enabled.[/dim]")
->>>>>>> f97608f178
 
     # Built-in tool override is a privileged grant; bundled plugins are trusted.
     if source == "bundled":
@@ -1573,23 +1541,12 @@ def cmd_disable(name: str) -> None:
     if not _activate_key(key, enable=False):
         console.print(f"[dim]Plugin '{key}' is already disabled.[/dim]")
         return
-<<<<<<< HEAD
-    # Also drop a stale legacy bare-name entry so it can't keep a nested plugin loading.
-    _discard_key_and_leaf(enabled, key)
-    disabled.add(key)
-    _save_plugin_sets(enabled, disabled)
     profile = read_raw_config()
     selection = managed_scope.compose_plugin_selection(profile, managed_scope.expand_managed_config())
-||||||| 939e45c91d
-    # Also drop a stale legacy bare-name entry so it can't keep a nested plugin loading.
-    _discard_key_and_leaf(enabled, key)
-    disabled.add(key)
-    _save_plugin_sets(enabled, disabled)
-=======
->>>>>>> f97608f178
     console.print(
         f"[yellow]![/yellow] Plugin [bold]{key}[/bold] is required by managed policy; it stays enabled."
-        if selection and key in selection["enabled"] else f"[yellow]\u2298[/yellow] Plugin [bold]{key}[/bold] disabled. Takes effect when the Hermes agent and gateway processes restart (managed agents: ask your operator).")
+        if selection and key in selection["enabled"]
+        else f"[yellow]\u2298[/yellow] Plugin [bold]{key}[/bold] disabled. Takes effect on next session.")
 
 
 def _read_manifest_info(d: Path, prefix: str):

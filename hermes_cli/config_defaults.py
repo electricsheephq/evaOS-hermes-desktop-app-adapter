@@ -201,18 +201,10 @@ DEFAULT_CONFIG = {
         "verify_on_stop": False,
         # Inactivity warning (seconds), once per run before gateway_timeout; no interrupt. 0 = off.
         "gateway_timeout_warning": 900,
-<<<<<<< HEAD
-        # Max seconds the gateway blocks an agent awaiting a clarify-tool reply; then it unblocks
-        # with the canonical clarify timeout response. CLI clarify blocks indefinitely and ignores this.
-||||||| 939e45c91d
-        # Max seconds the gateway blocks an agent awaiting a clarify-tool reply; then it unblocks
-        # with "[user did not respond within Xm]". CLI clarify blocks indefinitely and ignores this.
-=======
         # Max seconds any surface (CLI, TUI/Desktop, messaging gateway) blocks an agent awaiting a
-        # clarify-tool reply; then it unblocks with "[user did not respond within Xm]". 0 or less =
+        # clarify-tool reply; then it unblocks with the canonical clarify timeout response. 0 or less =
         # unlimited. Resolved by tools/clarify_gateway.py::resolve_clarify_timeout (a legacy
         # top-level ``clarify.timeout`` still wins when explicitly set).
->>>>>>> f97608f178
         # 1h because users step away and a shorter value evicted the entry mid-think so a later
         # button tap hit a dead entry. Tradeoff: a higher value holds the gateway's running-agent
         # guard longer for a genuinely abandoned prompt — lower it to free the guard sooner. See #32762.

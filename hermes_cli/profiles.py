@@ -359,13 +359,6 @@ def get_profile_dir(name: str) -> Path:
         if flat is not None:
             return flat[1]
         return _get_default_hermes_home()
-<<<<<<< HEAD
-    if flat is not None:
-        if canon == flat[0]:
-            return flat[1]
-        return flat[2] / "profiles" / canon
-||||||| 939e45c91d
-=======
     # The name becomes a path component under profiles/; refuse anything that
     # is not a valid profile id so every caller (WS params, /p/<profile>/
     # prefixes, tool args) fails closed instead of escaping the root. The
@@ -373,13 +366,15 @@ def get_profile_dir(name: str) -> Path:
     # profiles/hermes may still exist and must keep resolving.
     if not _PROFILE_ID_RE.match(canon):
         raise _invalid_profile_name_error(canon)
->>>>>>> f97608f178
+    if flat is not None:
+        if canon == flat[0]:
+            return flat[1]
+        return flat[2] / "profiles" / canon
     return _get_profiles_root() / canon
 
 
 def profile_exists(name: str) -> bool:
     """Check whether a live (non-tombstoned) profile directory exists."""
-<<<<<<< HEAD
     from hermes_cli.profile_scope import current_principal, require_profile
 
     if current_principal() is not None:
@@ -387,16 +382,11 @@ def profile_exists(name: str) -> bool:
             name = require_profile(name)
         except PermissionError:
             return False
-    canon = normalize_profile_name(name)
-||||||| 939e45c91d
-    canon = normalize_profile_name(name)
-=======
     try:
         canon = normalize_profile_name(name)
         profile_dir = get_profile_dir(canon)
     except ValueError:
         return False
->>>>>>> f97608f178
     if canon == "default":
         return True
     return named_profile_is_live(profile_dir)
@@ -443,22 +433,14 @@ def _iter_named_profile_dirs(*, live_only: bool = True) -> List[Path]:
 
 
 def list_profile_names() -> List[str]:
-<<<<<<< HEAD
-    """Cheap name-only listing (``default`` + profile dirs). Unlike :func:`list_profiles` this
-    reads NO per-profile config — safe for hot paths (cron target listings, create validation)."""
-    flat = _flat_managed_profile()
-    if flat is not None:
-        return [flat[0]]
-
-||||||| 939e45c91d
-    """Cheap name-only listing (``default`` + profile dirs). Unlike :func:`list_profiles` this
-    reads NO per-profile config — safe for hot paths (cron target listings, create validation)."""
-=======
     """Cheap name-only listing (``default`` + LIVE profile dirs). Unlike :func:`list_profiles` this
     reads NO per-profile config — safe for hot paths (cron target listings, create validation).
     Tombstoned shells are skipped like everywhere else: a stale process that re-mkdirs a deleted
     profile's directory must not resurface it as a ``bot-chat:<name>`` cron target."""
->>>>>>> f97608f178
+    flat = _flat_managed_profile()
+    if flat is not None:
+        return [flat[0]]
+
     names = ["default"]
     with contextlib.suppress(OSError):
         names.extend(entry.name for entry in _iter_named_profile_dirs())
@@ -1033,24 +1015,17 @@ def _profile_info(name: str, path: Path, *, is_default: bool, alias_name: Option
     )
 
 
-<<<<<<< HEAD
-def list_profiles() -> List[ProfileInfo]:
-    """Return info for all profiles, including the default."""
-    flat = _flat_managed_profile()
-    if flat is not None:
-        return [_profile_info(flat[0], flat[1], is_default=flat[0] == "default")]
-
-||||||| 939e45c91d
-def list_profiles() -> List[ProfileInfo]:
-    """Return info for all profiles, including the default."""
-=======
 def list_profiles(*, lazy_skill_count: bool = False) -> List[ProfileInfo]:
     """Return info for all profiles, including the default.
 
     ``lazy_skill_count=True`` is for POLLED callers (``GET /api/profiles``, ``profiles.list``):
     ``skill_count`` is the last known value, refreshed off-request, so the request never walks
     a skill tree (#114041). Default ``False`` counts synchronously (CLI, detail views)."""
->>>>>>> f97608f178
+    flat = _flat_managed_profile()
+    if flat is not None:
+        return [_profile_info(flat[0], flat[1], is_default=flat[0] == "default",
+                              lazy_skill_count=lazy_skill_count)]
+
     profiles = []
     default_home = _get_default_hermes_home()
     if default_home.is_dir():
@@ -1154,19 +1129,6 @@ def profiles_to_serve(multiplex: bool, *, include_standalone: bool = False,
 
     ``multiplex=False``: exactly one entry for the *active* profile (byte-for-byte the
     historical single-profile behavior; name is ``"default"`` or the named profile's id).
-<<<<<<< HEAD
-    ``multiplex=True``: default plus every live named profile, optionally filtered by
-    *profile_allowlist* (invalid entries skipped, missing ones warned once)."""
-    flat = _flat_managed_profile()
-    if flat is not None:
-        # A flat managed process is already isolated to one profile. Keep this
-        # owner-only even when a stale/overbroad multiplex flag is present.
-        return [(flat[0], flat[1])]
-
-||||||| 939e45c91d
-    ``multiplex=True``: default plus every live named profile, optionally filtered by
-    *profile_allowlist* (invalid entries skipped, missing ones warned once)."""
-=======
     ``multiplex=True``: default plus every live named profile under ``profiles/`` (tombstoned
     and parked profiles skipped). Pure directory read: never creates a profile dir (#94590).
 
@@ -1174,7 +1136,12 @@ def profiles_to_serve(multiplex: bool, *, include_standalone: bool = False,
     out of the host multiplexer; a ``gateway.parked`` marker (``hermes -p X gateway stop``) skips
     a profile the host would otherwise serve. Callers enumerating INSTALLED profiles pass
     ``include_standalone=True, include_parked=True``; serving/ticking callers pass neither."""
->>>>>>> f97608f178
+    flat = _flat_managed_profile()
+    if flat is not None:
+        # A flat managed process is already isolated to one profile. Keep this
+        # owner-only even when a stale/overbroad multiplex flag is present.
+        return [(flat[0], flat[1])]
+
     active = get_active_profile_name() or "default"
     default = _get_default_hermes_home()
     if profile_is_parked(default) and default not in _parked_default_warned:
@@ -2493,32 +2460,13 @@ def resolve_profile_env(profile_name: str) -> str:
     (junction-transparent); only the spelling is preserved.
     """
     canon = _canon_valid(profile_name)
-<<<<<<< HEAD
     env_home = os.environ.get("HERMES_HOME", "").strip()
     flat = _flat_managed_profile()
     if flat is not None and canon == flat[0]:
         # Preserve the launcher's configured spelling (including a symlink
         # alias) while using the validated managed profile identity.
         return env_home or str(flat[1])
-    if env_home:
-        env_path = Path(env_home)
-        # A profile-shaped env value means the root is the grandparent (mirrors
-        # get_default_hermes_root()).
-        root = env_path.parent.parent if env_path.parent.name == "profiles" else env_path
-    else:
-        root = _get_default_hermes_home()
-||||||| 939e45c91d
-    env_home = os.environ.get("HERMES_HOME", "").strip()
-    if env_home:
-        env_path = Path(env_home)
-        # A profile-shaped env value means the root is the grandparent (mirrors
-        # get_default_hermes_root()).
-        root = env_path.parent.parent if env_path.parent.name == "profiles" else env_path
-    else:
-        root = _get_default_hermes_home()
-=======
-    root = profile_root_for_env_home(os.environ.get("HERMES_HOME", ""), _get_default_hermes_home())
->>>>>>> f97608f178
+    root = profile_root_for_env_home(env_home, _get_default_hermes_home())
     if canon == "default":
         return str(root)
     profile_dir = root / "profiles" / canon
