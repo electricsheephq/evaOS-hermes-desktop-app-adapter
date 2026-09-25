@@ -28,6 +28,27 @@ async def drain(adapter):
         await asyncio.gather(*list(adapter._background_tasks))
 
 
+class RunningAgentStub:
+    _supports_active_turn_redirect = False
+    _active_children = ()
+
+    def __init__(self):
+        self.interrupt_calls = []
+        self.redirect_calls = []
+        self.steer_calls = []
+
+    def interrupt(self, text):
+        self.interrupt_calls.append(text)
+
+    def redirect(self, text):
+        self.redirect_calls.append(text)
+        return True
+
+    def steer(self, text):
+        self.steer_calls.append(text)
+        return True
+
+
 @pytest.mark.asyncio
 async def test_completion_ack_requires_admission_and_replay_never_repeats(tmp_path):
     runner = GatewayRunner(GatewayConfig())
@@ -207,6 +228,50 @@ async def test_shared_thread_completion_queues_while_store_session_is_busy():
         assert adapter._pending_messages[key].internal is True
         assert "shared-thread-busy" in adapter._pending_messages[key].text
         assert runner._session_state(key).turn.agent is _AGENT_PENDING_SENTINEL
+    finally:
+        runner._session_state(key).turn.agent = None
+        adapter._pending_messages.clear()
+        await drain(adapter)
+        await runner._cancel_process_completion_batch_tasks()
+
+
+@pytest.mark.asyncio
+async def test_shared_thread_completion_queues_without_interrupting_running_agent():
+    runner = GatewayRunner(GatewayConfig(thread_sessions_per_user=False))
+    adapter = DiscordAdapter(PlatformConfig(
+        enabled=True,
+        typing_indicator=False,
+        extra={"thread_sessions_per_user": True},
+    ))
+    adapter.set_session_store(runner.session_store)
+    runner.adapters = {Platform.DISCORD: adapter}
+    created_by_a = SessionSource(
+        platform=Platform.DISCORD,
+        chat_type="thread",
+        chat_id="shared-running-thread",
+        thread_id="shared-running-thread",
+        user_id="user-a",
+    )
+    entry = runner.session_store.get_or_create_session(created_by_a)
+    key = entry.session_key
+    evt = pending(key, "shared-thread-running")
+    evt.update(user_id="user-b")
+
+    async def handler(event):
+        assert event.source.user_id == "user-a"
+        return await runner._handle_message(event)
+
+    adapter.set_message_handler(handler)
+    running_agent = RunningAgentStub()
+    runner._session_state(key).turn.agent = running_agent
+    try:
+        assert await runner._deliver_async_delegation_group([evt]) is True
+        await drain(adapter)
+        assert running_agent.interrupt_calls == []
+        assert running_agent.redirect_calls == []
+        assert running_agent.steer_calls == []
+        assert adapter._pending_messages[key].internal is True
+        assert "shared-thread-running" in adapter._pending_messages[key].text
     finally:
         runner._session_state(key).turn.agent = None
         adapter._pending_messages.clear()
