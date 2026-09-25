@@ -4499,8 +4499,9 @@ class TestDashboardPluginManifestExtensions:
         assert len(entries) == 1
         assert entries[0]["tab"]["path"] == "/from-profile"
 
-    def test_managed_dashboard_plugin_rejects_profile_shadow(self, tmp_path, monkeypatch):
-        """A profile plugin cannot shadow an operator-managed dashboard plugin."""
+    @pytest.mark.parametrize("shadow_dir", ["managed-dashboard", "different-directory"])
+    def test_managed_dashboard_plugin_rejects_profile_shadow(self, tmp_path, monkeypatch, shadow_dir):
+        """A profile plugin cannot shadow a managed dashboard plugin by directory or manifest name."""
         from hermes_cli import managed_scope, web_server_dashboard
 
         managed_dir = tmp_path / "managed-scope"
@@ -4510,7 +4511,7 @@ class TestDashboardPluginManifestExtensions:
         )
         profile_home = tmp_path / "profile"
         bundled_home = tmp_path / "bundled"
-        self._write_plugin(profile_home, "managed-dashboard", {
+        self._write_plugin(profile_home, shadow_dir, {
             "name": "managed-dashboard",
             "label": "Profile Shadow",
             "api": "plugin_api.py",
@@ -4529,6 +4530,15 @@ class TestDashboardPluginManifestExtensions:
                 (bundled_home / "plugins", "bundled"),
             ],
         )
+        monkeypatch.setattr(
+            managed_scope,
+            "_operator_owned",
+            lambda candidate: candidate.source == "bundled",
+        )
+        monkeypatch.setattr(
+            "hermes_cli.plugins_discovery.discover_entrypoint_manifests",
+            lambda: [],
+        )
         managed_scope.invalidate_managed_cache()
 
         try:
@@ -4540,6 +4550,108 @@ class TestDashboardPluginManifestExtensions:
         assert [(p["source"], p["label"]) for p in entries] == [
             ("bundled", "Managed Plugin")
         ]
+
+    def test_managed_entrypoint_reserves_dashboard_identity(self, tmp_path, monkeypatch):
+        """A managed entry point reserves its identity from writable dashboard plugins."""
+        from types import SimpleNamespace
+        from hermes_cli import managed_scope, web_server_dashboard
+
+        managed_dir = tmp_path / "managed-scope"
+        managed_dir.mkdir()
+        (managed_dir / "config.yaml").write_text(
+            "plugins:\n  enabled: [managed-entrypoint]\n", encoding="utf-8"
+        )
+        profile_home = tmp_path / "profile"
+        self._write_plugin(profile_home, "writable-shadow", {
+            "name": "managed-entrypoint",
+            "label": "Profile Shadow",
+        })
+        self._write_plugin(profile_home, "unrelated", {"name": "unrelated", "label": "Unrelated"})
+        monkeypatch.setenv("HERMES_MANAGED_DIR", str(managed_dir))
+        monkeypatch.setattr(
+            web_server_dashboard,
+            "_dashboard_plugin_search_dirs",
+            lambda: [(profile_home / "plugins", "user")],
+        )
+        monkeypatch.setattr(managed_scope, "_operator_owned", lambda candidate: candidate.source == "entrypoint")
+        monkeypatch.setattr(
+            "hermes_cli.plugins_discovery.discover_entrypoint_manifests",
+            lambda: [SimpleNamespace(
+                name="managed-entrypoint",
+                path="managed_package:register",
+                source="entrypoint",
+            )],
+        )
+        managed_scope.invalidate_managed_cache()
+
+        try:
+            plugins = web_server_dashboard._discover_dashboard_plugins()
+        finally:
+            managed_scope.invalidate_managed_cache()
+
+        assert [plugin["name"] for plugin in plugins] == ["unrelated"]
+
+    def test_dashboard_plugin_cache_is_profile_scoped(self, tmp_path, monkeypatch):
+        """Managed dashboard filtering is cached independently for each profile home."""
+        from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+        from hermes_cli import managed_scope, web_server, web_server_dashboard
+
+        managed_root = tmp_path / "managed-profiles"
+        homes = [tmp_path / name for name in ("profile-a", "profile-b")]
+        for home, managed_name in zip(homes, ("managed-a", "managed-b")):
+            home.mkdir()
+            policy_dir = managed_root / home.name
+            policy_dir.mkdir(parents=True)
+            (policy_dir / "config.yaml").write_text(
+                f"plugins:\n  enabled: [{managed_name}]\n", encoding="utf-8"
+            )
+        profile_plugins = tmp_path / "profile-plugins"
+        bundled_plugins = tmp_path / "bundled-plugins"
+        for name in ("managed-a", "managed-b"):
+            self._write_plugin(profile_plugins, f"shadow-{name}", {
+                "name": name, "label": f"Profile {name}",
+            })
+            self._write_plugin(bundled_plugins, name, {
+                "name": name, "label": f"Bundled {name}",
+            })
+        monkeypatch.delenv("HERMES_MANAGED_DIR", raising=False)
+        monkeypatch.setenv("EVAOS_HERMES_MANAGED_PROFILE_ROOT", str(managed_root))
+        monkeypatch.setattr(
+            web_server_dashboard,
+            "_dashboard_plugin_search_dirs",
+            lambda: [
+                (profile_plugins / "plugins", "user"),
+                (bundled_plugins / "plugins", "bundled"),
+            ],
+        )
+        monkeypatch.setattr(managed_scope, "_operator_owned", lambda candidate: candidate.source == "bundled")
+        monkeypatch.setattr(
+            "hermes_cli.plugins_discovery.discover_entrypoint_manifests",
+            lambda: [],
+        )
+        web_server._dashboard_plugins_cache = None
+        managed_scope.invalidate_managed_cache()
+
+        def labels_for(home):
+            token = set_hermes_home_override(str(home))
+            try:
+                return {plugin["name"]: plugin["label"] for plugin in web_server._get_dashboard_plugins()}
+            finally:
+                reset_hermes_home_override(token)
+
+        try:
+            labels_a = labels_for(homes[0])
+            labels_b = labels_for(homes[1])
+            labels_a_again = labels_for(homes[0])
+        finally:
+            managed_scope.invalidate_managed_cache()
+            web_server._dashboard_plugins_cache = None
+
+        assert labels_a == labels_a_again
+        assert labels_a["managed-a"] == "Bundled managed-a"
+        assert labels_a["managed-b"] == "Profile managed-b"
+        assert labels_b["managed-a"] == "Profile managed-a"
+        assert labels_b["managed-b"] == "Bundled managed-b"
 
     def test_unreadable_plugin_paths_do_not_block_discovery(self, tmp_path, monkeypatch, caplog):
         """A denied plugin directory or manifest must not prevent valid plugins loading."""

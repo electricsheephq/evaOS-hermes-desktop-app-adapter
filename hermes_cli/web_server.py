@@ -934,18 +934,31 @@ def _voice_list_error_logged_once(signature: Optional[str]) -> bool:
 
 _ACTION_LOG_FILES.setdefault("computer-use-grant", "action-computer-use-grant.log")
 
-# Cache discovered plugins per-process (refresh on explicit re-scan).
-_dashboard_plugins_cache: Optional[list] = None
+# Cache discovered plugins per managed-policy scope (refresh on explicit re-scan). The plugin
+# directories are process-wide, but managed reservations follow the request's profile when
+# ``EVAOS_HERMES_MANAGED_PROFILE_ROOT`` is set, so one profile's filtered list must not serve another.
+_dashboard_plugins_cache: Optional[Dict[str, list]] = None
+
+
+def _dashboard_plugins_cache_key() -> str:
+    from hermes_cli.managed_scope import get_managed_dir
+
+    return str(get_managed_dir())
 
 
 def _get_dashboard_plugins(force_rescan: bool = False) -> list:
     global _dashboard_plugins_cache
-    stale = _dashboard_plugins_cache is None or force_rescan or any(
-        not Path(p["_dir"]).is_dir() for p in _dashboard_plugins_cache
+    if not isinstance(_dashboard_plugins_cache, dict):
+        _dashboard_plugins_cache = {}
+    cache_key = _dashboard_plugins_cache_key()
+    cached = _dashboard_plugins_cache.get(cache_key)
+    stale = cached is None or force_rescan or any(
+        not Path(p["_dir"]).is_dir() for p in cached
     )
     if stale:
-        _dashboard_plugins_cache = _discover_dashboard_plugins()
-    return _dashboard_plugins_cache
+        cached = _discover_dashboard_plugins()
+        _dashboard_plugins_cache[cache_key] = cached
+    return cached
 
 
 # Router mounting. ORDER IS ROUTE-MATCHING ORDER: literal paths must land before

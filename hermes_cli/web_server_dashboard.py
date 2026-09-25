@@ -578,10 +578,18 @@ def _discover_dashboard_plugins() -> list:
                 continue
 
     from hermes_cli.managed_scope import filter_managed_plugin_candidates
+    from hermes_cli.plugins_discovery import discover_entrypoint_manifests
 
     candidates = filter_managed_plugin_candidates(
-        candidates, lambda candidate: candidate.path.name,
+        [*candidates, *discover_entrypoint_manifests()],
+        # The shared filter claims this identity AND ``candidate.name`` (the manifest name), so a
+        # shadow is rejected by either its directory or its manifest. Entry points (``path`` is a
+        # ``module:attr`` string) only reserve managed identities; they are never dashboard plugins.
+        lambda candidate: (
+            candidate.name if candidate.source == "entrypoint" else candidate.path.name
+        ),
     )
+    candidates = [candidate for candidate in candidates if candidate.source != "entrypoint"]
     plugins = []
     seen_names: set = set()
     for candidate in candidates:
