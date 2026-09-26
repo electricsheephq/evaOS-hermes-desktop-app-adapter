@@ -11,6 +11,7 @@ import json
 import sqlite3
 import zipfile
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 
@@ -79,6 +80,54 @@ class TestExtensionHelpers:
 
 
 class TestWriteFileToolGuard:
+    @pytest.mark.parametrize(
+        "probe_status", ["ok", "unavailable", "env_unavailable", "not_regular", "bad_size"])
+    def test_remote_binary_overwrite_rejected_when_present_or_probe_unavailable(
+            self, tmp_path: Path, monkeypatch, probe_status: str):
+        import tools.file_tools as file_tools
+        import tools.file_tools_paths as file_tools_paths
+
+        remote_only = tmp_path / "remote-only.png"
+        assert not remote_only.exists()
+
+        file_ops = Mock()
+        if probe_status == "unavailable":
+            file_ops._probe_regular_file.side_effect = RuntimeError("backend unavailable")
+        else:
+            # Any verdict other than an explicit "missing" must fail closed.
+            file_ops._probe_regular_file.return_value = (12 if probe_status == "ok" else 0, probe_status)
+        write_result = Mock(_content_sha256=None)
+        write_result.to_dict.return_value = {"bytes_written": 16}
+        file_ops.write_file.return_value = write_result
+
+        monkeypatch.setattr(file_tools_paths, "_terminal_env_type_for_task", lambda _task_id: "docker")
+        monkeypatch.setattr(file_tools, "_get_file_ops", lambda _task_id: file_ops)
+
+        result = json.loads(write_file_tool(str(remote_only), "replacement text"))
+
+        assert "Refusing to overwrite existing binary file" in result.get("error", "")
+        file_ops.write_file.assert_not_called()
+
+    def test_remote_missing_verdict_allows_creation(self, tmp_path: Path, monkeypatch):
+        """Positive control: only the backend's explicit "missing" verdict lets a new binary file be created."""
+        import tools.file_tools as file_tools
+        import tools.file_tools_paths as file_tools_paths
+
+        remote_only = tmp_path / "remote-only.png"
+        file_ops = Mock()
+        file_ops._probe_regular_file.return_value = (0, "missing")
+        write_result = Mock(_content_sha256=None)
+        write_result.to_dict.return_value = {"bytes_written": 16}
+        file_ops.write_file.return_value = write_result
+
+        monkeypatch.setattr(file_tools_paths, "_terminal_env_type_for_task", lambda _task_id: "docker")
+        monkeypatch.setattr(file_tools, "_get_file_ops", lambda _task_id: file_ops)
+
+        result = json.loads(write_file_tool(str(remote_only), "new file body"))
+
+        assert "error" not in result, result
+        file_ops.write_file.assert_called_once()
+
     def test_write_file_rejects_existing_docx(self, tmp_path: Path):
         docx = tmp_path / "report.docx"
         _make_minimal_docx(docx)

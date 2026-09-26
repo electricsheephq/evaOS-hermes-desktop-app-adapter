@@ -461,24 +461,37 @@ def _check_binary_document_write(filepath: str, task_id: str = "default") -> str
             resolved = Path(_resolve_path_for_task(filepath, task_id))
         except Exception:
             resolved = Path(_expand_tilde(filepath))
-        try:
-            if resolved.is_file():
-                if pdf:
-                    return (
-                        f"Refusing to overwrite existing PDF '{filepath}' with plain text. "
-                        "read_file showed you EXTRACTED text, not the real bytes — writing "
-                        "text back would destroy the document. Use the pdf skill or a PDF "
-                        "library via the terminal to modify it. (Creating a NEW .pdf file "
-                        "is allowed.)")
+        from tools.file_tools_paths import _terminal_env_type_for_task
+
+        if _terminal_env_type_for_task(task_id) == "local":
+            try:
+                exists = resolved.is_file()
+            except OSError:
+                exists = False
+        else:
+            try:
+                from tools.file_tools import _get_file_ops
+
+                _size, status = _get_file_ops(task_id)._probe_regular_file(str(resolved))
+                # Only an explicit backend "missing" verdict makes creation safe.
+                exists = status != "missing"
+            except Exception:
+                exists = True
+        if exists:
+            if pdf:
                 return (
-                    f"Refusing to overwrite existing binary file '{filepath}' ({ext}) "
-                    "with plain text — read_file showed you extracted or mojibake "
-                    "text, not the real bytes, and writing text back would destroy "
-                    "the file. Use a binary-aware tool via the terminal to modify it "
-                    "(for SQLite databases, the sqlite3 CLI or a SQLite library). "
-                    "(Creating a NEW file with this extension is allowed.)")
-        except OSError:
-            pass
+                    f"Refusing to overwrite existing PDF '{filepath}' with plain text. "
+                    "read_file showed you EXTRACTED text, not the real bytes — writing "
+                    "text back would destroy the document. Use the pdf skill or a PDF "
+                    "library via the terminal to modify it. (Creating a NEW .pdf file "
+                    "is allowed.)")
+            return (
+                f"Refusing to overwrite existing binary file '{filepath}' ({ext}) "
+                "with plain text — read_file showed you extracted or mojibake "
+                "text, not the real bytes, and writing text back would destroy "
+                "the file. Use a binary-aware tool via the terminal to modify it "
+                "(for SQLite databases, the sqlite3 CLI or a SQLite library). "
+                "(Creating a NEW file with this extension is allowed.)")
     return None
 
 
