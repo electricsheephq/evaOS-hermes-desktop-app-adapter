@@ -578,18 +578,24 @@ def _discover_dashboard_plugins() -> list:
                 continue
 
     from hermes_cli.managed_scope import filter_managed_plugin_candidates
-    from hermes_cli.plugins_discovery import discover_entrypoint_manifests
+    from hermes_cli.plugins_discovery import collect_directory_manifests, discover_entrypoint_manifests
 
-    candidates = filter_managed_plugin_candidates(
-        [*candidates, *discover_entrypoint_manifests()],
-        # The shared filter claims this identity AND ``candidate.name`` (the manifest name), so a
-        # shadow is rejected by either its directory or its manifest. Entry points (``path`` is a
-        # ``module:attr`` string) only reserve managed identities; they are never dashboard plugins.
-        lambda candidate: (
-            candidate.name if candidate.source == "entrypoint" else candidate.path.name
-        ),
-    )
-    candidates = [candidate for candidate in candidates if candidate.source != "entrypoint"]
+    # Reserve managed identities against the core loader's candidates too, so an operator plugin
+    # WITHOUT a dashboard still displaces a same-named writable dashboard shadow. ``user`` manifests are
+    # left out: they are profile-writable and come from the per-request home, outside the cache key.
+    dashboard_ids = {id(candidate) for candidate in candidates}
+    reservations = [
+        *(manifest for manifest in collect_directory_manifests() if manifest.source != "user"),
+        *discover_entrypoint_manifests(),
+    ]
+    candidates = [
+        candidate for candidate in filter_managed_plugin_candidates(
+            [*candidates, *reservations],
+            # The shared filter claims this identity AND ``candidate.name`` (the manifest name).
+            lambda c: c.path.name if id(c) in dashboard_ids else (getattr(c, "key", "") or c.name),
+        )
+        if id(candidate) in dashboard_ids
+    ]
     plugins = []
     seen_names: set = set()
     for candidate in candidates:

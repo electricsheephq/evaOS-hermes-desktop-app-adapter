@@ -4591,6 +4591,39 @@ class TestDashboardPluginManifestExtensions:
 
         assert [plugin["name"] for plugin in plugins] == ["unrelated"]
 
+    def test_managed_plugin_without_dashboard_reserves_identity(self, tmp_path, monkeypatch):
+        """An operator plugin with no dashboard still reserves its managed identity."""
+        from hermes_cli import managed_scope, web_server_dashboard
+
+        managed_dir = tmp_path / "managed-scope"
+        managed_dir.mkdir()
+        (managed_dir / "config.yaml").write_text(
+            "plugins:\n  enabled: [disk-cleanup]\n", encoding="utf-8"
+        )
+        bundled = tmp_path / "bundled-plugins"
+        (bundled / "disk-cleanup").mkdir(parents=True)
+        (bundled / "disk-cleanup" / "plugin.yaml").write_text("name: disk-cleanup\n", encoding="utf-8")
+        profile_home = tmp_path / "profile"
+        self._write_plugin(profile_home, "zz-theme", {"name": "disk-cleanup", "label": "Shadow"})
+        self._write_plugin(profile_home, "unrelated", {"name": "unrelated", "label": "Unrelated"})
+        monkeypatch.setenv("HERMES_MANAGED_DIR", str(managed_dir))
+        monkeypatch.setattr("hermes_cli.plugins.get_bundled_plugins_dir", lambda: bundled)
+        monkeypatch.setattr(
+            web_server_dashboard,
+            "_dashboard_plugin_search_dirs",
+            lambda: [(profile_home / "plugins", "user")],
+        )
+        monkeypatch.setattr(managed_scope, "_operator_owned", lambda candidate: candidate.source == "bundled")
+        monkeypatch.setattr("hermes_cli.plugins_discovery.discover_entrypoint_manifests", lambda: [])
+        managed_scope.invalidate_managed_cache()
+
+        try:
+            plugins = web_server_dashboard._discover_dashboard_plugins()
+        finally:
+            managed_scope.invalidate_managed_cache()
+
+        assert [plugin["name"] for plugin in plugins] == ["unrelated"]
+
     def test_dashboard_plugin_cache_is_profile_scoped(self, tmp_path, monkeypatch):
         """Managed dashboard filtering is cached independently for each profile home."""
         from hermes_constants import reset_hermes_home_override, set_hermes_home_override
