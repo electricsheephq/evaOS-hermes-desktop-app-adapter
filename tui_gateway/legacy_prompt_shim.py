@@ -16,7 +16,8 @@ those builds working while the fleet desktop moves to es.10:
 - ``connectors.list`` / ``connectors.connect``: es.9 names the session as ``{session_id}``; r34 takes
   ``owner``. The session owner is rebuilt from that id and the runtime then derives the profile and
   checks transport authority exactly as it does for a native client; a client ``owner`` is never
-  rewritten.
+  rewritten. The reply to such a request is shaped for es.9: list rows also carry ``connectionStatus``,
+  and connect answers r33's ``{results, summary}`` from the open operation's targets (PR-2b).
 
 ``HERMES_EVAOS_LEGACY_PROMPT_SHIM=0`` (read per call) turns all of it off: the runtime then behaves as
 the raw tag. Pure at import: ``server_requests`` imports it; the rest is rebound onto server.py's
@@ -96,6 +97,18 @@ def _lp_after_write(obj) -> None:
         logger.debug("legacy prompt twin failed", exc_info=True)  # a twin must never break the real frame
 
 
+def _lp_open_method(request_id: str) -> str | None:
+    """The srq method of the open request *request_id* (compute-host mirror included); None when none is open."""
+    from tui_gateway import server_requests
+    with server_requests._lock:
+        req = server_requests._open.get(request_id)
+    if req is not None:
+        return req.method
+    located = _compute_host_request_session(request_id)
+    mirrored = located[1].get("_compute_host_open_request") if located else None
+    return mirrored.get("method") if isinstance(mirrored, dict) else None
+
+
 def _legacy_prompt_respond(rid, method: str, params: dict) -> dict | None:
     """``rpc_dispatch`` hook: a legacy ``<kind>.respond``, or None to continue normal dispatch."""
     entry = _LP_RESPONDS.get(method)
@@ -103,7 +116,8 @@ def _legacy_prompt_respond(rid, method: str, params: dict) -> dict | None:
         return None
     srq_method, kind = entry
     request_id = str(params.get("request_id") or "")
-    if not request_id:
+    # Never settle another open kind; the clarify path (cancel-all included) stays exactly as before PR-2b.
+    if not request_id or (srq_method != "clarify" and _lp_open_method(request_id) not in (None, srq_method)):
         return _err(rid, 4009, f"no pending {kind[1]} request")  # es.9 matches this text
     raw = params.get(kind[1], "")
     answer = raw if isinstance(raw, str) else json.dumps(raw, ensure_ascii=False)
@@ -116,15 +130,21 @@ def _legacy_prompt_respond(rid, method: str, params: dict) -> dict | None:
     return _methods["request.answer"](rid, {"id": request_id, "result": {kind[2]: answer}})
 
 
+def _legacy_prompt_mark(session: dict) -> None:
+    """A never-advertised WS client reads or creates *session*: mark it legacy so a prompt raised while it is
+    detached still twins into the replay ring (``session.create`` hook; review mL-SK)."""
+    from tui_gateway import server_requests
+    from tui_gateway.ws import WSTransport
+    transport = current_transport()
+    if legacy_prompt_enabled() and isinstance(transport, WSTransport) and not server_requests.answers_requests(transport):
+        session["_lp_seen"] = True
+
+
 def _legacy_prompt_snapshot(sid: str, session: dict) -> dict | None:
     """``_live_session_payload`` hook: the open clarify as es.9's ``pending_clarify`` (locked answers included)."""
     if not legacy_prompt_enabled():
         return None
-    from tui_gateway import server_requests
-    from tui_gateway.ws import WSTransport
-    transport = current_transport()
-    if isinstance(transport, WSTransport) and not server_requests.answers_requests(transport):
-        session["_lp_seen"] = True
+    _legacy_prompt_mark(session)
     for entry in _open_requests(sid):  # includes the compute-host mirror
         if entry.get("method") == "clarify" and isinstance(entry.get("params"), dict):
             return _lp_payload("clarify", entry["params"], str(entry["id"]))
@@ -141,6 +161,43 @@ def _legacy_connector_params(method: str, params: dict) -> dict:
     out = {k: v for k, v in params.items() if k != "session_id"}
     out["owner"] = {"type": "session", "session_id": sid}
     return out
+
+
+def _legacy_connector_snapshot(req: dict, method: str) -> list | None:
+    """``_handle_admitted_request`` hook, BEFORE dispatch: an es.9-shaped ``connectors.connect`` samples the open
+    operation's targets of the transport's own session. A 4002 LINK_STILL_VALID is answered from this sample only,
+    so an operation that settles, closes or is succeeded while the request runs is never read after it."""
+    raw = req.get("params")
+    if method != "connectors.connect" or not isinstance(raw, dict) or _legacy_connector_params(method, raw) is raw:
+        return None  # native (or kill switch off): nothing sampled
+    from tools.connectors import live
+    from tui_gateway.connector_payload import connector_ui_payload
+    _, session = _current_session_steer_authority(raw["session_id"])  # the transport's own session only
+    operation = session and live.current(session["session_key"], profile_home=session.get("profile_home"))
+    return connector_ui_payload(operation.snapshot())["targets"] if operation else None
+
+
+def _legacy_connector_reply(req: dict, method: str, response, link_targets: list | None = None):
+    """``_handle_admitted_request`` hook, after ``check_result``: the reply to an es.9-shaped connector request."""
+    raw = req.get("params")
+    if not isinstance(raw, dict) or _legacy_connector_params(method, raw) is raw or not isinstance(response, dict):
+        return response  # native (or kill switch off): untouched
+    result = response.get("result")
+    if method == "connectors.list" and isinstance(result, dict) and isinstance(result.get("connectors"), list):
+        rows = [{**row, "connectionStatus": row["connection_status"]} if isinstance(row, dict) and "connection_status" in row
+                else row for row in result["connectors"]]
+        return {**response, "result": {**result, "connectors": rows}}
+    if method != "connectors.connect":
+        return response
+    targets = result.get("targets") if isinstance(result, dict) else None
+    error = response.get("error") or {}
+    if targets is None and error.get("code") == 4002 and (error.get("data") or {}).get("reason") == "LINK_STILL_VALID":
+        targets = link_targets  # the pre-dispatch sample (``_legacy_connector_snapshot``), never a re-read
+    if not isinstance(targets, list):
+        return response  # 4004 and every other error stay errors
+    results = [{"connector": t.get("name"), "status": "active" if t.get("state") == "connected" else "initiated",
+                "connect_url": t.get("connect_url")} for t in targets if isinstance(t, dict)]
+    return {"jsonrpc": "2.0", "id": response.get("id"), "result": {"results": results, "summary": {}}}
 
 
 def register(server):

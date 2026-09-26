@@ -22,6 +22,7 @@ def _handle_admitted_request(req: dict) -> dict | None:
     # ---- BEGIN EVAOS-LEGACY-PROMPT-SHIM (rs35: delete; docs/r34-managed-delta.md) ----
     if (legacy := _legacy_prompt_respond(rid, method, params)) is not None:
         return legacy
+    es9_link_targets = _legacy_connector_snapshot(req, method)
     # ---- END EVAOS-LEGACY-PROMPT-SHIM ----
     if not (fn := _methods.get(method)):
         return _err(rid, -32601, f"unknown method: {method} — the client and the Hermes backend are out of sync "
@@ -49,6 +50,9 @@ def _handle_admitted_request(req: dict) -> dict | None:
     if contract is not None and isinstance(response, dict) and isinstance(response.get("result"), dict):
         _contracts.check_params_accepted(contract, params)
         _contracts.check_result(contract, response["result"])
+    # ---- BEGIN EVAOS-LEGACY-PROMPT-SHIM (rs35: delete; docs/r34-managed-delta.md) ----
+    response = _legacy_connector_reply(req, method, response, es9_link_targets)
+    # ---- END EVAOS-LEGACY-PROMPT-SHIM ----
     return response
 
 
