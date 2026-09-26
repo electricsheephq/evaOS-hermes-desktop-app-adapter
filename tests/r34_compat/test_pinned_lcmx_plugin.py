@@ -40,7 +40,7 @@ def _materialize(source: Path, ref: str, destination: Path) -> None:
             target = (destination / member.name).resolve()
             if target != root and root not in target.parents:
                 raise AssertionError(f"plugin archive escapes destination: {member.name}")
-        bundle.extractall(destination)
+        bundle.extractall(destination, filter="data")  # pinned git object; the loop above already refuses escapes
     assert (destination / "plugin.yaml").is_file(), "archive did not contain plugin.yaml"
 
 
