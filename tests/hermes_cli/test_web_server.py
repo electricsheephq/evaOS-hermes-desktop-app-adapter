@@ -4624,6 +4624,43 @@ class TestDashboardPluginManifestExtensions:
 
         assert [plugin["name"] for plugin in plugins] == ["unrelated"]
 
+    @pytest.mark.parametrize("operator_owned", [True, False])
+    def test_process_home_operator_plugin_reserves_identity(self, tmp_path, monkeypatch, operator_owned):
+        """A root-owned (symlinked) plugin without a dashboard in the process-home plugins folder
+        reserves its managed identity; a user-owned one in the same folder does not."""
+        import os
+        from hermes_cli import managed_scope, web_server_dashboard
+
+        managed_dir = tmp_path / "managed-scope"
+        managed_dir.mkdir()
+        (managed_dir / "config.yaml").write_text(
+            "plugins:\n  enabled: [evaos-secure-access]\n", encoding="utf-8"
+        )
+        user_plugins = tmp_path / "process-home" / "plugins"
+        user_plugins.mkdir(parents=True)
+        installed = tmp_path / "managed-plugins" / "evaos-secure-access"
+        installed.mkdir(parents=True)
+        (installed / "plugin.yaml").write_text("name: evaos-secure-access\n", encoding="utf-8")
+        if operator_owned:
+            (user_plugins / "evaos-secure-access").symlink_to(installed, target_is_directory=True)
+        else:
+            installed.rename(user_plugins / "evaos-secure-access")
+        self._write_plugin(user_plugins.parent, "zz-shadow", {"name": "evaos-secure-access", "label": "Shadow"})
+        monkeypatch.setenv("HERMES_MANAGED_DIR", str(managed_dir))
+        monkeypatch.setattr("hermes_cli.plugins.get_bundled_plugins_dir", lambda: tmp_path / "no-bundled")
+        monkeypatch.setattr(web_server_dashboard, "_dashboard_plugin_search_dirs", lambda: [(user_plugins, "user")])
+        # Root-owned symlink stand-in: only the symlinked install is operator-owned.
+        monkeypatch.setattr(managed_scope, "_operator_owned", lambda c: os.path.islink(str(c.path)))
+        monkeypatch.setattr("hermes_cli.plugins_discovery.discover_entrypoint_manifests", lambda: [])
+        managed_scope.invalidate_managed_cache()
+
+        try:
+            plugins = web_server_dashboard._discover_dashboard_plugins()
+        finally:
+            managed_scope.invalidate_managed_cache()
+
+        assert [plugin["label"] for plugin in plugins] == ([] if operator_owned else ["Shadow"])
+
     def test_dashboard_plugin_cache_is_profile_scoped(self, tmp_path, monkeypatch):
         """Managed dashboard filtering is cached independently for each profile home."""
         from hermes_constants import reset_hermes_home_override, set_hermes_home_override
@@ -4665,10 +4702,13 @@ class TestDashboardPluginManifestExtensions:
         web_server._dashboard_plugins_cache = None
         managed_scope.invalidate_managed_cache()
 
-        def labels_for(home):
+        def labels_for(home, force_rescan=False):
             token = set_hermes_home_override(str(home))
             try:
-                return {plugin["name"]: plugin["label"] for plugin in web_server._get_dashboard_plugins()}
+                return {
+                    plugin["name"]: plugin["label"]
+                    for plugin in web_server._get_dashboard_plugins(force_rescan=force_rescan)
+                }
             finally:
                 reset_hermes_home_override(token)
 
@@ -4676,6 +4716,10 @@ class TestDashboardPluginManifestExtensions:
             labels_a = labels_for(homes[0])
             labels_b = labels_for(homes[1])
             labels_a_again = labels_for(homes[0])
+            # A forced rescan (plugin install/update) in A's scope must refresh B's cached list too.
+            self._write_plugin(bundled_plugins, "added-later", {"name": "added-later", "label": "Added"})
+            labels_for(homes[0], force_rescan=True)
+            labels_b_after_rescan = labels_for(homes[1])
         finally:
             managed_scope.invalidate_managed_cache()
             web_server._dashboard_plugins_cache = None
@@ -4685,6 +4729,7 @@ class TestDashboardPluginManifestExtensions:
         assert labels_a["managed-b"] == "Profile managed-b"
         assert labels_b["managed-a"] == "Profile managed-a"
         assert labels_b["managed-b"] == "Bundled managed-b"
+        assert labels_b_after_rescan["added-later"] == "Added"
 
     def test_unreadable_plugin_paths_do_not_block_discovery(self, tmp_path, monkeypatch, caplog):
         """A denied plugin directory or manifest must not prevent valid plugins loading."""

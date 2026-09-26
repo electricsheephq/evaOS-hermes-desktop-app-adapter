@@ -551,7 +551,8 @@ def _discover_dashboard_plugins() -> list:
     """Scan ``<plugins root>/*/dashboard/manifest.json`` across user, bundled and (opt-in)
     project plugin sources — same three sources as ``hermes_cli.plugins``."""
     candidates = []
-    for plugins_root, source in _dashboard_plugin_search_dirs():
+    search_dirs = _dashboard_plugin_search_dirs()
+    for plugins_root, source in search_dirs:
         try:
             if not plugins_root.is_dir():
                 continue
@@ -578,14 +579,20 @@ def _discover_dashboard_plugins() -> list:
                 continue
 
     from hermes_cli.managed_scope import filter_managed_plugin_candidates
-    from hermes_cli.plugins_discovery import collect_directory_manifests, discover_entrypoint_manifests
+    from hermes_cli.plugins_discovery import (
+        collect_directory_manifests, discover_entrypoint_manifests, scan_directory,
+    )
 
     # Reserve managed identities against the core loader's candidates too, so an operator plugin
-    # WITHOUT a dashboard still displaces a same-named writable dashboard shadow. ``user`` manifests are
-    # left out: they are profile-writable and come from the per-request home, outside the cache key.
+    # WITHOUT a dashboard still displaces a same-named writable dashboard shadow. ``user`` manifests
+    # come from this scan's process-home roots (managed hosts install root-owned symlinks there) and
+    # ``_operator_owned`` decides whether they reserve; the core loader's ``user`` scan follows the
+    # per-request home, which is outside the cache key, so it is not used.
     dashboard_ids = {id(candidate) for candidate in candidates}
     reservations = [
         *(manifest for manifest in collect_directory_manifests() if manifest.source != "user"),
+        *(manifest for root, source in search_dirs if source == "user"
+          for manifest in scan_directory(root, "user")),
         *discover_entrypoint_manifests(),
     ]
     candidates = [

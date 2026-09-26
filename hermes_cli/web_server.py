@@ -948,8 +948,8 @@ def _dashboard_plugins_cache_key() -> str:
 
 def _get_dashboard_plugins(force_rescan: bool = False) -> list:
     global _dashboard_plugins_cache
-    if not isinstance(_dashboard_plugins_cache, dict):
-        _dashboard_plugins_cache = {}
+    if not isinstance(_dashboard_plugins_cache, dict) or force_rescan:
+        _dashboard_plugins_cache = {}  # plugin files are process-wide: a rescan refreshes every policy
     cache_key = _dashboard_plugins_cache_key()
     cached = _dashboard_plugins_cache.get(cache_key)
     stale = cached is None or force_rescan or any(
