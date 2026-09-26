@@ -175,6 +175,38 @@ def test_new_client_gets_no_twin_and_kill_switch_restores_the_raw_tag(monkeypatc
     assert _rpc(old, "sudo.respond", request_id="srq-x", password="pw")["error"]["code"] == -32601
 
 
+def test_kill_switch_stops_the_twin_and_expire_on_a_mixed_session(monkeypatch):
+    """shim=0 with an es.10 peer attached: the request still goes out (answerable), but es.9 gets no twin/expire."""
+    monkeypatch.setenv(ENV, "0")
+    old, new = _Peer(), _Peer(advertised=True)
+    _session(monkeypatch, "mixed", FanoutTransport(old, new))
+    assert server._ask("sudo", "mixed", {}, timeout=0.05) == ""
+    for peer in (old, new):
+        peer.wait(2)
+        time.sleep(0.2)  # the fanout drains per peer: a late twin/expire would land here
+        assert peer.kinds() == ["sudo", "request.cancel"], peer.kinds()
+
+
+def test_kill_switch_drops_pending_clarify_from_activate(monkeypatch):
+    """shim=0 with a clarify open (es.10 client, so it waits): activate carries open_requests, no pending_clarify."""
+    monkeypatch.setenv(ENV, "0")
+    monkeypatch.setattr(server, "_schedule_agent_build", lambda _sid: None)
+    monkeypatch.setattr(server, "_schedule_session_cap_enforcement", lambda: None)
+    new = _Peer(advertised=True)
+    sid = _rpc(new, "session.create", source="desktop", desktop_ui_protocol=3)["result"]["session_id"]
+    try:
+        thread, box = _bg(lambda: server._agent_cbs(sid)["clarify_callback"]("Deploy now?", ["yes", "no"]))
+        req = _open_request(sid)
+        activated = _rpc(new, "session.activate", session_id=sid, desktop_ui_protocol=3, omit_messages=True)
+        assert [entry["id"] for entry in activated["result"]["open_requests"]] == [req.id]
+        assert "pending_clarify" not in activated["result"]
+        assert server.dispatch({"jsonrpc": "2.0", "id": req.id, "result": {"answer": "yes"}}, new) is None
+        thread.join(timeout=5)
+        assert box["r"] == "yes"
+    finally:
+        server._close_session_by_id(sid, end_reason="test_cleanup")
+
+
 def test_mixed_peers_both_see_request_then_twin_and_first_answer_wins(monkeypatch):
     old, new = _Peer(), _Peer(advertised=True)
     _session(monkeypatch, "mixed", FanoutTransport(old, new))
