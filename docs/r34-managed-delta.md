@@ -527,3 +527,16 @@ Every JSON-RPC method the es.9 desktop client (`origin/main` source) sends, with
 | `wake.status` | client_capture, profile, surface |
 | `wake.stop` | persist, profile |
 | `window.read.respond` | profile, request_id, text |
+
+## PR-3: synthetic-compatibility sources
+
+The CI step "Prepare immutable synthetic-compatibility sources" (`.github/workflows/tests.yml`) now prepares the r34 pair: the fleet's last serving runtime r33.6 (`2d10969e7d6fab477c4aa4f7e4c9e4df1f524e9a`, tag `evaos-runtime-es.12-v0.21.2-r33.6`) as `../evaos-r34-r336-baseline`, and LCM-X v0.24.1 (`98ac62fee5316cdf461e77f28951720f523489f1`, electricsheephq/lcm-x) as `../evaos-r34-lcmx-source`, both asserted exact. The r31 pair (r30.7 and hermes-lcm v0.20.0) is retired with `tests/r31_compat/` and `tests/r31_lcm_compat/`: no fleet box runs r31 ([retirement row](r31-managed-delta.md)). The r31 references in R10, the state-rollback note and Test adaptations above are the PR-1 record.
+
+`tests/r34_compat/` (consumers of the pair; each file runs as one pytest process, the predecessor in child interpreters):
+
+| File | Contract | Positive control |
+|---|---|---|
+| `test_managed_dir_guard.py` | R1 as a permanent test: a config r33.6 settles at its version (v42) under `HERMES_MANAGED_DIR` is not migrated or stamped by this tree; config.yaml, .env and the managed scope stay byte-identical | unmanaged parametrization migrates to v46 and normalizes .env; the managed case fails on the raw tag (`46 == 42`) |
+| `test_pinned_lcmx_plugin.py` | the pinned source loads as plugin `hermes-lcm-x` and registers context engine `lcm-x` from a config naming only the new identity; engine ingest, `lcm_grep` and restart on one `lcm.db`; no first-party runtime or CI file names `hermes-lcm` | the load test fails against the r31 source (`--r34-lcmx-source`/`--r34-lcmx-ref`); the scanner's synthetic hit |
+| `test_es9_session_bind_wire.py` | `desktop_ui_protocol` and its method set are read from the predecessor's `apps/desktop/src/api/client.ts`; every recorded es.9 create (5), resume (7) and activate (1) shape binds, a clarify raised mid-turn is answered with the legacy `clarify.respond`, and every rebind carries `pending_clarify` | `HERMES_EVAOS_LEGACY_PROMPT_SHIM=0`: no twin, `-32601`, clarify timeout, no `pending_clarify`; the raw tag also refuses the bind key itself (4000) |
+| `test_state_rollback_compat.py` | kept from `tests/r31_compat` and re-pointed at r33.6: a state.db born on r33.6, used by r34, rolled back and re-rung keeps every row readable, appendable and searchable (stamp 2 → 3 → 2 → 3 over the view-backed word index); an r34-born database reads back on r33.6 | layout pinned per step |

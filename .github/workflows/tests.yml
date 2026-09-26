@@ -60,12 +60,12 @@ jobs:
       - name: Prepare immutable synthetic-compatibility sources
         run: |
           set -euo pipefail
-          git fetch --no-tags origin d02f246755153b318d472e30abb960f8578f8cfa
-          git worktree add --detach ../evaos-r31-r307-baseline d02f246755153b318d472e30abb960f8578f8cfa
-          git clone --no-checkout --filter=blob:none https://github.com/stephenschoettler/hermes-lcm.git ../evaos-r31-lcm-source
-          git -C ../evaos-r31-lcm-source checkout --detach 49e99a272d2d461e5c90732e7ef2bc20e96f0826
-          test "$(git -C ../evaos-r31-r307-baseline rev-parse HEAD)" = d02f246755153b318d472e30abb960f8578f8cfa
-          test "$(git -C ../evaos-r31-lcm-source rev-parse HEAD)" = 49e99a272d2d461e5c90732e7ef2bc20e96f0826
+          git fetch --no-tags origin 2d10969e7d6fab477c4aa4f7e4c9e4df1f524e9a
+          git worktree add --detach ../evaos-r34-r336-baseline 2d10969e7d6fab477c4aa4f7e4c9e4df1f524e9a
+          git clone --no-checkout --filter=blob:none https://github.com/electricsheephq/lcm-x.git ../evaos-r34-lcmx-source
+          git -C ../evaos-r34-lcmx-source checkout --detach 98ac62fee5316cdf461e77f28951720f523489f1
+          test "$(git -C ../evaos-r34-r336-baseline rev-parse HEAD)" = 2d10969e7d6fab477c4aa4f7e4c9e4df1f524e9a
+          test "$(git -C ../evaos-r34-lcmx-source rev-parse HEAD)" = 98ac62fee5316cdf461e77f28951720f523489f1
 
       - name: Install ripgrep (prebuilt binary)
         run: |
