@@ -24,8 +24,17 @@ function clients(): EvaSupportClient[] {
   ]
 }
 
-function mountBridge(overrides: Partial<Record<'listSupportTargets' | 'startSupport' | 'switchSupportTarget' | 'endSupportSession' | 'onOpenSupportPicker', unknown>> = {}) {
-  const listSupportTargets = vi.fn<() => Promise<EvaSupportTargetsResult>>().mockResolvedValue({ ok: true, is_admin: false, clients: clients() })
+function mountBridge(
+  overrides: Partial<
+    Record<
+      'listSupportTargets' | 'startSupport' | 'switchSupportTarget' | 'endSupportSession' | 'onOpenSupportPicker',
+      unknown
+    >
+  > = {}
+) {
+  const listSupportTargets = vi
+    .fn<() => Promise<EvaSupportTargetsResult>>()
+    .mockResolvedValue({ ok: true, is_admin: false, clients: clients() })
 
   const startSupport = vi.fn<() => Promise<EvaSupportStartResult>>().mockResolvedValue({
     ok: true,
@@ -35,7 +44,14 @@ function mountBridge(overrides: Partial<Record<'listSupportTargets' | 'startSupp
   const switchSupportTarget = vi.fn().mockResolvedValue({ managed: true })
   const endSupportSession = vi.fn().mockResolvedValue({ ok: true })
   const onOpenSupportPicker = vi.fn().mockReturnValue(() => undefined)
-  const eva = { listSupportTargets, startSupport, switchSupportTarget, endSupportSession, onOpenSupportPicker, ...overrides }
+  const eva = {
+    listSupportTargets,
+    startSupport,
+    switchSupportTarget,
+    endSupportSession,
+    onOpenSupportPicker,
+    ...overrides
+  }
   Object.defineProperty(window, 'hermesDesktop', { configurable: true, value: { eva } })
 
   return eva
@@ -161,7 +177,12 @@ describe('SupportTargetPickerOverlay', () => {
       listSupportTargets: vi.fn().mockResolvedValue({ ok: true, is_admin: false, clients: clients() }),
       startSupport: vi
         .fn()
-        .mockResolvedValue({ ok: false, reason: 'conflict', code: 'delegated_support_conflict', message: 'Another support session is active.' })
+        .mockResolvedValue({
+          ok: false,
+          reason: 'conflict',
+          code: 'delegated_support_conflict',
+          message: 'Another support session is active.'
+        })
     })
 
     renderPicker()
@@ -185,7 +206,12 @@ describe('SupportTargetPickerOverlay', () => {
     const pending = mountBridge({
       startSupport: vi
         .fn()
-        .mockResolvedValue({ ok: false, reason: 'cleanup_pending', code: 'support-cleanup-pending', message: 'A previous support session could not be ended yet. End it, then try again.' })
+        .mockResolvedValue({
+          ok: false,
+          reason: 'cleanup_pending',
+          code: 'support-cleanup-pending',
+          message: 'A previous support session could not be ended yet. End it, then try again.'
+        })
     })
 
     renderPicker()
@@ -202,7 +228,14 @@ describe('SupportTargetPickerOverlay', () => {
 
     cleanup()
     mountBridge({
-      listSupportTargets: vi.fn().mockResolvedValue({ ok: false, reason: 'error', code: 'broker-rejected', message: 'Electric Sheep request failed (500).' })
+      listSupportTargets: vi
+        .fn()
+        .mockResolvedValue({
+          ok: false,
+          reason: 'error',
+          code: 'broker-rejected',
+          message: 'Electric Sheep request failed (500).'
+        })
     })
     renderPicker()
     setSupportPickerOpen(true)

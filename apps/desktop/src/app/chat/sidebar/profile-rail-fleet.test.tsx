@@ -131,7 +131,8 @@ const connectionsRegistry = connectionsStore.$connectionsRegistry as ReturnType<
   typeof atom<DesktopConnectionsRegistry | null>
 >
 
-const { $activeGatewayProfile, $profileErrors, $profileOrder, $profiles, $profileScope } = await import('@/store/profile')
+const { $activeGatewayProfile, $profileErrors, $profileOrder, $profiles, $profileScope } =
+  await import('@/store/profile')
 const activeGatewayProfile = $activeGatewayProfile as ReturnType<typeof atom<string>>
 const profileErrors = $profileErrors as ReturnType<typeof atom<Array<{ profile: string; error: string }>>>
 const profiles = $profiles as ReturnType<typeof atom<Array<{ is_default: boolean; name: string }>>>

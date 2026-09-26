@@ -219,9 +219,7 @@ export function SupportTargetPickerOverlay() {
       break
 
     case 'forbidden':
-      body = (
-        <p role="alert">{state.message || copy.forbidden}</p>
-      )
+      body = <p role="alert">{state.message || copy.forbidden}</p>
 
       break
 

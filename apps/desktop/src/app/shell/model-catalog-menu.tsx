@@ -548,7 +548,8 @@ export function ModelCatalogMenu({
                   textValue=""
                 >
                   <span className="truncate">
-                    <HighlightMatches foldSeparators
+                    <HighlightMatches
+                      foldSeparators
                       query={search}
                       text={managedProviderDisplayValue(group.provider.slug, group.provider.name, managedEva)}
                     />

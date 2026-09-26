@@ -70,7 +70,9 @@ describe('app-root delegated support controls', () => {
     )
 
     expect(screen.getByText(state)).toBeTruthy()
-    expect(await screen.findByRole('region', { name: 'A previous support session still needs to be ended.' })).toBeTruthy()
+    expect(
+      await screen.findByRole('region', { name: 'A previous support session still needs to be ended.' })
+    ).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'End support session' }))
     await waitFor(() => expect(endSupportSession).toHaveBeenCalledTimes(1))
     await waitFor(() => expect(screen.queryByRole('region')).toBeNull())
@@ -88,7 +90,12 @@ describe('app-root delegated support controls', () => {
     Object.defineProperty(window, 'hermesDesktop', {
       configurable: true,
       value: {
-        eva: { status: async () => status, endSupportSession: async () => ({ ok: true }), switchSupportTarget, listSupportTargets }
+        eva: {
+          status: async () => status,
+          endSupportSession: async () => ({ ok: true }),
+          switchSupportTarget,
+          listSupportTargets
+        }
       }
     })
 

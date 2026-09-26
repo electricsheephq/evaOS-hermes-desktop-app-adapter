@@ -8777,8 +8777,9 @@ async function saveGatewayFile(payload: GatewayFileSavePayload = {}) {
     ensureRegistry: ensureRegistryBackend
   })
 
-  const requestPaths = gatewayFileRequestPaths(filePath, requestPath =>
-    gatewayFileRequestPath(connection, connectionId, routedProfile, requestPath),
+  const requestPaths = gatewayFileRequestPaths(
+    filePath,
+    requestPath => gatewayFileRequestPath(connection, connectionId, routedProfile, requestPath),
     payload.sessionId
   )
 
@@ -13790,7 +13791,9 @@ async function runHermesStart({ supervisorRecovery = false }: { supervisorRecove
         if (loginShellPath.applied) {
           rememberLog('[env] merged login-shell PATH into process.env for backend spawn')
         } else if (loginShellPath.reason && !['win32', 'unchanged'].includes(loginShellPath.reason)) {
-          rememberLog(`[env] login-shell PATH resolution unavailable (${loginShellPath.reason}); keeping inherited PATH`)
+          rememberLog(
+            `[env] login-shell PATH resolution unavailable (${loginShellPath.reason}); keeping inherited PATH`
+          )
         }
 
         const token = crypto.randomBytes(32).toString('base64url')
@@ -14151,7 +14154,9 @@ async function runHermesStart({ supervisorRecovery = false }: { supervisorRecove
         // boundary when present, so the renderer overlay can key on it rather than
         // re-classifying the message string. main owns classification; the renderer
         // only consumes the structured result (#85335).
-        const isCloudBackendDown = Boolean(error && typeof error === 'object' && (error as any).isCloudBackendDown === true)
+        const isCloudBackendDown = Boolean(
+          error && typeof error === 'object' && (error as any).isCloudBackendDown === true
+        )
 
         const statusCode = readStatusCode(error)
 

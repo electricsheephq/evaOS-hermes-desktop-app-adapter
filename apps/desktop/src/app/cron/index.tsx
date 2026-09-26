@@ -49,7 +49,14 @@ import { isManagedEvaosAgent, managedProviderDisplayValue } from '@/i18n/managed
 import { AlertTriangle } from '@/lib/icons'
 import { requestModelOptions } from '@/lib/model-options'
 import { asText } from '@/lib/text'
-import { $cronFocusJobId, $cronJobErrors, $cronJobs, cronJobIdentity, invalidateCronJobsRequests, setCronFocusJobId } from '@/store/cron'
+import {
+  $cronFocusJobId,
+  $cronJobErrors,
+  $cronJobs,
+  cronJobIdentity,
+  invalidateCronJobsRequests,
+  setCronFocusJobId
+} from '@/store/cron'
 import { $changeEventsAvailable, $cronChangeTick } from '@/store/live-sync'
 import { notify, notifyError } from '@/store/notifications'
 import {
@@ -579,6 +586,7 @@ export function CronView({ onClose, onOpenSession, setStatusbarItemGroup: _setSt
         deliver: values.deliver || DEFAULT_DELIVER,
         ...(values.model.trim() ? { model: values.model.trim(), provider: values.provider.trim() || undefined } : {})
       }
+
       const {
         value: created,
         refreshError,
@@ -653,10 +661,15 @@ export function CronView({ onClose, onOpenSession, setStatusbarItemGroup: _setSt
     <Panel closeLabel={c.close} onClose={onClose}>
       <PanelHeader subtitle={c.count(totalCount)} title={c.title} />
       {cronJobErrors.length > 0 && (
-        <div className="mx-4 mt-3 rounded-md bg-(--ui-warning-background) px-3 py-2 text-xs text-(--ui-warning-text)" role="status">
+        <div
+          className="mx-4 mt-3 rounded-md bg-(--ui-warning-background) px-3 py-2 text-xs text-(--ui-warning-text)"
+          role="status"
+        >
           {c.partialFailures(
             cronJobErrors.length,
-            cronJobErrors.map(error => error.status != null ? `${error.profile}: ${error.status}` : error.profile).join(', ')
+            cronJobErrors
+              .map(error => (error.status != null ? `${error.profile}: ${error.status}` : error.profile))
+              .join(', ')
           )}
         </div>
       )}
@@ -725,7 +738,9 @@ export function CronView({ onClose, onOpenSession, setStatusbarItemGroup: _setSt
 
           {selectedJob ? (
             <CronJobDetail
-              busy={busyJobTokens.has(cronJobIdentity(selectedJob)) || triggeringJobKeys.has(cronJobIdentity(selectedJob))}
+              busy={
+                busyJobTokens.has(cronJobIdentity(selectedJob)) || triggeringJobKeys.has(cronJobIdentity(selectedJob))
+              }
               c={c}
               job={selectedJob}
               onEdit={() => setEditor({ mode: 'edit', job: selectedJob })}

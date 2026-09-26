@@ -66,6 +66,7 @@ describe('GatewaySettings', () => {
   it('runs the active support-session card controls and live countdown', async () => {
     vi.useFakeTimers()
     vi.setSystemTime('2030-01-01T00:00:00.000Z')
+
     let current = {
       managed: true,
       productName: 'evaOS Agent',
@@ -78,12 +79,16 @@ describe('GatewaySettings', () => {
       supportExpiresAt: '2030-01-01T00:00:05.000Z',
       supportEndFailed: true
     } as EvaManagedStatus
+
     const status = vi.fn(async () => current)
     const switchSupportTarget = vi.fn(async () => current)
+
     const endSupportSession = vi.fn(async () => {
       current = { ...current, delegatedSupportActive: false }
+
       return { ok: true }
     })
+
     Object.defineProperty(window, 'hermesDesktop', {
       configurable: true,
       value: { eva: { status, switchSupportTarget, endSupportSession } }

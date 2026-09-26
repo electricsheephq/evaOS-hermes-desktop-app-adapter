@@ -71,9 +71,14 @@ export function commitCronJobsRequest(request: CronJobsRequest, jobs: CronJobLis
   // can publish after this authoritative snapshot.
   cronJobsRequestGeneration += 1
   const errors = jobs.errors ?? []
-  const failed = new Set(errors.filter(error => !('code' in error) || error.code !== 'support-profile-refused').map(error => error.profile))
+  const failed = new Set(
+    errors.filter(error => !('code' in error) || error.code !== 'support-profile-refused').map(error => error.profile)
+  )
   const incoming = new Set(jobs.map(cronJobIdentity))
-  $cronJobs.set([...jobs, ...$cronJobs.get().filter(job => job.profile && failed.has(job.profile) && !incoming.has(cronJobIdentity(job)))])
+  $cronJobs.set([
+    ...jobs,
+    ...$cronJobs.get().filter(job => job.profile && failed.has(job.profile) && !incoming.has(cronJobIdentity(job)))
+  ])
   $cronJobErrors.set(errors)
 
   return true
@@ -83,14 +88,18 @@ export function failCronJobsRequest(request: CronJobsRequest, error: unknown): b
   if (!isCronJobsRequestCurrent(request)) {
     return false
   }
+
   cronJobsRequestGeneration += 1
   const message = stripIpcErrorPrefix(error instanceof Error ? error.message : String(error))
   const status = Number(/^\s*(\d{3}):/.exec(message)?.[1])
-  const unauthorized = status === 401 || status === 403 || /^profile \S+ is not authorized for this session$/.test(message)
+  const unauthorized =
+    status === 401 || status === 403 || /^profile \S+ is not authorized for this session$/.test(message)
+
   if (unauthorized) {
     $cronJobs.set([])
     $cronJobErrors.set([])
   }
+
   return true
 }
 

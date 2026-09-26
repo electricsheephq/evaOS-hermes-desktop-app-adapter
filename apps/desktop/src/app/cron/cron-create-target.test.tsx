@@ -99,6 +99,7 @@ describe('CronView create target', () => {
 
   it('All-view blueprint create targets the active profile instead of the default alias', async () => {
     setShowAllProfiles(true)
+
     const blueprint = {
       appUrl: '',
       category: 'general',
@@ -109,16 +110,14 @@ describe('CronView create target', () => {
       tags: [],
       title: 'Daily brief'
     }
+
     renderCron([blueprint])
 
     fireEvent.click(await screen.findByText('Daily brief'))
     fireEvent.click(await screen.findByRole('button', { name: 'Schedule it' }))
 
     await waitFor(() =>
-      expect(instantiateAutomationBlueprint).toHaveBeenCalledWith(
-        { blueprint: 'daily-brief', values: {} },
-        'birch-ops'
-      )
+      expect(instantiateAutomationBlueprint).toHaveBeenCalledWith({ blueprint: 'daily-brief', values: {} }, 'birch-ops')
     )
   })
 })

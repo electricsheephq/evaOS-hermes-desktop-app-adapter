@@ -114,7 +114,8 @@ describe('useMessageStream agent-init error surfacing (#63078)', () => {
     act(() =>
       stream.handleEvent({
         payload: {
-          message: 'agent init failed: Codex token refresh failed: Your refresh token has expired. Please sign in again.'
+          message:
+            'agent init failed: Codex token refresh failed: Your refresh token has expired. Please sign in again.'
         },
         session_id: SID,
         type: 'error'

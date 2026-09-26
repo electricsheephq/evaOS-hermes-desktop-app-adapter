@@ -48,7 +48,9 @@ afterEach(() => {
 describe('refreshEvaManagedStatus', () => {
   it('does not rewrite an unchanged no-session status over two poll ticks', async () => {
     const current = status()
+
     const listener = vi.fn()
+
     ;(window as { hermesDesktop?: unknown }).hermesDesktop = { eva: { status: vi.fn(async () => current) } }
     const unlisten = $evaManagedStatus.listen(listener)
     const timer = window.setInterval(() => void refreshEvaManagedStatus(), 1_000)
@@ -67,14 +69,19 @@ describe('refreshEvaManagedStatus', () => {
       supportCustomerLabel: 'Fixture Customer',
       supportExpiresAt: new Date(Date.now() + 10_000).toISOString()
     })
+
     const labels: string[] = []
+
     ;(window as { hermesDesktop?: unknown }).hermesDesktop = { eva: { status: vi.fn(async () => current) } }
+
     const unlisten = $evaManagedStatus.listen(next => {
       const session = activeSupportSession(next)
+
       if (session) {
         labels.push(formatSupportRemaining(session.expiresAt))
       }
     })
+
     const timer = window.setInterval(() => void refreshEvaManagedStatus(), 1_000)
 
     await vi.advanceTimersByTimeAsync(2_100)
@@ -99,6 +106,7 @@ describe('profile-scope refresh trigger', () => {
     refreshActiveProfile.mockImplementationOnce(async () => void order.push('active'))
     refreshProfiles.mockImplementationOnce(async () => {
       order.push('profiles')
+
       return []
     })
     $evaManagedStatus.set(status({ profileScopeKey: 'alpha,beta|1|alpha' }))
@@ -114,9 +122,11 @@ describe('profile-scope refresh trigger', () => {
     refreshProfiles.mockClear()
 
     let release!: () => void
+
     const oldFlight = new Promise<void>(resolve => {
       release = resolve
     })
+
     refreshActiveProfile.mockImplementationOnce(async () => oldFlight)
 
     $evaManagedStatus.set(status({ profileScopeKey: 'gamma,delta|1|gamma' }))

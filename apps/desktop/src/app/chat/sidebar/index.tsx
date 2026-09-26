@@ -2041,17 +2041,17 @@ export function ChatSidebar({
               !worktreeGroupingActive &&
               showsAdvancedChrome &&
               (cronJobs.length > 0 || cronJobErrors.length > 0) && (
-              <SidebarCronJobsSection
-                errors={cronJobErrors}
-                jobs={cronJobs}
-                label={s.cronJobs}
-                onManageJob={onManageCronJob}
-                onOpenRun={onResumeSession}
-                onToggle={() => setSidebarCronOpen(!cronOpen)}
-                onTriggerJob={onTriggerCronJob}
-                open={cronOpen}
-              />
-            )}
+                <SidebarCronJobsSection
+                  errors={cronJobErrors}
+                  jobs={cronJobs}
+                  label={s.cronJobs}
+                  onManageJob={onManageCronJob}
+                  onOpenRun={onResumeSession}
+                  onToggle={() => setSidebarCronOpen(!cronOpen)}
+                  onTriggerJob={onTriggerCronJob}
+                  open={cronOpen}
+                />
+              )}
           </div>
         )}
 

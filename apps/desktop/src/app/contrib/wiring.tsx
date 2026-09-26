@@ -1166,11 +1166,7 @@ export function ContribWiring({ children }: { children: ReactNode }) {
     onToggleSelectedPin: toggleSelectedPin,
     onTranscribeAudio: transcribeVoiceAudio,
     onTriggerCronJob: job =>
-      triggerAndRefreshCronJobs(
-        job.id,
-        profileScope === ALL_PROFILES ? 'all' : profileScope,
-        job.profile
-      )
+      triggerAndRefreshCronJobs(job.id, profileScope === ALL_PROFILES ? 'all' : profileScope, job.profile)
         .then(() => undefined)
         .catch(() => undefined),
     getGateway: () => gatewayRef.current,

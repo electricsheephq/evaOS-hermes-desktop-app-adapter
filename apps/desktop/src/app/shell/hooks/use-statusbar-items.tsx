@@ -67,7 +67,12 @@ import {
 } from '@/store/session-states'
 import { $statusbarHiddenIds } from '@/store/statusbar-prefs'
 import { $subagentsBySession, activeSubagentCount, failedSubagentCount } from '@/store/subagents'
-import { $evaManagedStatus, activeSupportSession, formatSupportRemaining, runSupportSessionAction } from '@/store/support-picker'
+import {
+  $evaManagedStatus,
+  activeSupportSession,
+  formatSupportRemaining,
+  runSupportSessionAction
+} from '@/store/support-picker'
 import { $gatewayRestarting } from '@/store/system-actions'
 import {
   $backendUpdateApply,
@@ -778,7 +783,8 @@ export function supportSessionStatusbarItem(
       {
         id: 'support-session-switch',
         label: copy.switchTarget,
-        onSelect: () => void runSupportSessionAction('switch').catch(error => notifyError(error, copy.switchTargetFailed))
+        onSelect: () =>
+          void runSupportSessionAction('switch').catch(error => notifyError(error, copy.switchTargetFailed))
       },
       {
         className: 'text-destructive',
