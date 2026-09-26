@@ -49,6 +49,9 @@ def _handle_admitted_request(req: dict) -> dict | None:
     if contract is not None and isinstance(response, dict) and isinstance(response.get("result"), dict):
         _contracts.check_params_accepted(contract, params)
         _contracts.check_result(contract, response["result"])
+    # ---- BEGIN EVAOS-LEGACY-PROMPT-SHIM (rs35: delete; docs/r34-managed-delta.md) ----
+    response = _legacy_connector_reply(req, method, response)
+    # ---- END EVAOS-LEGACY-PROMPT-SHIM ----
     return response
 
 

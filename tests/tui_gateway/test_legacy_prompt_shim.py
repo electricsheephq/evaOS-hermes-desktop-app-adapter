@@ -479,12 +479,17 @@ def test_r13_es9_connector_shape_becomes_the_native_session_owner():
     assert server._legacy_connector_params("connectors.operation.status", dict(ES9_LIST)) == ES9_LIST
 
 
-def test_r13_es9_connectors_list_answers_exactly_as_the_native_client(owned_session):
-    """runtime shape → response: same reply as a native session owner; authority is still the transport."""
+def test_r13_es9_connectors_list_answers_as_the_native_client_plus_connection_status(owned_session):
+    """runtime shape → response: the native reply, each row also carrying es.9's camelCase ``connectionStatus``
+    (PR-2b); authority is still the transport."""
     owner, stranger = owned_session
     native = owner.call("connectors.list", NATIVE_LIST)
     assert native["result"]["available"] is True and native["result"]["connectors"][0]["connector"] == "gmail"
-    assert owner.call("connectors.list", ES9_LIST) == native
+    assert "connectionStatus" not in native["result"]["connectors"][0]  # native rows unchanged
+    es9 = owner.call("connectors.list", ES9_LIST)
+    assert es9["result"]["connectors"] == [{**row, "connectionStatus": row["connection_status"]}
+                                           for row in native["result"]["connectors"]]
+    assert {**es9, "result": {**es9["result"], "connectors": native["result"]["connectors"]}} == native
     refused = stranger.call("connectors.list", ES9_LIST)
     assert refused["error"]["code"] == 4001 and refused["error"]["data"]["reason"] == "NOT_OWNER"
 
@@ -503,3 +508,176 @@ def test_r13_kill_switch_rejects_the_es9_connector_shape_as_the_raw_tag(owned_se
     monkeypatch.setenv(ENV, "0")
     rejected = owner.call("connectors.list", ES9_LIST)
     assert rejected["error"]["code"] == 4000 and "session_id" in rejected["error"]["message"]
+
+
+# ── PR-2b: the replies es.9 reads (connector-flow.ts:178-214, connector-tools.ts:9,123) ─────────────────
+
+
+def _es9_connect_phase(reply, slug):
+    """es.9's connector card as the #369 review quotes it: ``results[]`` → the entry with ``connector === slug``;
+    ``active`` → refresh, ``initiated`` + ``connect_url`` → open the link, anything else or an RPC error → error."""
+    entry = next((r for r in (reply.get("result") or {}).get("results") or [] if r.get("connector") == slug), None)
+    if "error" in reply or entry is None:
+        return ("error",)
+    if entry.get("status") == "active":
+        return ("refresh",)
+    return ("open", entry["connect_url"]) if entry.get("status") == "initiated" and entry.get("connect_url") else ("error",)
+
+
+@pytest.fixture
+def connector_op(owned_session, monkeypatch):
+    """An open operation on the es.9 session: gmail waits on a valid link, notion is connected, slack failed."""
+    from tools.connectors import live
+    from tools.connectors.contract import Actor, TargetState
+    from tools.connectors.operation import ConnectionOperation, Target
+
+    mints = []
+
+    class Client:
+        def connections(self, names, *, reinitiate=False, **_):
+            mints.append(tuple(names))
+            return {"results": [{"connector": n, "status": "initiated", "connect_url": f"https://l/{n}/2",
+                                 "connection_id": f"acct-{n}"} for n in names]}
+
+    monkeypatch.setattr("tools.connectors.gateway.client.ConnectorClient", Client)
+    op = ConnectionOperation([Target(n, "connector", "connect") for n in ("gmail", "notion", "slack")], session_key=SID)
+    live.open(op)
+    for name in ("gmail", "notion", "slack"):
+        op.transition(name, TargetState.initiated, Actor.backend_watcher, connect_url=f"https://l/{name}/1")
+    op.transition("notion", TargetState.connected, Actor.backend_watcher, connection_id="acct-notion")
+    op.transition("slack", TargetState.failed, Actor.backend_watcher, detail="vendor: nope")
+    return owned_session, op, mints
+
+
+ES9_CONNECT = {"session_id": SID, "reconnect": False, "profile": "default"}
+
+
+def test_pr2b_es9_connect_on_a_still_valid_link_answers_the_results_es9_opens(connector_op):
+    """The common case (the tool just minted, the target waits): r34 answers 4002 LINK_STILL_VALID; es.9 gets the
+    r33 ``{results, summary}`` carrying the stored link instead, and nothing is re-minted."""
+    (owner, _), _, mints = connector_op
+    reply = owner.call("connectors.connect", {**ES9_CONNECT, "connectors": ["gmail"]})
+    assert reply["result"] == {"summary": {}, "results": [
+        {"connector": "gmail", "status": "initiated", "connect_url": "https://l/gmail/1"},
+        {"connector": "notion", "status": "active", "connect_url": "https://l/notion/1"},
+        # The spec's mapping (not connected → initiated); es.9 reads only the slug it asked for, and a dead link
+        # it asks for is re-minted first (next test).
+        {"connector": "slack", "status": "initiated", "connect_url": "https://l/slack/1"}]}
+    assert _es9_connect_phase(reply, "gmail") == ("open", "https://l/gmail/1")
+    assert _es9_connect_phase(reply, "notion") == ("refresh",)
+    assert mints == []
+
+
+def test_pr2b_es9_connect_reissue_answers_the_operation_view_as_results(connector_op):
+    (owner, _), op, mints = connector_op
+    reply = owner.call("connectors.connect", {**ES9_CONNECT, "connectors": ["slack"]})
+    assert mints == [("slack",)]
+    assert set(reply) == {"jsonrpc", "id", "result"} and set(reply["result"]) == {"results", "summary"}
+    assert _es9_connect_phase(reply, "slack") == ("open", "https://l/slack/2")
+    assert [set(r) for r in reply["result"]["results"]] == [{"connector", "status", "connect_url"}] * 3
+
+
+def test_pr2b_native_connect_and_list_keep_the_r34_shapes(connector_op):
+    """A native (``owner``) request is never reshaped: 4002 stays an error, the operation view keeps ``targets``."""
+    (owner, _), op, _ = connector_op
+    refused = owner.call("connectors.connect", {**NATIVE_LIST, "connectors": ["gmail"]})
+    assert refused["error"] == {"code": 4002, "message": "Reopen the stored link.", "data": {"reason": "LINK_STILL_VALID"}}
+    view = owner.call("connectors.connect", {**NATIVE_LIST, "connectors": ["slack"]})
+    assert "results" not in view["result"] and view["result"]["op_id"] == op.op_id
+    assert {t["name"]: t["state"] for t in view["result"]["targets"]} == {
+        "gmail": "initiated", "notion": "connected", "slack": "initiated"}
+    assert "connectionStatus" not in owner.call("connectors.list", NATIVE_LIST)["result"]["connectors"][0]
+
+
+def test_pr2b_es9_connect_keeps_4004_authority_and_the_kill_switch(connector_op, monkeypatch):
+    from tools.connectors import live
+
+    (owner, stranger), op, mints = connector_op
+    foreign = stranger.call("connectors.connect", {**ES9_CONNECT, "connectors": ["gmail"]})
+    assert foreign["error"]["code"] == 4001 and "result" not in foreign  # another transport never sees the links
+    monkeypatch.setenv(ENV, "0")
+    assert owner.call("connectors.connect", {**ES9_CONNECT, "connectors": ["gmail"]})["error"]["code"] == 4000
+    monkeypatch.setenv(ENV, "1")
+    live.close(op)
+    closed = owner.call("connectors.connect", {**ES9_CONNECT, "connectors": ["gmail"]})
+    assert closed["error"]["data"]["reason"] == "UNKNOWN_OPERATION" and _es9_connect_phase(closed, "gmail") == ("error",)
+    assert mints == []
+
+
+def test_pr2b_es9_list_rows_carry_connection_status_for_grant_again(owned_session, monkeypatch):
+    owner, _ = owned_session
+    rows = [{"connector": "gmail", "enabled": True, "connected": False, "connection_status": "expired",
+             "status_reason": "token revoked", "gateway_disabled_tools": []}]
+    monkeypatch.setattr("model_tools.handle_function_call", lambda name, args, **kw: json.dumps({"connectors": rows}))
+    row = owner.call("connectors.list", ES9_LIST)["result"]["connectors"][0]
+    assert row["connectionStatus"] == row["connection_status"] == "expired"
+    monkeypatch.setenv(ENV, "0")
+    assert owner.call("connectors.list", NATIVE_LIST)["result"]["connectors"][0].get("connectionStatus") is None
+
+
+def test_pr2b_es9_create_marks_the_session_so_a_detached_sudo_is_replayed(monkeypatch):
+    """Review mL-SK: es.9 creates a session and detaches before the first prompt; a sudo raised then must enter the
+    replay ring as ``sudo.request`` so the reconnecting es.9 (``session.events.since``) shows and answers it."""
+    monkeypatch.setattr(server, "_schedule_agent_build", lambda _sid: None)
+    monkeypatch.setattr(server, "_schedule_session_cap_enforcement", lambda: None)
+    es9 = _Peer()
+    sid = _rpc(es9, "session.create", source="desktop", desktop_ui_protocol=3)["result"]["session_id"]
+    try:
+        session = server._sessions[sid]
+        assert session.get("_lp_seen") is True
+        server._detach_session_transport(session, es9)
+        thread, box = _bg(lambda: server._ask("sudo", sid, {}, timeout=5))
+        req = _open_request(sid)
+        back = _Peer()
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            replay = _rpc(back, "session.events.since", session_id=sid, last_seen=0)["result"]["events"]
+            twins = [e["payload"] for e in replay if e["type"] == "sudo.request"]
+            if twins:
+                break
+            time.sleep(0.01)
+        assert twins == [{"request_id": req.id}]
+        assert _rpc(back, "sudo.respond", request_id=req.id, password="pw")["result"] == {"status": "ok"}
+        thread.join(timeout=5)
+        assert box["r"] == "pw"
+    finally:
+        server._close_session_by_id(sid, end_reason="test_cleanup")
+
+
+def test_pr2b_session_create_does_not_mark_an_advertised_client_or_with_the_kill_switch(monkeypatch):
+    monkeypatch.setattr(server, "_schedule_agent_build", lambda _sid: None)
+    monkeypatch.setattr(server, "_schedule_session_cap_enforcement", lambda: None)
+    for peer, env in ((_Peer(advertised=True), "1"), (_Peer(), "0")):
+        monkeypatch.setenv(ENV, env)
+        sid = _rpc(peer, "session.create", source="desktop", desktop_ui_protocol=3)["result"]["session_id"]
+        try:
+            assert "_lp_seen" not in server._sessions[sid]
+        finally:
+            server._close_session_by_id(sid, end_reason="test_cleanup")
+
+
+def test_pr2b_legacy_respond_never_settles_another_open_kind(monkeypatch):
+    """Review thread on #369: sudo and secret open together; ``secret.respond`` naming the sudo's id is the legacy
+    4009 and settles nothing; each card is then answered by its own kind."""
+    old = _Peer()
+    _session(monkeypatch, "ws-old", old)
+    sudo_thread, sudo_box = _bg(lambda: server._ask("sudo", "ws-old", {}, timeout=5))
+    sudo = _open_request("ws-old")
+    secret_thread, secret_box = _bg(lambda: server._ask("secret", "ws-old", {"env_var": "K", "prompt": "p"}, timeout=5))
+    deadline = time.monotonic() + 5
+    while len(server_requests.open_requests("ws-old")) < 2 and time.monotonic() < deadline:
+        time.sleep(0.01)
+    secret = next(r for r in server_requests._open.values() if r.method == "secret")
+
+    crossed = _rpc(old, "secret.respond", request_id=sudo.id, value="leaked")
+    assert crossed["error"]["code"] == 4009 and "no pending value request" in crossed["error"]["message"]
+    assert _rpc(old, "sudo.respond", request_id=secret.id, password="leaked")["error"]["code"] == 4009
+    assert {r["id"] for r in server_requests.open_requests("ws-old")} == {sudo.id, secret.id}
+
+    assert _rpc(old, "sudo.respond", request_id=sudo.id, password="pw")["result"] == {"status": "ok"}
+    assert _rpc(old, "secret.respond", request_id=secret.id, value="v")["result"] == {"status": "ok"}
+    sudo_thread.join(timeout=5)
+    secret_thread.join(timeout=5)
+    assert (sudo_box["r"], secret_box["r"]) == ("pw", "v")
+    # A settled or unknown id still answers ``expired`` (upstream request.answer), never 4009.
+    assert _rpc(old, "sudo.respond", request_id=sudo.id, password="late")["result"] == {"status": "expired"}
