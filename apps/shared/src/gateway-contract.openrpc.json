@@ -16250,6 +16250,90 @@
         "title": "LeaseHolder",
         "type": "string"
       },
+      "LegacyPendingClarify": {
+        "additionalProperties": false,
+        "description": "``legacy_prompt_shim._legacy_prompt_snapshot``: the open clarify in the pre-es.10 ``clarify.request``\nshape (``request_id`` = the server request id); a batch carries the answers locked so far.",
+        "properties": {
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          },
+          "question": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Question"
+          },
+          "choices": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Choices"
+          },
+          "multi_select": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Multi Select"
+          },
+          "questions": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/ClarifyQuestion"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Questions"
+          },
+          "answers": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Answers"
+          }
+        },
+        "required": [
+          "request_id"
+        ],
+        "title": "LegacyPendingClarify",
+        "type": "object"
+      },
       "LegacyPluginRow": {
         "additionalProperties": false,
         "properties": {
@@ -27524,6 +27608,17 @@
             "default": null,
             "title": "Open Requests"
           },
+          "pending_clarify": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LegacyPendingClarify"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
           "pending_connection": {
             "anyOf": [
               {
@@ -30408,6 +30503,17 @@
             ],
             "default": null,
             "title": "Open Requests"
+          },
+          "pending_clarify": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LegacyPendingClarify"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           },
           "pending_connection": {
             "anyOf": [

@@ -649,6 +649,19 @@ def write_json(obj: dict) -> bool:
     return (current_transport() or _stdio_transport).write(obj)
 
 
+# ---- BEGIN EVAOS-LEGACY-PROMPT-SHIM (rs35: delete; docs/r34-managed-delta.md) ----
+# Every writer resolves ``write_json`` from this namespace at call time (``_emit``, the server_requests sinks,
+# split modules, the compute-host relay), so the legacy twin follows each real frame, relayed ones included.
+_upstream_write_json = write_json
+
+
+def write_json(obj: dict) -> bool:
+    ok = _upstream_write_json(obj)
+    _lp_after_write(obj)
+    return ok
+# ---- END EVAOS-LEGACY-PROMPT-SHIM ----
+
+
 def _event_frame(event: str, sid: str, payload: dict | None = None) -> dict:
     _contracts.check_payload(event, payload)
     params: dict = {"type": event, "session_id": sid, **({"payload": payload} if payload is not None else {})}
@@ -883,6 +896,10 @@ def _normalize_request(req: Any) -> tuple[Any, str, dict] | dict:
     params = req.get("params", {})
     if params is not None and not isinstance(params, dict):
         return _err(rid, -32602, "invalid params: expected an object")
+    # ---- BEGIN EVAOS-LEGACY-PROMPT-SHIM (rs35: delete; docs/r34-managed-delta.md) ----
+    if params:
+        params = _legacy_connector_params(method, params)
+    # ---- END EVAOS-LEGACY-PROMPT-SHIM ----
     return rid, method, params if params is not None else {}
 
 
@@ -3271,6 +3288,9 @@ def _live_session_payload(
     for key, value in (("inflight", inflight), ("queued", queued),
                        ("pending_approval", _pending_approval_request_payload(str(session.get("session_key") or ""))),
                        ("open_requests", _open_requests(sid)),
+                       # ---- BEGIN EVAOS-LEGACY-PROMPT-SHIM (rs35: delete; docs/r34-managed-delta.md) ----
+                       ("pending_clarify", _legacy_prompt_snapshot(sid, session)),
+                       # ---- END EVAOS-LEGACY-PROMPT-SHIM ----
                        ("pending_connection", _pending_connection_request_payload(sid))):
         if value:
             payload[key] = value
@@ -3755,3 +3775,8 @@ for _m in (
     _methods_connectors_account, _methods_display, _methods_display_watch, _methods_onboarding):
     _m.register(sys.modules[__name__])
 del _m
+# ---- BEGIN EVAOS-LEGACY-PROMPT-SHIM (rs35: delete; docs/r34-managed-delta.md) ----
+from . import legacy_prompt_shim as _legacy_prompt_shim  # noqa: E402
+
+_legacy_prompt_shim.register(sys.modules[__name__])
+# ---- END EVAOS-LEGACY-PROMPT-SHIM ----

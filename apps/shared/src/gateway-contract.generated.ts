@@ -2863,6 +2863,7 @@ export interface SessionResumeResult {
   queued?: QueuedPrompt | null
   pending_approval?: PendingApproval | null
   open_requests?: OpenRequestEntry[] | null
+  pending_clarify?: LegacyPendingClarify | null
   pending_connection?: ConnectionRequestPayload | null
   todo_state?: TodoState | null
   auto_continue?: AutoContinue | null
@@ -2889,6 +2890,21 @@ export interface OpenRequestEntry {
   id: string
   method: string
   params: Record<string, unknown>
+}
+/** ``legacy_prompt_shim._legacy_prompt_snapshot``: the open clarify in the pre-es.10 ``clarify.request`` shape (``request_id`` = the server request id); a batch carries the answers locked so far. */
+export interface LegacyPendingClarify {
+  request_id: string
+  question?: string | null
+  choices?: string[] | null
+  multi_select?: boolean | null
+  questions?: ClarifyQuestion[] | null
+  answers?: Record<string, string> | null
+}
+export interface ClarifyQuestion {
+  qid: string
+  question: string
+  choices?: string[] | null
+  multi_select?: boolean
 }
 /** ``ConnectionOperation.request_payload``: opens the card; also the ``pending_connection`` resume snapshot so a client that missed the event restores the card with the server's deadline. */
 export interface ConnectionRequestPayload {
@@ -2934,6 +2950,7 @@ export interface SessionActivateResult {
   queued?: QueuedPrompt | null
   pending_approval?: PendingApproval | null
   open_requests?: OpenRequestEntry[] | null
+  pending_clarify?: LegacyPendingClarify | null
   pending_connection?: ConnectionRequestPayload | null
   todo_state?: TodoState | null
   auto_continue?: AutoContinue | null
@@ -4145,12 +4162,6 @@ export interface ClarifyRequestParams {
   multi_select?: boolean | null
   questions?: ClarifyQuestion[] | null
   answers?: Record<string, string> | null
-}
-export interface ClarifyQuestion {
-  qid: string
-  question: string
-  choices?: string[] | null
-  multi_select?: boolean
 }
 /** Single: ``{answer}`` ('' = skip). Batch: ``{answers}`` for the whole set (early locks go through the ``clarify.lock`` RPC); a response with neither is cancel-all. */
 export interface ClarifyResult {

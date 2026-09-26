@@ -17,18 +17,10 @@ from tui_gateway.contracts import registry as contracts
 
 _SHAPES = json.loads((Path(__file__).with_name("es9_rpc_shapes.json")).read_text(encoding="utf-8"))["shapes"]
 
-# Known gap (r34 stop-and-report): upstream moved connectors.list/connect from ``{session_id}`` to a
-# required ``owner`` object; accepting es.9's legacy shape needs a structural contract change, so it
-# is left to the legacy-client shim follow-up rather than declared here.
-_LEGACY_CONNECTOR_SHAPE = {"connectors.list", "connectors.connect"}
-
 
 def _cases():
     for shape in _SHAPES:
-        marks = ()
-        if shape["method"] in _LEGACY_CONNECTOR_SHAPE and "owner" not in shape["params"]:
-            marks = (pytest.mark.xfail(strict=True, reason="es.9 legacy {session_id} connector shape"),)
-        yield pytest.param(shape, id=f"{shape['method']}@{shape['site']}", marks=marks)
+        yield pytest.param(shape, id=f"{shape['method']}@{shape['site']}")
 
 
 @pytest.mark.parametrize("shape", list(_cases()))
@@ -37,7 +29,13 @@ def test_es9_request_shape_is_accepted_by_the_merged_contracts(shape):
     assert method in server._methods, f"{method} is not registered on the merged backend"
     contract = contracts.METHODS.get(method)
     assert contract is not None, f"{method} has no wire contract"
-    _, problem = contracts.validate_params(contract, dict(shape["params"]))
+    params = dict(shape["params"])
+    # ---- BEGIN EVAOS-LEGACY-PROMPT-SHIM (rs35: delete; docs/r34-managed-delta.md) ----
+    # connectors.list/connect: upstream moved ``{session_id}`` to a required ``owner`` object; the dispatcher's
+    # request normalization carries es.9's shape over (tests/tui_gateway/test_legacy_prompt_shim.py, R13).
+    _, _, params = server._normalize_request({"id": 1, "method": method, "params": params})
+    # ---- END EVAOS-LEGACY-PROMPT-SHIM ----
+    _, problem = contracts.validate_params(contract, params)
     assert problem is None, problem
 
 
