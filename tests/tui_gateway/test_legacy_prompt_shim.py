@@ -681,3 +681,77 @@ def test_pr2b_legacy_respond_never_settles_another_open_kind(monkeypatch):
     assert (sudo_box["r"], secret_box["r"]) == ("pw", "v")
     # A settled or unknown id still answers ``expired`` (upstream request.answer), never 4009.
     assert _rpc(old, "sudo.respond", request_id=sudo.id, password="late")["result"] == {"status": "expired"}
+
+
+def _after_connect_dispatch(monkeypatch, then):
+    """Run *then* right after the real ``connectors.connect`` handler answered, before the es.9 reply is shaped: the
+    tool thread settling and closing the operation (``tools/connectors/run.py``) while the request is in flight."""
+    real = server._methods["connectors.connect"]
+
+    def handler(rid, params):
+        response = real(rid, params)
+        then()
+        return response
+
+    monkeypatch.setitem(server._methods, "connectors.connect", handler)
+
+
+ES9_STILL_VALID = {"summary": {}, "results": [
+    {"connector": "gmail", "status": "initiated", "connect_url": "https://l/gmail/1"},
+    {"connector": "notion", "status": "active", "connect_url": "https://l/notion/1"},
+    {"connector": "slack", "status": "initiated", "connect_url": "https://l/slack/1"}]}
+
+
+def test_pr2b_es9_4002_is_answered_from_the_pre_dispatch_sample_when_the_operation_settles(connector_op, monkeypatch):
+    """Review round 2: the dispatch answered 4002 LINK_STILL_VALID, then the operation settled and closed before the
+    reply was shaped. es.9 still gets the still-valid link (sampled before dispatch), not the raw 4002."""
+    from tools.connectors import live
+    from tools.connectors.contract import SettleReason
+
+    (owner, _), op, mints = connector_op
+    _after_connect_dispatch(monkeypatch, lambda: (op.settle(SettleReason.interrupt), live.close(op)))
+    reply = owner.call("connectors.connect", {**ES9_CONNECT, "connectors": ["gmail"]})
+    assert op.settled and live.current(SID) is None
+    assert reply["result"] == ES9_STILL_VALID
+    assert _es9_connect_phase(reply, "gmail") == ("open", "https://l/gmail/1")
+    assert mints == []
+
+
+def test_pr2b_es9_4002_never_samples_a_successor_operation(connector_op, monkeypatch):
+    """A successor operation opened in that window (another tool call on the same session) is never read: the reply
+    carries the links of the operation the dispatch refused on."""
+    from tools.connectors import live
+    from tools.connectors.contract import Actor, SettleReason, TargetState
+    from tools.connectors.operation import ConnectionOperation, Target
+
+    (owner, _), op, mints = connector_op
+    successor = ConnectionOperation([Target("gmail", "connector", "connect")], session_key=SID)
+
+    def replace():
+        op.settle(SettleReason.all_resolved)
+        live.close(op)
+        live.open(successor)
+        successor.transition("gmail", TargetState.initiated, Actor.backend_watcher, connect_url="https://l/gmail/next")
+
+    _after_connect_dispatch(monkeypatch, replace)
+    reply = owner.call("connectors.connect", {**ES9_CONNECT, "connectors": ["gmail"]})
+    assert live.current(SID) is successor
+    assert reply["result"] == ES9_STILL_VALID
+    assert "https://l/gmail/next" not in json.dumps(reply)
+    assert mints == []
+
+
+def test_pr2b_legacy_clarify_respond_on_another_open_kind_is_unchanged_from_base(monkeypatch):
+    """Review round 2: the cross-kind check guards sudo/secret/tour/vault only. A legacy ``clarify.respond`` naming an
+    id open as another kind behaves exactly as on base 840c2981: with a question_id it forwards to ``clarify.lock``
+    (``expired``, nothing settled); without one (es.9's cancel-all) it forwards to ``request.answer``."""
+    old = _Peer()
+    _session(monkeypatch, "ws-old", old)
+    thread, box = _bg(lambda: server._ask("sudo", "ws-old", {}, timeout=5))
+    sudo = _open_request("ws-old")
+    assert _rpc(old, "clarify.respond", request_id=sudo.id, question_id="q0", answer="x")["result"] == {
+        "status": "expired"}
+    assert [r["id"] for r in server_requests.open_requests("ws-old")] == [sudo.id]
+    assert _rpc(old, "clarify.respond", request_id=sudo.id, answer="x")["result"] == {"status": "ok"}
+    thread.join(timeout=5)
+    assert box["r"] == "" and not server_requests.open_requests("ws-old")

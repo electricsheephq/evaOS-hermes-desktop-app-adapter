@@ -116,7 +116,8 @@ def _legacy_prompt_respond(rid, method: str, params: dict) -> dict | None:
         return None
     srq_method, kind = entry
     request_id = str(params.get("request_id") or "")
-    if not request_id or _lp_open_method(request_id) not in (None, srq_method):  # never settle another kind
+    # Never settle another open kind; the clarify path (cancel-all included) stays exactly as before PR-2b.
+    if not request_id or (srq_method != "clarify" and _lp_open_method(request_id) not in (None, srq_method)):
         return _err(rid, 4009, f"no pending {kind[1]} request")  # es.9 matches this text
     raw = params.get(kind[1], "")
     answer = raw if isinstance(raw, str) else json.dumps(raw, ensure_ascii=False)
@@ -162,7 +163,21 @@ def _legacy_connector_params(method: str, params: dict) -> dict:
     return out
 
 
-def _legacy_connector_reply(req: dict, method: str, response):
+def _legacy_connector_snapshot(req: dict, method: str) -> list | None:
+    """``_handle_admitted_request`` hook, BEFORE dispatch: an es.9-shaped ``connectors.connect`` samples the open
+    operation's targets of the transport's own session. A 4002 LINK_STILL_VALID is answered from this sample only,
+    so an operation that settles, closes or is succeeded while the request runs is never read after it."""
+    raw = req.get("params")
+    if method != "connectors.connect" or not isinstance(raw, dict) or _legacy_connector_params(method, raw) is raw:
+        return None  # native (or kill switch off): nothing sampled
+    from tools.connectors import live
+    from tui_gateway.connector_payload import connector_ui_payload
+    _, session = _current_session_steer_authority(raw["session_id"])  # the transport's own session only
+    operation = session and live.current(session["session_key"], profile_home=session.get("profile_home"))
+    return connector_ui_payload(operation.snapshot())["targets"] if operation else None
+
+
+def _legacy_connector_reply(req: dict, method: str, response, link_targets: list | None = None):
     """``_handle_admitted_request`` hook, after ``check_result``: the reply to an es.9-shaped connector request."""
     raw = req.get("params")
     if not isinstance(raw, dict) or _legacy_connector_params(method, raw) is raw or not isinstance(response, dict):
@@ -177,11 +192,7 @@ def _legacy_connector_reply(req: dict, method: str, response):
     targets = result.get("targets") if isinstance(result, dict) else None
     error = response.get("error") or {}
     if targets is None and error.get("code") == 4002 and (error.get("data") or {}).get("reason") == "LINK_STILL_VALID":
-        from tools.connectors import live
-        from tui_gateway.connector_payload import connector_ui_payload
-        _, session = _current_session_steer_authority(raw["session_id"])  # the transport's own session only
-        operation = session and live.current(session["session_key"], profile_home=session.get("profile_home"))
-        targets = connector_ui_payload(operation.snapshot())["targets"] if operation else None
+        targets = link_targets  # the pre-dispatch sample (``_legacy_connector_snapshot``), never a re-read
     if not isinstance(targets, list):
         return response  # 4004 and every other error stay errors
     results = [{"connector": t.get("name"), "status": "active" if t.get("state") == "connected" else "initiated",
