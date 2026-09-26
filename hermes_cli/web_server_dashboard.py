@@ -8,6 +8,8 @@ import os
 import sys
 import threading
 import time
+from types import SimpleNamespace
+
 import yaml
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
@@ -548,9 +550,9 @@ def _dashboard_plugin_entry(data: Dict[str, Any], name: str, dashboard_dir: Path
 def _discover_dashboard_plugins() -> list:
     """Scan ``<plugins root>/*/dashboard/manifest.json`` across user, bundled and (opt-in)
     project plugin sources — same three sources as ``hermes_cli.plugins``."""
-    plugins = []
-    seen_names: set = set()
-    for plugins_root, source in _dashboard_plugin_search_dirs():
+    candidates = []
+    search_dirs = _dashboard_plugin_search_dirs()
+    for plugins_root, source in search_dirs:
         try:
             if not plugins_root.is_dir():
                 continue
@@ -566,16 +568,57 @@ def _discover_dashboard_plugins() -> list:
                     continue
                 data = json.loads(manifest_file.read_text(encoding="utf-8"))
                 name = data.get("name", child.name)
-                if name in seen_names:
-                    continue
-                seen_names.add(name)
-                plugins.append(_dashboard_plugin_entry(data, name, child / "dashboard", source))
+                candidates.append(SimpleNamespace(
+                    data=data, name=name, path=child, source=source,
+                ))
             except OSError as exc:
                 _log.warning("Skipping unreadable dashboard plugin %s: %s", manifest_file, exc)
                 continue
             except Exception as exc:
                 _log.warning("Bad dashboard plugin manifest %s: %s", manifest_file, exc)
                 continue
+
+    from hermes_cli.managed_scope import filter_managed_plugin_candidates
+    from hermes_cli.plugins_discovery import (
+        collect_directory_manifests, discover_entrypoint_manifests, scan_directory,
+    )
+
+    # Reserve managed identities against the core loader's candidates too, so an operator plugin
+    # WITHOUT a dashboard still displaces a same-named writable dashboard shadow. ``user`` manifests
+    # come from this scan's process-home roots (managed hosts install root-owned symlinks there) and
+    # ``_operator_owned`` decides whether they reserve; the core loader's ``user`` scan follows the
+    # per-request home, which is outside the cache key, so it is not used.
+    dashboard_ids = {id(candidate) for candidate in candidates}
+    reservations = [
+        *(manifest for manifest in collect_directory_manifests() if manifest.source != "user"),
+        *(manifest for root, source in search_dirs if source == "user"
+          for manifest in scan_directory(root, "user")),
+        *discover_entrypoint_manifests(),
+    ]
+    candidates = [
+        candidate for candidate in filter_managed_plugin_candidates(
+            [*candidates, *reservations],
+            # The shared filter claims this identity AND ``candidate.name`` (the manifest name).
+            lambda c: c.path.name if id(c) in dashboard_ids else (getattr(c, "key", "") or c.name),
+        )
+        if id(candidate) in dashboard_ids
+    ]
+    plugins = []
+    seen_names: set = set()
+    for candidate in candidates:
+        manifest_file = candidate.path / "dashboard" / "manifest.json"
+        try:
+            if candidate.name in seen_names:
+                continue
+            seen_names.add(candidate.name)
+            plugins.append(_dashboard_plugin_entry(
+                candidate.data,
+                candidate.name,
+                candidate.path / "dashboard",
+                candidate.source,
+            ))
+        except Exception as exc:
+            _log.warning("Bad dashboard plugin manifest %s: %s", manifest_file, exc)
     return plugins
 
 

@@ -230,7 +230,7 @@ class TestMountApiRoutesRefusesUntrusted:
 
     def test_project_source_api_is_not_imported(self, tmp_path):
         plugin = self._payload_plugin(tmp_path, source="project")
-        web_server._dashboard_plugins_cache = [plugin]
+        web_server._dashboard_plugins_cache = {web_server._dashboard_plugins_cache_key(): [plugin]}
         with patch("importlib.util.spec_from_file_location") as spec:
             _web_server_dashboard._mount_plugin_api_routes()
         assert spec.call_count == 0, (
@@ -245,7 +245,7 @@ class TestMountApiRoutesRefusesUntrusted:
         file outside the dashboard dir."""
         plugin = self._payload_plugin(tmp_path, source="user",
                                        api_file="../../../tmp/evil.py")
-        web_server._dashboard_plugins_cache = [plugin]
+        web_server._dashboard_plugins_cache = {web_server._dashboard_plugins_cache_key(): [plugin]}
         with patch("importlib.util.spec_from_file_location") as spec:
             _web_server_dashboard._mount_plugin_api_routes()
         assert spec.call_count == 0
