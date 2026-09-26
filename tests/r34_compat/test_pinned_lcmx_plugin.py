@@ -2,8 +2,9 @@
 
 The plugin is materialized from the pinned Git object at test time (never vendored). It must load as
 ``hermes-lcm-x`` and register the ``lcm-x`` context engine from a config that names only the new
-identity; the retired ``hermes-lcm`` plugin name is required by no r34 code path. Positive control:
-the same load test pointed at the r31 source (``--r34-lcmx-source`` / ``--r34-lcmx-ref`` =
+identity. A profile that still enables only the retired ``hermes-lcm`` name loads without error, gets
+no ``lcm-x`` engine, and its agent falls back to the built-in compressor. Positive control: the same
+load test pointed at the r31 source (``--r34-lcmx-source`` / ``--r34-lcmx-ref`` =
 stephenschoettler/hermes-lcm 49e99a27) fails, because that tree is ``hermes-lcm`` / engine ``lcm``.
 """
 
@@ -11,14 +12,14 @@ from __future__ import annotations
 
 import io
 import json
-import os
 from pathlib import Path
-import re
 import subprocess
 import tarfile
 
 import pytest
 
+from agent import agent_init
+from hermes_cli import plugins as hermes_plugins
 from hermes_cli.plugins import PluginManager
 from tests.r34_compat import _pair as pair
 
@@ -122,33 +123,37 @@ def test_pinned_lcmx_loads_as_hermes_lcm_x_and_serves_the_lcm_x_engine(
     restarted.shutdown()
 
 
-# First-party runtime sources and CI definitions: a hit here would make the retired name load-bearing.
-_RUNTIME_SKIP = {".git", ".venv", "venv", "node_modules", "__pycache__", "tests", "website", "docs",
-                 "skills", "optional-skills", "apps", "evals", "build", ".worktrees"}
-_RETIRED = re.compile(rf"{re.escape(pair.RETIRED_PLUGIN)}(?![-\w])")
+@pytest.mark.parametrize("engine", ["lcm", pair.LCMX_ENGINE])
+def test_a_profile_enabling_only_the_retired_name_falls_back_to_the_built_in_compressor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest, engine: str
+) -> None:
+    """The pinned plugin is installed, but the config names only ``hermes-lcm`` (no such plugin in the
+    pinned source) with either engine name: discovery loads cleanly, nothing registers ``lcm-x``, and
+    the agent's context-engine selection resolves to the built-in compressor."""
+    source, ref = pair.lcmx_source(request.config)
+    hermes_home = tmp_path / "hermes-home"
+    (hermes_home / "plugins").mkdir(parents=True)
+    _materialize(source, ref, hermes_home / "plugins" / pair.LCMX_PLUGIN)
+    (hermes_home / "config.yaml").write_text(
+        "plugins:\n"
+        f"  enabled:\n    - {pair.RETIRED_PLUGIN}\n"
+        "  allow_deprecated_imports: false\n"
+        "context:\n"
+        f"  engine: {engine}\n",
+        encoding="utf-8",
+    )
 
-
-def _retired_name_hits(root: Path) -> list[str]:
-    hits = []
-    for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [d for d in dirnames if not (Path(dirpath) == root and d in _RUNTIME_SKIP)
-                       and d not in {".git", ".venv", "node_modules", "__pycache__"}]
-        for name in filenames:
-            path = Path(dirpath) / name
-            if path.suffix not in {".py", ".yml", ".yaml"}:
-                continue
-            for number, line in enumerate(path.read_text(encoding="utf-8", errors="ignore").splitlines(), 1):
-                if _RETIRED.search(line):
-                    hits.append(f"{path.relative_to(root)}:{number}")
-    return hits
-
-
-def test_no_r34_code_path_requires_the_retired_plugin_name(tmp_path: Path) -> None:
-    # Positive control: the scanner finds the name where it exists, and ignores the new identity.
-    control = tmp_path / "control"
-    (control / "pkg").mkdir(parents=True)
-    (control / "pkg" / "a.py").write_text(f'ENABLED = ["{pair.RETIRED_PLUGIN}"]\n', encoding="utf-8")
-    (control / "pkg" / "b.py").write_text(f'ENABLED = ["{pair.LCMX_PLUGIN}"]\n', encoding="utf-8")
-    assert _retired_name_hits(control) == ["pkg/a.py:1"]
-
-    assert _retired_name_hits(pair.CURRENT_ROOT) == []
+    hermes_plugins._reset_plugin_managers_for_tests()
+    try:
+        manager = _new_manager(monkeypatch, hermes_home)
+        monkeypatch.setattr(hermes_plugins, "_plugin_manager", manager)  # the agent path's manager
+        assert hermes_plugins.get_plugin_manager() is manager
+        assert pair.RETIRED_PLUGIN not in manager._plugins
+        assert all(loaded.error is None for loaded in manager._plugins.values() if loaded.enabled)
+        installed = manager._plugins[pair.LCMX_PLUGIN]  # discovered, skipped: not named in the config
+        assert installed.enabled is False and installed.error.startswith("not enabled in config"), installed
+        assert manager._context_engine is None
+        assert hermes_plugins.get_plugin_context_engine() is None
+        assert agent_init._select_context_engine({"context": {"engine": engine}}) is None  # built-in
+    finally:
+        hermes_plugins._reset_plugin_managers_for_tests()

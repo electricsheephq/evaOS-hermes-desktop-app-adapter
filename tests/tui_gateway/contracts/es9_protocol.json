@@ -1,0 +1,15 @@
+{
+ "_about": "The session-bind protocol marker evaOS Desktop es.9 stamps on every session.create / session.resume / session.activate (apps/desktop/src/api/client.ts withDesktopUiProtocol). Recorded once from both refs below, which agree; tests consume this data and never read the TypeScript. Re-record it when the predecessor pin or the es.9 tag moves.",
+ "desktop_ui_protocol": 3,
+ "methods": [
+  "session.create",
+  "session.resume",
+  "session.activate"
+ ],
+ "recorded_from": {
+  "desktop_tag": "v2026.9.22-es.9",
+  "desktop_commit": "44b9b8bff386f8f076b8f761be1dcb894cd7f2ed",
+  "predecessor_runtime_commit": "2d10969e7d6fab477c4aa4f7e4c9e4df1f524e9a",
+  "file": "apps/desktop/src/api/client.ts"
+ }
+}
