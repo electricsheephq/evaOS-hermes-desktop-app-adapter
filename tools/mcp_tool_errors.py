@@ -462,9 +462,10 @@ _AUTH_ERROR_TYPES: Optional[tuple] = None
 
 def _get_auth_error_types() -> tuple:
     """Cached ``(auth_types, http_status_types)``: SDK ``OAuthFlowError``/``OAuthTokenError`` (+ legacy
-    ``UnauthorizedError``), our ``OAuthNonInteractiveError``, and ``HTTPStatusError`` from both httpx
-    flavours — a 401 may come from the SDK's own stack (``httpx2`` on mcp >= 2.0) or Hermes' pinned
-    ``httpx``; the classes are unrelated and still need the 401 check in :func:`_is_auth_error`."""
+    ``UnauthorizedError``), our ``OAuthNonInteractiveError`` and ``OAuthFlowCancelled`` (a dashboard
+    flow the user cancelled), and ``HTTPStatusError`` from both httpx flavours — a 401 may come from
+    the SDK's own stack (``httpx2`` on mcp >= 2.0) or Hermes' pinned ``httpx``; the classes are
+    unrelated and still need the 401 check in :func:`_is_auth_error`."""
     global _AUTH_ERROR_TYPES
     if not (_AUTH_ERROR_TYPES and _AUTH_ERROR_TYPES[0]):  # retry while empty (SDK may import later)
         sdk_mod = _core.sdk_httpx()
@@ -472,7 +473,8 @@ def _get_auth_error_types() -> tuple:
             ([sdk_mod.HTTPStatusError] if sdk_mod is not None else []) + _optional_types("httpx", "HTTPStatusError")))
         auth_types = (*_optional_types("mcp.client.auth", "OAuthFlowError", "OAuthTokenError"),
                       *_optional_types("mcp.client.auth", "UnauthorizedError"),  # older SDKs
-                      *_optional_types("tools.mcp_oauth", "OAuthNonInteractiveError"), *http_types)
+                      *_optional_types("tools.mcp_oauth", "OAuthNonInteractiveError"),
+                      *_optional_types("tools.mcp_dashboard_oauth", "OAuthFlowCancelled"), *http_types)
         _AUTH_ERROR_TYPES = (auth_types, http_types)
     return _AUTH_ERROR_TYPES
 

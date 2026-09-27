@@ -454,7 +454,24 @@ def _probe_single_server(
             details["initialized"] = False
         try:
             server = await asyncio.wait_for(_connect_server(name, config), timeout=connect_timeout)
-        except asyncio.TimeoutError:
+        except asyncio.CancelledError:
+            # A cancelled coroutine cannot await shutdown(); cancel the claimed run task directly.
+            for srv in claimed:
+                if srv._task is not None and not srv._task.done():
+                    srv._task.cancel()
+            raise
+        except BaseException as exc:
+            # The claim tells _connect_server that someone else owns the task, so it skips its own
+            # reap; this probe is that owner. A failed task left running parks and re-probes every
+            # _PARKED_RETRY_INTERVAL for the life of the process, one more per failed probe.
+            for srv in claimed:
+                if srv._task is not None and not srv._task.done():
+                    try:
+                        await srv.shutdown()
+                    except Exception as shutdown_exc:  # noqa: BLE001 -- best-effort reap, keep the real error
+                        logger.debug("MCP probe '%s': shutdown of the failed task failed: %s", name, shutdown_exc)
+            if not isinstance(exc, asyncio.TimeoutError):
+                raise
             # str(TimeoutError()) is '' — printed verbatim it was a blank "Authentication failed:".
             raise TimeoutError(
                 f"Connecting to MCP server '{name}' timed out after {float(connect_timeout):.0f}s "

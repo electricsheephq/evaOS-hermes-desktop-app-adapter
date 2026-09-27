@@ -43,7 +43,7 @@ from urllib.parse import parse_qs, urlparse
 
 from hermes_constants import secure_parent_dir
 from utils import atomic_json_write
-from tools.mcp_dashboard_oauth import contextvar_set as _contextvar_set, get_dashboard_oauth_flow
+from tools.mcp_dashboard_oauth import OAuthFlowCancelled, contextvar_set as _contextvar_set, get_dashboard_oauth_flow
 
 if TYPE_CHECKING:  # annotations only; the SDK is imported lazily at runtime
     from mcp.client.auth import OAuthClientProvider
@@ -204,6 +204,30 @@ except ImportError:
 
 class OAuthNonInteractiveError(RuntimeError):
     """Raised when OAuth requires browser interaction in a non-interactive env."""
+
+
+class _ExpectedOAuthRefusalFilter(logging.Filter):
+    """Demote the SDK's ``logger.exception("OAuth flow error")`` to DEBUG, without the traceback, when
+    the cause is an expected refusal (non-interactive context, cancelled dashboard flow). A parked
+    server hits it on every probe; Hermes' own deduplicated park WARNING is the user-facing line.
+    Every other cause still logs as the SDK wrote it."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        exc = record.exc_info[1] if record.exc_info else None
+        if record.msg == "OAuth flow error" and isinstance(exc, (OAuthNonInteractiveError, OAuthFlowCancelled)):
+            record.levelno, record.levelname, record.exc_info, record.exc_text = logging.DEBUG, "DEBUG", None, None
+        return True
+
+
+def _install_sdk_oauth_log_filter() -> None:
+    """Idempotent: a module reload replaces the filter instead of stacking a second one."""
+    sdk_logger = logging.getLogger("mcp.client.auth.oauth2")
+    for old in [f for f in sdk_logger.filters if type(f).__name__ == _ExpectedOAuthRefusalFilter.__name__]:
+        sdk_logger.removeFilter(old)
+    sdk_logger.addFilter(_ExpectedOAuthRefusalFilter())
+
+
+_install_sdk_oauth_log_filter()
 
 
 # Port of the most recent callback-port resolution. Legacy global; per-flow closures are the
@@ -792,7 +816,9 @@ def _make_redirect_handler(port: int, redirect_uri: str | None = None, redirect_
     """
     async def _redirect_handler(authorization_url: str) -> None:
         dashboard_flow = get_dashboard_oauth_flow()
-        if dashboard_flow is not None:
+        # Only an attended connect may publish: a parked task keeps the flow handle for its life, and
+        # its timed self-probe (interactivity disabled) must fail fast below instead of reusing it.
+        if dashboard_flow is not None and _oauth_interactive_enabled.get():
             await dashboard_flow.publish_authorization_url(authorization_url)
             return
         # Fail fast when non-interactive: a cached-but-unusable token makes the SDK fall through to the
