@@ -60,6 +60,8 @@ def failing_probe_env(monkeypatch, tmp_path):
 
         async def _run_stdio(self, config):
             state.runs += 1
+            if state.error is None:
+                await asyncio.Event().wait()
             raise state.error()
 
     real_sleep = asyncio.sleep
@@ -125,3 +127,18 @@ def test_failed_probes_do_not_self_probe(failing_probe_env, error, attempts_per_
     time.sleep(10 * mcp_tool._PARKED_RETRY_INTERVAL)
     assert state.runs == expected, (
         f"failed probes kept re-probing after they returned: {state.runs - expected} extra attempts")
+
+
+
+def test_probe_timeout_still_reaps_and_names_the_bound(failing_probe_env):
+    """The reap on failure keeps the timeout path's readable TimeoutError and its cleanup."""
+    from hermes_cli.mcp_config import _probe_single_server
+    from tools.mcp_tool_loop import _run_on_mcp_loop
+
+    state = failing_probe_env
+    state.error = None  # the transport hangs until the connect timeout cancels it
+    with pytest.raises(TimeoutError, match="timed out after 1s"):
+        _probe_single_server("flaky", {"command": "x"}, connect_timeout=1, details={})
+
+    assert [s._task.done() for s in state.created] == [True]
+    assert _run_on_mcp_loop(_pending_tasks, timeout=5) == state.baseline
