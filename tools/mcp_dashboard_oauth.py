@@ -38,6 +38,11 @@ def exception_message(exc: BaseException) -> str:
     return str(exc) or type(exc).__name__
 
 
+class OAuthFlowCancelled(RuntimeError):
+    """The user cancelled this dashboard flow. Terminal: classified as an auth error, so the
+    server parks at once instead of retrying a flow that can never complete."""
+
+
 @dataclass
 class DashboardOAuthFlow:
     flow_id: str
@@ -76,7 +81,7 @@ class DashboardOAuthFlow:
             raise ValueError("OAuth authorization URL did not include state")
         with self._lock:
             if self.cancelled:
-                raise RuntimeError("OAuth flow already ended: cancelled by user")
+                raise OAuthFlowCancelled("OAuth flow already ended: cancelled by user")
             if self.status in {"approved", "error"}:
                 self._reopen_ended_attempt()
             self.expected_state = state
@@ -129,7 +134,8 @@ class DashboardOAuthFlow:
         if not await asyncio.to_thread(self._callback_ready.wait, timeout):
             raise TimeoutError("Timed out waiting for MCP OAuth callback")
         if self._callback_error:
-            raise RuntimeError(f"OAuth authorization failed: {self._callback_error}")
+            error_type = OAuthFlowCancelled if self.cancelled else RuntimeError
+            raise error_type(f"OAuth authorization failed: {self._callback_error}")
         if self._callback is None:
             raise RuntimeError(
                 f"MCP OAuth flow for '{self.server_name}' ended without an authorization code "

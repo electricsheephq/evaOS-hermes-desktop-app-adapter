@@ -618,9 +618,9 @@ class MCPServerRunMixin:
         budget.initial_retries += 1
         if budget.initial_retries > _core._MAX_INITIAL_CONNECT_RETRIES:
             self._log_park(
-                "MCP server '%s' failed initial connection after %d attempts, parking until a reconnect is "
-                "requested (state: connecting → parked): %s: %s",
-                self.name, _core._MAX_INITIAL_CONNECT_RETRIES, type(root).__name__, root)
+                "MCP server '%s' failed initial connection after %d attempts, parking; re-probing every %ds "
+                "(state: connecting → parked): %s: %s",
+                self.name, _core._MAX_INITIAL_CONNECT_RETRIES, _core._PARKED_RETRY_INTERVAL, type(root).__name__, root)
             return await self._park_initial_failure(exc, "after initial connection failures", budget)
         logger.debug(
             "MCP server '%s' initial connection failed (attempt %d/%d), retrying in %.0fs: %s: %s",

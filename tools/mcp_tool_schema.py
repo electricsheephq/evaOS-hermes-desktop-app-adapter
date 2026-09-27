@@ -178,8 +178,8 @@ def mcp_prefixed_tool_name(server_name: str, tool_name: str) -> str:
     suffix = "_" + hashlib.sha256(full_name.encode("utf-8")).hexdigest()[:_MCP_TOOL_NAME_HASH_LENGTH]
     if full_name not in _clamped_names_warned:  # recomputed on every health refresh; warn once
         _clamped_names_warned.add(full_name)
-        logger.warning("MCP tool name %r (%d chars) exceeds the %d-char provider limit; shortened to a "
-                       "deterministic hash-suffixed name", full_name, len(full_name), _MCP_TOOL_NAME_MAX_LENGTH)
+        logger.info("MCP tool name %r (%d chars) exceeds the %d-char provider limit; shortened to a "
+                    "deterministic hash-suffixed name", full_name, len(full_name), _MCP_TOOL_NAME_MAX_LENGTH)
     return full_name[:_MCP_TOOL_NAME_MAX_LENGTH - len(suffix)] + suffix
 
 
