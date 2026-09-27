@@ -13,6 +13,7 @@ test process), which hides the leak that a live gateway keeps.
 
 import asyncio
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -24,7 +25,7 @@ _PROBES = 5  # one probe per Desktop session sweeping the same failing server
 async def _pending_tasks():
     current = asyncio.current_task()
     return sorted(
-        task.get_coro().__qualname__
+        getattr(task.get_coro(), "__qualname__", repr(task))
         for task in asyncio.all_tasks()
         if task is not current and not task.done()
     )
@@ -50,16 +51,16 @@ def failing_probe_env(monkeypatch, tmp_path):
     from tools import mcp_tool_loop as _loop
 
     _reset_mcp_state(mcp_tool)
-    state = {"created": [], "runs": 0, "error": _transient}
+    state = SimpleNamespace(created=[], runs=0, error=_transient, baseline=None)
 
     class _FailingServerTask(mcp_tool.MCPServerTask):
         def __init__(self, name):
             super().__init__(name)
-            state["created"].append(self)
+            state.created.append(self)
 
         async def _run_stdio(self, config):
-            state["runs"] += 1
-            raise state["error"]()
+            state.runs += 1
+            raise state.error()
 
     real_sleep = asyncio.sleep
 
@@ -76,11 +77,11 @@ def failing_probe_env(monkeypatch, tmp_path):
     # Keep the loop alive during the asserts (see the module docstring).
     monkeypatch.setattr(_lifecycle, "_stop_mcp_loop_if_idle", lambda: False)
     _loop._ensure_mcp_loop()
-    state["baseline"] = _loop._run_on_mcp_loop(_pending_tasks, timeout=5)
+    state.baseline = _loop._run_on_mcp_loop(_pending_tasks, timeout=5)
     try:
         yield state
     finally:
-        _cleanup_mcp_state(mcp_tool, state["created"])
+        _cleanup_mcp_state(mcp_tool, state.created)
 
 
 def _probe_k_times(state):
@@ -97,13 +98,13 @@ def test_probe_single_server_reaps_failed_task(failing_probe_env, error):
     from tools.mcp_tool_loop import _run_on_mcp_loop
 
     state = failing_probe_env
-    state["error"] = error
+    state.error = error
     _probe_k_times(state)
 
-    assert len(state["created"]) == _PROBES
-    assert [s._task.done() for s in state["created"]] == [True] * _PROBES, (
+    assert len(state.created) == _PROBES
+    assert [s._task.done() for s in state.created] == [True] * _PROBES, (
         "a failed probe left its MCP server task running (parked, self-probing)")
-    assert _run_on_mcp_loop(_pending_tasks, timeout=5) == state["baseline"]
+    assert _run_on_mcp_loop(_pending_tasks, timeout=5) == state.baseline
     with mcp_tool._lock:
         assert "flaky" not in mcp_tool._servers
 
@@ -116,11 +117,11 @@ def test_failed_probes_do_not_self_probe(failing_probe_env, error, attempts_per_
     from tools import mcp_tool
 
     state = failing_probe_env
-    state["error"] = error
+    state.error = error
     _probe_k_times(state)
 
     expected = _PROBES * attempts_per_probe
-    assert state["runs"] == expected
+    assert state.runs == expected
     time.sleep(10 * mcp_tool._PARKED_RETRY_INTERVAL)
-    assert state["runs"] == expected, (
-        f"failed probes kept re-probing after they returned: {state['runs'] - expected} extra attempts")
+    assert state.runs == expected, (
+        f"failed probes kept re-probing after they returned: {state.runs - expected} extra attempts")

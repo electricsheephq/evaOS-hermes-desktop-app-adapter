@@ -89,7 +89,9 @@ def test_cancelled_dashboard_flow_is_terminal_auth_error(monkeypatch, tmp_path):
 
         async def _run_http(self, config):
             attempts.append(1)
-            await get_dashboard_oauth_flow().publish_authorization_url(_AUTHORIZE)
+            inherited = get_dashboard_oauth_flow()
+            assert inherited is flow
+            await inherited.publish_authorization_url(_AUTHORIZE)
 
     _run_until(_Task, config, flow, lambda: len(attempts_at_park) >= 4, real_sleep)
 
