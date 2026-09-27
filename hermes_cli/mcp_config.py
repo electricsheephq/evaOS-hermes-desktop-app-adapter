@@ -468,6 +468,16 @@ def _probe_single_server(
                 if srv._task is not None and not srv._task.done():
                     try:
                         await srv.shutdown()
+                    except asyncio.CancelledError:
+                        # Either this probe is being cancelled, or shutdown() re-raised the run task's
+                        # own cancellation (a timed-out connect still unwinding). Only the first wins.
+                        probe_task = asyncio.current_task()
+                        if probe_task is not None and probe_task.cancelling():
+                            for other in claimed:
+                                if other._task is not None and not other._task.done():
+                                    other._task.cancel()
+                            raise
+                        logger.debug("MCP probe '%s': the failed task ended cancelled during shutdown", name)
                     except Exception as shutdown_exc:  # noqa: BLE001 -- best-effort reap, keep the real error
                         logger.debug("MCP probe '%s': shutdown of the failed task failed: %s", name, shutdown_exc)
             if not isinstance(exc, asyncio.TimeoutError):
