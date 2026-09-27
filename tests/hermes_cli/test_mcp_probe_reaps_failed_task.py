@@ -12,7 +12,7 @@ test process), which hides the leak that a live gateway keeps.
 """
 
 import asyncio
-import time
+import concurrent.futures
 from types import SimpleNamespace
 
 import pytest
@@ -20,6 +20,7 @@ import pytest
 from tests.tools.test_mcp_initial_connect_shutdown import _cleanup_mcp_state, _reset_mcp_state
 
 _PROBES = 5  # one probe per Desktop session sweeping the same failing server
+_MIN_WALL_CLOCK = 2.0  # AGENTS.md: timing tests must not assume a quiet runner
 
 
 async def _pending_tasks():
@@ -51,7 +52,7 @@ def failing_probe_env(monkeypatch, tmp_path):
     from tools import mcp_tool_loop as _loop
 
     _reset_mcp_state(mcp_tool)
-    state = SimpleNamespace(created=[], runs=0, error=_transient, baseline=None)
+    state = SimpleNamespace(created=[], runs=0, error=_transient, on_cancel=None, baseline=None)
 
     class _FailingServerTask(mcp_tool.MCPServerTask):
         def __init__(self, name):
@@ -60,9 +61,18 @@ def failing_probe_env(monkeypatch, tmp_path):
 
         async def _run_stdio(self, config):
             state.runs += 1
-            if state.error is None:
-                await asyncio.Event().wait()
-            raise state.error()
+            if state.error is not None:
+                raise state.error()
+            try:
+                await asyncio.Event().wait()  # hang until the connect timeout cancels the transport
+            except asyncio.CancelledError:
+                if state.on_cancel is not None:
+                    await state.on_cancel(self)
+                raise
+
+        async def shutdown(self):
+            self.shutdown_caller = asyncio.current_task()
+            await super().shutdown()
 
     real_sleep = asyncio.sleep
 
@@ -117,6 +127,7 @@ def test_probe_single_server_reaps_failed_task(failing_probe_env, error):
     [(_transient, 2), (_auth, 1)], ids=["transient", "auth"])
 def test_failed_probes_do_not_self_probe(failing_probe_env, error, attempts_per_probe):
     from tools import mcp_tool
+    from tools.mcp_tool_loop import _run_on_mcp_loop
 
     state = failing_probe_env
     state.error = error
@@ -124,7 +135,14 @@ def test_failed_probes_do_not_self_probe(failing_probe_env, error, attempts_per_
 
     expected = _PROBES * attempts_per_probe
     assert state.runs == expected
-    time.sleep(10 * mcp_tool._PARKED_RETRY_INTERVAL)
+
+    async def _let_parked_intervals_elapse():
+        # A timed wait ON the MCP loop: a leaked task's park timer (0.05 s) is on the same loop, so
+        # its self-probe runs before this returns even when the runner is starved.
+        await asyncio.wait({asyncio.get_running_loop().create_future()}, timeout=_MIN_WALL_CLOCK)
+
+    _run_on_mcp_loop(_let_parked_intervals_elapse, timeout=_MIN_WALL_CLOCK + 10)
+    assert _MIN_WALL_CLOCK >= 10 * mcp_tool._PARKED_RETRY_INTERVAL
     assert state.runs == expected, (
         f"failed probes kept re-probing after they returned: {state.runs - expected} extra attempts")
 
@@ -139,6 +157,49 @@ def test_probe_timeout_still_reaps_and_names_the_bound(failing_probe_env):
     state.error = None  # the transport hangs until the connect timeout cancels it
     with pytest.raises(TimeoutError, match="timed out after 1s"):
         _probe_single_server("flaky", {"command": "x"}, connect_timeout=1, details={})
+
+    assert [s._task.done() for s in state.created] == [True]
+    assert _run_on_mcp_loop(_pending_tasks, timeout=5) == state.baseline
+
+
+async def _unwind_after_the_reap_starts(server):
+    """Keep the cancelled run task unwinding until the probe's reap awaits it in shutdown()."""
+    await server._shutdown_event.wait()
+
+
+def test_probe_timeout_with_slow_cancelling_task_keeps_timeout_error(failing_probe_env):
+    """The run task's own CancelledError, re-raised by shutdown(), must not replace the TimeoutError."""
+    from hermes_cli.mcp_config import _probe_single_server
+    from tools import mcp_tool
+    from tools.mcp_tool_loop import _run_on_mcp_loop
+
+    state = failing_probe_env
+    state.error = None
+    state.on_cancel = _unwind_after_the_reap_starts
+    with pytest.raises(TimeoutError, match="timed out after 1s"):
+        _probe_single_server("slow", {"command": "x"}, connect_timeout=1, details={})
+
+    assert [s._task.done() for s in state.created] == [True]
+    assert _run_on_mcp_loop(_pending_tasks, timeout=5) == state.baseline
+    with mcp_tool._lock:
+        assert "slow" not in mcp_tool._servers
+
+
+def test_probe_cancelled_during_the_reap_propagates_and_ends_the_task(failing_probe_env):
+    """A cancellation of the probe itself, arriving while the reap awaits shutdown(), still wins."""
+    from hermes_cli.mcp_config import _probe_single_server
+    from tools.mcp_tool_loop import _run_on_mcp_loop
+
+    state = failing_probe_env
+    state.error = None
+
+    async def _cancel_the_probe_mid_reap(server):
+        await server._shutdown_event.wait()  # the probe task is now inside its reap
+        server.shutdown_caller.cancel()
+
+    state.on_cancel = _cancel_the_probe_mid_reap
+    with pytest.raises(concurrent.futures.CancelledError):
+        _probe_single_server("slow", {"command": "x"}, connect_timeout=1, details={})
 
     assert [s._task.done() for s in state.created] == [True]
     assert _run_on_mcp_loop(_pending_tasks, timeout=5) == state.baseline
