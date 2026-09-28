@@ -102,6 +102,13 @@ def _codex_credentials() -> tuple[Optional[dict], list]:
             entries if isinstance(entries, list) else [])
 
 
+def _cooling(entry: dict) -> bool:
+    """True while any model cooldown on the entry is still in the future (expired stamps are metadata only)."""
+    now = time.time()
+    return any(isinstance(until, (int, float)) and until > now
+               for until in (entry.get("model_cooldowns") or {}).values())
+
+
 def _codex_failure(exc: BaseException) -> Optional[dict]:
     """The Codex fetcher raises (rather than returning None) when nothing is signed in, so a failure
     is only an error card when a singleton state or a pool entry (incl. the shared pool) exists."""
@@ -124,9 +131,9 @@ def _codex_failure(exc: BaseException) -> Optional[dict]:
         rows = [e for e in entries if isinstance(e, dict)]
         if any(e.get("last_status") == "exhausted" for e in rows):
             category = "rate_limited"
-        elif any(e.get("last_status") != "dead" and str(e.get("access_token") or "").strip() and e.get("model_cooldowns")
+        elif any(e.get("last_status") != "dead" and str(e.get("access_token") or "").strip() and _cooling(e)
                  for e in rows):
-            pass  # a live credential held back only by a model cooldown (entitlement, not quota or auth): stay generic
+            pass  # a live credential held back only by an active model cooldown (entitlement, not quota or auth)
         else:
             category = "auth_expired"
     return error_snapshot("openai-codex", category)
