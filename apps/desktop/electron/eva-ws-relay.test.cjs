@@ -711,6 +711,48 @@ test('an upstream authentication rejection invalidates the managed enrollment', 
   assert.equal(rejected, 1)
 })
 
+test('a sign-in change during the upstream connect sends nothing with the replaced credential', async t => {
+  const upstream = fakeUpstream(401)
+  await upstream.start()
+  let generation = 3
+  let rejected = 0
+  let dialed
+  let release
+  let upstreamClosed
+  const dialedOnce = new Promise(resolve => (dialed = resolve))
+  const connecting = new Promise(resolve => (release = resolve))
+  const upstreamClosedOnce = new Promise(resolve => (upstreamClosed = resolve))
+  const relay = createEvaWsRelay({
+    connectUpstream: async () => {
+      dialed()
+      await connecting
+      const socket = await upstream.connect()
+      socket.once('close', upstreamClosed)
+      return socket
+    },
+    getGeneration: () => generation,
+    getUpstream: async () => ({ baseUrl: BASE_URL, generation: 3, token: 'replaced-secret' }),
+    onAuthRejected: () => {
+      rejected += 1
+    }
+  })
+  t.after(async () => {
+    await relay.close()
+    await upstream.stop()
+  })
+
+  upgrade(await relay.mintTicket({ generation, path: '/api/ws' })).catch(() => undefined)
+  await dialedOnce
+  generation += 1
+  relay.disconnectAll()
+  release()
+  await upstreamClosedOnce
+  await new Promise(resolve => setImmediate(resolve))
+
+  assert.equal(upstream.observed(), '')
+  assert.equal(rejected, 0)
+})
+
 test('an upstream connection that never completes fails within the setup deadline', async t => {
   const relay = createEvaWsRelay({
     connectUpstream: () => new Promise(() => undefined),
