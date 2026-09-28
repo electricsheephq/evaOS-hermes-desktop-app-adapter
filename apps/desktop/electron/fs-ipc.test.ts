@@ -8,7 +8,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 const electron = vi.hoisted(() => ({
   handlers: new Map<string, (...args: unknown[]) => unknown>(),
@@ -21,28 +21,31 @@ vi.mock('electron', () => ({
   },
   shell: {
     showItemInFolder: electron.showItemInFolder,
-    openPath: vi.fn(async () => ''),
-    trashItem: vi.fn(async () => undefined)
+    openPath: vi.fn(async () => '')
   }
 }))
 
-vi.mock('./desktop-plugin-install', () => ({
-  installDesktopPluginFromGit: vi.fn(async () => ({ ok: true })),
-  probePluginRepo: vi.fn(async () => ({ ok: true }))
-}))
-vi.mock('./desktop-plugin-remove', () => ({ removeDesktopPlugin: vi.fn(async () => ({ ok: true })) }))
+vi.mock('./desktop-plugin-install', () => ({ installDesktopPluginFromGit: vi.fn(), probePluginRepo: vi.fn() }))
 vi.mock('./desktop-plugins-root', () => ({
   DESKTOP_PLUGINS_DIR: 'desktop-plugins',
   ensureDir: vi.fn(),
   migrateProfileScopedDesktopPlugins: vi.fn(),
   reconcileUnifiedDesktopHalves: vi.fn()
 }))
-vi.mock('./fs-read-dir', () => ({ readDirForIpc: vi.fn(async () => []) }))
-vi.mock('./git-root', () => ({ gitRootForIpc: vi.fn(async () => null) }))
 
 import { registerFsIpc } from './fs-ipc'
 
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'hermes-fs-ipc-'))
+
+registerFsIpc({
+  hermesHome: scratch,
+  readActiveDesktopProfile: () => null,
+  // `~/` resolves under the scratch dir so tilde paths can be exercised.
+  expandUserPath: value => (value.startsWith('~/') ? path.join(scratch, value.slice(2)) : value),
+  resolveRequestedPathForIpc: value => value,
+  directoryExists: value => fs.existsSync(value),
+  resolveGitBinary: () => 'git'
+})
 
 const reveal = (target: string) => electron.handlers.get('hermes:fs:reveal')!({}, target)
 
@@ -51,20 +54,6 @@ afterEach(() => {
 })
 
 describe('hermes:fs:reveal', () => {
-  beforeEach(() => {
-    electron.handlers.clear()
-    registerFsIpc({
-      assertLocalAccessAllowed: () => {},
-      hermesHome: scratch,
-      readActiveDesktopProfile: () => null,
-      // `~/` resolves under the scratch dir so tilde paths can be exercised.
-      expandUserPath: value => (value.startsWith('~/') ? path.join(scratch, value.slice(2)) : value),
-      resolveRequestedPathForIpc: value => value,
-      directoryExists: value => fs.existsSync(value),
-      resolveGitBinary: () => 'git'
-    })
-  })
-
   it('reveals a path that exists on this computer', async () => {
     const file = path.join(scratch, 'workspace')
     fs.mkdirSync(file)
@@ -89,52 +78,5 @@ describe('hermes:fs:reveal', () => {
 
     await expect(reveal('~/tilde.md')).resolves.toBe(true)
     expect(electron.showItemInFolder).toHaveBeenCalledWith(here)
-  })
-})
-
-describe('registerFsIpc managed boundary', () => {
-  beforeEach(() => electron.handlers.clear())
-
-  it('checks every local filesystem and plugin operation before touching the machine', async () => {
-    const blocked = new Error('managed local access blocked')
-
-    const assertLocalAccessAllowed = vi.fn(() => {
-      throw blocked
-    })
-
-    registerFsIpc({
-      assertLocalAccessAllowed,
-      directoryExists: () => true,
-      expandUserPath: value => value,
-      hermesHome: '/tmp/hermes-test',
-      readActiveDesktopProfile: () => null,
-      resolveGitBinary: () => '/usr/bin/git',
-      resolveRequestedPathForIpc: value => value
-    })
-
-    const invocations: Array<[string, unknown[]]> = [
-      ['hermes:fs:readDir', ['/tmp']],
-      ['hermes:fs:gitRoot', ['/tmp']],
-      ['hermes:fs:reveal', ['/tmp/file']],
-      ['hermes:fs:openDir', ['/tmp/test']],
-      ['hermes:fs:desktopPluginsRoot', []],
-      ['hermes:fs:reconcileDesktopPlugins', []],
-      ['hermes:fs:logsRoot', []],
-      ['hermes:fs:agentPluginsRoot', []],
-      ['hermes:plugin:probe', [{ identifier: 'owner/repo' }]],
-      ['hermes:plugin:installDesktop', [{ identifier: 'owner/repo' }]],
-      ['hermes:plugin:removeDesktop', [{ name: 'plugin' }]],
-      ['hermes:fs:rename', ['/tmp/file', 'renamed']],
-      ['hermes:fs:writeText', ['/tmp/file', 'text']],
-      ['hermes:fs:trash', ['/tmp/file']]
-    ]
-
-    for (const [channel, args] of invocations) {
-      const handler = electron.handlers.get(channel)
-      expect(handler, `missing handler for ${channel}`).toBeTypeOf('function')
-      await expect(Promise.resolve().then(() => handler?.({}, ...args))).rejects.toThrow(blocked)
-    }
-
-    expect(assertLocalAccessAllowed).toHaveBeenCalledTimes(invocations.length)
   })
 })

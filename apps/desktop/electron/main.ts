@@ -18825,7 +18825,6 @@ ipcMain.on('hermes:logs:renderer-error', (_event, report) => {
 
 // Local filesystem + plugin-root IPC (readDir/reveal/rename/trash/…) — see fs-ipc.ts.
 registerFsIpc({
-  assertLocalAccessAllowed: operation => assertEvaManagedLocalMutationAllowed(EVA_MANAGED_BUILD, operation),
   hermesHome: HERMES_HOME,
   readActiveDesktopProfile,
   expandUserPath,
