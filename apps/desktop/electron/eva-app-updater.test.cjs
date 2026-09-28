@@ -409,7 +409,7 @@ test('holds a gated release until an agent contract has been seen', async () => 
 
   assert.equal(status.updateAvailable, false)
   assert.equal(status.reason, 'waiting-for-agent')
-  assert.match(status.message, /waiting for your agent/)
+  assert.equal(status.message, 'Waiting for your agent to connect.')
   assert.equal(applied.ok, false)
   assert.equal(updater.downloadCalls, 0)
 })
@@ -422,7 +422,7 @@ test('holds a gated release while the lowest agent contract is too old', async (
 
   assert.equal(status.updateAvailable, false)
   assert.equal(status.reason, 'agent-update-required')
-  assert.match(status.message, /agent needs an update first/)
+  assert.equal(status.message, 'Your agent needs an update before this app update.')
   assert.equal(applied.ok, false)
   assert.equal(updater.downloadCalls, 0)
 })

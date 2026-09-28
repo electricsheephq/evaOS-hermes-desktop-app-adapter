@@ -10,8 +10,8 @@ const SAFE_APPLY_FAILURE_MESSAGE = 'evaOS Agent could not install the update. Tr
 // REQUIRED_BACKEND_CONTRACT (scripts/backend-contract.mjs).
 const EVA_MIN_BACKEND_CONTRACT_KEY = 'evaosMinBackendContract'
 const AGENT_CONTRACT_HOLD_MESSAGES = Object.freeze({
-  'waiting-for-agent': 'This update is waiting for your agent. Connect to your agent, then check again.',
-  'agent-update-required': 'Your agent needs an update first. Electric Sheep will update it, then this app update will be offered.'
+  'waiting-for-agent': 'Waiting for your agent to connect.',
+  'agent-update-required': 'Your agent needs an update before this app update.'
 })
 const MANAGED_RELEASE_NOTE_REPLACEMENTS = [
   [/Eva by Electric Sheep/g, 'evaOS Agent'],

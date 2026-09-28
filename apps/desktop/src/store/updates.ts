@@ -79,6 +79,13 @@ export const resetUpdateApplyState = () => {
   $backendUpdateApply.set(IDLE)
 }
 
+/** The managed updater's reason for holding an app update (eva-app-updater.cjs). */
+export function heldUpdateMessage(status: DesktopUpdateStatus | null): null | string {
+  const held = status?.reason === 'waiting-for-agent' || status?.reason === 'agent-update-required'
+
+  return held ? (status?.message ?? null) : null
+}
+
 const UPDATE_TOAST_ID = 'desktop-update-available'
 // Time-based snooze instead of per-sha dismissal: this repo lands ~100 commits
 // a day, so a "don't show this exact sha again" guard re-popped the toast on

@@ -45,7 +45,12 @@ describe('AboutSettings', () => {
   })
 
   it('shows why a managed app update is held for the agent runtime', async () => {
-    const message = 'Your agent needs an update first. Electric Sheep will update it, then this app update will be offered.'
+    Object.defineProperty(window, 'hermesDesktop', {
+      configurable: true,
+      value: { eva: { status: vi.fn().mockResolvedValue({ signedIn: true, updateChannel: 'managed-beta' }) } },
+      writable: true
+    })
+    const message = 'Your agent needs an update before this app update.'
     $updateStatus.set({ message, reason: 'agent-update-required', supported: true, updateAvailable: false })
 
     const { AboutSettings } = await import('./about-settings')
