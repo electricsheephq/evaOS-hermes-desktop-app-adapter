@@ -1,9 +1,14 @@
+import { readFileSync } from 'node:fs'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
 import { describe, expect, it } from 'vitest'
 
 import {
   assertManagedGatewayMethodAllowed,
   isManagedConfigFieldVisible,
-  isManagedSettingsViewVisible
+  isManagedSettingsViewVisible,
+  MANAGED_ALLOWED_GATEWAY_READS
 } from './managed-ui-policy'
 
 describe('managed renderer policy', () => {
@@ -32,23 +37,49 @@ describe('managed renderer policy', () => {
     expect(isManagedConfigFieldVisible('toolsets', false)).toBe(true)
   })
 
-  it('rejects Nous billing and subscription RPCs below the managed UI', () => {
+  it('lets Nous billing reads through but rejects spend and plan changes below the managed UI', () => {
     for (const method of [
       'billing.state',
+      'billing.charge_status',
+      'subscription.state',
+      'usage.bars',
+      'plugin.billing-helper.run',
+      'session.status',
+      'usage.snapshot'
+    ]) {
+      expect(() => assertManagedGatewayMethodAllowed(method, true)).not.toThrow()
+      expect(() => assertManagedGatewayMethodAllowed(method, false)).not.toThrow()
+    }
+
+    for (const method of [
       'billing.charge',
       'billing.auto_reload',
       'billing.step_up',
-      'subscription.state',
       'subscription.change',
       'subscription.resume',
       'subscription.upgrade',
-      'usage.bars'
+      'subscription.preview',
+      'billing.future_method',
+      'subscription.future_method'
     ]) {
       expect(() => assertManagedGatewayMethodAllowed(method, true)).toThrow(/unavailable in managed evaOS Agent/)
       expect(() => assertManagedGatewayMethodAllowed(method, false)).not.toThrow()
     }
+  })
 
-    expect(() => assertManagedGatewayMethodAllowed('session.status', true)).not.toThrow()
-    expect(() => assertManagedGatewayMethodAllowed('usage.snapshot', true)).not.toThrow()
+  it('keeps the renderer read allowlist identical to the Electron main-process list', () => {
+    const source = readFileSync(
+      resolve(dirname(fileURLToPath(import.meta.url)), '../../electron/eva-managed.cjs'),
+      'utf8'
+    )
+
+    const literal = source.match(/const EVA_MANAGED_ALLOWED_GATEWAY_READS = new Set\(\[([^\]]*)\]\)/)
+
+    expect(literal).not.toBeNull()
+
+    const mainProcessReads = [...(literal?.[1] ?? '').matchAll(/'([^']+)'/g)].map(match => match[1]).sort()
+
+    expect(mainProcessReads).toEqual([...MANAGED_ALLOWED_GATEWAY_READS].sort())
+    expect(mainProcessReads).toHaveLength(4)
   })
 })

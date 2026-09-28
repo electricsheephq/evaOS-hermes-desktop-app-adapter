@@ -171,8 +171,8 @@ export function SettingsView({ onClose, onConfigSaved, onMainModelChanged }: Set
   const [providerView, setProviderView] = useRouteEnumParam<ProviderView>('pview', providerViews, 'accounts')
   const [keysView] = useRouteEnumParam<KeysView>('kview', KEYS_VIEWS, 'tools')
   const [billingView] = useRouteEnumParam<BillingSubView>('bview', BILLING_VIEWS, 'overview')
-  const billingState = useBillingState()
-  const subscriptionState = useSubscriptionState()
+  const billingState = useBillingState(!managedEva)
+  const subscriptionState = useSubscriptionState(!managedEva)
   const billingPresentation = deriveBillingView(billingState.data, subscriptionState.data)
   const canViewPlans = billingPresentation.status === 'normal' && Boolean(billingPresentation.plan?.action)
 
