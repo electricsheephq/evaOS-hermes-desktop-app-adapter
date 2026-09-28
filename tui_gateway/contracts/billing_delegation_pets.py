@@ -74,6 +74,44 @@ method("usage.bars", params=ProfileParams, result=UsageModel,
        doc="Two-bar dollar usage view shared by /usage, /topup and /subscription; fail-open to unavailable.")
 
 
+# ── account.usage (provider quota snapshots) ──────────────────────────────────────────────────
+
+
+class AccountUsageWindowModel(Result):
+    """``account_usage_view.serialize_window``: percents clamped to 0..100 server-side;
+    ``remaining_percent`` is ``100 - used_percent`` when the provider gives none."""
+
+    label: str
+    used_percent: float | None
+    remaining_percent: float | None
+    reset_at: str | None
+    detail: str | None
+
+
+class AccountUsageSnapshotModel(Result):
+    """One provider's quota card. On failure ``windows`` is empty, ``details`` holds one sentence and
+    ``error`` one of auth_expired / rate_limited / timeout / unavailable / not_oauth."""
+
+    provider: str = Field(min_length=1, pattern=r"^[^:]+$")
+    plan: str | None
+    details: list[str]
+    windows: list[AccountUsageWindowModel]
+    error: str | None
+    available: bool
+    source: str
+    fetched_at: str
+    title: str
+    unavailable_reason: str | None
+
+
+class AccountUsageResult(Result):
+    snapshots: list[AccountUsageSnapshotModel]
+
+
+method("account.usage", params=ProfileParams, result=AccountUsageResult,
+       doc="Provider quota snapshots (not Nous — see usage.bars); a provider without a credential is omitted.")
+
+
 # ── billing.state ─────────────────────────────────────────────────────────────────────────────
 
 

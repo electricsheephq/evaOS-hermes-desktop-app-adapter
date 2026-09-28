@@ -1,0 +1,174 @@
+"""``account.usage``: provider quota snapshots (Codex / Claude / OpenRouter) for the Desktop's quota cards.
+
+Reuses ``agent.account_usage``'s fetcher registry — the code ``/usage`` runs, shared-auth aware, with
+its token-refresh semantics — but a fetch failure becomes a typed error snapshot instead of failing
+open to nothing. Nous is left to ``usage.bars``; a provider with no credential is omitted. The wire
+never carries ``raw``, exception text, tokens, URLs or paths: an error is one fixed category plus a
+fixed sentence. Providers run in parallel on short-lived daemon threads (never the RPC pool) under
+one deadline; results are cached per (profile home, provider).
+"""
+
+from __future__ import annotations
+
+import contextvars
+import math
+import threading
+import time
+from datetime import datetime, timezone
+from typing import Any, Optional
+
+DEADLINE_S = 20.0
+RESULT_TTL_S = 60.0
+ERROR_TTL_S = 30.0
+_EXCLUDED_PROVIDERS = frozenset({"nous"})  # usage.bars already renders Nous
+
+_ERROR_TEXT = {
+    "auth_expired": "The sign-in for this account has expired. Sign in again to see its limits.",
+    "rate_limited": "The provider is rate limiting usage checks. Try again in a minute.",
+    "timeout": "The provider took too long to report usage. Try again shortly.",
+    "unavailable": "Usage for this account is unavailable right now.",
+    "not_oauth": "Account limits need an OAuth sign-in, not an API key.",
+}
+
+# (profile home, provider) → (monotonic expiry, serialized snapshot or None = omitted).
+_cache: dict[tuple[str, str], tuple[float, Optional[dict]]] = {}
+_cache_lock = threading.Lock()
+
+
+def _iso(value: Any) -> Optional[str]:
+    return value.isoformat() if isinstance(value, datetime) else None
+
+
+def _percent(value: Any) -> Optional[float]:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        return None
+    return min(100.0, max(0.0, float(value)))
+
+
+def serialize_window(window) -> dict:
+    used = _percent(window.used_percent)
+    remaining = _percent(getattr(window, "remaining_percent", None))
+    if remaining is None and used is not None:
+        remaining = 100.0 - used
+    return {"label": str(window.label), "used_percent": used, "remaining_percent": remaining,
+            "reset_at": _iso(window.reset_at), "detail": str(window.detail) if window.detail else None}
+
+
+def serialize_snapshot(snapshot) -> dict:
+    """A successful ``AccountUsageSnapshot`` → wire dict (``raw`` deliberately dropped)."""
+    return {"provider": snapshot.provider, "plan": snapshot.plan, "details": [str(d) for d in snapshot.details if d],
+            "windows": [serialize_window(w) for w in snapshot.windows], "error": None,
+            "available": bool(snapshot.available), "source": snapshot.source, "fetched_at": _iso(snapshot.fetched_at),
+            "title": snapshot.title, "unavailable_reason": None}
+
+
+def error_snapshot(provider: str, category: str) -> dict:
+    text = _ERROR_TEXT[category]
+    return {"provider": provider, "plan": None, "details": [text], "windows": [], "error": category,
+            "available": False, "source": "account_usage", "fetched_at": datetime.now(timezone.utc).isoformat(),
+            "title": "Account limits", "unavailable_reason": text}
+
+
+def _failure_category(exc: BaseException) -> str:
+    import httpx
+
+    from hermes_cli.auth import AuthError
+    if isinstance(exc, httpx.TimeoutException):
+        return "timeout"
+    if isinstance(exc, httpx.HTTPStatusError):
+        code = exc.response.status_code
+        return "auth_expired" if code in (401, 403) else "rate_limited" if code == 429 else "unavailable"
+    return "auth_expired" if isinstance(exc, AuthError) else "unavailable"
+
+
+def _codex_has_credential() -> bool:
+    """The Codex fetcher raises (rather than returning None) when nothing is signed in, so a failure
+    is only an error card when a singleton token or a pool entry (incl. the shared pool) exists."""
+    from agent.credential_pool import load_pool
+    from hermes_cli.auth import _read_codex_tokens
+    try:
+        if str((_read_codex_tokens().get("tokens") or {}).get("access_token") or "").strip():
+            return True
+    except Exception:
+        pass
+    try:
+        return load_pool("openai-codex").has_credentials()
+    except Exception:
+        return False
+
+
+def _openrouter_credentials() -> Optional[tuple[str, str]]:
+    """(base_url, api_key) only when OpenRouter resolves to a key on openrouter.ai itself."""
+    from hermes_cli.runtime_provider import resolve_runtime_provider
+    from utils import base_url_host_matches
+    try:
+        runtime = resolve_runtime_provider(requested="openrouter")
+    except Exception:
+        return None
+    base_url, api_key = str(runtime.get("base_url") or ""), str(runtime.get("api_key") or "").strip()
+    return (base_url, api_key) if api_key and base_url_host_matches(base_url, "openrouter.ai") else None
+
+
+def _fetch_one(provider: str) -> Optional[dict]:
+    """One provider → wire snapshot, or None to omit it (no resolvable credential)."""
+    from agent.account_usage import _USAGE_FETCHERS
+    args: tuple = (None, None)  # what fetch_account_usage passes for a sessionless read
+    if provider == "openrouter":
+        # Resolved once here and handed over, so the key never goes to a non-OpenRouter host and a
+        # round-robin pool is not rotated twice.
+        if (creds := _openrouter_credentials()) is None:
+            return None
+        args = creds
+    try:
+        snapshot = _USAGE_FETCHERS[provider](*args)
+    except Exception as exc:
+        if provider == "openai-codex" and not _codex_has_credential():
+            return None
+        return error_snapshot(provider, _failure_category(exc))
+    if snapshot is None:
+        return None
+    if snapshot.unavailable_reason:
+        return error_snapshot(provider, "not_oauth" if "oauth" in snapshot.unavailable_reason.lower() else "unavailable")
+    return serialize_snapshot(snapshot) if snapshot.available else error_snapshot(provider, "unavailable")
+
+
+def _run_into(provider: str, box: dict) -> None:
+    try:
+        box["value"] = _fetch_one(provider)
+    except Exception:
+        box["value"] = error_snapshot(provider, "unavailable")
+
+
+def account_usage_snapshots() -> list[dict]:
+    """Snapshots for every registry provider except Nous, in registry order, for the bound profile."""
+    from agent.account_usage import _USAGE_FETCHERS
+    from hermes_constants import get_hermes_home
+
+    home = str(get_hermes_home())
+    providers = [p for p in _USAGE_FETCHERS if p not in _EXCLUDED_PROVIDERS]
+    results: dict[str, Optional[dict]] = {}
+    with _cache_lock:
+        now = time.monotonic()
+        for provider in providers:
+            hit = _cache.get((home, provider))
+            if hit is not None and hit[0] > now:
+                results[provider] = hit[1]
+    boxes: dict[str, dict] = {p: {} for p in providers if p not in results}
+    threads = []
+    for provider, box in boxes.items():
+        ctx = contextvars.copy_context()  # one per thread: a Context cannot be entered concurrently
+        thread = threading.Thread(target=ctx.run, args=(_run_into, provider, box), daemon=True,
+                                  name=f"account-usage-{provider}")
+        thread.start()
+        threads.append(thread)
+    deadline = time.monotonic() + DEADLINE_S
+    for thread in threads:
+        thread.join(max(0.0, deadline - time.monotonic()))
+    with _cache_lock:
+        now = time.monotonic()
+        for provider, box in boxes.items():
+            value = box["value"] if "value" in box else error_snapshot(provider, "timeout")
+            ttl = ERROR_TTL_S if value is not None and value.get("error") else RESULT_TTL_S
+            _cache[(home, provider)] = (now + ttl, value)
+            results[provider] = value
+    return [snap for p in providers if (snap := results.get(p)) is not None]
