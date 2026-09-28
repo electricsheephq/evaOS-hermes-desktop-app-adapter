@@ -157,6 +157,13 @@ function isInstallMethodToastSnoozed(): boolean {
  * doesn't nag on every thread switch.
  */
 export function reportBackendContract(contract: number | undefined): void {
+  if (isManagedEvaosAgent() && typeof contract === 'number') {
+    // The app updater holds releases this agent's runtime is too old for.
+    void window.hermesDesktop?.updates
+      ?.reportAgentContract?.({ connection: $connection.get()?.baseUrl || 'agent', contract })
+      ?.catch(() => undefined)
+  }
+
   if ((contract ?? 0) >= REQUIRED_BACKEND_CONTRACT) {
     dismissNotification(SKEW_TOAST_ID)
     // Backend caught up — forget any prior snooze so a future regression warns

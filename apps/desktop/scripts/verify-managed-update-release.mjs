@@ -6,6 +6,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { execFile } from 'node:child_process'
 
+import { MIN_BACKEND_CONTRACT_KEY, readRequiredBackendContract } from './backend-contract.mjs'
 import { isMain } from './utils.mjs'
 
 const DEFAULT_ARCH = 'arm64'
@@ -37,9 +38,10 @@ function unquoteYamlScalar(value) {
 }
 
 export function parseManagedUpdateInfo(source) {
-  const result = { files: [], path: '', sha512: '', version: '' }
+  const result = { files: [], minBackendContract: null, path: '', sha512: '', version: '' }
   let currentFile = null
   let inFiles = false
+  let inVendor = false
 
   const finishCurrentFile = () => {
     if (currentFile) {
@@ -53,11 +55,17 @@ export function parseManagedUpdateInfo(source) {
     if (topLevel) {
       finishCurrentFile()
       inFiles = topLevel[1] === 'files'
+      inVendor = topLevel[1] === 'vendor'
 
       if (topLevel[1] === 'version') result.version = unquoteYamlScalar(topLevel[2])
       if (topLevel[1] === 'path') result.path = unquoteYamlScalar(topLevel[2])
       if (topLevel[1] === 'sha512') result.sha512 = unquoteYamlScalar(topLevel[2])
       continue
+    }
+
+    const vendorField = inVendor ? line.match(/^\s+([A-Za-z][A-Za-z0-9_-]*):\s*(.+)$/) : null
+    if (vendorField?.[1] === MIN_BACKEND_CONTRACT_KEY) {
+      result.minBackendContract = Number(unquoteYamlScalar(vendorField[2]))
     }
 
     if (!inFiles) {
@@ -280,6 +288,12 @@ export async function verifyManagedUpdateRelease(options = {}) {
   }
   if (/nousresearch|hermes-agent\/releases/i.test(updateInfoSource)) {
     throw new Error('latest-mac.yml contains an upstream Nous release reference.')
+  }
+  const requiredBackendContract = options.requiredBackendContract ?? readRequiredBackendContract()
+  if (updateInfo.minBackendContract !== requiredBackendContract) {
+    throw new Error(
+      `latest-mac.yml vendor.${MIN_BACKEND_CONTRACT_KEY} must equal REQUIRED_BACKEND_CONTRACT ${requiredBackendContract}.`
+    )
   }
 
   const assets = []

@@ -9,6 +9,8 @@ import path from "node:path"
 import { spawnSync } from "node:child_process"
 import { createRequire } from "node:module"
 
+import { minBackendContractBuilderArg } from "./backend-contract.mjs"
+
 const require = createRequire(import.meta.url)
 
 function electronDistDir() {
@@ -47,6 +49,8 @@ const dist = electronDistDir()
 // so it fails with "Cannot detect repository by .git/config". Pin publish to
 // "never" so electron-builder skips that lookup entirely.
 const args = ["--publish", "never"]
+// latest-mac.yml records the agent contract this release needs (backend-contract.mjs).
+args.push(minBackendContractBuilderArg())
 if (dist && fs.existsSync(distBinary(dist))) {
   args.push(`-c.electronDist=${dist}`)
 } else {

@@ -201,7 +201,12 @@ import {
 } from './desktop-uninstall'
 import { describeDevCdpDecision, resolveDevCdpPort } from './dev-cdp'
 import { installEmbedReferer } from './embed-referer'
-const { createEvaAppUpdater, safeApplyFailure, safeCheckFailure } = require('./eva-app-updater.cjs')
+const {
+  createAgentContractStore,
+  createEvaAppUpdater,
+  safeApplyFailure,
+  safeCheckFailure
+} = require('./eva-app-updater.cjs')
 const {
   assertEvaManagedLocalMutationAllowed,
   assertEvaManagedLocalTerminalAllowed,
@@ -3428,6 +3433,15 @@ function emitUpdateProgress(payload) {
 
 let evaAppUpdater = null
 
+// Lowest agent contract per connection, so an app update is never offered to
+// an app whose agent runtime is too old for it (eva-app-updater.cjs).
+const EVA_AGENT_CONTRACTS_PATH = path.join(app.getPath('userData'), 'eva-agent-contracts.json')
+
+const evaAgentContracts = createAgentContractStore({
+  load: () => readJson(EVA_AGENT_CONTRACTS_PATH),
+  save: contracts => fs.writeFileSync(EVA_AGENT_CONTRACTS_PATH, JSON.stringify(contracts))
+})
+
 function getEvaAppUpdater() {
   if (!evaAppUpdater) {
     const { autoUpdater } = require('electron-updater')
@@ -3435,6 +3449,7 @@ function getEvaAppUpdater() {
       app,
       autoUpdater,
       emitProgress: emitUpdateProgress,
+      getLowestAgentContract: () => evaAgentContracts.lowest(),
       isPackaged: IS_PACKAGED,
       onError: (stage, error) => {
         const message = error instanceof Error ? error.message : String(error || 'Unknown updater error')
@@ -18878,6 +18893,12 @@ ipcMain.handle('hermes:updates:check', async (_event, opts) => {
     message: error?.message || String(error),
     fetchedAt: Date.now()
   }))
+})
+
+ipcMain.handle('hermes:updates:agent-contract', async (_event, payload) => {
+  if (EVA_MANAGED_BUILD) {
+    evaAgentContracts.record(payload?.connection, payload?.contract)
+  }
 })
 
 ipcMain.handle('hermes:updates:apply', async (_event, payload) => {

@@ -178,6 +178,9 @@ function AppUpdatesSettings({ includeUninstall }: { includeUninstall: boolean })
   } else if (updateAvailable) {
     statusLine = behind > 0 ? a.updateReady(behind) : a.updateReadyUnknown
     statusTone = 'available'
+  } else if (status?.message && (status.reason === 'waiting-for-agent' || status.reason === 'agent-update-required')) {
+    // A managed release held until the agent runtime can run it.
+    statusLine = status.message
   } else if (status) {
     statusLine = a.onLatest
   } else {

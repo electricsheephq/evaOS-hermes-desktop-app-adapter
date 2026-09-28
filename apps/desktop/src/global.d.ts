@@ -614,6 +614,8 @@ declare global {
       updates: {
         check: (opts?: { force?: boolean }) => Promise<DesktopUpdateStatus>
         apply: (opts?: DesktopUpdateApplyOptions) => Promise<DesktopUpdateApplyResult>
+        /** Managed builds: record an agent's desktop contract for the app-update gate. */
+        reportAgentContract?: (payload: { connection: string; contract: number }) => Promise<void>
         getBranch: () => Promise<{ branch: string }>
         setBranch: (name: string) => Promise<{ branch: string }>
         onProgress: (callback: (payload: DesktopUpdateProgress) => void) => () => void

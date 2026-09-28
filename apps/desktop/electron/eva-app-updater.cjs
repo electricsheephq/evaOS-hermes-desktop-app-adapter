@@ -6,6 +6,13 @@ const EVA_APP_UPDATE_CHANNEL = 'latest'
 const EVA_APP_UPDATE_BRANCH = 'managed-beta'
 const SAFE_CHECK_FAILURE_MESSAGE = 'evaOS Agent could not check for updates. Try again.'
 const SAFE_APPLY_FAILURE_MESSAGE = 'evaOS Agent could not install the update. Try again.'
+// latest-mac.yml `vendor` key written at build time from the renderer's
+// REQUIRED_BACKEND_CONTRACT (scripts/backend-contract.mjs).
+const EVA_MIN_BACKEND_CONTRACT_KEY = 'evaosMinBackendContract'
+const AGENT_CONTRACT_HOLD_MESSAGES = Object.freeze({
+  'waiting-for-agent': 'This update is waiting for your agent. Connect to your agent, then check again.',
+  'agent-update-required': 'Your agent needs an update first. Electric Sheep will update it, then this app update will be offered.'
+})
 const MANAGED_RELEASE_NOTE_REPLACEMENTS = [
   [/Eva by Electric Sheep/g, 'evaOS Agent'],
   [/Hermes Desktop/g, 'evaOS Agent'],
@@ -67,6 +74,51 @@ function statusFor(app, info, updateAvailable, now = Date.now) {
   }
 }
 
+/**
+ * Whether a release may be offered to this app given the lowest agent
+ * contract it has seen. Returns null when it may, else the hold reason.
+ * Releases without the field predate the gate and stay allowed.
+ */
+function agentContractHold(info, lowestAgentContract) {
+  const raw = info?.vendor?.[EVA_MIN_BACKEND_CONTRACT_KEY]
+  if (raw === undefined || raw === null) return null
+  const required = Number(raw)
+  if (!Number.isInteger(lowestAgentContract)) return 'waiting-for-agent'
+  // A malformed field fails closed: it cannot prove the agent is new enough.
+  return Number.isInteger(required) && lowestAgentContract >= required ? null : 'agent-update-required'
+}
+
+function heldStatus(app, info, reason, now = Date.now) {
+  return { ...statusFor(app, info, false, now), message: AGENT_CONTRACT_HOLD_MESSAGES[reason], reason }
+}
+
+/**
+ * The agent contract each connection last reported, persisted so the gate
+ * holds across launches. The gate uses the lowest across connections.
+ */
+function createAgentContractStore({ load = () => ({}), save = () => undefined } = {}) {
+  const valid = ([key, value]) => Boolean(key) && Number.isInteger(value) && value >= 0
+  let contracts = null
+  const current = () => (contracts ??= Object.fromEntries(Object.entries(load() || {}).filter(valid)))
+
+  return Object.freeze({
+    lowest() {
+      const values = Object.values(current())
+      return values.length > 0 ? Math.min(...values) : null
+    },
+    record(connection, contract) {
+      const key = String(connection || '').slice(0, 256)
+      if (!valid([key, contract]) || current()[key] === contract) return
+      contracts = { ...current(), [key]: contract }
+      try {
+        save(contracts)
+      } catch {
+        // The in-memory value still gates this run.
+      }
+    }
+  })
+}
+
 function unsupportedStatus(message, now = Date.now) {
   return {
     supported: false,
@@ -100,6 +152,7 @@ function createEvaAppUpdater(options) {
     arch = process.arch,
     autoUpdater,
     emitProgress = () => undefined,
+    getLowestAgentContract = () => null,
     isPackaged = app?.isPackaged,
     now = Date.now,
     onError = () => undefined,
@@ -117,7 +170,10 @@ function createEvaAppUpdater(options) {
   }
 
   let lastStatus = null
+  let contractHold = null
   let downloadedVersion = null
+  const originalIsUpdateSupported =
+    typeof autoUpdater.isUpdateSupported === 'function' ? autoUpdater.isUpdateSupported : () => true
   let checkPromise = null
   let applyPromise = null
   let applying = false
@@ -145,6 +201,12 @@ function createEvaAppUpdater(options) {
       url: EVA_APP_UPDATE_FEED,
       channel: EVA_APP_UPDATE_CHANNEL
     })
+    // Never offer an app update the connected agent runtime is too old for.
+    autoUpdater.isUpdateSupported = async info => {
+      if (!(await originalIsUpdateSupported(info))) return false
+      contractHold = agentContractHold(info, getLowestAgentContract())
+      return contractHold === null
+    }
   }
 
   function reportError(stage, error) {
@@ -160,7 +222,7 @@ function createEvaAppUpdater(options) {
   })
 
   autoUpdater.on('update-not-available', info => {
-    lastStatus = statusFor(app, info, false, now)
+    lastStatus = contractHold ? heldStatus(app, info, contractHold, now) : statusFor(app, info, false, now)
   })
 
   autoUpdater.on('download-progress', progress => {
@@ -217,11 +279,14 @@ function createEvaAppUpdater(options) {
       try {
         configure()
         lastStatus = null
+        contractHold = null
         const result = await autoUpdater.checkForUpdates()
         if (!lastStatus) {
           const info = result?.updateInfo
           const version = normalizeVersion(info)
-          lastStatus = statusFor(app, info, Boolean(version && version !== app.getVersion()), now)
+          lastStatus = contractHold
+            ? heldStatus(app, info, contractHold, now)
+            : statusFor(app, info, Boolean(version && version !== app.getVersion()), now)
         }
         return lastStatus
       } catch (error) {
@@ -314,6 +379,9 @@ module.exports = {
   EVA_APP_UPDATE_BRANCH,
   EVA_APP_UPDATE_CHANNEL,
   EVA_APP_UPDATE_FEED,
+  EVA_MIN_BACKEND_CONTRACT_KEY,
+  agentContractHold,
+  createAgentContractStore,
   createEvaAppUpdater,
   releaseNoteCommits,
   safeApplyFailure,

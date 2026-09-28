@@ -6,6 +6,7 @@ import path from 'node:path'
 import test from 'node:test'
 import zlib from 'node:zlib'
 
+import { readRequiredBackendContract } from './backend-contract.mjs'
 import { refreshAndVerifyManagedUpdateRelease } from './refresh-managed-update-metadata.mjs'
 import {
   parseManagedUpdateInfo,
@@ -66,6 +67,8 @@ function createReleaseFixture() {
       `path: ${base}.zip`,
       `sha512: ${digest(content.zip)}`,
       "releaseDate: '2026-08-04T00:00:00.000Z'",
+      'vendor:',
+      `  evaosMinBackendContract: ${readRequiredBackendContract()}`,
       ''
     ].join('\n')
   )
@@ -132,11 +135,45 @@ test('parses electron-builder mac update metadata without reading release notes 
 
   assert.deepEqual(parsed, {
     files: [{ sha512: 'abc', size: 12, url: 'app.zip' }],
+    minBackendContract: null,
     path: 'app.zip',
     sha512: 'abc',
     version: '1.2.3'
   })
 })
+
+test('parses the minimum agent contract from the vendor block', () => {
+  const parsed = parseManagedUpdateInfo(['version: 1.2.3', 'vendor:', '  evaosMinBackendContract: 7'].join('\n'))
+
+  assert.equal(parsed.minBackendContract, 7)
+})
+
+for (const [label, rewrite] of [
+  ['is missing', source => source.replace(/vendor:\n.*\n/, '')],
+  ['differs from REQUIRED_BACKEND_CONTRACT', source => source.replace(/evaosMinBackendContract: \d+/, 'evaosMinBackendContract: 1')]
+]) {
+  test(`rejects an appcast whose minimum agent contract ${label}`, async () => {
+    const fixture = createReleaseFixture()
+    const updateInfoPath = path.join(fixture.releaseDir, 'latest-mac.yml')
+    fs.writeFileSync(updateInfoPath, rewrite(fs.readFileSync(updateInfoPath, 'utf8')))
+
+    try {
+      await assert.rejects(
+        verifyManagedUpdateRelease({
+          manifest,
+          platform: 'darwin',
+          releaseDir: fixture.releaseDir,
+          runCommand: async () => {
+            throw new Error('artifact extraction must not run')
+          }
+        }),
+        /evaosMinBackendContract must equal REQUIRED_BACKEND_CONTRACT/
+      )
+    } finally {
+      fixture.cleanup()
+    }
+  })
+}
 
 test('derives release filenames from package metadata', () => {
   assert.equal(

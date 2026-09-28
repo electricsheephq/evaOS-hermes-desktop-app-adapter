@@ -557,6 +557,17 @@ describe('managed evaOS agent backend updates', () => {
     expect(updateHermesSpy).not.toHaveBeenCalled()
   })
 
+  it('reports each agent contract to the app updater gate', () => {
+    const reportAgentContract = vi.fn().mockResolvedValue(undefined)
+    ;(window as unknown as { hermesDesktop: { updates: object } }).hermesDesktop.updates = { reportAgentContract }
+
+    reportBackendContract(6)
+    reportBackendContract(undefined)
+
+    expect(reportAgentContract).toHaveBeenCalledTimes(1)
+    expect(reportAgentContract).toHaveBeenCalledWith({ connection: 'http://box:9119', contract: 6 })
+  })
+
   it('never starts the backend self-update', async () => {
     const result = await applyBackendUpdate()
 
