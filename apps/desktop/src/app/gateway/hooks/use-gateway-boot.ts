@@ -380,7 +380,7 @@ export function useGatewayBoot({
 
       if (!loggedSwitchSkips.has(entry)) {
         loggedSwitchSkips.add(entry)
-        console.warn(`[gateway-reconnect] skipped entry=${entry} reason=gateway-switching`)
+        console.info(`[gateway-reconnect] skipped entry=${entry} reason=gateway-switching`)
       }
 
       return true
@@ -516,7 +516,7 @@ export function useGatewayBoot({
           const { code, name } = (err ?? {}) as { code?: unknown; name?: unknown }
           const errorClass = typeof name === 'string' && name ? name : typeof err
           const errorCode = typeof code === 'string' || typeof code === 'number' ? ` code=${code}` : ''
-          console.warn(`[gateway-reconnect] attempt failed stage=${stage} error=${errorClass}${errorCode}`)
+          console.info(`[gateway-reconnect] attempt failed stage=${stage} error=${errorClass}${errorCode}`)
         }
 
         // OAuth session expired mid-reconnect: surface the actionable "sign in

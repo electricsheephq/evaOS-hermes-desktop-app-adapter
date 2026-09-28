@@ -889,7 +889,7 @@ describe('useGatewayBoot remote reconnect loop (real hook, fake socket)', () => 
   // #388 diagnosis: a failed or skipped primary re-dial used to leave no
   // trace in the app log. Bounded codes only: no URLs, tickets or tokens.
   it('logs a swallowed reconnect failure with its stage and error class', async () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    const warn = vi.spyOn(console, 'info').mockImplementation(() => undefined)
 
     const desktop = fakeDesktop()
 
@@ -910,7 +910,7 @@ describe('useGatewayBoot remote reconnect loop (real hook, fake socket)', () => 
   })
 
   it('logs once per entry point when a stuck gateway switch skips the re-dial', async () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    const warn = vi.spyOn(console, 'info').mockImplementation(() => undefined)
     render(<Harness />)
     await flushAsync()
 

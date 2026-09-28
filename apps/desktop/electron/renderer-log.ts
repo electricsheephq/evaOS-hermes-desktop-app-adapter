@@ -30,7 +30,8 @@ interface WindowLike {
   webContents: WebContentsLike
 }
 
-const REMEMBERED_RENDERER_DIAGNOSTIC_PREFIX = '[gateway-profile-adoption]'
+// Bounded renderer diagnostics persisted at info level: no URLs or secrets.
+const REMEMBERED_RENDERER_DIAGNOSTIC_PREFIXES = ['[gateway-profile-adoption]', '[gateway-reconnect]']
 
 /** Normalize Electron's two `console-message` signatures into one line, or
  *  null for non-error levels except the one bounded boot diagnostic persisted
@@ -54,7 +55,9 @@ export function formatRendererConsoleLine(
   const lineNo = details ? details.lineNumber : line
 
   const rememberedDiagnostic =
-    level === 1 && typeof text === 'string' && text.startsWith(REMEMBERED_RENDERER_DIAGNOSTIC_PREFIX)
+    level === 1 &&
+    typeof text === 'string' &&
+    REMEMBERED_RENDERER_DIAGNOSTIC_PREFIXES.some(prefix => text.startsWith(prefix))
 
   if (level !== 3 && !rememberedDiagnostic) {
     return null
