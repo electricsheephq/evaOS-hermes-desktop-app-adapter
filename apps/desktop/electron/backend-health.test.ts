@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 
 import { test } from 'vitest'
 
+import { htmlResponseError } from './api-transport'
 import {
   DEFAULT_HEALTH_PROBE_TIMEOUT_MS,
   isAuthRejectionError,
@@ -9,6 +10,7 @@ import {
   isMissingHealthEndpointError,
   isNousCloudAgentUrl,
   isReauthRequiredError,
+  isRedirectResponseError,
   isServerSideHttpError,
   makeNousCloudBackendDownError,
   makeUnsignedOauthError,
@@ -16,6 +18,7 @@ import {
 } from './backend-health'
 
 const GATE_401 = '401: {"error":"unauthenticated","detail":"Unauthorized","reason":"no_cookie","login_url":"/login"}'
+const LOGIN_URL = 'https://login.example/login'
 
 test('uses lightweight /api/health for current backends', async () => {
   const calls: string[][] = []
@@ -343,6 +346,113 @@ test('credentialed 5xx and 429 keep polling — only 401/403 are terminal', asyn
 
     assert.ok(attempts > 1, `${transient} should have retried, got ${attempts} attempt(s)`)
   }
+})
+
+// --- Managed gateway front doors (adapter#385) ---
+//
+// The front door answers /api/health with a 302 to its dashboard login page,
+// with or without the session token, but accepts the token on /api/status.
+
+test('a redirect on /api/health falls back to /api/status with the same credentials', async () => {
+  const calls: string[][] = []
+
+  await waitForHermesReady('https://gw.example', {
+    token: 'session-token',
+    fetchPublicJson: async () => {
+      throw new Error('public probe must not be used when credentialed')
+    },
+    fetchJson: async (url, token) => {
+      calls.push(['status', url, token ?? ''])
+
+      return { version: '0.20.0' }
+    },
+    probeHealth: async url => {
+      calls.push(['probe', url])
+      throw htmlResponseError(url, 302, LOGIN_URL)
+    },
+    probeIsCredentialed: true,
+    sleep: async () => {},
+    timeoutMs: 100,
+    pollMs: 1
+  })
+
+  assert.deepEqual(calls, [
+    ['probe', 'https://gw.example/api/health'],
+    ['status', 'https://gw.example/api/status', 'session-token']
+  ])
+})
+
+test('a redirect on /api/status too is never ready and reports the redirect', async () => {
+  let currentTime = 0
+
+  await assert.rejects(
+    waitForHermesReady('https://gw.example', {
+      token: 'session-token',
+      fetchPublicJson: async () => ({}),
+      fetchJson: async url => {
+        throw htmlResponseError(url, 302, LOGIN_URL)
+      },
+      probeHealth: async url => {
+        throw htmlResponseError(url, 302, LOGIN_URL)
+      },
+      probeIsCredentialed: true,
+      sleep: async () => {},
+      now: () => {
+        currentTime += 20
+
+        return currentTime
+      },
+      timeoutMs: 100,
+      pollMs: 1
+    }),
+    (error: any) => {
+      assert.equal(isReauthRequiredError(error), false)
+      assert.match(error.message, /^Hermes backend did not become ready: /)
+      assert.match(error.message, /redirected \(status 302\)/)
+
+      return true
+    }
+  )
+})
+
+test('a credentialed plain 401 still fails fast for reauth without reaching /api/status', async () => {
+  const calls: string[][] = []
+
+  await assert.rejects(
+    waitForHermesReady('https://gw.example', {
+      token: 'session-token',
+      fetchPublicJson: async () => ({}),
+      fetchJson: async url => {
+        calls.push(['status', url])
+
+        return {}
+      },
+      probeHealth: async url => {
+        calls.push(['probe', url])
+        throw new Error('401: {"detail":"Unauthorized"}')
+      },
+      probeIsCredentialed: true,
+      sleep: async () => {},
+      timeoutMs: 100,
+      pollMs: 1
+    }),
+    (error: any) => isReauthRequiredError(error)
+  )
+
+  assert.deepEqual(calls, [['probe', 'https://gw.example/api/health']])
+})
+
+test('isRedirectResponseError matches the transport redirect message only', () => {
+  for (const status of [301, 302, 307]) {
+    assert.equal(isRedirectResponseError(htmlResponseError('https://gw.example/api/health', status, LOGIN_URL)), true)
+  }
+
+  assert.equal(isRedirectResponseError(htmlResponseError('https://gw.example/api/health', 200)), false)
+  assert.equal(isRedirectResponseError(new Error('401: {"detail":"Unauthorized"}')), false)
+  assert.equal(isRedirectResponseError(new Error('Timed out connecting to Hermes backend after 15000ms')), false)
+  assert.equal(isRedirectResponseError('the request was redirected (status 302)'), false)
+  assert.equal(isRedirectResponseError(null), false)
+  assert.equal(isRedirectResponseError(undefined), false)
 })
 
 test('error-shape predicates', () => {

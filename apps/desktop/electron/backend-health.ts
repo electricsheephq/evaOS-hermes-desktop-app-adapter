@@ -191,6 +191,19 @@ export function isGatedMissingHealthError(error: unknown): boolean {
   return isAuthRejectionError(error) && message.includes('no_cookie')
 }
 
+/**
+ * True for a 3xx reply to a JSON probe. The transport never follows redirects
+ * and names them "…the request was redirected (status 3xx)…" (api-transport.ts
+ * htmlResponseError). A managed gateway front door can gate /api/health behind
+ * its dashboard login while it accepts the session token on /api/status, so a
+ * redirect on the health leg is the same "this probe cannot reach the route"
+ * signal as a gate-shaped 401: fall back to /api/status with the same
+ * credentials. A redirect on /api/status itself is never ready.
+ */
+export function isRedirectResponseError(error: unknown): boolean {
+  return error instanceof Error && /the request was redirected \(status 3\d\d\)/.test(error.message)
+}
+
 /** Tag a terminal reauth failure the main process latches and the overlay keys on. */
 export function makeReauthRequiredError(detail?: string): Error {
   const error = new Error(REMOTE_SESSION_EXPIRED_MESSAGE) as any
@@ -289,9 +302,14 @@ export async function waitForHermesReady(baseUrl: string, options: HermesReadyOp
       // So does a gate-shaped 401 on an ANONYMOUS probe: the dashboard auth
       // gate runs ahead of the SPA catch-all, so a pre-/api/health backend
       // rejects the unknown path as unauthenticated instead of 404 and a
-      // credential-free probe can never observe the 404. Timeouts, 5xx, 429,
-      // and non-gate 401s keep polling health.
-      if (!useStatusFallback && (isMissingHealthEndpointError(error) || isGatedMissingHealthError(error))) {
+      // credential-free probe can never observe the 404. So does a redirect: a
+      // managed front door gates /api/health behind its login page but accepts
+      // the token on /api/status. Timeouts, 5xx, 429, and non-gate 401s keep
+      // polling health.
+      if (
+        !useStatusFallback &&
+        (isMissingHealthEndpointError(error) || isGatedMissingHealthError(error) || isRedirectResponseError(error))
+      ) {
         useStatusFallback = true
 
         continue
