@@ -164,10 +164,20 @@ function isInstallMethodToastSnoozed(): boolean {
  * doesn't nag on every thread switch.
  */
 export function reportBackendContract(contract: number | undefined): void {
-  if (isManagedEvaosAgent() && typeof contract === 'number') {
-    // The app updater holds releases this agent's runtime is too old for.
+  if (isManagedEvaosAgent()) {
+    // The app updater holds releases this agent's runtime is too old for. A
+    // backend without the field (e.g. after a rollback) clears its old value.
     void window.hermesDesktop?.updates
-      ?.reportAgentContract?.({ connection: $connection.get()?.baseUrl || 'agent', contract })
+      ?.reportAgentContract?.({
+        connection: $connection.get()?.baseUrl || 'agent',
+        contract: typeof contract === 'number' ? contract : null
+      })
+      ?.then(result => {
+        // A held update is re-checked at once instead of at the next daily poll.
+        if (result?.lowestChanged && heldUpdateMessage($updateStatus.get()) !== null) {
+          void checkUpdates()
+        }
+      })
       ?.catch(() => undefined)
   }
 

@@ -82,10 +82,12 @@ function statusFor(app, info, updateAvailable, now = Date.now) {
 function agentContractHold(info, lowestAgentContract) {
   const raw = info?.vendor?.[EVA_MIN_BACKEND_CONTRACT_KEY]
   if (raw === undefined || raw === null) return null
-  const required = Number(raw)
+  // Only a positive integer (or its digits) is a requirement; '', false or -1
+  // must not read as 0.
+  const required = typeof raw === 'number' || /^\d+$/.test(String(raw)) ? Number(raw) : NaN
   if (!Number.isInteger(lowestAgentContract)) return 'waiting-for-agent'
   // A malformed field fails closed: it cannot prove the agent is new enough.
-  return Number.isInteger(required) && lowestAgentContract >= required ? null : 'agent-update-required'
+  return Number.isInteger(required) && required > 0 && lowestAgentContract >= required ? null : 'agent-update-required'
 }
 
 function heldStatus(app, info, reason, now = Date.now) {
@@ -106,15 +108,23 @@ function createAgentContractStore({ load = () => ({}), save = () => undefined } 
       const values = Object.values(current())
       return values.length > 0 ? Math.min(...values) : null
     },
+    /** Records a connection's contract; null forgets it (a backend without the field). Returns whether it changed. */
     record(connection, contract) {
       const key = String(connection || '').slice(0, 256)
-      if (!valid([key, contract]) || current()[key] === contract) return
-      contracts = { ...current(), [key]: contract }
+      if (contract === null) {
+        if (!key || !(key in current())) return false
+        const { [key]: _forgotten, ...rest } = current()
+        contracts = rest
+      } else {
+        if (!valid([key, contract]) || current()[key] === contract) return false
+        contracts = { ...current(), [key]: contract }
+      }
       try {
         save(contracts)
       } catch {
         // The in-memory value still gates this run.
       }
+      return true
     }
   })
 }

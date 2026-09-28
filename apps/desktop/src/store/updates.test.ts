@@ -565,8 +565,44 @@ describe('managed evaOS agent backend updates', () => {
     reportBackendContract(6)
     reportBackendContract(undefined)
 
-    expect(reportAgentContract).toHaveBeenCalledTimes(1)
-    expect(reportAgentContract).toHaveBeenCalledWith({ connection: 'http://box:9119', contract: 6 })
+    expect(reportAgentContract).toHaveBeenCalledTimes(2)
+    expect(reportAgentContract).toHaveBeenNthCalledWith(1, { connection: 'http://box:9119', contract: 6 })
+    // A backend without the field clears the connection's old value.
+    expect(reportAgentContract).toHaveBeenNthCalledWith(2, { connection: 'http://box:9119', contract: null })
+  })
+
+  it('re-checks a held app update when the lowest agent contract changes', async () => {
+    const reportAgentContract = vi.fn().mockResolvedValue({ lowestChanged: true })
+
+    ;(window as unknown as { hermesDesktop: { updates: object } }).hermesDesktop.updates = {
+      check: checkClientMock,
+      reportAgentContract
+    }
+    $updateStatus.set({ ...status({ updateAvailable: false }), message: 'held', reason: 'waiting-for-agent' })
+
+    reportBackendContract(REQUIRED_BACKEND_CONTRACT)
+
+    await vi.waitFor(() => expect(checkClientMock).toHaveBeenCalledTimes(1))
+  })
+
+  it('does not re-check when nothing is held or the lowest contract is unchanged', async () => {
+    const reportAgentContract = vi.fn().mockResolvedValue({ lowestChanged: true })
+
+    ;(window as unknown as { hermesDesktop: { updates: object } }).hermesDesktop.updates = {
+      check: checkClientMock,
+      reportAgentContract
+    }
+    $updateStatus.set(status({ updateAvailable: false }))
+    reportBackendContract(REQUIRED_BACKEND_CONTRACT)
+    await new Promise(resolve => setTimeout(resolve, 0))
+
+    reportAgentContract.mockResolvedValue({ lowestChanged: false })
+    $updateStatus.set({ ...status({ updateAvailable: false }), message: 'held', reason: 'agent-update-required' })
+    reportBackendContract(REQUIRED_BACKEND_CONTRACT)
+
+    await vi.waitFor(() => expect(reportAgentContract).toHaveBeenCalledTimes(2))
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(checkClientMock).not.toHaveBeenCalled()
   })
 
   it('never starts the backend self-update', async () => {

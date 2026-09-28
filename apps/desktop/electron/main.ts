@@ -18891,9 +18891,14 @@ ipcMain.handle('hermes:updates:check', async (_event, opts) => {
 })
 
 ipcMain.handle('hermes:updates:agent-contract', async (_event, payload) => {
-  if (EVA_MANAGED_BUILD) {
-    evaAgentContracts.record(payload?.connection, payload?.contract)
+  if (!EVA_MANAGED_BUILD) {
+    return { lowestChanged: false }
   }
+
+  const before = evaAgentContracts.lowest()
+  evaAgentContracts.record(payload?.connection, payload?.contract ?? null)
+
+  return { lowestChanged: evaAgentContracts.lowest() !== before }
 })
 
 ipcMain.handle('hermes:updates:apply', async (_event, payload) => {
