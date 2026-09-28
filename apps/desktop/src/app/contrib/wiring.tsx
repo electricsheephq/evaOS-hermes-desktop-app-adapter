@@ -1199,7 +1199,7 @@ export function ContribWiring({ children }: { children: ReactNode }) {
     [actions, currentView]
   )
 
-  const terminalNode = useMemo(() => (managedEva ? null : <TerminalSurface />), [managedEva])
+  const terminalNode = useMemo(() => <TerminalSurface />, [])
 
   const statusbarNode = useMemo(
     () => (

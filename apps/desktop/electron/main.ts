@@ -204,7 +204,6 @@ import { installEmbedReferer } from './embed-referer'
 const { createEvaAppUpdater, safeApplyFailure, safeCheckFailure } = require('./eva-app-updater.cjs')
 const {
   assertEvaManagedLocalMutationAllowed,
-  assertEvaManagedLocalTerminalAllowed,
   buildEvaAccountRendererResetScript,
   EVA_MANAGED_POLICY,
   probeEvaSecureStorageEarlyKey,
@@ -16204,8 +16203,6 @@ ipcMain.handle('hermes:window:openBrowser', async (_event, tabId) => {
 // never ensureRuntime(), which would kick off a first-run install from a menu
 // click; an unresolved runtime is reported instead.
 ipcMain.handle('hermes:window:openInTerminal', async (_event, sessionId, opts) => {
-  assertEvaManagedLocalTerminalAllowed(EVA_MANAGED_BUILD)
-
   if (typeof sessionId !== 'string' || !sessionId.trim()) {
     return { ok: false, error: 'invalid-session-id' }
   }
@@ -18847,8 +18844,6 @@ registerMcpOauthCallbackIpc()
 // Embedded terminal PTY host (hermes:terminal:*) — see terminal-ipc.ts.
 const terminalIpc = registerTerminalIpc({
   isWindows: IS_WINDOWS,
-  assertLocalMutationAllowed: operation => assertEvaManagedLocalMutationAllowed(EVA_MANAGED_BUILD, operation),
-  assertLocalTerminalAllowed: () => assertEvaManagedLocalTerminalAllowed(EVA_MANAGED_BUILD),
   findOnPath,
   rememberLog,
   activeSshTerminalTarget,
