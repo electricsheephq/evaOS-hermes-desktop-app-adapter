@@ -21,7 +21,7 @@ import type { ProfileScope } from '@/hermes'
 import { useI18n } from '@/i18n'
 import { triggerHaptic } from '@/lib/haptics'
 import { FolderOpen, Loader2, Monitor, Package, RefreshCw, Trash2 } from '@/lib/icons'
-import { CATALOG_OPEN_DOCS_MESSAGE, CATALOG_ORIGIN, CATALOG_PICKER_URL, catalogDocsUrl } from '@/lib/plugin-catalog'
+import { CATALOG_ORIGIN, CATALOG_PICKER_URL } from '@/lib/plugin-catalog'
 import { cn } from '@/lib/utils'
 import {
   $agentPluginBusy,
@@ -81,8 +81,6 @@ interface PluginPickMessage {
   subdir?: string
   tier?: string
   type?: string
-  /** Only on CATALOG_OPEN_DOCS_MESSAGE. */
-  url?: unknown
 }
 
 /** Deep-link anchor for a package row (`/capabilities?tab=plugins&plugin=<key>`).
@@ -588,16 +586,6 @@ export const PluginsTab = memo(function PluginsTab({
       }
 
       const data = event.data as null | PluginPickMessage
-
-      if (data?.type === CATALOG_OPEN_DOCS_MESSAGE) {
-        const url = catalogDocsUrl(data.url)
-
-        if (url) {
-          void window.hermesDesktop?.openExternal?.(url)
-        }
-
-        return
-      }
 
       if (!data || data.type !== 'hermes-plugin-pick' || !data.name || !data.repo) {
         return

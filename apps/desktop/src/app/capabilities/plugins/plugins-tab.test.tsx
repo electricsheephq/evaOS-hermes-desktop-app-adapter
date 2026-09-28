@@ -235,28 +235,6 @@ describe('PluginsTab', () => {
     })
   })
 
-  it('opens catalog docs links through openExternal (the iframe has no allow-popups)', () => {
-    const openExternal = vi.fn(async () => undefined)
-    ;(window as { hermesDesktop?: unknown }).hermesDesktop = { openExternal }
-    render(<PluginsTab profile="workbot" />)
-
-    const post = (url: unknown, origin = 'https://hermes-agent.nousresearch.com') =>
-      window.dispatchEvent(new MessageEvent('message', { data: { type: 'hermes-open-docs', url }, origin }))
-
-    post('https://hermes-agent.nousresearch.com/docs/plugins/weather-plugin')
-    post('http://hermes-agent.nousresearch.com/docs/plugins/weather-plugin')
-    post('https://evil.example.com/docs')
-    post('javascript:alert(1)')
-    post('https://user:pass@hermes-agent.nousresearch.com/docs')
-    post(42)
-    post('https://hermes-agent.nousresearch.com/docs/other', 'https://evil.example.com')
-
-    expect(openExternal).toHaveBeenCalledTimes(1)
-    expect(openExternal).toHaveBeenCalledWith('https://hermes-agent.nousresearch.com/docs/plugins/weather-plugin')
-    expect($pluginInstallRequest.get()).toBeNull()
-    delete (window as { hermesDesktop?: unknown }).hermesDesktop
-  })
-
   it('ignores pick messages from foreign origins', () => {
     render(<PluginsTab profile={null} />)
 
