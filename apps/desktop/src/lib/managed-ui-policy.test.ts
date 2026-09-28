@@ -1,15 +1,16 @@
-import { readFileSync } from 'node:fs'
-import { dirname, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { createRequire } from 'node:module'
 
 import { describe, expect, it } from 'vitest'
 
 import {
   assertManagedGatewayMethodAllowed,
   isManagedConfigFieldVisible,
-  isManagedSettingsViewVisible,
-  MANAGED_ALLOWED_GATEWAY_READS
+  isManagedSettingsViewVisible
 } from './managed-ui-policy'
+
+const { isEvaManagedGatewayMethodBlocked } = createRequire(import.meta.url)('../../electron/eva-managed.cjs') as {
+  isEvaManagedGatewayMethodBlocked: (method: string) => boolean
+}
 
 describe('managed renderer policy', () => {
   it('removes Billing without narrowing any other Settings destination', () => {
@@ -67,19 +68,37 @@ describe('managed renderer policy', () => {
     }
   })
 
-  it('keeps the renderer read allowlist identical to the Electron main-process list', () => {
-    const source = readFileSync(
-      resolve(dirname(fileURLToPath(import.meta.url)), '../../electron/eva-managed.cjs'),
-      'utf8'
-    )
+  it('makes the same allow or block decision as the Electron main-process gate', () => {
+    for (const method of [
+      'billing.state',
+      'billing.charge_status',
+      'subscription.state',
+      'usage.bars',
+      'billing.charge',
+      'billing.auto_reload',
+      'billing.step_up',
+      'subscription.change',
+      'subscription.resume',
+      'subscription.upgrade',
+      'subscription.preview',
+      'billing.future_method',
+      'subscription.future_method',
+      'session.status',
+      'usage.snapshot',
+      'plugin.billing-helper.run'
+    ]) {
+      let rendererBlocked = false
 
-    const literal = source.match(/const EVA_MANAGED_ALLOWED_GATEWAY_READS = new Set\(\[([^\]]*)\]\)/)
+      try {
+        assertManagedGatewayMethodAllowed(method, true)
+      } catch {
+        rendererBlocked = true
+      }
 
-    expect(literal).not.toBeNull()
-
-    const mainProcessReads = [...(literal?.[1] ?? '').matchAll(/'([^']+)'/g)].map(match => match[1]).sort()
-
-    expect(mainProcessReads).toEqual([...MANAGED_ALLOWED_GATEWAY_READS].sort())
-    expect(mainProcessReads).toHaveLength(4)
+      expect({ method, blocked: rendererBlocked }).toEqual({
+        method,
+        blocked: isEvaManagedGatewayMethodBlocked(method)
+      })
+    }
   })
 })

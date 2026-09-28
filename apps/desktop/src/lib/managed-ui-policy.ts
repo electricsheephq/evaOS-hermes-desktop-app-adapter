@@ -2,7 +2,7 @@ import { isManagedEvaosAgent } from '@/i18n/managed-brand'
 import { $evaManagedStatus } from '@/store/support-picker'
 
 // Must match EVA_MANAGED_ALLOWED_GATEWAY_READS in electron/eva-managed.cjs.
-export const MANAGED_ALLOWED_GATEWAY_READS = new Set([
+const MANAGED_ALLOWED_GATEWAY_READS = new Set([
   'billing.charge_status',
   'billing.state',
   'subscription.state',
