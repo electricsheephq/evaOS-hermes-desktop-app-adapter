@@ -166,8 +166,10 @@ def _collect_profile_gateway_topology() -> Dict[str, Any]:
     for name, home in homes:
         try:
             # A served profile's liveness is the multiplexer's: listing it here showed one phantom
-            # gateway per served profile beside the host.
-            if not (_check_gateway_running(home) if name == "default" else _has_own_gateway(home)):
+            # gateway per served profile beside the host. A managed process's one home is its own
+            # home, so the gateway a host record names there is its own gateway, not a host serving it.
+            own = name == "default" or owner is not None
+            if not (_check_gateway_running(home) if own else _has_own_gateway(home)):
                 continue
         except Exception:
             continue

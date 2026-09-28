@@ -94,6 +94,45 @@ class TestCollectProfileGatewayTopology:
         assert topo["profiles"] == ["main"]
         assert topo["gateway_mode"] == "single"
 
+    @staticmethod
+    def _patch_managed_owner_gateway(monkeypatch, home, *, running, pid=4321):
+        """Managed ``main`` whose home IS the process home: the multiplexer record found for that
+        home names the profile's own gateway pid, and liveness reports that same pid."""
+        from types import SimpleNamespace
+
+        import gateway.status as status_mod
+        import hermes_cli.profiles as profiles_mod
+        from hermes_cli import managed_profile_scope
+
+        monkeypatch.setattr(managed_profile_scope, "managed_profile_name", lambda: "main")
+        monkeypatch.setattr(_web_server_gateway, "get_hermes_home", lambda: home)
+        monkeypatch.setattr(profiles_mod, "_check_gateway_running", lambda _home: running)
+        monkeypatch.setattr(status_mod, "read_runtime_status", lambda _path=None: None)
+        monkeypatch.setattr(status_mod, "multiplexer_liveness_for_profile", lambda _home: (pid, {}))
+        monkeypatch.setattr(
+            status_mod, "resolve_gateway_liveness",
+            lambda **_kw: SimpleNamespace(running=running, pid=pid if running else None))
+
+    def test_managed_process_lists_its_own_gateway_despite_same_pid_host_record(self, tmp_path, monkeypatch):
+        # r34.1: the managed profile's own gateway was dropped because the host record for its home
+        # names the same pid, and the served-profile rule read that as "served, not its own".
+        self._patch_managed_owner_gateway(monkeypatch, tmp_path / "main", running=True)
+
+        topo = _collect_profile_gateway_topology()
+
+        assert topo["profiles"] == ["main"]
+        assert topo["gateway_mode"] == "single"
+        assert topo["gateways"] == [{"profile": "main", "ports": {}}]
+
+    def test_managed_process_without_a_running_gateway_reports_none(self, tmp_path, monkeypatch):
+        self._patch_managed_owner_gateway(monkeypatch, tmp_path / "main", running=False)
+
+        topo = _collect_profile_gateway_topology()
+
+        assert topo["profiles"] == ["main"]
+        assert topo["gateway_mode"] == "none"
+        assert topo["gateways"] == []
+
     def test_flat_managed_default_reports_literal_owner(self, tmp_path, monkeypatch):
         import gateway.status as status_mod
         import hermes_cli.profiles as profiles_mod
