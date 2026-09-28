@@ -7,8 +7,6 @@ const {
   EVA_MANAGED_POLICY,
   EvaBrokerError,
   assertEvaManagedApiRequestAllowed,
-  assertEvaManagedLocalMutationAllowed,
-  assertEvaManagedLocalTerminalAllowed,
   brokerPost,
   buildEvaAccountRendererResetScript,
   buildEvaDesktopAuthUrl,
@@ -84,51 +82,6 @@ test('managed policy is remote-only, account-neutral, and has no Nous endpoint',
   assert.equal(Object.hasOwn(EVA_MANAGED_POLICY, 'allowedAgentIds'), false)
   assert.equal(EVA_MANAGED_POLICY.runtimeHostSuffix, '.ecs.electricsheephq.com')
   assert.doesNotMatch(serialized, /nousresearch|portal\.nous|github\.com/i)
-})
-
-test('managed mode refuses to start a local terminal for a remote agent', () => {
-  assert.throws(
-    () => assertEvaManagedLocalTerminalAllowed(true),
-    error =>
-      error instanceof EvaBrokerError &&
-      error.statusCode === 403 &&
-      error.code === 'managed-terminal-unavailable' &&
-      /unavailable for this managed remote agent/i.test(error.message)
-  )
-  assert.doesNotThrow(() => assertEvaManagedLocalTerminalAllowed(false))
-})
-
-test('managed mode fails closed before local machine mutation while unmanaged mode preserves it', () => {
-  const capabilities = [
-    'Writing local files',
-    'Renaming local files',
-    'Trashing local files',
-    'Mutating local Git state',
-    'Controlling local terminal processes'
-  ]
-
-  for (const capability of capabilities) {
-    let managedMutationRan = false
-    assert.throws(
-      () => {
-        assertEvaManagedLocalMutationAllowed(true, capability)
-        managedMutationRan = true
-      },
-      error =>
-        error instanceof EvaBrokerError &&
-        error.statusCode === 403 &&
-        error.code === 'managed-local-mutation-unavailable' &&
-        error.message.includes(capability)
-    )
-    assert.equal(managedMutationRan, false)
-
-    let unmanagedMutationRan = false
-    assert.doesNotThrow(() => {
-      assertEvaManagedLocalMutationAllowed(false, capability)
-      unmanagedMutationRan = true
-    })
-    assert.equal(unmanagedMutationRan, true)
-  }
 })
 
 test('managed gateway policy blocks hidden Nous billing methods and their future namespaces', () => {

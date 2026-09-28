@@ -114,9 +114,9 @@ Buckets: COVERED-UPSTREAM = the tag version is taken and the fork code deleted b
 | 9 | `apps/desktop/e2e/launch-packaged-app.spec.ts` | 0 | COVERED-UPSTREAM | modify/delete: upstream purged; fork change was product-name branding only; removed |
 | 9 | `apps/desktop/e2e/mock-backend-setup.spec.ts` | 0 | COVERED-UPSTREAM | modify/delete: upstream purged; fork change was a managed skip only (managed-boot spec covers managed); removed |
 | 9 | `apps/desktop/electron/backend-dial-claim.test.ts` | 1 | COVERED-UPSTREAM | Upstream replaced the main-source wiring scans (whose slice bound the fork had widened) with behavioral claim tests; took upstream. |
-| 9 | `apps/desktop/electron/fs-ipc.test.ts` | 1 | RE-EXPRESS | Merged upstream reveal tests with the fork managed-boundary test in one mock set; boundary list now also covers upstream's new desktop-plugin removal channel. |
-| 9 | `apps/desktop/electron/fs-ipc.ts` | 0 | RE-EXPRESS | Auto-merged file (no markers): added the managed local-access guard to upstream's new desktop-plugin removal handler so the managed denial covers it. |
-| 9 | `apps/desktop/electron/git-ipc.ts` | 1 | RE-EXPRESS | Took upstream's removal of the PR-comment fetch handler; kept the managed local-mutation guard on pull request creation. |
+| 9 | `apps/desktop/electron/fs-ipc.test.ts` | 1 | RE-EXPRESS | Merged upstream reveal tests with the fork managed-boundary test in one mock set; boundary list now also covers upstream's new desktop-plugin removal channel. **Removed 2026-09-28 (owner direction): identical to v2026.9.24 again; `fs-ipc-managed.test.ts` proves the managed build runs the upstream handlers.** |
+| 9 | `apps/desktop/electron/fs-ipc.ts` | 0 | RE-EXPRESS | Auto-merged file (no markers): added the managed local-access guard to upstream's new desktop-plugin removal handler so the managed denial covers it. **Removed 2026-09-28 (owner direction): the managed local-access guard and the fork `agentPluginsRoot` handler are gone; the file is identical to v2026.9.24 and managed builds install and load desktop plugin halves the upstream way.** |
+| 9 | `apps/desktop/electron/git-ipc.ts` | 1 | RE-EXPRESS | Took upstream's removal of the PR-comment fetch handler; kept the managed local-mutation guard on pull request creation. **Removed 2026-09-28 (owner direction): the local-mutation guard is gone; the file is identical to v2026.9.24.** |
 | 9 | `apps/desktop/electron/hardening.test.ts` | 1 | CARRY-AS-IS | Kept the fork safe-storage decrypt tests; accepted upstream's purge of two main-source scan tests. |
 | 9 | `apps/desktop/electron/main.ts` | 17 | RE-EXPRESS | Took upstream bodies of ensureBackend and runHermesStart re-wrapped in the fork managed backend gate; kept eva IPC, managed profile get/remember denial, managed connection id and deep-link manager; managed builds ignore and refuse the new app-wide default profile route; quit prompt keeps upstream ownership copy plus app name. |
 | 9 | `apps/desktop/electron/quit-guard.test.ts` | 1 | RE-EXPRESS | Kept upstream ownership tests and the fork app-identity test updated to the new parameter order. |
@@ -144,7 +144,7 @@ Buckets: COVERED-UPSTREAM = the tag version is taken and the fork code deleted b
 | 9 | `apps/desktop/src/app/chat/sidebar/chat-sidebar.integration.test.tsx` | 1 | CARRY-AS-IS | Union of upstream's expanded store imports and the fork cron-error fixture imports. |
 | 9 | `apps/desktop/src/app/chat/sidebar/index.tsx` | 2 | RE-EXPRESS | Cron section needs upstream's advanced-chrome mode and shows for jobs or the fork's cron read errors. |
 | 9 | `apps/desktop/src/app/chat/sidebar/profile-rail-fleet.test.tsx` | 1 | CARRY-AS-IS | Profile store import carries upstream's order atom and the fork active-profile and profile-error atoms used by the unavailable-profile tests. |
-| 9 | `apps/desktop/src/app/contrib/controller.tsx` | 2 | RE-EXPRESS | Upstream advanced-chrome terminal collapse binding and mode-context subscriptions, with the terminal binding still skipped when the managed terminal UI is hidden. |
+| 9 | `apps/desktop/src/app/contrib/controller.tsx` | 2 | RE-EXPRESS | Upstream advanced-chrome terminal collapse binding and mode-context subscriptions, with the terminal binding still skipped when the managed terminal UI is hidden. **Removed 2026-09-28 (owner direction): the terminal binding and palette toggle are unconditional again; the file is identical to v2026.9.24.** |
 | 9 | `apps/desktop/src/app/contrib/wiring.tsx` | 2 | RE-EXPRESS | Upstream imports and session retry action; kept the fork managed-brand import and cron management by job identity; dropped message-hydration imports that no longer have callers. |
 | 9 | `apps/desktop/src/app/cron/index.tsx` | 1 | RE-EXPRESS | Upstream cron model-choice values with the fork managed provider display label. |
 | 9 | `apps/desktop/src/app/gateway/hooks/use-gateway-boot.test.tsx` | 3 | CARRY-AS-IS | Kept the fork managed-boot adoption tests and harness event hook alongside upstream's new imports, server-request option and auth-parking test.; managed deadline copy now expects the managed-branded form of the upstream reworded message |
@@ -166,7 +166,7 @@ Buckets: COVERED-UPSTREAM = the tag version is taken and the fork code deleted b
 | 9 | `apps/desktop/src/app/session/hooks/use-session-list-actions.ts` | 1 | CARRY-AS-IS | Upstream-only insertion of the corrupt-store notice and retryable-error filter; taken as-is. |
 | 9 | `apps/desktop/src/app/session/hooks/use-session-state-cache.ts` | 1 | COVERED-UPSTREAM | Both sides converted the session-states import to a multi-line list; took upstream's list, which already carries the fork's foreground helper. |
 | 9 | `apps/desktop/src/app/session/hooks/wrong-session-closeout.test.tsx` | 1 | CARRY-AS-IS | Both added the same integration test; the fork copy is upstream's plus owner-hint carry and reserved-page rotation cases, so kept the fork superset. |
-| 9 | `apps/desktop/src/app/settings/about-settings.tsx` | 1 | RE-EXPRESS | Upstream subpage-aware About entry now returns the fork managed About panel first; the fork's separate unmanaged wrapper is replaced by upstream's updates panel. |
+| 9 | `apps/desktop/src/app/settings/about-settings.tsx` | 1 | RE-EXPRESS | Upstream subpage-aware About entry now returns the fork managed About panel first; the fork's separate unmanaged wrapper is replaced by upstream's updates panel. The managed About panel keeps the Uninstall subpage: upstream's uninstaller runs `hermes_cli.uninstall` through the local agent's Python, which a managed build never has, so every mode would fail with `agent-missing`. A managed customer removes the app by moving it to the Trash. |
 | 9 | `apps/desktop/src/app/settings/browser-real-profile-panel.tsx` | 1 | CARRY-AS-IS | Callback dependencies name both the fork enable gate and upstream's write scope. |
 | 9 | `apps/desktop/src/app/settings/computer-use-panel.tsx` | 2 | CARRY-AS-IS | Kept both upstream's i18n hook and the fork managed-brand detection. |
 | 9 | `apps/desktop/src/app/settings/config-settings.test.tsx` | 2 | RE-EXPRESS | Upstream's section-parameterized render helper on the fork's shared query client, which the fork refetch test inspects.; expectations follow upstream concrete settings request profile (write scope and scoped cache key) |
@@ -300,7 +300,18 @@ State DB rollback (not a numbered RISK row, found by the compat suite): upstream
 - Desktop: evaOS identity and release scripts, `eva-managed.cjs`, `eva-ws-relay.cjs`, support-target picker, managed boot, connectors/updater carry, `npm run test:managed`.
 - CI: the fork's slice matrix, compat-source preparation and durations job; both desktop e2e jobs.
 
-Desktop behaviour choices made during the resolution (review in PR): managed builds ignore the default-profile route; the `message.reaction` gate; plugin removal returns the managed denial; support indicator placement; `/restart` stays a desktop action; connection-lost wording; stricter foreground check; the new fr/de/es strings are machine-written and unreviewed.
+Desktop behaviour choices made during the resolution (review in PR): managed builds ignore the default-profile route; the `message.reaction` gate; plugin removal returns the managed denial (removed 2026-09-28, see below); support indicator placement; `/restart` stays a desktop action; connection-lost wording; stricter foreground check; the new fr/de/es strings are machine-written and unreviewed.
+
+2026-09-28 (owner direction: work the same as upstream): the managed local-access guard on `fs-ipc.ts` (local files, desktop-plugin root, probe, install, reconcile and removal) and #383's fixed "agent only" probe answer in `plugin-install-modal.tsx` (with its `catalogOnly` string) were removed. Both files match v2026.9.24.
+
+2026-09-28, same direction: managed builds act on this computer the upstream way. A managed build talks to a URL remote, so none of these reach the remote agent. Removed:
+- the embedded terminal denial (`terminal-ipc.ts` start/write/resize/dispose, `hermes:window:openInTerminal`) and the hidden terminal pane, keybinds, statusbar toggle and palette entry (`controller.tsx`, `wiring.tsx`, `use-keybinds.ts`, `use-statusbar-items.tsx`, `isManagedTerminalUiVisible`);
+- the local git mutation guard in `git-ipc.ts` (worktrees, branch switch, stage/unstage/revert, commit, push, PR create);
+- the default project folder get/set/pick denial;
+- the uninstall summary/run refusal (the handlers match upstream; without a local agent runtime a run returns `agent-missing`). The managed About panel still hides the uninstall section (row 9);
+- the managed branch of `reachablePreviewUrl` (upstream returns the raw URL when there is no SSH target).
+
+`assertEvaManagedLocalMutationAllowed` and `assertEvaManagedLocalTerminalAllowed` had no callers left and were deleted. `terminal-ipc.ts`, `git-ipc.ts`, `controller.tsx`, `use-keybinds.ts` and `reachablePreviewUrl` match v2026.9.24.
 
 ## Upstream semantics that change fleet-visible behaviour
 
