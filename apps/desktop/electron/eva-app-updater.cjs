@@ -113,8 +113,7 @@ function createAgentContractStore({ load = () => ({}), save = () => undefined } 
       const key = String(connection || '').slice(0, 256)
       if (contract === null) {
         if (!key || !(key in current())) return false
-        const { [key]: _forgotten, ...rest } = current()
-        contracts = rest
+        contracts = Object.fromEntries(Object.entries(current()).filter(([known]) => known !== key))
       } else {
         if (!valid([key, contract]) || current()[key] === contract) return false
         contracts = { ...current(), [key]: contract }
