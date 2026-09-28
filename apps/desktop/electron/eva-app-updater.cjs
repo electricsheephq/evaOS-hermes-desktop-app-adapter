@@ -170,6 +170,7 @@ function createEvaAppUpdater(options) {
   }
 
   let lastStatus = null
+  let lastAvailableInfo = null
   let contractHold = null
   let downloadedVersion = null
   const originalIsUpdateSupported =
@@ -218,6 +219,7 @@ function createEvaAppUpdater(options) {
   }
 
   autoUpdater.on('update-available', info => {
+    lastAvailableInfo = info
     lastStatus = statusFor(app, info, true, now)
   })
 
@@ -284,6 +286,7 @@ function createEvaAppUpdater(options) {
         if (!lastStatus) {
           const info = result?.updateInfo
           const version = normalizeVersion(info)
+          lastAvailableInfo = info
           lastStatus = contractHold
             ? heldStatus(app, info, contractHold, now)
             : statusFor(app, info, Boolean(version && version !== app.getVersion()), now)
@@ -326,6 +329,18 @@ function createEvaAppUpdater(options) {
           }
         }
 
+        // The lowest agent contract can drop after the check (another agent
+        // connects), so the gate is re-read before download and install.
+        const heldApply = () => {
+          const hold = agentContractHold(lastAvailableInfo, getLowestAgentContract())
+          if (!hold) return null
+          lastStatus = heldStatus(app, lastAvailableInfo, hold, now)
+          return { ok: false, error: hold, message: lastStatus.message }
+        }
+
+        const heldBeforeDownload = heldApply()
+        if (heldBeforeDownload) return heldBeforeDownload
+
         downloadedVersion = null
         emitProgress({ stage: 'fetch', message: 'Downloading the signed update…', percent: 0 })
         await autoUpdater.downloadUpdate()
@@ -333,6 +348,9 @@ function createEvaAppUpdater(options) {
         if (!downloadedVersion) {
           throw new Error('The update downloaded without a verified release identity.')
         }
+
+        const heldBeforeInstall = heldApply()
+        if (heldBeforeInstall) return heldBeforeInstall
 
         await new Promise((resolve, reject) => {
           schedule(() => {

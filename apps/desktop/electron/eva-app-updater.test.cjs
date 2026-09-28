@@ -427,6 +427,30 @@ test('holds a gated release while the lowest agent contract is too old', async (
   assert.equal(updater.downloadCalls, 0)
 })
 
+test('apply re-reads the agent contract gate after an earlier check', async () => {
+  let lowest = 8
+  const updater = new GatedUpdater(GATED_RELEASE)
+  const service = createEvaAppUpdater({
+    app: { getVersion: () => '2026.7.20-es.8', isPackaged: true },
+    arch: 'arm64',
+    autoUpdater: updater,
+    getLowestAgentContract: () => lowest,
+    isPackaged: true,
+    now: () => 1234,
+    platform: 'darwin',
+    schedule: callback => callback()
+  })
+
+  assert.equal((await service.check()).updateAvailable, true)
+  lowest = 6
+  const applied = await service.apply()
+
+  assert.equal(applied.ok, false)
+  assert.equal(applied.error, 'agent-update-required')
+  assert.equal(updater.downloadCalls, 0)
+  assert.equal(updater.installCalls.length, 0)
+})
+
 test('offers a gated release once every agent meets its contract', async () => {
   const { service } = gatedFixture({ info: GATED_RELEASE, lowest: 8 })
 
