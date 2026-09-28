@@ -352,13 +352,19 @@ function createEvaAppUpdater(options) {
         const heldBeforeInstall = heldApply()
         if (heldBeforeInstall) return heldBeforeInstall
 
-        await new Promise((resolve, reject) => {
+        const heldAtInstall = await new Promise((resolve, reject) => {
           schedule(() => {
+            // Re-read at the handoff itself: the contract can drop during the delay.
+            const held = heldApply()
+            if (held) {
+              resolve(held)
+              return
+            }
             let rollbackHandoff
             try {
               rollbackHandoff = prepareInstallHandoff()
               autoUpdater.quitAndInstall(false, true)
-              resolve()
+              resolve(null)
             } catch (error) {
               if (typeof rollbackHandoff === 'function') {
                 rollbackHandoff()
@@ -367,6 +373,7 @@ function createEvaAppUpdater(options) {
             }
           }, 500)
         })
+        if (heldAtInstall) return heldAtInstall
         return { ok: true, handedOff: true, message: `Installing evaOS Agent ${downloadedVersion}.` }
       } catch (error) {
         reportError('apply', error)
