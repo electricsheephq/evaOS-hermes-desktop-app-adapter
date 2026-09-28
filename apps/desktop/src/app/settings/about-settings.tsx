@@ -50,7 +50,7 @@ function relativeTime(ms: number | undefined, a: Translations['settings']['about
   return a.daysAgo(Math.round(diff / 86_400_000))
 }
 
-function ManagedAboutSettings() {
+function ManagedAboutSettings({ includeUninstall }: { includeUninstall: boolean }) {
   const { t } = useI18n()
   const a = t.settings.about
   const version = useStore($desktopVersion)
@@ -105,6 +105,12 @@ function ManagedAboutSettings() {
           {a.checkNow}
         </Button>
       </div>
+
+      {includeUninstall && (
+        <div className="mx-auto mt-4 w-full max-w-2xl">
+          <UninstallSection />
+        </div>
+      )}
     </SettingsContent>
   )
 }
@@ -116,16 +122,16 @@ interface AboutSettingsProps {
 export function AboutSettings({ subpage }: AboutSettingsProps = {}) {
   useSettingDeepLink('about', page => subpage === undefined || page === subpage)
 
-  if (isManagedEvaosAgent()) {
-    return <ManagedAboutSettings />
-  }
-
   if (subpage === 'uninstall') {
     return (
       <SettingsContent>
         <UninstallSection />
       </SettingsContent>
     )
+  }
+
+  if (isManagedEvaosAgent()) {
+    return <ManagedAboutSettings includeUninstall={subpage === undefined} />
   }
 
   return <AppUpdatesSettings includeUninstall={subpage === undefined} />

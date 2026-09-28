@@ -19264,19 +19264,8 @@ async function runDesktopUninstall(mode) {
   return { ok: true, mode, willRemoveAppBundle: Boolean(removeBundle), scriptPath }
 }
 
-ipcMain.handle('hermes:uninstall:summary', async () => {
-  if (EVA_MANAGED_BUILD) {
-    return { available: false, managed: true, message: 'evaOS Agent does not install a local agent runtime.' }
-  }
-
-  return getUninstallSummary()
-})
-
+ipcMain.handle('hermes:uninstall:summary', async () => getUninstallSummary())
 ipcMain.handle('hermes:uninstall:run', async (_event, payload) => {
-  if (EVA_MANAGED_BUILD) {
-    throw new Error('evaOS Agent does not install a local agent runtime.')
-  }
-
   const mode = payload && typeof payload === 'object' ? payload.mode : payload
 
   return runDesktopUninstall(String(mode || ''))
