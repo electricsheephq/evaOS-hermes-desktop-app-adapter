@@ -44,9 +44,9 @@ vi.mock('./routing', async importOriginal => {
   }
 })
 
-import { host } from '@hermes/plugin-sdk'
+import { host, resolveSiblingWsUrl } from '@hermes/plugin-sdk'
 
-import { displayRequest, isEventForBotScreen } from './screen-connection'
+import { displayRequest, isEventForBotScreen, resolveScreenWsUrl } from './screen-connection'
 
 const bot = { name: 'ops' } as RosterRow
 const orphan = { name: 'ops', remoteSource: true } as RosterRow
@@ -75,6 +75,19 @@ describe('isEventForBotScreen', () => {
 
     // Runs for EVERY display.* event, so a throw here would kill the listener for a stale sidebar row.
     expect(isEventForBotScreen(orphan, { payload: { profile_key: '/x' } } as never, '/x')).toBe(false)
+  })
+})
+
+describe('resolveScreenWsUrl', () => {
+  it('resolves the display endpoint with the display ticket so a managed relay can bind both', async () => {
+    routeMock.mockReturnValue({ connectionId: 'conn-a', profile: 'ops' })
+    vi.mocked(resolveSiblingWsUrl).mockResolvedValueOnce('ws://127.0.0.1:4123/api/display/ws?display_ticket=t-1')
+
+    await expect(resolveScreenWsUrl(bot, 't-1')).resolves.toBe('ws://127.0.0.1:4123/api/display/ws?display_ticket=t-1')
+    expect(resolveSiblingWsUrl).toHaveBeenCalledWith({ connectionId: 'conn-a', profile: 'ops' }, '/api/display/ws', {
+      query: { display_ticket: 't-1' },
+      stripGatewayCredential: true
+    })
   })
 })
 

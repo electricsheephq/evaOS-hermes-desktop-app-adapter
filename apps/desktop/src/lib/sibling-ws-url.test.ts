@@ -45,11 +45,55 @@ describe('resolveSiblingWsUrl', () => {
 
   it('strips the spent gateway credential when the sibling route authenticates itself', async () => {
     const url = new URL(
-      await resolveSiblingWsUrl({ profile: null }, 'api/display/ws', { stripGatewayCredential: true })
+      await resolveSiblingWsUrl({ profile: null }, 'api/display/ws', {
+        query: { display_ticket: 'display-1' },
+        stripGatewayCredential: true
+      })
     )
 
     expect(url.origin + url.pathname).toBe('ws://127.0.0.1:5151/api/display/ws')
     expect(url.searchParams.has('token')).toBe(false)
     expect(url.searchParams.has('ticket')).toBe(false)
+    expect(url.searchParams.get('display_ticket')).toBe('display-1')
+  })
+
+  it('mints a managed relay ticket bound to the sibling endpoint and its query', async () => {
+    getConnectionFor.mockResolvedValueOnce({
+      authMode: 'token',
+      baseUrl: 'eva-managed://assigned',
+      profile: 'research',
+      wsUrl: 'ws://127.0.0.1:4123/api/ws?ticket=gateway'
+    })
+    getGatewayWsUrl.mockResolvedValueOnce({
+      ok: true,
+      wsUrl: 'ws://127.0.0.1:4123/api/display/ws?display_ticket=display-1&ticket=bound'
+    })
+
+    const url = await resolveSiblingWsUrl(
+      { connectionId: 'eva-managed-runtime', profile: 'research' },
+      '/api/display/ws',
+      {
+        query: { display_ticket: 'display-1' },
+        stripGatewayCredential: true
+      }
+    )
+
+    expect(url).toBe('ws://127.0.0.1:4123/api/display/ws?display_ticket=display-1&ticket=bound')
+    expect(getGatewayWsUrl).toHaveBeenCalledExactlyOnceWith('research', '/api/display/ws?display_ticket=display-1')
+    expect(getGatewayWsUrlFor).not.toHaveBeenCalled()
+  })
+
+  it('refuses a managed ticket minted for another endpoint', async () => {
+    getConnectionFor.mockResolvedValueOnce({
+      authMode: 'token',
+      baseUrl: 'eva-managed://assigned',
+      profile: 'research',
+      wsUrl: 'ws://127.0.0.1:4123/api/ws?ticket=gateway'
+    })
+    getGatewayWsUrl.mockResolvedValueOnce({ ok: true, wsUrl: 'ws://127.0.0.1:4123/api/other/api/display/ws?ticket=x' })
+
+    await expect(
+      resolveSiblingWsUrl({ connectionId: 'eva-managed-runtime', profile: 'research' }, '/api/display/ws')
+    ).rejects.toThrow(/Unexpected gateway WebSocket path/)
   })
 })

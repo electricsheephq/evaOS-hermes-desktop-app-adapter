@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest'
 
 import {
   assertManagedGatewayMethodAllowed,
-  isManagedBillingSlashCommand,
   isManagedConfigFieldVisible,
   isManagedSettingsViewVisible
 } from './managed-ui-policy'
@@ -31,16 +30,6 @@ describe('managed renderer policy', () => {
     expect(isManagedConfigFieldVisible('terminal.timeout', true)).toBe(true)
     expect(isManagedConfigFieldVisible('agent.max_turns', true)).toBe(true)
     expect(isManagedConfigFieldVisible('toolsets', false)).toBe(true)
-  })
-
-  it('denies only managed billing commands and their legacy alias', () => {
-    for (const command of ['/topup', '/subscription', '/upgrade']) {
-      expect(isManagedBillingSlashCommand(command, true)).toBe(true)
-      expect(isManagedBillingSlashCommand(command, false)).toBe(false)
-    }
-
-    expect(isManagedBillingSlashCommand('/my-billing-skill', true)).toBe(false)
-    expect(isManagedBillingSlashCommand('/tools', true)).toBe(false)
   })
 
   it('rejects Nous billing and subscription RPCs below the managed UI', () => {

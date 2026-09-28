@@ -81,6 +81,7 @@ function normalizeEvaWsEndpoint(value = '/api/ws') {
   const allowed =
     pathname === '/api/ws' ||
     pathname === '/api/audio/speak-stream' ||
+    pathname === '/api/display/ws' ||
     Boolean(pluginMatch && PLUGIN_ID_RE.test(pluginMatch[1]))
   if (!allowed) {
     throw new TypeError('evaOS Agent blocked an unsupported WebSocket endpoint.')

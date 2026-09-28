@@ -349,11 +349,11 @@ import {
   recordDismissed as recordPluginCompatDismissed
 } from './plugin-compat-notice'
 import {
-  assertEvaManagedConnectionId,
   buildEvaManagedConnectionsRegistry,
   buildEvaManagedProfileRoutes,
   buildRegistryProfileRoutes,
   EVA_MANAGED_CONNECTION_ID,
+  evaManagedConnectionId,
   isLocalEnumerationFailure,
   loadEvaManagedAgentRoster,
   localRouteFallbackProfiles,
@@ -15981,7 +15981,7 @@ ipcMain.handle('hermes:connection:for', async (_event, payload) => {
       { connectionId, profile, priority },
       {
         applySpawnPriority,
-        assertConnectionId: assertEvaManagedConnectionId,
+        managedConnectionId: evaManagedConnectionId,
         backendScopeKey,
         ensureBackend,
         primaryProfileKey,
@@ -17022,8 +17022,6 @@ const registryGatewayWsUrlHandler = createRegistryGatewayWsUrlHandler({
 
 ipcMain.handle('hermes:gateway:ws-url-for', async (_event, payload) => {
   if (EVA_MANAGED_BUILD) {
-    assertEvaManagedConnectionId(payload?.connectionId)
-
     return gatewayWsUrlIpcResult(() => freshGatewayWsUrl(payload?.profile))
   }
 

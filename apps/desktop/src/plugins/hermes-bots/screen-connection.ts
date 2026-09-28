@@ -158,17 +158,12 @@ export async function resolveScreenWsUrl(bot: RosterRow, ticket: string): Promis
   // The /api/ws credential authenticated the RPC that minted the display ticket;
   // the bridge authenticates on the ticket alone, so the gateway credential is
   // dropped rather than spending a second one-shot ticket.
-  const url = new URL(
-    await resolveSiblingWsUrl(
-      { connectionId: route?.connectionId ?? null, profile: route?.profile ?? bot.name },
-      '/api/display/ws',
-      {
-        stripGatewayCredential: true
-      }
-    )
+  return resolveSiblingWsUrl(
+    { connectionId: route?.connectionId ?? null, profile: route?.profile ?? bot.name },
+    '/api/display/ws',
+    {
+      query: { display_ticket: ticket },
+      stripGatewayCredential: true
+    }
   )
-
-  url.searchParams.set('display_ticket', ticket)
-
-  return url.toString()
 }

@@ -9,7 +9,8 @@ const {
   EvaBrokerError,
   brokerPost,
   evaDesktopCodeChallenge,
-  normalizeHermesEnrollment
+  normalizeHermesEnrollment,
+  resolveEvaManagedConnectionFor
 } = require('./eva-managed.cjs')
 const { createEvaManagedRuntime } = require('./eva-runtime.cjs')
 const { requestAuthorizedCronJobs } = require('./eva-runtime-profile-scope.cjs')
@@ -548,6 +549,128 @@ test('ordinary profile routing preserves a literal default member', async t => {
 
   await runtime.requestApi({ path: '/api/cron/jobs?profile=default', profile: 'default' })
   assert.equal(requested, 'default')
+})
+
+test('managed REST requests always target the enrolled runtime whatever routing fields they carry', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-routing-fields-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeActiveEnrollment(statePath)
+  const requests = []
+  const runtime = makeManagedRuntime(statePath, {
+    fetchJson: async (url, token) => {
+      requests.push({ token, url: new URL(url) })
+      return { ok: true }
+    }
+  })
+  t.after(() => runtime.close())
+
+  const carried = { url: 'https://evil.invalid', baseUrl: 'https://evil.invalid', token: 'renderer-token' }
+  await runtime.requestApi({
+    ...carried,
+    method: 'POST',
+    path: '/api/skills?token=renderer-token&base_url=https%3A%2F%2Fevil.invalid',
+    body: carried
+  })
+  assert.equal(requests.length, 1)
+  assert.equal(requests[0].url.origin, 'https://hermes-customer-one.ecs.electricsheephq.com')
+  assert.equal(requests[0].url.pathname, '/api/skills')
+  assert.equal(requests[0].token, 'runtime-token')
+
+  for (const unsafePath of ['//evil.host/x', '/api/../x']) {
+    await assert.rejects(
+      runtime.requestApi({ path: unsafePath }),
+      error => error instanceof EvaBrokerError && error.code === 'managed-policy'
+    )
+  }
+  assert.equal(requests.length, 1)
+})
+
+test('managed media streams the upstream files/stream endpoint with its Range header', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-media-stream-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeActiveEnrollment(statePath)
+  const fetched = []
+  const runtime = makeManagedRuntime(statePath, {
+    fetchMedia: async (url, token, headers) => {
+      fetched.push({ headers, token, url: new URL(url) })
+      return { status: 206 }
+    }
+  })
+  t.after(() => runtime.close())
+
+  const response = await runtime.requestMedia({
+    path: '/api/files/stream?path=%2Fsrv%2Fclip.mp4',
+    headers: { Range: 'bytes=0-99' }
+  })
+  assert.equal(response.status, 206)
+  assert.equal(fetched[0].url.origin, 'https://hermes-customer-one.ecs.electricsheephq.com')
+  assert.equal(fetched[0].url.pathname, '/api/files/stream')
+  assert.equal(fetched[0].url.searchParams.get('path'), '/srv/clip.mp4')
+  assert.equal(fetched[0].token, 'runtime-token')
+  assert.deepEqual(fetched[0].headers, { Range: 'bytes=0-99' })
+
+  await assert.rejects(
+    runtime.requestMedia({ path: '/api/files/other?path=%2Fsrv%2Fclip.mp4' }),
+    error => error instanceof EvaBrokerError && error.statusCode === 403 && error.code === 'managed-policy'
+  )
+  assert.equal(fetched.length, 1)
+})
+
+test('a managed display socket request mints a ticket bound to the display endpoint', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-display-ticket-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeActiveEnrollment(statePath)
+  let ticketInput
+  const runtime = makeManagedRuntime(statePath, {
+    createWsRelay: () => ({
+      mintTicket: async input => {
+        ticketInput = input
+        return 'ws://127.0.0.1:12345/api/display/ws?display_ticket=abc&ticket=loopback'
+      },
+      disconnectAll: () => undefined,
+      close: async () => undefined
+    })
+  })
+  t.after(() => runtime.close())
+
+  await runtime.freshWsUrl({ profile: 'main', path: '/api/display/ws?display_ticket=abc' })
+  assert.equal(ticketInput.path, '/api/display/ws?display_ticket=abc')
+  assert.equal(ticketInput.profile, 'main')
+  await assert.rejects(
+    runtime.freshWsUrl({ profile: 'main', path: '/api/display/ws?display_ticket=abc&profile=other' }),
+    /invalid WebSocket query/
+  )
+})
+
+test('any plugin connection id reaches the enrolled runtime while the grant still decides the profile', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-connection-id-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeScopedEnrollment(statePath)
+  const runtime = makeManagedRuntime(statePath)
+  t.after(() => runtime.close())
+  const deps = {
+    applySpawnPriority: () => () => undefined,
+    backendScopeKey: (connectionId, profile) => `${connectionId}:${profile}`,
+    ensureBackend: profile => runtime.resolveBackend({ profile }),
+    managedConnectionId: () => 'eva-managed-runtime',
+    primaryProfileKey: () => 'alpha',
+    runDialClaim: (_scopeKey, dial) => dial(),
+    spawnPriorityFrom: () => 'background'
+  }
+
+  for (const connectionId of ['', null, 'local', 'registry-primary', 'eva-managed-runtime']) {
+    const connection = await resolveEvaManagedConnectionFor({ connectionId, profile: 'beta' }, deps)
+    assert.equal(connection.connectionId, 'eva-managed-runtime')
+    assert.equal(connection.profile, 'beta')
+  }
+  await assert.rejects(
+    resolveEvaManagedConnectionFor({ connectionId: 'local', profile: 'outside' }, deps),
+    error => error.statusCode === 403 && error.code === 'profile-mismatch'
+  )
 })
 
 test('ordinary managed REST binding honors query and body profile carriers from parsed enrollment', async t => {
