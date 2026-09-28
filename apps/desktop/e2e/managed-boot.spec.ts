@@ -50,7 +50,9 @@ test.describe('managed signed-out boot', () => {
     })
   })
 
-  test('the real preload denies unenrolled and wrong-owner requests', async () => {
+  // Any connection id names the one enrolled runtime (upstream's empty id
+  // names the primary), so before sign-in every route asks for sign-in.
+  test('the real preload asks for sign-in before any route is enrolled', async () => {
     const errors = await fixture!.page.evaluate(async () => {
       const desktop = Reflect.get(window, 'hermesDesktop') as {
         getConnection: (profile?: string) => Promise<unknown>
@@ -69,14 +71,14 @@ test.describe('managed signed-out boot', () => {
 
       return {
         unenrolled: await rejection(() => desktop.getConnection()),
-        wrongOwner: await rejection(() =>
+        otherConnectionId: await rejection(() =>
           desktop.getConnectionFor({ connectionId: 'synthetic-workstation', profile: 'synthetic-owner' })
         )
       }
     })
 
     expect(errors.unenrolled).toContain('Sign in to evaOS Agent from Settings.')
-    expect(errors.wrongOwner).toContain('outside the managed runtime route')
+    expect(errors.otherConnectionId).toContain('Sign in to evaOS Agent from Settings.')
   })
 
   // Local-machine actions run as upstream's do: the terminal and the default
