@@ -16,6 +16,28 @@ export const CATALOG_ORIGIN = 'https://hermes-agent.nousresearch.com'
 export const CATALOG_PICKER_URL = `${CATALOG_ORIGIN}/docs/plugins?embed=picker`
 export const PLUGIN_CATALOG_URL = `${CATALOG_ORIGIN}/docs/api/plugins.json`
 
+/**
+ * The embedded catalog cannot open popups (its iframe deliberately has no
+ * `allow-popups`), so it asks the host to open a docs link instead with
+ * `{ type: CATALOG_OPEN_DOCS_MESSAGE, url }`.
+ */
+export const CATALOG_OPEN_DOCS_MESSAGE = 'hermes-open-docs'
+
+/** The docs URL the host may open for the catalog: https on the catalog's own host only. */
+export function catalogDocsUrl(raw: unknown): null | string {
+  if (typeof raw !== 'string') {
+    return null
+  }
+
+  try {
+    const url = new URL(raw)
+
+    return url.origin === CATALOG_ORIGIN && !url.username && !url.password ? url.toString() : null
+  } catch {
+    return null
+  }
+}
+
 /** Catalog names are directory names under `plugin-catalog/`; anything else is not a lookup key. */
 export const PLUGIN_CATALOG_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/
 
