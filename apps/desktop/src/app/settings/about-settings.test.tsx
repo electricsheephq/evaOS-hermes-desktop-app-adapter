@@ -42,4 +42,26 @@ describe('AboutSettings', () => {
     expect($updateOverlayOpen.get()).toBe(true)
     expect($updateOverlayTarget.get()).toBe('client')
   })
+
+  it.each([undefined, 'uninstall'])('never offers uninstall in managed mode (subpage %s)', async subpage => {
+    const summary = vi.fn().mockResolvedValue({ agent_installed: false, gui_installed: true })
+    const run = vi.fn()
+
+    Object.defineProperty(window, 'hermesDesktop', {
+      configurable: true,
+      value: {
+        eva: { status: vi.fn().mockResolvedValue({ signedIn: true, updateChannel: 'managed-beta' }) },
+        getVersion: vi.fn().mockResolvedValue({ appVersion: '2026.7.20-es.11' }),
+        uninstall: { run, summary }
+      },
+      writable: true
+    })
+
+    const { AboutSettings } = await import('./about-settings')
+    render(<AboutSettings subpage={subpage} />)
+
+    expect(await screen.findByRole('button', { name: 'Check now' })).toBeTruthy()
+    expect(summary).not.toHaveBeenCalled()
+    expect(run).not.toHaveBeenCalled()
+  })
 })
