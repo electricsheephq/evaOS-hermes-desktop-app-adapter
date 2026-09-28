@@ -306,16 +306,6 @@ function assertEvaManagedApiRequestAllowed(request, options = {}) {
   return { method, pathname, path: `${pathname}${query ? `?${query}` : ''}` }
 }
 
-function assertEvaManagedLocalMutationAllowed(managed, capability = 'This local action') {
-  if (managed) {
-    throw new EvaBrokerError(
-      `${String(capability || 'This local action')} is unavailable for this managed remote agent.`,
-      403,
-      'managed-local-mutation-unavailable'
-    )
-  }
-}
-
 function isEvaManagedGatewayMethodBlocked(value) {
   const method = String(value || '')
   return (
@@ -1064,7 +1054,6 @@ module.exports = {
   EVA_MANAGED_POLICY,
   EvaBrokerError,
   assertEvaManagedApiRequestAllowed,
-  assertEvaManagedLocalMutationAllowed,
   brokerPost,
   buildEvaAccountRendererResetScript,
   buildEvaDesktopAuthUrl,

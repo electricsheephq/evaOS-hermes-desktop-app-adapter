@@ -203,7 +203,6 @@ import { describeDevCdpDecision, resolveDevCdpPort } from './dev-cdp'
 import { installEmbedReferer } from './embed-referer'
 const { createEvaAppUpdater, safeApplyFailure, safeCheckFailure } = require('./eva-app-updater.cjs')
 const {
-  assertEvaManagedLocalMutationAllowed,
   buildEvaAccountRendererResetScript,
   EVA_MANAGED_POLICY,
   probeEvaSecureStorageEarlyKey,
@@ -18741,21 +18740,15 @@ ipcMain.handle('hermes:openPreviewInBrowser', async (_event, url) => {
 // settings mount and seeds the value into the picker; writing back persists
 // it via writeDefaultProjectDir so resolveHermesCwd picks it up on the next
 // session spawn (no app restart needed).
-ipcMain.handle('hermes:setting:defaultProjectDir:get', async () => {
-  assertEvaManagedLocalMutationAllowed(EVA_MANAGED_BUILD, 'Reading the local default project directory')
-
-  return {
-    dir: readDefaultProjectDir(),
-    defaultLabel: app.getPath('home'),
-    resolvedCwd: resolveHermesCwd()
-  }
-})
+ipcMain.handle('hermes:setting:defaultProjectDir:get', async () => ({
+  dir: readDefaultProjectDir(),
+  defaultLabel: app.getPath('home'),
+  resolvedCwd: resolveHermesCwd()
+}))
 
 ipcMain.handle('hermes:workspace:sanitize', async (_event, cwd) => sanitizeWorkspaceCwd(cwd))
 
 ipcMain.handle('hermes:setting:defaultProjectDir:set', async (_event, dir) => {
-  assertEvaManagedLocalMutationAllowed(EVA_MANAGED_BUILD, 'Changing the local default project directory')
-
   const next = typeof dir === 'string' && dir.trim() ? dir.trim() : null
 
   if (next) {
@@ -18772,8 +18765,6 @@ ipcMain.handle('hermes:setting:defaultProjectDir:set', async (_event, dir) => {
 })
 
 ipcMain.handle('hermes:setting:defaultProjectDir:pick', async () => {
-  assertEvaManagedLocalMutationAllowed(EVA_MANAGED_BUILD, 'Choosing a local default project directory')
-
   const result = await dialog.showOpenDialog({
     title: 'Choose default project directory',
     properties: ['openDirectory', 'createDirectory'],

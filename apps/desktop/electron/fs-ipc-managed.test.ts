@@ -1,6 +1,5 @@
 import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
-import { createRequire } from 'node:module'
 import os from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -17,8 +16,6 @@ vi.mock('electron', () => ({
 }))
 
 import { registerFsIpc } from './fs-ipc'
-
-const { assertEvaManagedLocalMutationAllowed } = createRequire(import.meta.url)('./eva-managed.cjs')
 
 const roots: string[] = []
 
@@ -63,7 +60,9 @@ describe('registerFsIpc in the managed build', () => {
     electron.handlers.clear()
     hermesHome = mkdtemp('hermes-managed-home-')
     registerFsIpc({
-      assertLocalAccessAllowed: (operation: string) => assertEvaManagedLocalMutationAllowed(true, operation),
+      assertLocalAccessAllowed: (operation: string) => {
+        throw new Error(`${operation} is unavailable for this managed remote agent.`)
+      },
       hermesHome,
       readActiveDesktopProfile: () => null,
       expandUserPath: value => value,
