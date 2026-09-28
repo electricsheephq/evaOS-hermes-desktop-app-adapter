@@ -64,6 +64,10 @@ const SUPPORT_LABEL_MAX_LENGTH = 120
 const SUPPORT_CLIENTS_MAX = 500
 const SUPPORT_PROFILES_MAX = 200
 const SUPPORT_SIGN_IN_REQUIRED_MESSAGE = 'Sign in to Electric Sheep again to choose a support target.'
+// macOS keeps the first safeStorage key a process derives, so a process whose
+// storage is unusable cannot be repaired in place; only a relaunch can.
+const SECURE_STORAGE_UNAVAILABLE_MESSAGE =
+  'evaOS Agent cannot use the macOS keychain in this session. Quit evaOS Agent, open it again, then sign in.'
 
 function boundedSupportLabel(value) {
   const label = Array.from(String(value ?? ''))
@@ -281,6 +285,8 @@ function createEvaManagedRuntime(options) {
   const scheduleSupportExpiry = options.scheduleSupportExpiry ?? setTimeout
   const cancelSupportExpiry = options.cancelSupportExpiry ?? clearTimeout
   const ensureSignInCallbackReady = options.ensureSignInCallbackReady ?? (async () => undefined)
+  const secureStorageState = options.secureStorageState ?? (() => 'available')
+  const secureStorageReadFailure = options.secureStorageReadFailure ?? (() => null)
   const statePath = options.statePath
   const now = options.now ?? Date.now
   const loginTimeoutMs = options.loginTimeoutMs ?? EVA_MANAGED_POLICY.loginTimeoutMs
@@ -982,7 +988,24 @@ function createEvaManagedRuntime(options) {
         controller.abort()
         assertGeneration(generation)
         attempt.supportPending = Boolean(supportRequestId)
-        writeState({ desktop, runtime: null, delegatedSupport: null, supportSignInPending: Boolean(supportRequestId) })
+        try {
+          // Probe first: only an encryption failure is a keychain fault.
+          options.encryptSecret(desktop.token)
+        } catch {
+          await revokeDesktopSession(desktop.token).catch(() => false)
+          throw new EvaBrokerError(SECURE_STORAGE_UNAVAILABLE_MESSAGE, 503, 'secure-storage-unavailable')
+        }
+        try {
+          // Replaces the retained sign-in only once the new one is stored.
+          writeState({ desktop, runtime: null, delegatedSupport: null, supportSignInPending: Boolean(supportRequestId) })
+        } catch (error) {
+          // A file error keeps its own cause; the unsaved session is revoked either way.
+          await revokeDesktopSession(desktop.token).catch(() => false)
+          throw error
+        }
+        // An enrollment started meanwhile holds the retained credential; it
+        // must not write that credential over the new sign-in.
+        runtimeGeneration += 1
         if (supportRequestId) {
           stage = 'support-claim'
           try {
@@ -1057,7 +1080,9 @@ function createEvaManagedRuntime(options) {
     if (state.desktop && !expiresSoon(state.desktop.expiresAt, 0)) return state.desktop
     if (state.desktopCredentialUnreadable) {
       throw new EvaBrokerError(
-        'evaOS Agent could not read managed access from secure storage. Unlock secure storage and try again, or sign in again from Settings.',
+        secureStorageReadFailure() === 'decrypt-failed'
+          ? 'evaOS Agent could not read the saved sign-in. Sign in again; the new sign-in will be kept.'
+          : 'evaOS Agent could not read managed access from secure storage. Unlock secure storage and try again, or sign in again from Settings.',
         503,
         'managed-enrollment-unreadable'
       )
@@ -1779,6 +1804,13 @@ function createEvaManagedRuntime(options) {
 
   async function signIn(signInOptions = {}) {
     const plainSession = signInOptions?.plainSession === true
+    const storage = secureStorageState()
+    if (storage === 'unavailable' || storage === 'error') {
+      // Refused before anything is touched: no browser, no server session.
+      rememberLog('[eva-managed] sign-in refused: secure-storage-unavailable')
+      signInFailure = SECURE_STORAGE_UNAVAILABLE_MESSAGE
+      throw new EvaBrokerError(SECURE_STORAGE_UNAVAILABLE_MESSAGE, 503, 'secure-storage-unavailable')
+    }
     await requireRendererIsolation()
     if (currentState().delegatedSupport) {
       throw new EvaBrokerError('End the current support session before signing in again.', 409, 'support-session-active')
@@ -1810,7 +1842,6 @@ function createEvaManagedRuntime(options) {
     if (currentState().supportSignInPending) await signOut()
     invalidateAuthWork()
     signInFailure = null
-    writeState(emptyState())
     supportRevalidated = false
     const desktop = await beginSignIn({ plainSession })
     const auth = authGeneration

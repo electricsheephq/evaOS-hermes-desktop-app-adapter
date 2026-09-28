@@ -2429,6 +2429,7 @@ test('a late support claim cannot overwrite a replacement sign-in attempt', asyn
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
   const statePath = path.join(directory, 'eva-enrollment.json')
   writeActiveEnrollment(statePath)
+  const persistedBefore = fs.readFileSync(statePath, 'utf8')
 
   let releaseClaim
   let markClaimStarted
@@ -2462,7 +2463,9 @@ test('a late support claim cannot overwrite a replacement sign-in attempt', asyn
   await assert.rejects(claim, error => error instanceof EvaBrokerError && error.code === 'stale-auth')
   await runtime.close()
   await assert.rejects(replacement, error => error instanceof EvaBrokerError && error.code === 'stale-auth')
-  assert.equal(fs.existsSync(statePath), false)
+  // Neither the late claim nor the cancelled replacement sign-in changed the
+  // retained sign-in (adapter#351: it is replaced only once a new one is stored).
+  assert.equal(fs.readFileSync(statePath, 'utf8'), persistedBefore)
 })
 
 test('renderer reset failure refuses and remotely ends a claimed support session', async t => {
@@ -3283,7 +3286,9 @@ for (const expired of [false, true]) test(`interrupted support sign-in recovers 
   assert.equal(opened, 1)
   assert.equal(launches, 0)
   assert.equal(revoked.length, expired ? 0 : 1)
-  assert.equal(fs.existsSync(statePath), false)
+  // The interrupted enrollment is consumed by the sign-out; only its
+  // signed-out tombstone remains until the new sign-in is stored.
+  assert.equal(JSON.parse(fs.readFileSync(statePath, 'utf8')).desktop, undefined)
   assert.equal(runtime.status().desktopSessionActive, false)
   await runtime.signOut()
   await cancelled
@@ -5703,4 +5708,117 @@ test('a forced re-sign-in during an active support session whose credential the 
   assert.equal(runtime.status().runtimeSessionActive, true)
   assert.equal(persistedSupportLease(statePath), null)
   assert.equal(runtime.status().supportCleanupPending, false)
+})
+
+const SECURE_STORAGE_UNAVAILABLE_MESSAGE =
+  'evaOS Agent cannot use the macOS keychain in this session. Quit evaOS Agent, open it again, then sign in.'
+
+test('sign-in is refused before the browser opens when secure storage is unusable this session', async t => {
+  for (const storageState of ['unavailable', 'error']) {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-sign-in-storage-refused-'))
+    t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+    const statePath = path.join(directory, 'eva-enrollment.json')
+    writeActiveEnrollment(statePath)
+    const persistedBefore = fs.readFileSync(statePath)
+    let opened = 0
+    let polls = 0
+    const runtime = makeManagedRuntime(statePath, {
+      secureStorageState: () => storageState,
+      loginTimeoutMs: 50,
+      openExternal: async () => {
+        opened += 1
+      },
+      pollDeviceCode: async () => {
+        polls += 1
+        throw new Error('no server session may be created')
+      }
+    })
+    t.after(() => runtime.close())
+
+    await assert.rejects(
+      runtime.signIn(),
+      error =>
+        error instanceof EvaBrokerError &&
+        error.code === 'secure-storage-unavailable' &&
+        error.message === SECURE_STORAGE_UNAVAILABLE_MESSAGE
+    )
+    assert.equal(opened, 0)
+    assert.equal(polls, 0)
+    assert.deepEqual(fs.readFileSync(statePath), persistedBefore)
+  }
+})
+
+test('a storage failure on the first write after the claim revokes the new session and keeps the retained sign-in', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-sign-in-storage-write-failed-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeActiveEnrollment(statePath)
+  const persistedBefore = fs.readFileSync(statePath)
+  let opened
+  const revoked = []
+  const logs = []
+  const runtime = makeManagedRuntime(statePath, {
+    secureStorageState: () => 'available',
+    encryptSecret: value => {
+      if (value === 'new-desktop-session') throw new Error('Failed to encrypt (keychain detail)')
+      return value
+    },
+    openExternal: async url => {
+      opened = new URL(url)
+    },
+    pollDeviceCode: async () => ({ token: 'new-desktop-session', expiresAt: FUTURE, email: 'employee@example.invalid' }),
+    revokeDesktopSession: async token => {
+      revoked.push(token)
+      return true
+    },
+    rememberLog: line => logs.push(line)
+  })
+  t.after(() => runtime.close())
+
+  const signingIn = runtime.signIn()
+  const rejection = assert.rejects(
+    signingIn,
+    error =>
+      error instanceof EvaBrokerError &&
+      error.code === 'secure-storage-unavailable' &&
+      error.message === SECURE_STORAGE_UNAVAILABLE_MESSAGE
+  )
+  await new Promise(resolve => setImmediate(resolve))
+  await runtime.completeCallback(
+    `evaos-agent://auth/callback?device_code=ABCDEFGH&desktop_auth_state=${opened.searchParams.get('desktop_auth_state')}`
+  )
+  await rejection
+
+  assert.deepEqual(revoked, ['new-desktop-session'])
+  assert.deepEqual(fs.readFileSync(statePath), persistedBefore)
+  assert.equal(logs.join('\n').includes('keychain detail'), false)
+  assert.equal(logs.join('\n').includes('new-desktop-session'), false)
+})
+
+test('an undecryptable saved sign-in says a new sign-in will be kept', async t => {
+  for (const [category, message] of [
+    ['decrypt-failed', 'evaOS Agent could not read the saved sign-in. Sign in again; the new sign-in will be kept.'],
+    [
+      'unavailable',
+      'evaOS Agent could not read managed access from secure storage. Unlock secure storage and try again, or sign in again from Settings.'
+    ]
+  ]) {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-decrypt-failed-'))
+    t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+    const statePath = path.join(directory, 'eva-enrollment.json')
+    writeActiveEnrollment(statePath)
+    const runtime = makeManagedRuntime(statePath, {
+      decryptSecret: () => '',
+      secureStorageReadFailure: () => category
+    })
+    t.after(() => runtime.close())
+
+    await assert.rejects(
+      runtime.resolveBackend(),
+      error =>
+        error instanceof EvaBrokerError &&
+        error.code === 'managed-enrollment-unreadable' &&
+        error.message === message
+    )
+  }
 })

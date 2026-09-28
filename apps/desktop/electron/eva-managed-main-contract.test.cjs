@@ -15,3 +15,19 @@ test('the canonical Desktop check includes managed contracts', () => {
   assert.match(packageJson.scripts['test:managed'], /electron\/r31-managed-profile-bypass\.test\.cjs/)
   assert.equal(packageJson.dependencies['electron-updater'], '6.8.9')
 })
+
+// Exception to the rule above: the moment of the first safeStorage touch is
+// module-scope ordering in main.ts, which no unit test can execute. Without
+// it, a process that starts signed out pins a different macOS Keychain key
+// than the one every later launch reads with.
+test('managed macOS builds touch safeStorage before the managed runtime reads state', () => {
+  const main = fs.readFileSync(path.join(__dirname, 'main.ts'), 'utf8')
+  const guard = main.indexOf("if (EVA_MANAGED_BUILD && process.platform === 'darwin') {")
+  const runtime = main.indexOf('const evaManagedRuntime = createEvaManagedRuntime(')
+  assert.ok(guard > 0, 'early-key block guarded by the managed flag and darwin')
+  assert.ok(runtime > guard, 'early-key block precedes createEvaManagedRuntime(')
+  const block = main.slice(guard, runtime)
+  assert.match(block, /safeStorage\.isEncryptionAvailable\(\)/)
+  assert.match(block, /secure-storage early key/)
+  assert.match(main.slice(runtime, runtime + 400), /secureStorageState: \(\) => /)
+})

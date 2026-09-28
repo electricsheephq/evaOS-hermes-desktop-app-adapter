@@ -242,6 +242,11 @@ function encryptDesktopSecret(
  * key. A JavaScript readiness gate changes that first-read ordering. Let the
  * native API decide availability, as ES17 did; errors still fail closed and
  * the managed runtime retains unreadable enrollment for a later retry.
+ *
+ * Rule: managed macOS builds always touch safeStorage before ready (main.ts
+ * early-key block), because the first touch picks the Keychain item for the
+ * whole process. Nothing in a managed build may make the first touch after
+ * ready, or it writes with a key later launches cannot read (adapter#351).
  */
 type SafeStorageReadFailure = 'not-ready' | 'unavailable' | 'invalid-ciphertext' | 'decrypt-failed' | 'unexpected'
 
