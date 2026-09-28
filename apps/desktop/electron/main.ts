@@ -10874,15 +10874,6 @@ async function resetPreviewReach(webContentsId?: number) {
  * failure; the pane explains an unreachable one on its own.
  */
 async function reachablePreviewUrl(webContentsId: number, rawUrl: string): Promise<string> {
-  if (EVA_MANAGED_BUILD) {
-    // Managed URL gateways intentionally have no workstation SSH transport.
-    // Never reuse saved Desktop registry credentials to tunnel VM loopback;
-    // authenticated managed port reach is tracked separately.
-    await resetPreviewReach(webContentsId)
-
-    return rawUrl
-  }
-
   let target = activeSshTerminalTarget(webContentsId)
 
   if (target === 'pending') {
