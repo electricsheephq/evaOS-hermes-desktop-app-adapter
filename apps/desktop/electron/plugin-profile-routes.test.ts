@@ -1,13 +1,13 @@
 import { describe, expect, it, vi } from 'vitest'
 
 import {
-  assertEvaManagedConnectionId,
   buildEvaManagedAgentRoster,
   buildEvaManagedConnectionsRegistry,
   buildEvaManagedProfileRoutes,
   buildOpaqueProfileRoutes,
   buildRegistryProfileRoutes,
   EVA_MANAGED_CONNECTION_ID,
+  evaManagedConnectionId,
   isLocalEnumerationFailure,
   loadEvaManagedAgentRoster,
   localRouteFallbackProfiles,
@@ -32,7 +32,7 @@ function config(overrides: Partial<ProfileRouteConfig> = {}): ProfileRouteConfig
 }
 
 describe('managed plugin profile routes', () => {
-  it('accepts only the opaque managed active route and forces registry scope', () => {
+  it('maps any active route onto the managed runtime and forces registry scope', () => {
     expect(
       normalizeEvaManagedActiveRoute({
         connectionId: EVA_MANAGED_CONNECTION_ID,
@@ -44,7 +44,15 @@ describe('managed plugin profile routes', () => {
       profile: 'research',
       registryScoped: true
     })
-    expect(normalizeEvaManagedActiveRoute({ connectionId: 'saved-workstation-ssh', registryScoped: true })).toBeNull()
+
+    for (const connectionId of ['', null, 'local', 'saved-workstation-ssh']) {
+      expect(normalizeEvaManagedActiveRoute({ connectionId, profile: 'research', registryScoped: false })).toEqual({
+        connectionId: EVA_MANAGED_CONNECTION_ID,
+        profile: 'research',
+        registryScoped: true
+      })
+    }
+
     expect(normalizeEvaManagedActiveRoute(null)).toBeNull()
   })
 
@@ -141,11 +149,18 @@ describe('managed plugin profile routes', () => {
     await expect(roster()).rejects.toThrow('scope unavailable')
   })
 
-  it('accepts only the exact managed route identity', () => {
-    expect(assertEvaManagedConnectionId(EVA_MANAGED_CONNECTION_ID)).toBe(EVA_MANAGED_CONNECTION_ID)
-    expect(() => assertEvaManagedConnectionId('local')).toThrow(/managed runtime route/i)
-    expect(() => assertEvaManagedConnectionId(` ${EVA_MANAGED_CONNECTION_ID} `)).toThrow(/managed runtime route/i)
-    expect(() => assertEvaManagedConnectionId('')).toThrow(/managed runtime route/i)
+  it('resolves every plugin connection id to the managed runtime, as an empty id names the primary', () => {
+    for (const connectionId of [
+      EVA_MANAGED_CONNECTION_ID,
+      ` ${EVA_MANAGED_CONNECTION_ID} `,
+      '',
+      null,
+      undefined,
+      'local',
+      'registry-primary'
+    ]) {
+      expect(evaManagedConnectionId(connectionId)).toBe(EVA_MANAGED_CONNECTION_ID)
+    }
   })
 })
 

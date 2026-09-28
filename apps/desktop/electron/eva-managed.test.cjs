@@ -38,7 +38,7 @@ test('managed connection-for brackets a foreground backend dial with its priorit
         calls.push(['apply', scopeKey, priority])
         return () => calls.push(['clear', scopeKey])
       },
-      assertConnectionId: connectionId => {
+      managedConnectionId: connectionId => {
         calls.push(['assert', connectionId])
         return connectionId
       },
@@ -86,15 +86,12 @@ test('managed policy is remote-only, account-neutral, and has no Nous endpoint',
 
 test('managed gateway policy blocks hidden Nous billing methods and their future namespaces', () => {
   for (const method of [
-    'billing.state',
     'billing.charge',
     'billing.auto_reload',
     'billing.step_up',
-    'subscription.state',
     'subscription.change',
     'subscription.resume',
     'subscription.upgrade',
-    'usage.bars',
     'billing.future_method',
     'subscription.future_method'
   ]) {
@@ -104,6 +101,15 @@ test('managed gateway policy blocks hidden Nous billing methods and their future
   assert.equal(isEvaManagedGatewayMethodBlocked('session.status'), false)
   assert.equal(isEvaManagedGatewayMethodBlocked('usage.snapshot'), false)
   assert.equal(isEvaManagedGatewayMethodBlocked('plugin.billing-helper.run'), false)
+})
+
+test('managed gateway policy passes billing and usage reads although they match a blocked prefix', () => {
+  for (const method of ['billing.state', 'billing.charge_status', 'subscription.state', 'usage.bars']) {
+    assert.equal(isEvaManagedGatewayMethodBlocked(method), false)
+    assert.equal(isEvaManagedGatewayRequestBlocked(method, {}), false)
+  }
+  assert.equal(isEvaManagedGatewayMethodBlocked('billing.charge'), true)
+  assert.equal(isEvaManagedGatewayMethodBlocked('subscription.change'), true)
 })
 
 test('managed gateway policy blocks only hidden commands inside supported generic dispatch envelopes', () => {
@@ -473,19 +479,35 @@ test('managed backend leaves file authorization to the assigned OS-isolated Herm
   )
 })
 
-test('managed backend blocks connection, assignment, updater, and Nous OAuth escape hatches', () => {
+test('managed backend treats routing-looking fields and query keys as ordinary request data', () => {
+  assert.deepEqual(
+    assertEvaManagedApiRequestAllowed({
+      path: '/api/future-feature?token=raw-token&base_url=https%3A%2F%2Fexample.invalid',
+      method: 'POST',
+      agentId: 'another-agent',
+      baseUrl: 'https://example.invalid',
+      token: 'raw-token',
+      url: 'https://example.invalid'
+    }),
+    {
+      method: 'POST',
+      path: '/api/future-feature?token=raw-token&base_url=https%3A%2F%2Fexample.invalid',
+      pathname: '/api/future-feature'
+    }
+  )
+})
+
+test('managed backend allows the update-available read', () => {
+  for (const path of ['/api/hermes/update/check', '/api/hermes/update/check?force=true', '/api/hermes/update/check/']) {
+    assert.equal(assertEvaManagedApiRequestAllowed({ path, method: 'GET' }).path, path)
+  }
+})
+
+test('managed backend blocks the in-place updater and Nous OAuth', () => {
   const denied = [
-    { path: '/api/future-feature', method: 'POST', agentId: 'another-agent' },
-    { path: '/api/future-feature', method: 'POST', customer_id: 'another-customer' },
-    { path: '/api/future-feature', gatewayUrl: 'https://example.invalid' },
-    { path: '/api/future-feature', token: 'raw-token' },
-    { path: '/api/future-feature?agent_id=another-agent' },
-    { path: '/api/future-feature?eva_session=raw-token' },
-    { path: '/api/future-feature?gateway_url=https%3A%2F%2Fexample.invalid' },
     { path: '/api/hermes/update', method: 'POST' },
     { path: '/api/hermes/update/', method: 'POST' },
-    { path: '/api/hermes/update/check?force=true', method: 'GET' },
-    { path: '/api/hermes/update/check/', method: 'GET' },
+    { path: '/api/hermes/update', method: 'GET' },
     { path: '/api/providers/oauth/nous', method: 'DELETE' },
     { path: '/api/providers/oauth/nous/start', method: 'POST' },
     { path: '/api/providers/oauth/nous/submit', method: 'POST' },
@@ -503,6 +525,8 @@ test('managed backend rejects absolute, non-API, and ambiguous request paths', (
   for (const path of [
     'https://example.invalid/api/skills',
     '//example.invalid/api/skills',
+    '//evil.host/x',
+    '/api/../x',
     '/health',
     '/api/%zz',
     '/api/%252e%252e/admin',

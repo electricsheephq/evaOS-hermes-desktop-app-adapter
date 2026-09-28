@@ -24,44 +24,23 @@ const EVA_MANAGED_POLICY = Object.freeze({
 })
 
 const EVA_MANAGED_API_METHODS = new Set(['DELETE', 'GET', 'HEAD', 'OPTIONS', 'PATCH', 'POST', 'PUT'])
-const EVA_MANAGED_ESCAPE_FIELDS = new Set([
-  'agentId',
-  'agent_id',
-  'baseUrl',
-  'base_url',
-  'customerId',
-  'customer_id',
-  'gatewayUrl',
-  'gateway_url',
-  'sessionToken',
-  'session_token',
-  'token',
-  'url'
-])
-const EVA_MANAGED_ESCAPE_QUERY_KEYS = new Set([
-  'agent',
-  'agent_id',
-  'base_url',
-  'customer',
-  'customer_id',
-  'eva_session',
-  'gateway',
-  'gateway_url',
-  'session_token',
-  'token'
-])
-const EVA_MANAGED_BLOCKED_BACKEND_PATHS = new Set(['/api/hermes/update', '/api/hermes/update/check'])
+const EVA_MANAGED_BLOCKED_BACKEND_PATHS = new Set(['/api/hermes/update'])
 const EVA_MANAGED_BLOCKED_BACKEND_PREFIXES = ['/api/providers/oauth/nous']
-const EVA_MANAGED_HIDDEN_NOUS_GATEWAY_METHODS = new Set([
+// Read-only billing and usage state passes, although it matches a blocked
+// prefix; only spend and plan changes stay blocked.
+const EVA_MANAGED_ALLOWED_GATEWAY_READS = new Set([
+  'billing.charge_status',
   'billing.state',
+  'subscription.state',
+  'usage.bars'
+])
+const EVA_MANAGED_HIDDEN_NOUS_GATEWAY_METHODS = new Set([
   'billing.charge',
   'billing.auto_reload',
   'billing.step_up',
-  'subscription.state',
   'subscription.change',
   'subscription.resume',
-  'subscription.upgrade',
-  'usage.bars'
+  'subscription.upgrade'
 ])
 const EVA_MANAGED_BLOCKED_GATEWAY_PREFIXES = ['billing.', 'subscription.']
 const EVA_MANAGED_HIDDEN_NOUS_COMMANDS = new Set(['subscription', 'topup', 'upgrade'])
@@ -241,16 +220,6 @@ function assertEvaManagedApiRequestAllowed(request, options = {}) {
   if (!EVA_MANAGED_API_METHODS.has(method)) {
     throw new EvaBrokerError('evaOS Agent blocked an invalid managed-backend method.', 400, 'managed-policy')
   }
-  for (const key of EVA_MANAGED_ESCAPE_FIELDS) {
-    if (Object.hasOwn(request ?? {}, key)) {
-      throw new EvaBrokerError(
-        'evaOS Agent connection and assignment are managed by Electric Sheep.',
-        403,
-        'managed-escape'
-      )
-    }
-  }
-
   const { parsed, pathname } = normalizeEvaManagedApiPath(request?.path)
   const policyPath = pathname.length > '/api/'.length ? pathname.replace(/\/+$/, '') : pathname
   if (
@@ -263,13 +232,6 @@ function assertEvaManagedApiRequestAllowed(request, options = {}) {
   }
 
   for (const [key, value] of parsed.searchParams.entries()) {
-    if (EVA_MANAGED_ESCAPE_QUERY_KEYS.has(key)) {
-      throw new EvaBrokerError(
-        'evaOS Agent connection and assignment are managed by Electric Sheep.',
-        403,
-        'managed-escape'
-      )
-    }
     if (hasAsciiControl(key) || hasAsciiControl(value)) {
       throw new EvaBrokerError('evaOS Agent blocked an invalid managed query.', 400, 'managed-policy')
     }
@@ -308,6 +270,7 @@ function assertEvaManagedApiRequestAllowed(request, options = {}) {
 
 function isEvaManagedGatewayMethodBlocked(value) {
   const method = String(value || '')
+  if (EVA_MANAGED_ALLOWED_GATEWAY_READS.has(method)) return false
   return (
     EVA_MANAGED_HIDDEN_NOUS_GATEWAY_METHODS.has(method) ||
     EVA_MANAGED_BLOCKED_GATEWAY_PREFIXES.some(prefix => method.startsWith(prefix))
@@ -1036,7 +999,7 @@ function probeEvaSecureStorageEarlyKey({ managed, platform, isEncryptionAvailabl
 // joining the claim, pass the same value to the backend, and always clear.
 async function resolveEvaManagedConnectionFor(payload, deps) {
   const { connectionId, profile, priority } = payload && typeof payload === 'object' ? payload : {}
-  const id = deps.assertConnectionId(connectionId)
+  const id = deps.managedConnectionId(connectionId)
   const profileKey = profile && String(profile).trim() ? String(profile).trim() : deps.primaryProfileKey()
   const spawnPriority = deps.spawnPriorityFrom(priority)
   const scopeKey = deps.backendScopeKey(id, profileKey)

@@ -3,7 +3,7 @@ const net = require('node:net')
 const { Duplex } = require('node:stream')
 const test = require('node:test')
 
-const { TICKET_TTL_MS, connectTls, createEvaWsRelay } = require('./eva-ws-relay.cjs')
+const { TICKET_TTL_MS, connectTls, createEvaWsRelay, normalizeEvaWsEndpoint } = require('./eva-ws-relay.cjs')
 
 const BASE_URL = 'https://hermes-fixture-tenant-a.ecs.electricsheephq.com'
 
@@ -198,6 +198,55 @@ test('tickets are bound to the exact voice endpoint and assigned profile', async
   assert.equal(upstreamUrl.searchParams.get('profile'), 'research')
 })
 
+test('Bot Screen display tickets bind the display endpoint and its display ticket upstream', async t => {
+  const upstream = fakeUpstream()
+  await upstream.start()
+  const relay = createEvaWsRelay({
+    connectUpstream: () => upstream.connect(),
+    getUpstream: async () => ({ baseUrl: BASE_URL, token: 'runtime-secret' })
+  })
+  t.after(async () => {
+    await relay.close()
+    await upstream.stop()
+  })
+
+  const localUrl = await relay.mintTicket({ path: '/api/display/ws?display_ticket=abc', profile: 'research' })
+  assert.match(localUrl, /^ws:\/\/127\.0\.0\.1:\d+\/api\/display\/ws\?display_ticket=abc&ticket=/)
+
+  const moved = new URL(localUrl)
+  moved.searchParams.set('display_ticket', 'other')
+  const crossed = await upgrade(moved.toString())
+  assert.match(crossed.response, /^HTTP\/1\.1 401/)
+  crossed.socket.destroy()
+
+  const next = await relay.mintTicket({ path: '/api/display/ws?display_ticket=abc', profile: 'research' })
+  const result = await upgrade(next)
+  assert.match(result.response, /^HTTP\/1\.1 101/)
+  result.socket.destroy()
+
+  const requestLine = upstream.observed().split('\r\n', 1)[0]
+  const upstreamUrl = new URL(`https://upstream.invalid${requestLine.split(' ')[1]}`)
+  assert.equal(upstreamUrl.pathname, '/api/display/ws')
+  assert.equal(upstreamUrl.searchParams.get('display_ticket'), 'abc')
+  assert.equal(upstreamUrl.searchParams.get('eva_session'), 'runtime-secret')
+  assert.equal(upstreamUrl.searchParams.get('profile'), 'research')
+})
+
+test('the display endpoint is the only new WebSocket path and keeps profile out of its query', () => {
+  assert.deepEqual(normalizeEvaWsEndpoint('/api/display/ws?display_ticket=abc'), {
+    pathname: '/api/display/ws',
+    search: '?display_ticket=abc',
+    path: '/api/display/ws?display_ticket=abc'
+  })
+  for (const path of ['/api/display/other', '/api/foo/ws', '/api/display/ws/extra']) {
+    assert.throws(() => normalizeEvaWsEndpoint(path), /unsupported WebSocket endpoint/)
+  }
+  assert.throws(
+    () => normalizeEvaWsEndpoint('/api/display/ws?display_ticket=abc&profile=other'),
+    /invalid WebSocket query/
+  )
+})
+
 test('a valid ticket cannot be moved to a different WebSocket endpoint', async t => {
   const relay = createEvaWsRelay({
     connectUpstream: async () => {
@@ -335,15 +384,12 @@ test('relay denies managed billing RPCs before they reach upstream', async t => 
   })
 
   for (const method of [
-    'billing.state',
     'billing.charge',
     'billing.auto_reload',
     'billing.step_up',
-    'subscription.state',
     'subscription.change',
     'subscription.resume',
     'subscription.upgrade',
-    'usage.bars',
     'billing.future_method',
     'subscription.future_method'
   ]) {
@@ -354,7 +400,39 @@ test('relay denies managed billing RPCs before they reach upstream', async t => 
   }
 
   assert.equal(upstream.tunneled().length, 0)
-  assert.equal(events.filter(event => event === 'client_rpc_denied').length, 11)
+  assert.equal(events.filter(event => event === 'client_rpc_denied').length, 8)
+})
+
+test('relay passes billing and usage reads on an open socket and still denies a spend RPC', async t => {
+  const upstream = fakeUpstream()
+  await upstream.start()
+  const events = []
+  const relay = createEvaWsRelay({
+    connectUpstream: () => upstream.connect(),
+    getUpstream: async () => ({ baseUrl: BASE_URL, token: 'runtime-secret' }),
+    onEvent: event => events.push(event)
+  })
+  t.after(async () => {
+    await relay.close()
+    await upstream.stop()
+  })
+
+  const result = await upgrade(await relay.mintTicket())
+  assert.match(result.response, /^HTTP\/1\.1 101/)
+  const reads = ['billing.state', 'billing.charge_status', 'subscription.state', 'usage.bars'].map((method, index) =>
+    clientFrame(JSON.stringify({ id: index + 1, jsonrpc: '2.0', method, params: {} }))
+  )
+  for (const frame of reads) result.socket.write(frame)
+  const readBytes = reads.reduce((total, frame) => total + frame.length, 0)
+  await waitForTunnel(upstream, readBytes)
+  assert.deepEqual(upstream.tunneled(), Buffer.concat(reads))
+  assert.equal(result.socket.destroyed, false)
+  assert.equal(events.includes('client_rpc_denied'), false)
+
+  result.socket.write(clientFrame(JSON.stringify({ id: 9, jsonrpc: '2.0', method: 'billing.charge', params: {} })))
+  await waitForClose(result.socket)
+  assert.equal(upstream.tunneled().length, readBytes)
+  assert.equal(events.filter(event => event === 'client_rpc_denied').length, 1)
 })
 
 test('relay denies hidden billing commands inside generic dispatch RPCs before they reach upstream', async t => {
@@ -641,7 +719,7 @@ test('relay preserves fragmented binary and allowed text while denying a fragmen
   blocked.socket.write(
     Buffer.concat([
       clientFrame('{"id":1,"jsonrpc":"2.0","method":"billing.', { fin: false, opcode: 0x1 }),
-      clientFrame('state","params":{}}', { opcode: 0x0 })
+      clientFrame('charge","params":{}}', { opcode: 0x0 })
     ])
   )
   await waitForClose(blocked.socket)

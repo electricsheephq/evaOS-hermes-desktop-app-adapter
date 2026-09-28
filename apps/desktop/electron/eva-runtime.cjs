@@ -2600,10 +2600,6 @@ function createEvaManagedRuntime(options) {
   }
 
   async function requestMedia(request, retry = true) {
-    if (typeof options.fetchMedia !== 'function') {
-      throw new EvaBrokerError('Managed media streaming is unavailable.', 501, 'managed-media-unavailable')
-    }
-
     const runtime = await ensureRuntimeEnrollment()
     const supportRequest = runtime.sessionKind === 'delegated_support'
     const profile = supportProfileFor(runtime, request?.profile)
@@ -2612,7 +2608,7 @@ function createEvaManagedRuntime(options) {
       path: request?.path,
       profile
     }, runtime.sessionKind === 'delegated_support' ? { allowBroadProfileSelectors: false } : undefined)
-    if (allowed.pathname !== '/api/files/download') {
+    if (allowed.pathname !== '/api/files/download' && allowed.pathname !== '/api/files/stream') {
       throw new EvaBrokerError('Managed media streaming blocked an unsupported endpoint.', 403, 'managed-policy')
     }
 

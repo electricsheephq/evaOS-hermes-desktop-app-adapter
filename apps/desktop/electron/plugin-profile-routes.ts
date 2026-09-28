@@ -12,22 +12,16 @@ export interface EvaManagedActiveRoute {
   registryScoped: true
 }
 
-/** Accept only the renderer's opaque enrolled-runtime route in a managed app.
- * The upstream renderer publishes this channel one-way, so invalid workstation
- * registry ids are rejected by returning null rather than throwing across IPC.
- * `registryScoped` is forced on; a renderer cannot opt back into legacy config
- * resolution with a false flag. */
+/** Map the renderer's active route onto the one enrolled runtime in a managed
+ * app. Any connection id (empty, `local`, a registry id) names that runtime,
+ * as upstream's empty id names the primary. `registryScoped` is forced on; a
+ * renderer cannot opt back into legacy config resolution with a false flag. */
 export function normalizeEvaManagedActiveRoute(value: unknown): EvaManagedActiveRoute | null {
   if (!value || typeof value !== 'object') {
     return null
   }
 
   const input = value as Record<string, unknown>
-
-  if (input.connectionId !== EVA_MANAGED_CONNECTION_ID) {
-    return null
-  }
-
   const profile = typeof input.profile === 'string' && input.profile.trim() ? input.profile.trim() : undefined
 
   return {
@@ -250,13 +244,10 @@ export async function loadEvaManagedAgentRoster(
   return buildEvaManagedAgentRoster(profiles.length ? profiles : primaryProfile(), profileMetadata)
 }
 
-/** Managed plugins may request only the synthetic enrolled-runtime route.
- * Generic registry ids stay unavailable in evaOS Agent. */
-export function assertEvaManagedConnectionId(value: unknown): typeof EVA_MANAGED_CONNECTION_ID {
-  if (value !== EVA_MANAGED_CONNECTION_ID) {
-    throw new Error('evaOS Agent rejected a plugin request outside the managed runtime route.')
-  }
-
+/** Every connection id a managed plugin passes (empty, `local`, a registry id)
+ * resolves to the one enrolled runtime, as upstream's empty id resolves to the
+ * primary. The broker still authorizes the requested profile. */
+export function evaManagedConnectionId(_value?: unknown): typeof EVA_MANAGED_CONNECTION_ID {
   return EVA_MANAGED_CONNECTION_ID
 }
 

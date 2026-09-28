@@ -40,12 +40,13 @@ export interface SiblingWsRoute {
  * Resolve `ws(s)://<gateway>/<path>` for `route`. `stripGatewayCredential`
  * drops the `?ticket=`/`?token=` the gateway URL carried when the sibling route
  * authenticates on its own credential (a one-shot ticket must not be spent
- * twice; the display bridge mints its own).
+ * twice; the display bridge mints its own). `query` is appended to the
+ * sibling endpoint.
  */
 export async function resolveSiblingWsUrl(
   route: SiblingWsRoute,
   path: string,
-  options: { stripGatewayCredential?: boolean } = {}
+  options: { query?: Record<string, string>; stripGatewayCredential?: boolean } = {}
 ): Promise<string> {
   const desktop = window.hermesDesktop
 
@@ -69,6 +70,28 @@ export async function resolveSiblingWsUrl(
           `Timed out connecting to profile "${profile}"`
         )
 
+  const endpointPath = path.startsWith('/') ? path : `/${path}`
+  const query = new URLSearchParams(options.query)
+  const search = query.toString()
+
+  // Managed relay tickets bind one exact endpoint, query included, so mint for
+  // the sibling endpoint itself rather than rewriting the /api/ws ticket's URL.
+  if (conn.baseUrl?.startsWith('eva-managed://')) {
+    const managedUrl = new URL(
+      await withTimeout(
+        resolveGatewayWsUrl(desktop, conn, search ? `${endpointPath}?${search}` : endpointPath),
+        RESOLVE_TIMEOUT_MS,
+        'Timed out minting the gateway WebSocket URL'
+      )
+    )
+
+    if (managedUrl.pathname !== endpointPath) {
+      throw new Error(`Unexpected gateway WebSocket path: ${managedUrl.pathname}`)
+    }
+
+    return managedUrl.toString()
+  }
+
   const wsDeps =
     connectionId && desktop.getGatewayWsUrlFor
       ? { getGatewayWsUrl: () => desktop.getGatewayWsUrlFor!({ connectionId, profile }) }
@@ -88,11 +111,15 @@ export async function resolveSiblingWsUrl(
     throw new Error(`Unexpected gateway WebSocket path: ${url.pathname}`)
   }
 
-  url.pathname = url.pathname.replace(/\/api\/ws$/, path.startsWith('/') ? path : `/${path}`)
+  url.pathname = url.pathname.replace(/\/api\/ws$/, endpointPath)
 
   if (options.stripGatewayCredential) {
     url.searchParams.delete('ticket')
     url.searchParams.delete('token')
+  }
+
+  for (const [key, value] of query) {
+    url.searchParams.set(key, value)
   }
 
   return url.toString()
