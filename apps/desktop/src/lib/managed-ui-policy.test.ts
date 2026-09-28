@@ -1,3 +1,5 @@
+import { createRequire } from 'node:module'
+
 import { describe, expect, it } from 'vitest'
 
 import {
@@ -5,6 +7,10 @@ import {
   isManagedConfigFieldVisible,
   isManagedSettingsViewVisible
 } from './managed-ui-policy'
+
+const { isEvaManagedGatewayMethodBlocked } = createRequire(import.meta.url)('../../electron/eva-managed.cjs') as {
+  isEvaManagedGatewayMethodBlocked: (method: string) => boolean
+}
 
 describe('managed renderer policy', () => {
   it('removes Billing without narrowing any other Settings destination', () => {
@@ -32,23 +38,67 @@ describe('managed renderer policy', () => {
     expect(isManagedConfigFieldVisible('toolsets', false)).toBe(true)
   })
 
-  it('rejects Nous billing and subscription RPCs below the managed UI', () => {
+  it('lets Nous billing reads through but rejects spend and plan changes below the managed UI', () => {
     for (const method of [
       'billing.state',
+      'billing.charge_status',
+      'subscription.state',
+      'usage.bars',
+      'plugin.billing-helper.run',
+      'session.status',
+      'usage.snapshot'
+    ]) {
+      expect(() => assertManagedGatewayMethodAllowed(method, true)).not.toThrow()
+      expect(() => assertManagedGatewayMethodAllowed(method, false)).not.toThrow()
+    }
+
+    for (const method of [
       'billing.charge',
       'billing.auto_reload',
       'billing.step_up',
-      'subscription.state',
       'subscription.change',
       'subscription.resume',
       'subscription.upgrade',
-      'usage.bars'
+      'subscription.preview',
+      'billing.future_method',
+      'subscription.future_method'
     ]) {
       expect(() => assertManagedGatewayMethodAllowed(method, true)).toThrow(/unavailable in managed evaOS Agent/)
       expect(() => assertManagedGatewayMethodAllowed(method, false)).not.toThrow()
     }
+  })
 
-    expect(() => assertManagedGatewayMethodAllowed('session.status', true)).not.toThrow()
-    expect(() => assertManagedGatewayMethodAllowed('usage.snapshot', true)).not.toThrow()
+  it('makes the same allow or block decision as the Electron main-process gate', () => {
+    for (const method of [
+      'billing.state',
+      'billing.charge_status',
+      'subscription.state',
+      'usage.bars',
+      'billing.charge',
+      'billing.auto_reload',
+      'billing.step_up',
+      'subscription.change',
+      'subscription.resume',
+      'subscription.upgrade',
+      'subscription.preview',
+      'billing.future_method',
+      'subscription.future_method',
+      'session.status',
+      'usage.snapshot',
+      'plugin.billing-helper.run'
+    ]) {
+      let rendererBlocked = false
+
+      try {
+        assertManagedGatewayMethodAllowed(method, true)
+      } catch {
+        rendererBlocked = true
+      }
+
+      expect({ method, blocked: rendererBlocked }).toEqual({
+        method,
+        blocked: isEvaManagedGatewayMethodBlocked(method)
+      })
+    }
   })
 })

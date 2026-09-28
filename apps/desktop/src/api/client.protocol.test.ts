@@ -84,4 +84,40 @@ describe('HermesGateway Desktop UI protocol contract', () => {
     await response
     gateway.close()
   })
+
+  it('sends managed billing reads and rejects managed spend calls before the socket', async () => {
+    const desktopWindow = window as { hermesDesktop?: unknown }
+    const previousDesktop = desktopWindow.hermesDesktop
+    desktopWindow.hermesDesktop = { eva: {} }
+
+    try {
+      const gateway = new HermesGateway()
+      const connecting = gateway.connect('ws://gateway.invalid')
+      const socket = FakeWebSocket.instances[0]
+      socket.open()
+      await connecting
+
+      for (const method of ['usage.bars', 'subscription.state']) {
+        const response = gateway.request(method)
+        const request = socket.lastRequest()
+
+        expect(request.method).toBe(method)
+
+        socket.respond(request.id)
+        await response
+      }
+
+      const sentBeforeSpend = socket.sent.length
+
+      // request() throws synchronously; callers that await it see a rejection.
+      await expect(Promise.resolve().then(() => gateway.request('billing.charge', { amount: 1 }))).rejects.toThrow(
+        'Billing and subscription actions are unavailable in managed evaOS Agent.'
+      )
+      expect(socket.sent).toHaveLength(sentBeforeSpend)
+
+      gateway.close()
+    } finally {
+      desktopWindow.hermesDesktop = previousDesktop
+    }
+  })
 })

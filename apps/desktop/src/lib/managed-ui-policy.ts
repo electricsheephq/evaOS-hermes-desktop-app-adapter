@@ -1,7 +1,14 @@
 import { isManagedEvaosAgent } from '@/i18n/managed-brand'
 import { $evaManagedStatus } from '@/store/support-picker'
 
-const MANAGED_NOUS_GATEWAY_METHODS = new Set(['usage.bars'])
+// Must match EVA_MANAGED_ALLOWED_GATEWAY_READS in electron/eva-managed.cjs.
+const MANAGED_ALLOWED_GATEWAY_READS = new Set([
+  'billing.charge_status',
+  'billing.state',
+  'subscription.state',
+  'usage.bars'
+])
+
 const MANAGED_NOUS_GATEWAY_PREFIXES = ['billing.', 'subscription.']
 
 const MANAGED_HIDDEN_ADVANCED_FIELDS = new Set([
@@ -39,8 +46,8 @@ export function isDisplayToggleWriteAllowed(connectPush: boolean): boolean {
 export function assertManagedGatewayMethodAllowed(method: string, managed: boolean): void {
   if (
     managed &&
-    (MANAGED_NOUS_GATEWAY_METHODS.has(method) ||
-      MANAGED_NOUS_GATEWAY_PREFIXES.some(prefix => method.startsWith(prefix)))
+    !MANAGED_ALLOWED_GATEWAY_READS.has(method) &&
+    MANAGED_NOUS_GATEWAY_PREFIXES.some(prefix => method.startsWith(prefix))
   ) {
     throw new Error('Billing and subscription actions are unavailable in managed evaOS Agent.')
   }
