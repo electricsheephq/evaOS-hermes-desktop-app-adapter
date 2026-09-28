@@ -114,8 +114,8 @@ Buckets: COVERED-UPSTREAM = the tag version is taken and the fork code deleted b
 | 9 | `apps/desktop/e2e/launch-packaged-app.spec.ts` | 0 | COVERED-UPSTREAM | modify/delete: upstream purged; fork change was product-name branding only; removed |
 | 9 | `apps/desktop/e2e/mock-backend-setup.spec.ts` | 0 | COVERED-UPSTREAM | modify/delete: upstream purged; fork change was a managed skip only (managed-boot spec covers managed); removed |
 | 9 | `apps/desktop/electron/backend-dial-claim.test.ts` | 1 | COVERED-UPSTREAM | Upstream replaced the main-source wiring scans (whose slice bound the fork had widened) with behavioral claim tests; took upstream. |
-| 9 | `apps/desktop/electron/fs-ipc.test.ts` | 1 | RE-EXPRESS | Merged upstream reveal tests with the fork managed-boundary test in one mock set; boundary list now also covers upstream's new desktop-plugin removal channel. |
-| 9 | `apps/desktop/electron/fs-ipc.ts` | 0 | RE-EXPRESS | Auto-merged file (no markers): added the managed local-access guard to upstream's new desktop-plugin removal handler so the managed denial covers it. |
+| 9 | `apps/desktop/electron/fs-ipc.test.ts` | 1 | RE-EXPRESS | Merged upstream reveal tests with the fork managed-boundary test in one mock set; boundary list now also covers upstream's new desktop-plugin removal channel. **Removed 2026-09-28 (owner direction): identical to v2026.9.24 again; `fs-ipc-managed.test.ts` proves the managed build runs the upstream handlers.** |
+| 9 | `apps/desktop/electron/fs-ipc.ts` | 0 | RE-EXPRESS | Auto-merged file (no markers): added the managed local-access guard to upstream's new desktop-plugin removal handler so the managed denial covers it. **Removed 2026-09-28 (owner direction): the managed local-access guard and the fork `agentPluginsRoot` handler are gone; the file is identical to v2026.9.24 and managed builds install and load desktop plugin halves the upstream way.** |
 | 9 | `apps/desktop/electron/git-ipc.ts` | 1 | RE-EXPRESS | Took upstream's removal of the PR-comment fetch handler; kept the managed local-mutation guard on pull request creation. |
 | 9 | `apps/desktop/electron/hardening.test.ts` | 1 | CARRY-AS-IS | Kept the fork safe-storage decrypt tests; accepted upstream's purge of two main-source scan tests. |
 | 9 | `apps/desktop/electron/main.ts` | 17 | RE-EXPRESS | Took upstream bodies of ensureBackend and runHermesStart re-wrapped in the fork managed backend gate; kept eva IPC, managed profile get/remember denial, managed connection id and deep-link manager; managed builds ignore and refuse the new app-wide default profile route; quit prompt keeps upstream ownership copy plus app name. |
@@ -300,7 +300,9 @@ State DB rollback (not a numbered RISK row, found by the compat suite): upstream
 - Desktop: evaOS identity and release scripts, `eva-managed.cjs`, `eva-ws-relay.cjs`, support-target picker, managed boot, connectors/updater carry, `npm run test:managed`.
 - CI: the fork's slice matrix, compat-source preparation and durations job; both desktop e2e jobs.
 
-Desktop behaviour choices made during the resolution (review in PR): managed builds ignore the default-profile route; the `message.reaction` gate; plugin removal returns the managed denial; support indicator placement; `/restart` stays a desktop action; connection-lost wording; stricter foreground check; the new fr/de/es strings are machine-written and unreviewed.
+Desktop behaviour choices made during the resolution (review in PR): managed builds ignore the default-profile route; the `message.reaction` gate; plugin removal returns the managed denial (removed 2026-09-28, see below); support indicator placement; `/restart` stays a desktop action; connection-lost wording; stricter foreground check; the new fr/de/es strings are machine-written and unreviewed.
+
+2026-09-28 (owner direction: work the same as upstream): the managed local-access guard on `fs-ipc.ts` (local files, desktop-plugin root, probe, install, reconcile and removal) and #383's fixed "agent only" probe answer in `plugin-install-modal.tsx` (with its `catalogOnly` string) were removed. Both files match v2026.9.24.
 
 ## Upstream semantics that change fleet-visible behaviour
 

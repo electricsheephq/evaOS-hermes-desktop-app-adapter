@@ -727,7 +727,6 @@ export const zh = defineLocale({
         installing: '正在安装…',
         probing: '正在检查仓库…',
         probeUnavailable: '当前环境无法检查插件仓库。',
-        catalogOnly: '此应用只能安装目录中的条目。',
         desktopUnavailable: '当前环境无法安装桌面插件。',
         selectComponent: '请至少选择一个要安装的组件。',
         agentSuccess: name => `智能体插件 ${name} 已安装`,

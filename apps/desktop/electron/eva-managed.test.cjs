@@ -100,9 +100,7 @@ test('managed mode refuses to start a local terminal for a remote agent', () => 
 
 test('managed mode fails closed before local machine mutation while unmanaged mode preserves it', () => {
   const capabilities = [
-    'Writing local files',
-    'Renaming local files',
-    'Trashing local files',
+    'Changing the local default project directory',
     'Mutating local Git state',
     'Controlling local terminal processes'
   ]

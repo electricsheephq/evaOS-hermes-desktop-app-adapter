@@ -811,7 +811,6 @@ export interface Translations {
         installing: string
         probing: string
         probeUnavailable: string
-        catalogOnly: string
         desktopUnavailable: string
         selectComponent: string
         agentSuccess: (name: string) => string
