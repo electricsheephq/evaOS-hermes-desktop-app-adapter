@@ -201,12 +201,7 @@ import {
 } from './desktop-uninstall'
 import { describeDevCdpDecision, resolveDevCdpPort } from './dev-cdp'
 import { installEmbedReferer } from './embed-referer'
-const {
-  createAgentContractStore,
-  createEvaAppUpdater,
-  safeApplyFailure,
-  safeCheckFailure
-} = require('./eva-app-updater.cjs')
+const { createAgentContractStore, createEvaAppUpdater, safeApplyFailure, safeCheckFailure } = require('./eva-app-updater.cjs')
 const {
   assertEvaManagedLocalMutationAllowed,
   assertEvaManagedLocalTerminalAllowed,
