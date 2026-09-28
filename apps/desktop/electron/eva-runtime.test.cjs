@@ -5822,3 +5822,99 @@ test('an undecryptable saved sign-in says a new sign-in will be kept', async t =
     )
   }
 })
+
+test('a forced enrollment started during a replacement sign-in does not block the new account', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-sign-in-replaces-forced-enrollment-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeActiveEnrollment(statePath)
+  let opened
+  let releaseRetained
+  const retainedGate = new Promise(resolve => {
+    releaseRetained = resolve
+  })
+  const launchedWith = []
+  let resets = 0
+  const runtime = makeManagedRuntime(statePath, {
+    openExternal: async url => {
+      opened = new URL(url)
+    },
+    pollDeviceCode: async () => ({ token: 'replacement-desktop-session', expiresAt: FUTURE, email: 'second@example.invalid' }),
+    launchRuntime: async token => {
+      launchedWith.push(token)
+      if (token === 'desktop-token') {
+        await retainedGate
+        return freshRuntimeEnrollment()
+      }
+      return { ...freshRuntimeEnrollment(), customerId: 'customer-two', token: 'replacement-runtime-token' }
+    },
+    resetRenderer: async () => {
+      resets += 1
+    }
+  })
+  t.after(() => runtime.close())
+
+  const signingIn = runtime.signIn()
+  await new Promise(resolve => setImmediate(resolve))
+  // The retained credential is still readable, so a forced refresh starts with it.
+  const staleRefresh = runtime.refresh()
+  const staleRejected = assert.rejects(staleRefresh, error => error instanceof EvaBrokerError && error.code === 'stale-auth')
+  await new Promise(resolve => setImmediate(resolve))
+  assert.deepEqual(launchedWith, ['desktop-token'])
+  await runtime.completeCallback(
+    `evaos-agent://auth/callback?device_code=ABCDEFGH&desktop_auth_state=${opened.searchParams.get('desktop_auth_state')}`
+  )
+  await new Promise(resolve => setImmediate(resolve))
+  releaseRetained()
+
+  const status = await signingIn
+  await staleRejected
+  assert.equal(status.desktopSessionActive, true)
+  assert.equal(resets, 1)
+  const persisted = JSON.parse(fs.readFileSync(statePath, 'utf8'))
+  assert.equal(persisted.desktop.token, 'replacement-desktop-session')
+  assert.equal(persisted.runtime.token, 'replacement-runtime-token')
+  assert.equal(persisted.runtime.customer_id, 'customer-two')
+})
+
+test('a failure after the state file is renamed does not revoke the committed sign-in', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-sign-in-post-rename-failure-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeActiveEnrollment(statePath)
+  // Any chmod of the committed file itself fails; the temporary file is untouched.
+  const chmodSync = fs.chmodSync
+  fs.chmodSync = (target, mode) => {
+    if (target === statePath) throw Object.assign(new Error('injected post-rename failure'), { code: 'EIO' })
+    return chmodSync(target, mode)
+  }
+  t.after(() => {
+    fs.chmodSync = chmodSync
+  })
+  let opened
+  const revoked = []
+  const runtime = makeManagedRuntime(statePath, {
+    openExternal: async url => {
+      opened = new URL(url)
+    },
+    pollDeviceCode: async () => ({ token: 'replacement-desktop-session', expiresAt: FUTURE, email: 'employee@example.invalid' }),
+    launchRuntime: async () => freshRuntimeEnrollment(),
+    revokeDesktopSession: async token => {
+      revoked.push(token)
+      return true
+    }
+  })
+  t.after(() => runtime.close())
+
+  const signingIn = runtime.signIn()
+  await new Promise(resolve => setImmediate(resolve))
+  await runtime.completeCallback(
+    `evaos-agent://auth/callback?device_code=ABCDEFGH&desktop_auth_state=${opened.searchParams.get('desktop_auth_state')}`
+  )
+  const status = await signingIn
+
+  assert.deepEqual(revoked, [])
+  assert.equal(status.desktopSessionActive, true)
+  assert.equal(JSON.parse(fs.readFileSync(statePath, 'utf8')).desktop.token, 'replacement-desktop-session')
+  assert.equal((fs.statSync(statePath).mode & 0o777).toString(8), '600')
+})

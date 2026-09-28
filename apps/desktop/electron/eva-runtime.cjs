@@ -471,8 +471,9 @@ function createEvaManagedRuntime(options) {
     const tempPath = `${statePath}.tmp`
     fs.writeFileSync(tempPath, JSON.stringify(payload, null, 2), { encoding: 'utf8', mode: 0o600 })
     fs.chmodSync(tempPath, 0o600)
+    // The rename commits the write and keeps the 0600 mode set just above;
+    // nothing after it may fail a write that already happened.
     fs.renameSync(tempPath, statePath)
-    fs.chmodSync(statePath, 0o600)
   }
 
   function writeState(state) {
@@ -1004,8 +1005,11 @@ function createEvaManagedRuntime(options) {
           throw error
         }
         // An enrollment started meanwhile holds the retained credential; it
-        // must not write that credential over the new sign-in.
+        // must not write that credential over the new sign-in, nor be reused
+        // by the new sign-in's own enrollment (as clearDelegatedSupportState).
         runtimeGeneration += 1
+        runtimeEnrollmentPromise = null
+        runtimeEnrollmentPromiseForced = false
         if (supportRequestId) {
           stage = 'support-claim'
           try {
