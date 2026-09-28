@@ -9,6 +9,7 @@ import {
   minBackendContractBuilderArg,
   readRequiredBackendContract
 } from './backend-contract.mjs'
+import { electronBuilderArgs } from './run-electron-builder.mjs'
 
 const require = createRequire(import.meta.url)
 
@@ -38,10 +39,14 @@ test('electron-builder receives the contract as a numeric releaseInfo.vendor fie
   assert.equal(minBackendContractBuilderArg(), minBackendContractBuilderArg(readRequiredBackendContract()))
 })
 
-test('the builder wrapper passes the derived value and package.json never hand-sets it', () => {
-  const wrapper = fs.readFileSync(new URL('./run-electron-builder.mjs', import.meta.url), 'utf8')
+test('the builder wrapper passes the derived contract and package.json never hand-sets it', () => {
+  const builder = require('electron-builder/out/builder.js')
+  const yargs = require('yargs')
+  const args = electronBuilderArgs(null, ['--mac'])
+  const { config } = builder.normalizeOptions(builder.configureBuildCommand(yargs(args)).parse())
   const manifest = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
 
-  assert.match(wrapper, /args\.push\(minBackendContractBuilderArg\(\)\)/)
+  assert.equal(config.releaseInfo.vendor[MIN_BACKEND_CONTRACT_KEY], readRequiredBackendContract())
+  assert.equal(args.at(-1), '--mac')
   assert.equal(manifest.build.releaseInfo?.vendor?.[MIN_BACKEND_CONTRACT_KEY], undefined)
 })
