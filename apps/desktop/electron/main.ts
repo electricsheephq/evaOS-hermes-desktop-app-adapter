@@ -3428,12 +3428,8 @@ let evaAppUpdater = null
 
 // Lowest agent contract per connection, so an app update is never offered to
 // an app whose agent runtime is too old for it (eva-app-updater.cjs).
-const EVA_AGENT_CONTRACTS_PATH = path.join(app.getPath('userData'), 'eva-agent-contracts.json')
 
-const evaAgentContracts = createAgentContractStore({
-  load: () => readJson(EVA_AGENT_CONTRACTS_PATH),
-  save: contracts => fs.writeFileSync(EVA_AGENT_CONTRACTS_PATH, JSON.stringify(contracts))
-})
+const evaAgentContracts = createAgentContractStore()
 
 function getEvaAppUpdater() {
   if (!evaAppUpdater) {

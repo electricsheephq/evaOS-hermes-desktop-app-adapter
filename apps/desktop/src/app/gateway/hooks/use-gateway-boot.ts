@@ -514,8 +514,14 @@ export function useGatewayBoot({
       } catch (err) {
         if (!cancelled && !isGatewayReauthRequired(err)) {
           const { code, name } = (err ?? {}) as { code?: unknown; name?: unknown }
-          const errorClass = typeof name === 'string' && name ? name : typeof err
-          const errorCode = typeof code === 'string' || typeof code === 'number' ? ` code=${code}` : ''
+          // Only short identifier-like tokens reach the persisted log; anything
+          // else (a URL, a token, a message) is replaced.
+          const token = (value: unknown) =>
+            (typeof value === 'string' || typeof value === 'number') && /^[A-Za-z0-9_.-]{1,48}$/.test(String(value))
+              ? String(value)
+              : 'other'
+          const errorClass = typeof name === 'string' && name ? token(name) : typeof err
+          const errorCode = typeof code === 'string' || typeof code === 'number' ? ` code=${token(code)}` : ''
           console.info(`[gateway-reconnect] attempt failed stage=${stage} error=${errorClass}${errorCode}`)
         }
 

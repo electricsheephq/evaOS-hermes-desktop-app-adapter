@@ -4,6 +4,7 @@ const test = require('node:test')
 
 const {
   EVA_APP_UPDATE_FEED,
+  agentContractHold,
   createAgentContractStore,
   createEvaAppUpdater,
   releaseNoteCommits,
@@ -543,37 +544,35 @@ test('accepts the minimum-agent field as digits', async () => {
 })
 
 test('agent contract store keeps the latest value per connection and gates on the lowest', () => {
-  const saved = []
-  const store = createAgentContractStore({
-    load: () => ({ bad: 'x', 'eva-managed://a': 8 }),
-    save: value => saved.push(value)
-  })
+  const store = createAgentContractStore()
 
-  assert.equal(store.lowest(), 8)
-  store.record('eva-managed://b', 6)
+  assert.equal(store.lowest(), null)
+  assert.equal(store.record('eva-managed://a', 8), true)
+  assert.equal(store.record('eva-managed://b', 6), true)
   assert.equal(store.lowest(), 6)
-  store.record('eva-managed://b', 8)
+  assert.equal(store.record('eva-managed://b', 8), true)
   assert.equal(store.lowest(), 8)
-  store.record('', 1)
-  store.record('eva-managed://c', 'nine')
+  assert.equal(store.record('eva-managed://b', 8), false)
+  assert.equal(store.record('', 1), false)
+  assert.equal(store.record('eva-managed://c', 'nine'), false)
+  assert.equal(store.record('eva-managed://c', -1), false)
   assert.equal(store.lowest(), 8)
-  assert.deepEqual(saved.at(-1), { 'eva-managed://a': 8, 'eva-managed://b': 8 })
-  assert.equal(createAgentContractStore({ load: () => null }).lowest(), null)
 })
 
 test('agent contract store holds for a connection that stops reporting a contract', () => {
-  const saved = []
-  const store = createAgentContractStore({
-    load: () => ({ 'eva-managed://new': 8, 'eva-managed://old': 6 }),
-    save: value => saved.push(value)
-  })
+  const store = createAgentContractStore()
+  store.record('eva-managed://new', 8)
+  store.record('eva-managed://old', 6)
 
-  assert.equal(store.record('eva-managed://new', 8), false)
   assert.equal(store.record('eva-managed://old', null), true)
   // A live backend without the field cannot prove it is new enough.
   assert.equal(store.lowest(), 0)
   assert.equal(store.record('eva-managed://old', null), false)
   assert.equal(store.record('eva-managed://old', 8), true)
   assert.equal(store.lowest(), 8)
-  assert.deepEqual(saved.at(-1), { 'eva-managed://new': 8, 'eva-managed://old': 8 })
+})
+
+test('a new agent contract store starts empty, so a fresh launch holds until an agent reports', () => {
+  assert.equal(createAgentContractStore().lowest(), null)
+  assert.equal(agentContractHold({ vendor: { evaosMinBackendContract: 8 } }, null), 'waiting-for-agent')
 })

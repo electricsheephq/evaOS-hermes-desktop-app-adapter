@@ -95,18 +95,17 @@ function heldStatus(app, info, reason, now = Date.now) {
 }
 
 /**
- * The agent contract each connection last reported, persisted so the gate
- * holds across launches. The gate uses the lowest across connections.
+ * The agent contract each connection reported in this run, kept in memory
+ * only: a value saved by an earlier launch could release an update before the
+ * agent reconnects (e.g. after a rollback), so each launch holds until its
+ * agents report again. The gate uses the lowest across connections.
  */
-function createAgentContractStore({ load = () => ({}), save = () => undefined } = {}) {
-  const valid = ([key, value]) => Boolean(key) && Number.isInteger(value) && value >= 0
-  let contracts = null
-  const current = () => (contracts ??= Object.fromEntries(Object.entries(load() || {}).filter(valid)))
+function createAgentContractStore() {
+  const contracts = new Map()
 
   return Object.freeze({
     lowest() {
-      const values = Object.values(current())
-      return values.length > 0 ? Math.min(...values) : null
+      return contracts.size > 0 ? Math.min(...contracts.values()) : null
     },
     /**
      * Records a connection's contract. null (a backend without the field) is
@@ -115,13 +114,8 @@ function createAgentContractStore({ load = () => ({}), save = () => undefined } 
     record(connection, reported) {
       const key = String(connection || '').slice(0, 256)
       const contract = reported === null ? 0 : reported
-      if (!valid([key, contract]) || current()[key] === contract) return false
-      contracts = { ...current(), [key]: contract }
-      try {
-        save(contracts)
-      } catch {
-        // The in-memory value still gates this run.
-      }
+      if (!key || !Number.isInteger(contract) || contract < 0 || contracts.get(key) === contract) return false
+      contracts.set(key, contract)
       return true
     }
   })
