@@ -1,11 +1,12 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { $updateOverlayOpen, $updateOverlayTarget } from '@/store/updates'
+import { $updateOverlayOpen, $updateOverlayTarget, $updateStatus } from '@/store/updates'
 
 afterEach(() => {
   cleanup()
   $updateOverlayOpen.set(false)
+  $updateStatus.set(null)
   Reflect.deleteProperty(window, 'hermesDesktop')
   vi.restoreAllMocks()
 })
@@ -41,6 +42,21 @@ describe('AboutSettings', () => {
 
     expect($updateOverlayOpen.get()).toBe(true)
     expect($updateOverlayTarget.get()).toBe('client')
+  })
+
+  it('shows why a managed app update is held for the agent runtime', async () => {
+    Object.defineProperty(window, 'hermesDesktop', {
+      configurable: true,
+      value: { eva: { status: vi.fn().mockResolvedValue({ signedIn: true, updateChannel: 'managed-beta' }) } },
+      writable: true
+    })
+    const message = 'Your agent needs an update before this app update.'
+    $updateStatus.set({ message, reason: 'agent-update-required', supported: true, updateAvailable: false })
+
+    const { AboutSettings } = await import('./about-settings')
+    render(<AboutSettings />)
+
+    expect(screen.getByText(message)).toBeTruthy()
   })
 
   it.each([undefined, 'uninstall'])('never offers uninstall in managed mode (subpage %s)', async subpage => {

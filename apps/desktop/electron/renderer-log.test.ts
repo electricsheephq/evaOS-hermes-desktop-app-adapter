@@ -35,6 +35,17 @@ describe('formatRendererConsoleLine', () => {
 
     expect(line).toContain('[gateway-profile-adoption] source=delegated-support-grant value="main"')
   })
+
+  it('persists the bounded reconnect diagnostics at info level (#388)', () => {
+    const failed = '[gateway-reconnect] attempt failed stage=connection error=TypeError code=ECONNREFUSED'
+    const skipped = '[gateway-reconnect] skipped entry=explicit reason=gateway-switching'
+
+    expect(formatRendererConsoleLine('main', { level: 1, message: failed, sourceUrl: 's', lineNumber: 1 })).toContain(
+      failed
+    )
+    expect(formatRendererConsoleLine('main', 1, skipped, 1, 's')).toContain(skipped)
+    expect(formatRendererConsoleLine('main', 1, 'gateway-reconnect without the bracket prefix', 1, 's')).toBeNull()
+  })
 })
 
 describe('attachRendererConsoleCapture', () => {

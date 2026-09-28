@@ -508,6 +508,141 @@ describe('explicit update targets', () => {
   })
 })
 
+// A managed evaOS agent is updated by Electric Sheep, never from the app
+// (adapter#387): no surface may POST /api/hermes/update on the customer's agent.
+describe('managed evaOS agent backend updates', () => {
+  const applyClientMock = vi.fn()
+  const checkClientMock = vi.fn()
+
+  beforeEach(() => {
+    storage.clear()
+    notifySpy.mockClear()
+    dismissSpy.mockClear()
+    applyClientMock.mockReset().mockResolvedValue({ ok: true, handedOff: true })
+    checkClientMock.mockReset().mockResolvedValue(status({ behind: 0, updateAvailable: false }))
+    updateHermesSpy.mockReset().mockResolvedValue({ ok: true, name: 'update' })
+    checkHermesUpdateSpy.mockReset().mockResolvedValue({
+      install_method: 'git',
+      current_version: '0.4.2',
+      behind: 3,
+      update_available: true,
+      can_apply: true,
+      update_command: null,
+      message: null
+    })
+    resetUpdateApplyState()
+    $updateStatus.set(null)
+    $backendUpdateStatus.set(null)
+    $updateOverlayOpen.set(false)
+    $updateOverlayTarget.set('client')
+    $mockConnectionsRegistry.set(registryOf(['eva-managed', 'local']))
+    setRemote(true)
+    ;(globalThis as unknown as { window: unknown }).window = {
+      hermesDesktop: { eva: {}, updates: { apply: applyClientMock, check: checkClientMock } }
+    }
+    vi.useRealTimers()
+  })
+
+  afterEach(async () => {
+    await vi.waitFor(() => expect($updateEverything.get().running).toBe(false), { timeout: 5000 })
+    $mockConnectionsRegistry.set(null)
+    setRemote(false)
+    delete (globalThis as unknown as { window?: unknown }).window
+  })
+
+  it('raises no backend-update toast for an older agent contract', () => {
+    reportBackendContract(REQUIRED_BACKEND_CONTRACT - 2)
+
+    expect(notifySpy).not.toHaveBeenCalled()
+    expect(updateHermesSpy).not.toHaveBeenCalled()
+  })
+
+  it('reports each agent contract to the app updater gate', () => {
+    const reportAgentContract = vi.fn().mockResolvedValue(undefined)
+
+    ;(window as unknown as { hermesDesktop: { updates: object } }).hermesDesktop.updates = { reportAgentContract }
+
+    reportBackendContract(6)
+    reportBackendContract(undefined)
+
+    expect(reportAgentContract).toHaveBeenCalledTimes(2)
+    expect(reportAgentContract).toHaveBeenNthCalledWith(1, { connection: 'http://box:9119', contract: 6 })
+    // A backend without the field clears the connection's old value.
+    expect(reportAgentContract).toHaveBeenNthCalledWith(2, { connection: 'http://box:9119', contract: null })
+  })
+
+  it('re-checks a held app update when the lowest agent contract changes', async () => {
+    const reportAgentContract = vi.fn().mockResolvedValue({ lowestChanged: true })
+
+    ;(window as unknown as { hermesDesktop: { updates: object } }).hermesDesktop.updates = {
+      check: checkClientMock,
+      reportAgentContract
+    }
+    $updateStatus.set({ ...status({ updateAvailable: false }), message: 'held', reason: 'waiting-for-agent' })
+
+    reportBackendContract(REQUIRED_BACKEND_CONTRACT)
+
+    await vi.waitFor(() => expect(checkClientMock).toHaveBeenCalledTimes(1))
+  })
+
+  it('does not re-check when nothing is held or the lowest contract is unchanged', async () => {
+    const reportAgentContract = vi.fn().mockResolvedValue({ lowestChanged: true })
+
+    ;(window as unknown as { hermesDesktop: { updates: object } }).hermesDesktop.updates = {
+      check: checkClientMock,
+      reportAgentContract
+    }
+    $updateStatus.set(status({ updateAvailable: false }))
+    reportBackendContract(REQUIRED_BACKEND_CONTRACT)
+    await new Promise(resolve => setTimeout(resolve, 0))
+
+    reportAgentContract.mockResolvedValue({ lowestChanged: false })
+    $updateStatus.set({ ...status({ updateAvailable: false }), message: 'held', reason: 'agent-update-required' })
+    reportBackendContract(REQUIRED_BACKEND_CONTRACT)
+
+    await vi.waitFor(() => expect(reportAgentContract).toHaveBeenCalledTimes(2))
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(checkClientMock).not.toHaveBeenCalled()
+  })
+
+  it('never starts the backend self-update', async () => {
+    const result = await applyBackendUpdate()
+
+    expect(result.ok).toBe(false)
+    expect(updateHermesSpy).not.toHaveBeenCalled()
+    expect($backendUpdateApply.get().applying).toBe(false)
+  })
+
+  it('does not check the backend for updates', async () => {
+    await checkBackendUpdates({ force: true })
+
+    expect(checkHermesUpdateSpy).not.toHaveBeenCalled()
+    expect($backendUpdateStatus.get()).toBeNull()
+  })
+
+  it('routes every generic and backend entry point to the app update', async () => {
+    expect(hasMultipleUpdateTargets()).toBe(false)
+
+    openUpdatesWindow()
+    expect($updateOverlayTarget.get()).toBe('client')
+
+    openUpdatesWindow('backend')
+    expect($updateOverlayTarget.get()).toBe('client')
+
+    $updateStatus.set(status({ behind: 2 }))
+    requestActiveUpdate()
+    await vi.waitFor(() => expect(applyClientMock).toHaveBeenCalledTimes(1))
+
+    startActiveUpdate()
+    await vi.waitFor(() => expect(applyClientMock).toHaveBeenCalledTimes(2))
+
+    await applyEverythingUpdate()
+
+    expect(updateHermesSpy).not.toHaveBeenCalled()
+    expect(checkHermesUpdateSpy).not.toHaveBeenCalled()
+  })
+})
+
 // The everything-flow: on multi-target installs (remote mode / multi-connection
 // registry) "update" must mean every machine — active backend, other registered
 // sources via the Electron fan-out, and the client LAST. Before this flow,

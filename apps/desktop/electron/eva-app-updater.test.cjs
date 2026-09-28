@@ -4,6 +4,8 @@ const test = require('node:test')
 
 const {
   EVA_APP_UPDATE_FEED,
+  agentContractHold,
+  createAgentContractStore,
   createEvaAppUpdater,
   releaseNoteCommits,
   safeApplyFailure,
@@ -353,4 +355,233 @@ test('download failures keep infrastructure details out of renderer results and 
   assert.equal(result.message.includes('/private/tmp'), false)
   assert.equal(progress.at(-1).message, result.message)
   assert.equal(errors.at(-1).error.message.includes('/private/tmp'), true)
+})
+
+// Mirrors electron-updater's AppUpdater.isUpdateAvailable: a release the
+// isUpdateSupported hook rejects is reported as update-not-available.
+class GatedUpdater extends FakeUpdater {
+  constructor(info) {
+    super()
+    this.info = info
+    this.isUpdateSupported = () => true
+  }
+
+  async checkForUpdates() {
+    this.checkCalls += 1
+    const available = await this.isUpdateSupported(this.info)
+    this.emit(available ? 'update-available' : 'update-not-available', this.info)
+    return { updateInfo: this.info }
+  }
+}
+
+function gatedFixture({ info, lowest = null, originalSupported = true }) {
+  const updater = new GatedUpdater(info)
+  updater.isUpdateSupported = () => originalSupported
+  const service = createEvaAppUpdater({
+    app: { getVersion: () => '2026.7.20-es.8', isPackaged: true },
+    arch: 'arm64',
+    autoUpdater: updater,
+    getLowestAgentContract: () => lowest,
+    isPackaged: true,
+    now: () => 1234,
+    platform: 'darwin',
+    schedule: callback => callback()
+  })
+  return { service, updater }
+}
+
+const RELEASE = { version: '2026.7.20-es.9' }
+const GATED_RELEASE = { ...RELEASE, vendor: { evaosMinBackendContract: 8 } }
+
+test('offers a release without the minimum-agent field (older releases)', async () => {
+  const { service } = gatedFixture({ info: RELEASE })
+
+  const status = await service.check()
+
+  assert.equal(status.updateAvailable, true)
+  assert.equal(status.reason, undefined)
+})
+
+test('holds a gated release until an agent contract has been seen', async () => {
+  const { service, updater } = gatedFixture({ info: GATED_RELEASE })
+
+  const status = await service.check()
+  const applied = await service.apply()
+
+  assert.equal(status.updateAvailable, false)
+  assert.equal(status.reason, 'waiting-for-agent')
+  assert.equal(status.message, 'Waiting for your agent to connect.')
+  assert.equal(applied.ok, false)
+  assert.equal(updater.downloadCalls, 0)
+})
+
+test('holds a gated release while the lowest agent contract is too old', async () => {
+  const { service, updater } = gatedFixture({ info: GATED_RELEASE, lowest: 6 })
+
+  const status = await service.check()
+  const applied = await service.apply()
+
+  assert.equal(status.updateAvailable, false)
+  assert.equal(status.reason, 'agent-update-required')
+  assert.equal(status.message, 'Your agent needs an update before this app update.')
+  assert.equal(applied.ok, false)
+  assert.equal(updater.downloadCalls, 0)
+})
+
+test('apply re-reads the agent contract gate after an earlier check', async () => {
+  let lowest = 8
+  const updater = new GatedUpdater(GATED_RELEASE)
+  const service = createEvaAppUpdater({
+    app: { getVersion: () => '2026.7.20-es.8', isPackaged: true },
+    arch: 'arm64',
+    autoUpdater: updater,
+    getLowestAgentContract: () => lowest,
+    isPackaged: true,
+    now: () => 1234,
+    platform: 'darwin',
+    schedule: callback => callback()
+  })
+
+  assert.equal((await service.check()).updateAvailable, true)
+  lowest = 6
+  const applied = await service.apply()
+
+  assert.equal(applied.ok, false)
+  assert.equal(applied.error, 'agent-update-required')
+  assert.equal(updater.downloadCalls, 0)
+  assert.equal(updater.installCalls.length, 0)
+})
+
+test('apply re-reads the agent contract gate at the install handoff', async () => {
+  let lowest = 8
+  const updater = new GatedUpdater(GATED_RELEASE)
+  const service = createEvaAppUpdater({
+    app: { getVersion: () => '2026.7.20-es.8', isPackaged: true },
+    arch: 'arm64',
+    autoUpdater: updater,
+    getLowestAgentContract: () => lowest,
+    isPackaged: true,
+    now: () => 1234,
+    platform: 'darwin',
+    schedule: callback => {
+      lowest = 6
+      callback()
+    }
+  })
+
+  assert.equal((await service.check()).updateAvailable, true)
+  const applied = await service.apply()
+
+  assert.equal(applied.ok, false)
+  assert.equal(applied.error, 'agent-update-required')
+  assert.equal(updater.downloadCalls, 1)
+  assert.equal(updater.installCalls.length, 0)
+})
+
+test('apply fails safely when the gate read throws at the install handoff', async () => {
+  let failGateRead = false
+  const updater = new GatedUpdater(GATED_RELEASE)
+  const service = createEvaAppUpdater({
+    app: { getVersion: () => '2026.7.20-es.8', isPackaged: true },
+    arch: 'arm64',
+    autoUpdater: updater,
+    getLowestAgentContract: () => {
+      if (failGateRead) throw new Error('gate read failed')
+      return 8
+    },
+    isPackaged: true,
+    now: () => 1234,
+    platform: 'darwin',
+    schedule: callback => {
+      failGateRead = true
+      setImmediate(callback)
+    }
+  })
+
+  assert.equal((await service.check()).updateAvailable, true)
+  const applied = await service.apply()
+
+  assert.equal(applied.ok, false)
+  assert.equal(applied.error, 'apply-failed')
+  assert.equal(updater.installCalls.length, 0)
+
+  failGateRead = false
+  const retried = await service.apply()
+  assert.equal(retried.error, 'apply-failed')
+  assert.equal(updater.downloadCalls, 2)
+})
+
+test('offers a gated release once every agent meets its contract', async () => {
+  const { service } = gatedFixture({ info: GATED_RELEASE, lowest: 8 })
+
+  const status = await service.check()
+
+  assert.equal(status.updateAvailable, true)
+  assert.equal(status.reason, undefined)
+})
+
+test('keeps the original electron-updater support check', async () => {
+  const { service } = gatedFixture({ info: GATED_RELEASE, lowest: 8, originalSupported: false })
+
+  const status = await service.check()
+
+  assert.equal(status.updateAvailable, false)
+  assert.equal(status.reason, undefined)
+})
+
+test('fails closed on a malformed minimum-agent field', async () => {
+  for (const malformed of ['eight', '', false, true, -1, 0, 1.5, '8x', ' 8', [8], { toString: () => '8' }]) {
+    const { service } = gatedFixture({ info: { ...RELEASE, vendor: { evaosMinBackendContract: malformed } }, lowest: 99 })
+
+    assert.equal((await service.check()).reason, 'agent-update-required', `field ${JSON.stringify(malformed)}`)
+  }
+})
+
+test('accepts the minimum-agent field as digits', async () => {
+  const { service } = gatedFixture({ info: { ...RELEASE, vendor: { evaosMinBackendContract: '8' } }, lowest: 8 })
+
+  assert.equal((await service.check()).updateAvailable, true)
+})
+
+test('agent contract store keeps the lowest value per connection this run and gates on the lowest', () => {
+  const store = createAgentContractStore()
+
+  assert.equal(store.lowest(), null)
+  assert.equal(store.record('eva-managed://a', 8), true)
+  assert.equal(store.record('eva-managed://b', 6), true)
+  assert.equal(store.lowest(), 6)
+  assert.equal(store.record('eva-managed://a', 7), true)
+  assert.equal(store.lowest(), 6)
+  assert.equal(store.record('', 1), false)
+  assert.equal(store.record('eva-managed://c', 'nine'), false)
+  assert.equal(store.record('eva-managed://c', -1), false)
+  assert.equal(store.lowest(), 6)
+})
+
+test('a newer profile on the same managed connection does not release an update an older one holds', () => {
+  const store = createAgentContractStore()
+  // Every profile of an account reports through one managed connection key.
+  assert.equal(store.record('eva-managed://acct', 6), true)
+  assert.equal(store.record('eva-managed://acct', 8), false)
+  assert.equal(store.lowest(), 6)
+  assert.equal(agentContractHold({ vendor: { evaosMinBackendContract: 8 } }, store.lowest()), 'agent-update-required')
+})
+
+test('agent contract store holds for a connection that stops reporting a contract', () => {
+  const store = createAgentContractStore()
+  store.record('eva-managed://new', 8)
+  store.record('eva-managed://old', 6)
+
+  assert.equal(store.record('eva-managed://old', null), true)
+  // A live backend without the field cannot prove it is new enough.
+  assert.equal(store.lowest(), 0)
+  assert.equal(store.record('eva-managed://old', null), false)
+  // Only the next launch trusts a later report from that connection.
+  assert.equal(store.record('eva-managed://old', 8), false)
+  assert.equal(store.lowest(), 0)
+})
+
+test('a new agent contract store starts empty, so a fresh launch holds until an agent reports', () => {
+  assert.equal(createAgentContractStore().lowest(), null)
+  assert.equal(agentContractHold({ vendor: { evaosMinBackendContract: 8 } }, null), 'waiting-for-agent')
 })

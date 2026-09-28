@@ -16,6 +16,7 @@ import type {
 } from '@/global'
 import { checkHermesUpdate, getActionStatus, updateHermes } from '@/hermes'
 import { translateNow } from '@/i18n'
+import { isManagedEvaosAgent } from '@/i18n/managed-brand'
 import { persistString, storedString } from '@/lib/storage'
 import { $connectionsRegistry, refreshConnectionsRegistry } from '@/store/connections'
 import { reconnectGateway } from '@/store/gateway-reconnect'
@@ -64,7 +65,10 @@ export const $updateOverlayTarget = atom<UpdateTarget>('client')
 
 export const setUpdateOverlayOpen = (open: boolean) => $updateOverlayOpen.set(open)
 
-export const openUpdateOverlayFor = (target: UpdateTarget) => {
+export const openUpdateOverlayFor = (requested: UpdateTarget) => {
+  // A managed agent has no backend update surface (adapter#387): the backend
+  // version pill and every other backend entry point land on the app instead.
+  const target = requested === 'backend' && isManagedEvaosAgent() ? 'client' : requested
   $updateOverlayTarget.set(target)
   $updateOverlayOpen.set(true)
   void (target === 'backend' ? checkBackendUpdates({ force: true }) : checkUpdates({ force: true }))
@@ -73,6 +77,13 @@ export const openUpdateOverlayFor = (target: UpdateTarget) => {
 export const resetUpdateApplyState = () => {
   $updateApply.set(IDLE)
   $backendUpdateApply.set(IDLE)
+}
+
+/** The managed updater's reason for holding an app update (eva-app-updater.cjs). */
+export function heldUpdateMessage(status: DesktopUpdateStatus | null): null | string {
+  const held = status?.reason === 'waiting-for-agent' || status?.reason === 'agent-update-required'
+
+  return held ? (status?.message ?? null) : null
 }
 
 const UPDATE_TOAST_ID = 'desktop-update-available'
@@ -153,6 +164,24 @@ function isInstallMethodToastSnoozed(): boolean {
  * doesn't nag on every thread switch.
  */
 export function reportBackendContract(contract: number | undefined): void {
+  if (isManagedEvaosAgent()) {
+    // The app updater holds releases this agent's runtime is too old for. A
+    // backend without the field (e.g. after a rollback) reports null, which
+    // the updater stores as 0 so updates stay held.
+    void window.hermesDesktop?.updates
+      ?.reportAgentContract?.({
+        connection: $connection.get()?.baseUrl || 'agent',
+        contract: typeof contract === 'number' ? contract : null
+      })
+      ?.then(result => {
+        // A held update is re-checked at once instead of at the next daily poll.
+        if (result?.lowestChanged && heldUpdateMessage($updateStatus.get()) !== null) {
+          void checkUpdates()
+        }
+      })
+      ?.catch(() => undefined)
+  }
+
   if ((contract ?? 0) >= REQUIRED_BACKEND_CONTRACT) {
     dismissNotification(SKEW_TOAST_ID)
     // Backend caught up — forget any prior snooze so a future regression warns
@@ -162,7 +191,10 @@ export function reportBackendContract(contract: number | undefined): void {
     return
   }
 
-  if (isSkewToastSnoozed()) {
+  // A managed agent is updated by Electric Sheep, never from this app
+  // (adapter#387). Offering the backend self-update here would POST
+  // /api/hermes/update on the customer's agent, so there is nothing to act on.
+  if (isManagedEvaosAgent() || isSkewToastSnoozed()) {
     return
   }
 
@@ -267,7 +299,7 @@ export function maybeNotifyUpdateAvailable(status: DesktopUpdateStatus | null, t
  *  user is connected to. Surfaces that display one target's status must pass
  *  that target explicitly instead of inheriting this. */
 function activeUpdateTarget(): UpdateTarget {
-  return isRemoteMode() ? 'backend' : 'client'
+  return isRemoteMode() && !isManagedEvaosAgent() ? 'backend' : 'client'
 }
 
 /**
@@ -410,7 +442,7 @@ export interface UpdateCheckOptions {
 export async function checkBackendUpdates({
   force = false
 }: UpdateCheckOptions = {}): Promise<DesktopUpdateStatus | null> {
-  if (!isRemoteMode() || $backendUpdateChecking.get()) {
+  if (!isRemoteMode() || isManagedEvaosAgent() || $backendUpdateChecking.get()) {
     return $backendUpdateStatus.get()
   }
 
@@ -812,6 +844,10 @@ async function runBackendUpdate(): Promise<DesktopUpdateApplyResult> {
 }
 
 export function applyBackendUpdate(): Promise<DesktopUpdateApplyResult> {
+  if (isManagedEvaosAgent()) {
+    return Promise.resolve({ ok: false, error: 'unavailable', message: 'Your agent is updated by Electric Sheep.' })
+  }
+
   if (backendUpdateInFlight) {
     return backendUpdateInFlight
   }
@@ -881,6 +917,10 @@ export const $updateEverything = atom<UpdateEverythingState>({ running: false })
  *  "Update everything" affordance so single-machine installs keep the
  *  one-button experience. */
 export function hasMultipleUpdateTargets(): boolean {
+  if (isManagedEvaosAgent()) {
+    return false
+  }
+
   return isRemoteMode() || ($connectionsRegistry.get()?.connections.length ?? 0) > 1
 }
 
@@ -912,7 +952,7 @@ async function runEverythingUpdate(): Promise<void> {
     //    Its own finish path re-checks and nudges, but the everything-flow
     //    continues regardless of the outcome: one unreachable backend must
     //    not strand the other machines or the client.
-    if (isRemoteMode()) {
+    if (isRemoteMode() && !isManagedEvaosAgent()) {
       $updateOverlayTarget.set('backend')
 
       await applyBackendUpdate().catch(() => null)

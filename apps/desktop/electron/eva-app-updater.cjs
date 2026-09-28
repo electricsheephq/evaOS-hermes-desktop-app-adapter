@@ -6,6 +6,13 @@ const EVA_APP_UPDATE_CHANNEL = 'latest'
 const EVA_APP_UPDATE_BRANCH = 'managed-beta'
 const SAFE_CHECK_FAILURE_MESSAGE = 'evaOS Agent could not check for updates. Try again.'
 const SAFE_APPLY_FAILURE_MESSAGE = 'evaOS Agent could not install the update. Try again.'
+// latest-mac.yml `vendor` key written at build time from the renderer's
+// REQUIRED_BACKEND_CONTRACT (scripts/backend-contract.mjs).
+const EVA_MIN_BACKEND_CONTRACT_KEY = 'evaosMinBackendContract'
+const AGENT_CONTRACT_HOLD_MESSAGES = Object.freeze({
+  'waiting-for-agent': 'Waiting for your agent to connect.',
+  'agent-update-required': 'Your agent needs an update before this app update.'
+})
 const MANAGED_RELEASE_NOTE_REPLACEMENTS = [
   [/Eva by Electric Sheep/g, 'evaOS Agent'],
   [/Hermes Desktop/g, 'evaOS Agent'],
@@ -67,6 +74,59 @@ function statusFor(app, info, updateAvailable, now = Date.now) {
   }
 }
 
+/**
+ * Whether a release may be offered to this app given the lowest agent
+ * contract it has seen. Returns null when it may, else the hold reason.
+ * Releases without the field predate the gate and stay allowed.
+ */
+function agentContractHold(info, lowestAgentContract) {
+  const raw = info?.vendor?.[EVA_MIN_BACKEND_CONTRACT_KEY]
+  if (raw === undefined || raw === null) return null
+  // Only a positive integer (or its digits) is a requirement; '', false or -1
+  // must not read as 0.
+  const required = typeof raw === 'number' || (typeof raw === 'string' && /^\d+$/.test(raw)) ? Number(raw) : NaN
+  if (!Number.isInteger(lowestAgentContract)) return 'waiting-for-agent'
+  // A malformed field fails closed: it cannot prove the agent is new enough.
+  return Number.isInteger(required) && required > 0 && lowestAgentContract >= required ? null : 'agent-update-required'
+}
+
+function heldStatus(app, info, reason, now = Date.now) {
+  return { ...statusFor(app, info, false, now), message: AGENT_CONTRACT_HOLD_MESSAGES[reason], reason }
+}
+
+/**
+ * The lowest agent contract each connection reported in this run, kept in
+ * memory only: a value saved by an earlier launch could release an update
+ * before the agent reconnects (e.g. after a rollback), so each launch holds
+ * until its agents report again. A later, higher report never raises a
+ * connection's value: one managed connection serves every profile of the
+ * account, and those profiles can run different runtimes. The gate uses the
+ * lowest across connections; an agent upgraded mid-run releases the update at
+ * the next launch.
+ */
+function createAgentContractStore() {
+  const contracts = new Map()
+
+  return Object.freeze({
+    lowest() {
+      return contracts.size > 0 ? Math.min(...contracts.values()) : null
+    },
+    /**
+     * Records a connection's contract, keeping the lowest seen this run. null
+     * (a backend without the field) is stored as 0 so it keeps holding
+     * updates. Returns whether the connection's value changed.
+     */
+    record(connection, reported) {
+      const key = String(connection || '').slice(0, 256)
+      const contract = reported === null ? 0 : reported
+      if (!key || !Number.isInteger(contract) || contract < 0) return false
+      if (contracts.has(key) && contracts.get(key) <= contract) return false
+      contracts.set(key, contract)
+      return true
+    }
+  })
+}
+
 function unsupportedStatus(message, now = Date.now) {
   return {
     supported: false,
@@ -100,6 +160,7 @@ function createEvaAppUpdater(options) {
     arch = process.arch,
     autoUpdater,
     emitProgress = () => undefined,
+    getLowestAgentContract = () => null,
     isPackaged = app?.isPackaged,
     now = Date.now,
     onError = () => undefined,
@@ -117,7 +178,11 @@ function createEvaAppUpdater(options) {
   }
 
   let lastStatus = null
+  let lastAvailableInfo = null
+  let contractHold = null
   let downloadedVersion = null
+  const originalIsUpdateSupported =
+    typeof autoUpdater.isUpdateSupported === 'function' ? autoUpdater.isUpdateSupported : () => true
   let checkPromise = null
   let applyPromise = null
   let applying = false
@@ -145,6 +210,12 @@ function createEvaAppUpdater(options) {
       url: EVA_APP_UPDATE_FEED,
       channel: EVA_APP_UPDATE_CHANNEL
     })
+    // Never offer an app update the connected agent runtime is too old for.
+    autoUpdater.isUpdateSupported = async info => {
+      if (!(await originalIsUpdateSupported(info))) return false
+      contractHold = agentContractHold(info, getLowestAgentContract())
+      return contractHold === null
+    }
   }
 
   function reportError(stage, error) {
@@ -156,11 +227,12 @@ function createEvaAppUpdater(options) {
   }
 
   autoUpdater.on('update-available', info => {
+    lastAvailableInfo = info
     lastStatus = statusFor(app, info, true, now)
   })
 
   autoUpdater.on('update-not-available', info => {
-    lastStatus = statusFor(app, info, false, now)
+    lastStatus = contractHold ? heldStatus(app, info, contractHold, now) : statusFor(app, info, false, now)
   })
 
   autoUpdater.on('download-progress', progress => {
@@ -217,11 +289,15 @@ function createEvaAppUpdater(options) {
       try {
         configure()
         lastStatus = null
+        contractHold = null
         const result = await autoUpdater.checkForUpdates()
         if (!lastStatus) {
           const info = result?.updateInfo
           const version = normalizeVersion(info)
-          lastStatus = statusFor(app, info, Boolean(version && version !== app.getVersion()), now)
+          lastAvailableInfo = info
+          lastStatus = contractHold
+            ? heldStatus(app, info, contractHold, now)
+            : statusFor(app, info, Boolean(version && version !== app.getVersion()), now)
         }
         return lastStatus
       } catch (error) {
@@ -261,6 +337,18 @@ function createEvaAppUpdater(options) {
           }
         }
 
+        // The lowest agent contract can drop after the check (another agent
+        // connects), so the gate is re-read before download and install.
+        const heldApply = () => {
+          const hold = agentContractHold(lastAvailableInfo, getLowestAgentContract())
+          if (!hold) return null
+          lastStatus = heldStatus(app, lastAvailableInfo, hold, now)
+          return { ok: false, error: hold, message: lastStatus.message }
+        }
+
+        const heldBeforeDownload = heldApply()
+        if (heldBeforeDownload) return heldBeforeDownload
+
         downloadedVersion = null
         emitProgress({ stage: 'fetch', message: 'Downloading the signed update…', percent: 0 })
         await autoUpdater.downloadUpdate()
@@ -269,13 +357,22 @@ function createEvaAppUpdater(options) {
           throw new Error('The update downloaded without a verified release identity.')
         }
 
-        await new Promise((resolve, reject) => {
+        const heldBeforeInstall = heldApply()
+        if (heldBeforeInstall) return heldBeforeInstall
+
+        const heldAtInstall = await new Promise((resolve, reject) => {
           schedule(() => {
             let rollbackHandoff
             try {
+              // Re-read at the handoff itself: the contract can drop during the delay.
+              const held = heldApply()
+              if (held) {
+                resolve(held)
+                return
+              }
               rollbackHandoff = prepareInstallHandoff()
               autoUpdater.quitAndInstall(false, true)
-              resolve()
+              resolve(null)
             } catch (error) {
               if (typeof rollbackHandoff === 'function') {
                 rollbackHandoff()
@@ -284,6 +381,7 @@ function createEvaAppUpdater(options) {
             }
           }, 500)
         })
+        if (heldAtInstall) return heldAtInstall
         return { ok: true, handedOff: true, message: `Installing evaOS Agent ${downloadedVersion}.` }
       } catch (error) {
         reportError('apply', error)
@@ -314,6 +412,9 @@ module.exports = {
   EVA_APP_UPDATE_BRANCH,
   EVA_APP_UPDATE_CHANNEL,
   EVA_APP_UPDATE_FEED,
+  EVA_MIN_BACKEND_CONTRACT_KEY,
+  agentContractHold,
+  createAgentContractStore,
   createEvaAppUpdater,
   releaseNoteCommits,
   safeApplyFailure,

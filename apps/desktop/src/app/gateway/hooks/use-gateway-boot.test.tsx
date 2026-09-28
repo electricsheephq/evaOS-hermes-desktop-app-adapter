@@ -886,6 +886,69 @@ describe('shared host backend event provenance', () => {
 })
 
 describe('useGatewayBoot remote reconnect loop (real hook, fake socket)', () => {
+  // #388 diagnosis: a failed or skipped primary re-dial used to leave no
+  // trace in the app log. Bounded codes only: no URLs, tickets or tokens.
+  it('logs a swallowed reconnect failure with its stage and error class', async () => {
+    const warn = vi.spyOn(console, 'info').mockImplementation(() => undefined)
+
+    const desktop = fakeDesktop()
+
+    ;(window as { hermesDesktop?: unknown }).hermesDesktop = desktop
+    render(<Harness />)
+    await flushAsync()
+
+    desktop.getConnection.mockRejectedValue(
+      Object.assign(new TypeError(`refused ${primaryConn.wsUrl}`), { code: 'ECONNREFUSED' })
+    )
+    act(() => FakeWebSocket.instances[0].drop())
+    await advanceBackoff()
+
+    const lines = warn.mock.calls.map(call => String(call[0])).filter(line => line.startsWith('[gateway-reconnect]'))
+    expect(lines[0]).toBe('[gateway-reconnect] attempt failed stage=connection error=TypeError code=ECONNREFUSED')
+    expect(lines.join('\n')).not.toContain('vps.example.com')
+    warn.mockRestore()
+  })
+
+  it('replaces an error name or code that is not a short identifier', async () => {
+    const info = vi.spyOn(console, 'info').mockImplementation(() => undefined)
+
+    const desktop = fakeDesktop()
+
+    ;(window as { hermesDesktop?: unknown }).hermesDesktop = desktop
+    render(<Harness />)
+    await flushAsync()
+
+    const odd = Object.assign(new Error('boom'), { code: `${primaryConn.wsUrl}?token=secret` })
+    odd.name = 'Bad Name\nwith newline'
+    desktop.getConnection.mockRejectedValue(odd)
+    act(() => FakeWebSocket.instances[0].drop())
+    await advanceBackoff()
+
+    const lines = info.mock.calls.map(call => String(call[0])).filter(line => line.startsWith('[gateway-reconnect]'))
+    expect(lines[0]).toBe('[gateway-reconnect] attempt failed stage=connection error=other code=other')
+    expect(lines.join('\n')).not.toContain('secret')
+    info.mockRestore()
+  })
+
+  it('logs once per entry point when a stuck gateway switch skips the re-dial', async () => {
+    const warn = vi.spyOn(console, 'info').mockImplementation(() => undefined)
+    render(<Harness />)
+    await flushAsync()
+
+    beginGatewaySwitch()
+    act(() => FakeWebSocket.instances[0].drop())
+    await act(async () => {
+      await reconnectGateway().catch(() => undefined)
+      await reconnectGateway().catch(() => undefined)
+    })
+    await advanceBackoff()
+
+    const lines = warn.mock.calls.map(call => String(call[0])).filter(line => line.startsWith('[gateway-reconnect]'))
+    expect(lines.filter(line => line.includes('entry=explicit reason=gateway-switching'))).toHaveLength(1)
+    expect(FakeWebSocket.instances).toHaveLength(1)
+    warn.mockRestore()
+  })
+
   it('adopts a delegated-support profile before the first managed connection request', async () => {
     const calls: string[] = []
     const rememberLog = vi.spyOn(console, 'info').mockImplementation(() => undefined)

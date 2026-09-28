@@ -35,6 +35,7 @@ import {
   applyUpdates,
   checkBackendUpdates,
   checkUpdates,
+  heldUpdateMessage,
   resetUpdateApplyState,
   setUpdateOverlayOpen,
   type UpdateApplyState
@@ -263,12 +264,14 @@ function IdleView({
     )
   }
 
+  const held = heldUpdateMessage(status)
+
   if (!updateAvailable) {
     return (
       <CenteredStatus
-        body={target === 'backend' ? u.latestBodyBackend : u.latestBody}
+        body={held ? undefined : target === 'backend' ? u.latestBodyBackend : u.latestBody}
         icon={<BrandMark className="size-12" />}
-        title={u.allSetTitle}
+        title={held ?? u.allSetTitle}
       />
     )
   }

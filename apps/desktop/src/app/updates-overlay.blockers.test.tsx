@@ -181,3 +181,31 @@ describe('BlockerView', () => {
     expect(onStopAndUpdate).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('managed app update held for the agent runtime', () => {
+  afterEach(() => {
+    cleanup()
+    Reflect.deleteProperty(window, 'hermesDesktop')
+    $updateOverlayOpen.set(false)
+    $updateStatus.set(null)
+  })
+
+  it.each([
+    ['waiting-for-agent', 'Waiting for your agent to connect.'],
+    ['agent-update-required', 'Your agent needs an update before this app update.']
+  ])('shows the %s reason instead of "All set"', async (reason, message) => {
+    Object.defineProperty(window, 'hermesDesktop', {
+      configurable: true,
+      value: { eva: {}, updates: { check: vi.fn(), apply: vi.fn(), onProgress: vi.fn() } },
+      writable: true
+    })
+    $updateOverlayTarget.set('client')
+    $updateOverlayOpen.set(true)
+    $updateStatus.set({ message, reason, supported: true, updateAvailable: false } as DesktopUpdateStatus)
+
+    await renderUpdatesOverlay()
+
+    expect(screen.getByText(message)).toBeTruthy()
+    expect(screen.queryByText(/all set/i)).toBeNull()
+  })
+})

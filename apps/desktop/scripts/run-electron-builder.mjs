@@ -9,6 +9,9 @@ import path from "node:path"
 import { spawnSync } from "node:child_process"
 import { createRequire } from "node:module"
 
+import { minBackendContractBuilderArg } from "./backend-contract.mjs"
+import { isMain } from "./utils.mjs"
+
 const require = createRequire(import.meta.url)
 
 function electronDistDir() {
@@ -36,7 +39,6 @@ function electronBuilderCli() {
   return path.join(path.dirname(pkgJson), rel)
 }
 
-const dist = electronDistDir()
 // Local `hermes desktop` builds only ever package (--dir or dist), never
 // publish a GitHub release — no CI workflow drives this script. But the npm
 // lifecycle env sets CI=1 (so esbuild's postinstall doesn't try interactive
@@ -46,22 +48,30 @@ const dist = electronDistDir()
 // (only the repo root does) and no "repository" field in its package.json —
 // so it fails with "Cannot detect repository by .git/config". Pin publish to
 // "never" so electron-builder skips that lookup entirely.
-const args = ["--publish", "never"]
-if (dist && fs.existsSync(distBinary(dist))) {
-  args.push(`-c.electronDist=${dist}`)
-} else {
-  console.warn(
-    "[run-electron-builder] no local electron dist; electron-builder will fetch " +
-      "via @electron/get (electronVersion + ELECTRON_MIRROR)."
-  )
+export function electronBuilderArgs(dist, extraArgs = []) {
+  const args = ["--publish", "never"]
+  // latest-mac.yml records the agent contract this release needs (backend-contract.mjs).
+  args.push(minBackendContractBuilderArg())
+  if (dist && fs.existsSync(distBinary(dist))) {
+    args.push(`-c.electronDist=${dist}`)
+  } else {
+    console.warn(
+      "[run-electron-builder] no local electron dist; electron-builder will fetch " +
+        "via @electron/get (electronVersion + ELECTRON_MIRROR)."
+    )
+  }
+  args.push(...extraArgs)
+  return args
 }
-args.push(...process.argv.slice(2))
 
-const result = spawnSync(process.execPath, [electronBuilderCli(), ...args], {
-  stdio: "inherit",
-})
-if (result.error) {
-  console.error(`[run-electron-builder] spawn failed: ${result.error.message}`)
-  process.exit(1)
+if (isMain(import.meta.url)) {
+  const args = electronBuilderArgs(electronDistDir(), process.argv.slice(2))
+  const result = spawnSync(process.execPath, [electronBuilderCli(), ...args], {
+    stdio: "inherit",
+  })
+  if (result.error) {
+    console.error(`[run-electron-builder] spawn failed: ${result.error.message}`)
+    process.exit(1)
+  }
+  process.exit(result.status == null ? 1 : result.status)
 }
-process.exit(result.status == null ? 1 : result.status)
