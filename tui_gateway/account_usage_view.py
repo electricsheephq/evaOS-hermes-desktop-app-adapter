@@ -121,8 +121,14 @@ def _codex_failure(exc: BaseException) -> Optional[dict]:
     if category == "unavailable" and entries and str(exc).startswith(_CODEX_POOL_EMPTY):
         # Unselectable pool: cooling-down (exhausted) entries are a quota wait; dead or empty-token
         # entries need a re-login — the same message covers both, the persisted status tells them apart.
-        exhausted = any(isinstance(e, dict) and e.get("last_status") == "exhausted" for e in entries)
-        category = "rate_limited" if exhausted else "auth_expired"
+        rows = [e for e in entries if isinstance(e, dict)]
+        if any(e.get("last_status") == "exhausted" for e in rows):
+            category = "rate_limited"
+        elif any(e.get("last_status") != "dead" and str(e.get("access_token") or "").strip() and e.get("model_cooldowns")
+                 for e in rows):
+            pass  # a live credential held back only by a model cooldown (entitlement, not quota or auth): stay generic
+        else:
+            category = "auth_expired"
     return error_snapshot("openai-codex", category)
 
 
