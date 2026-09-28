@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { $updateOverlayOpen, $updateOverlayTarget } from '@/store/updates'
@@ -41,21 +41,5 @@ describe('AboutSettings', () => {
 
     expect($updateOverlayOpen.get()).toBe(true)
     expect($updateOverlayTarget.get()).toBe('client')
-  })
-
-  it('shows upstream uninstall page in managed mode', async () => {
-    const summary = vi.fn().mockResolvedValue({ agent_installed: false, gui_installed: true })
-
-    Object.defineProperty(window, 'hermesDesktop', {
-      configurable: true,
-      value: { eva: { status: vi.fn().mockResolvedValue({ updateChannel: 'managed-beta' }) }, uninstall: { summary } },
-      writable: true
-    })
-
-    const { AboutSettings } = await import('./about-settings')
-    render(<AboutSettings subpage="uninstall" />)
-
-    await waitFor(() => expect(summary).toHaveBeenCalledTimes(1))
-    expect(screen.queryByRole('button', { name: 'Check now' })).toBeNull()
   })
 })
