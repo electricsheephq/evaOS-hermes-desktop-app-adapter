@@ -97,4 +97,17 @@ describe('registerFsIpc in the managed build', () => {
     expect(fs.readdirSync(appRoot)).toEqual(['remote-panel'])
     expect(fs.existsSync(path.join(appRoot, 'remote-panel', 'plugin.js'))).toBe(true)
   })
+
+  // The install dialog awaits the probe without a catch (upstream). It hung
+  // only while the managed gate made this IPC reject; a failed inspection
+  // is an answer, so the dialog shows it and Cancel stays usable.
+  it('answers a failed inspection instead of rejecting', async () => {
+    const missing = pathToFileURL(path.join(mkdtemp('hermes-managed-missing-'), 'absent')).href
+
+    await expect(invoke('hermes:plugin:probe', { identifier: missing })).resolves.toMatchObject({
+      ok: false,
+      agent: false,
+      desktop: false
+    })
+  })
 })
