@@ -354,14 +354,14 @@ function createEvaAppUpdater(options) {
 
         const heldAtInstall = await new Promise((resolve, reject) => {
           schedule(() => {
-            // Re-read at the handoff itself: the contract can drop during the delay.
-            const held = heldApply()
-            if (held) {
-              resolve(held)
-              return
-            }
             let rollbackHandoff
             try {
+              // Re-read at the handoff itself: the contract can drop during the delay.
+              const held = heldApply()
+              if (held) {
+                resolve(held)
+                return
+              }
               rollbackHandoff = prepareInstallHandoff()
               autoUpdater.quitAndInstall(false, true)
               resolve(null)

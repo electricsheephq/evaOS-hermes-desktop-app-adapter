@@ -477,6 +477,39 @@ test('apply re-reads the agent contract gate at the install handoff', async () =
   assert.equal(updater.installCalls.length, 0)
 })
 
+test('apply fails safely when the gate read throws at the install handoff', async () => {
+  let failGateRead = false
+  const updater = new GatedUpdater(GATED_RELEASE)
+  const service = createEvaAppUpdater({
+    app: { getVersion: () => '2026.7.20-es.8', isPackaged: true },
+    arch: 'arm64',
+    autoUpdater: updater,
+    getLowestAgentContract: () => {
+      if (failGateRead) throw new Error('gate read failed')
+      return 8
+    },
+    isPackaged: true,
+    now: () => 1234,
+    platform: 'darwin',
+    schedule: callback => {
+      failGateRead = true
+      setImmediate(callback)
+    }
+  })
+
+  assert.equal((await service.check()).updateAvailable, true)
+  const applied = await service.apply()
+
+  assert.equal(applied.ok, false)
+  assert.equal(applied.error, 'apply-failed')
+  assert.equal(updater.installCalls.length, 0)
+
+  failGateRead = false
+  const retried = await service.apply()
+  assert.equal(retried.error, 'apply-failed')
+  assert.equal(updater.downloadCalls, 2)
+})
+
 test('offers a gated release once every agent meets its contract', async () => {
   const { service } = gatedFixture({ info: GATED_RELEASE, lowest: 8 })
 
