@@ -12,6 +12,7 @@ import { Tip } from '@/components/ui/tooltip'
 import { getActionStatus, getLogs, getStatus, getUsageAnalytics, restartGateway, updateHermes } from '@/hermes'
 import type { ActionStatusResponse, AnalyticsResponse, SessionInfo, StatusResponse } from '@/hermes'
 import { useI18n } from '@/i18n'
+import { isManagedEvaosAgent } from '@/i18n/managed-brand'
 import { sessionTitle } from '@/lib/chat-runtime'
 import {
   Activity,
@@ -458,9 +459,12 @@ export function CommandCenterView({ initialSection, onClose, onDeleteSession, on
                         <Button onClick={() => void runSystemAction('restart')} size="xs" variant="text">
                           {cc.restartGateway}
                         </Button>
-                        <Button onClick={() => void runSystemAction('update')} size="xs" variant="textStrong">
-                          {cc.updateHermes}
-                        </Button>
+                        {/* A managed agent is updated by Electric Sheep (adapter#387). */}
+                        {!isManagedEvaosAgent() && (
+                          <Button onClick={() => void runSystemAction('update')} size="xs" variant="textStrong">
+                            {cc.updateHermes}
+                          </Button>
+                        )}
                       </div>
                     </div>
                     {systemAction && (
