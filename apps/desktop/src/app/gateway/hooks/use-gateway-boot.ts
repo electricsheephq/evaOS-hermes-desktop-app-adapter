@@ -368,6 +368,24 @@ export function useGatewayBoot({
     // genuinely changes between reads).
     const gatewayOpen = () => gateway.connectionState === 'open'
 
+    // #388 diagnosis: a primary re-dial that never happens left no trace. Log
+    // why, with bounded codes only (no URLs, tickets or tokens). A switch skip
+    // logs once per entry point until the socket opens again.
+    const loggedSwitchSkips = new Set<string>()
+
+    const switchingSkipsReconnect = (entry: string) => {
+      if (!$gatewaySwitching.get()) {
+        return false
+      }
+
+      if (!loggedSwitchSkips.has(entry)) {
+        loggedSwitchSkips.add(entry)
+        console.warn(`[gateway-reconnect] skipped entry=${entry} reason=gateway-switching`)
+      }
+
+      return true
+    }
+
     const clearReconnectTimer = () => {
       if (reconnectTimer !== null) {
         clearTimeout(reconnectTimer)
@@ -398,11 +416,12 @@ export function useGatewayBoot({
     }
 
     const attemptReconnect = async (manual?: { profile: string; activationEpoch: number }) => {
-      if (cancelled || primaryReauthError || reconnecting || gatewayOpen() || $gatewaySwitching.get()) {
+      if (cancelled || primaryReauthError || reconnecting || gatewayOpen() || switchingSkipsReconnect('attempt')) {
         return
       }
 
       reconnecting = true
+      let stage = 'connection'
 
       try {
         // Drop a stale REMOTE backend cache before re-dialing. After sleep/wake a
@@ -441,6 +460,7 @@ export function useGatewayBoot({
           publish(conn)
         }
 
+        stage = 'ws-url'
         // Re-mint the WS URL before reconnecting. OAuth tickets are single-use
         // with a short TTL, so the ticket baked into the cached conn.wsUrl is
         // dead on every reconnect after the initial boot — reusing it surfaces
@@ -455,6 +475,7 @@ export function useGatewayBoot({
           'Timed out re-minting the gateway WebSocket URL'
         )
 
+        stage = 'dial'
         await gateway.connect(wsUrl)
 
         if (cancelled) {
@@ -490,6 +511,13 @@ export function useGatewayBoot({
           await callbacksRef.current.refreshSessions().catch(() => undefined)
         }
       } catch (err) {
+        if (!cancelled && !isGatewayReauthRequired(err)) {
+          const { code, name } = (err ?? {}) as { code?: unknown; name?: unknown }
+          const errorClass = typeof name === 'string' && name ? name : typeof err
+          const errorCode = typeof code === 'string' || typeof code === 'number' ? ` code=${code}` : ''
+          console.warn(`[gateway-reconnect] attempt failed stage=${stage} error=${errorClass}${errorCode}`)
+        }
+
         // OAuth session expired mid-reconnect: surface the actionable "sign in
         // again" recovery overlay once instead of silently looping the backoff
         // against a ticket that can never succeed. Transport failures fall
@@ -554,7 +582,7 @@ export function useGatewayBoot({
         reconnecting ||
         reconnectTimer !== null ||
         gatewayOpen() ||
-        $gatewaySwitching.get()
+        switchingSkipsReconnect('schedule')
       ) {
         return
       }
@@ -572,7 +600,7 @@ export function useGatewayBoot({
     }
 
     const reconnectNow = async ({ forceOpenSocket = false }: { forceOpenSocket?: boolean } = {}) => {
-      if (cancelled || !bootCompleted || $gatewaySwitching.get()) {
+      if (cancelled || !bootCompleted || switchingSkipsReconnect('nudge')) {
         return
       }
 
@@ -1045,6 +1073,7 @@ export function useGatewayBoot({
       if (st === 'open') {
         bootSnapshotSuperseded = true
         openedAt = Date.now()
+        loggedSwitchSkips.clear()
         reauthNotified = false
         primaryReauthError = null
         livenessProbeFailures = 0
@@ -1150,7 +1179,7 @@ export function useGatewayBoot({
     const offConnectionApplied = desktop.onConnectionApplied?.(() => void softSwitch())
 
     const offGatewayReconnect = registerGatewayReconnect(async () => {
-      if (cancelled || !bootCompleted || $gatewaySwitching.get()) {
+      if (cancelled || !bootCompleted || switchingSkipsReconnect('explicit')) {
         return
       }
 
