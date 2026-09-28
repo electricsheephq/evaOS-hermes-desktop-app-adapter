@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 
+import { htmlResponseError } from './api-transport'
 import {
   ensureHealthyPooledRemoteBackendForDispatch,
   POOLED_REMOTE_DISPATCH_PROBE_TIMEOUT_MS,
@@ -354,6 +355,35 @@ describe('ensureHealthyPooledRemoteBackendForDispatch', () => {
     ).resolves.toBe(legacy)
 
     expect(probe).toHaveBeenCalledWith(legacy, '/api/status', {
+      timeoutMs: POOLED_REMOTE_DISPATCH_PROBE_TIMEOUT_MS
+    })
+    expect(retire).not.toHaveBeenCalled()
+    expect(reconnect).not.toHaveBeenCalled()
+  })
+  it('falls back to /api/status when a managed front door redirects /api/health', async () => {
+    const managed = { baseUrl: 'https://gw.example', mode: 'remote' }
+    const managedPromise = Promise.resolve(managed)
+
+    const retire = vi.fn()
+    const reconnect = vi.fn()
+
+    const probe = vi.fn(async (_connection, path) => {
+      if (path === '/api/health') {
+        throw htmlResponseError(`https://gw.example${path}`, 302, 'https://login.example/login')
+      }
+    })
+
+    await expect(
+      ensureHealthyPooledRemoteBackendForDispatch({
+        connectionPromise: managedPromise,
+        currentConnectionPromise: () => managedPromise,
+        probe,
+        reconnect,
+        retire
+      })
+    ).resolves.toBe(managed)
+
+    expect(probe).toHaveBeenCalledWith(managed, '/api/status', {
       timeoutMs: POOLED_REMOTE_DISPATCH_PROBE_TIMEOUT_MS
     })
     expect(retire).not.toHaveBeenCalled()

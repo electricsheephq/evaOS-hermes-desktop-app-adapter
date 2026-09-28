@@ -1,4 +1,4 @@
-import { isMissingHealthEndpointError } from './backend-health'
+import { isMissingHealthEndpointError, isRedirectResponseError } from './backend-health'
 
 export const REMOTE_LIVENESS_TIMEOUT_MS = 10_000
 // Dispatch is synchronous user intent: a cached descriptor must prove its
@@ -110,9 +110,10 @@ export async function ensureHealthyPooledRemoteBackendForDispatch<TConnection ex
       })
     } catch (healthError) {
       // A remote that predates /api/health would otherwise 404 every dispatch,
-      // retire the tunnel and reconnect forever; the boot probe falls back the
-      // same way (backend-health.ts).
-      if (!isMissingHealthEndpointError(healthError)) {
+      // retire the tunnel and reconnect forever; so would a managed front door
+      // that redirects /api/health to its login page. The boot probe falls back
+      // the same way (backend-health.ts).
+      if (!isMissingHealthEndpointError(healthError) && !isRedirectResponseError(healthError)) {
         throw healthError
       }
 

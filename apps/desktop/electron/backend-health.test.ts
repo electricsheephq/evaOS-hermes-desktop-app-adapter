@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 
 import { test } from 'vitest'
 
+import { htmlResponseError } from './api-transport'
 import {
   DEFAULT_HEALTH_PROBE_TIMEOUT_MS,
   isAuthRejectionError,
@@ -343,6 +344,59 @@ test('credentialed 5xx and 429 keep polling — only 401/403 are terminal', asyn
 
     assert.ok(attempts > 1, `${transient} should have retried, got ${attempts} attempt(s)`)
   }
+})
+
+test('a redirected /api/health falls back to /api/status; a redirected /api/status is never ready', async () => {
+  // A managed gateway front door answers /api/health with a 302 to its login
+  // page but accepts the session token on /api/status (adapter#385).
+  const redirect = (url: string) => htmlResponseError(url, 302, 'https://login.example/login')
+  const statusCalls: string[][] = []
+
+  await waitForHermesReady('https://gw.example', {
+    token: 'session-token',
+    fetchPublicJson: async () => {
+      throw new Error('public probe must not be used when credentialed')
+    },
+    fetchJson: async (url, token) => {
+      statusCalls.push([url, token ?? ''])
+
+      return { version: '0.20.0' }
+    },
+    probeHealth: async url => {
+      throw redirect(url)
+    },
+    probeIsCredentialed: true,
+    sleep: async () => {},
+    timeoutMs: 100,
+    pollMs: 1
+  })
+
+  assert.deepEqual(statusCalls, [['https://gw.example/api/status', 'session-token']])
+
+  let currentTime = 0
+
+  await assert.rejects(
+    waitForHermesReady('https://gw.example', {
+      token: 'session-token',
+      fetchPublicJson: async () => ({}),
+      fetchJson: async url => {
+        throw redirect(url)
+      },
+      probeHealth: async url => {
+        throw redirect(url)
+      },
+      probeIsCredentialed: true,
+      sleep: async () => {},
+      now: () => {
+        currentTime += 20
+
+        return currentTime
+      },
+      timeoutMs: 100,
+      pollMs: 1
+    }),
+    /redirected \(status 302\)/
+  )
 })
 
 test('error-shape predicates', () => {
