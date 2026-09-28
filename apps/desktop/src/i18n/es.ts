@@ -925,6 +925,7 @@ export const es = defineLocale({
         installing: 'Instalando…',
         probing: 'Inspeccionando el repositorio…',
         probeUnavailable: 'La inspección de plugins no está disponible en este entorno.',
+        catalogOnly: 'En esta aplicación solo se pueden instalar entradas del catálogo.',
         desktopUnavailable: 'La instalación de plugins de escritorio no está disponible en este entorno.',
         selectComponent: 'Selecciona al menos un componente para instalar.',
         agentSuccess: name => `Plugin del agente ${name} instalado`,

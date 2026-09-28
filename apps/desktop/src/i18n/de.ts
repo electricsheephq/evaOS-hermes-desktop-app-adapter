@@ -925,6 +925,7 @@ export const de = defineLocale({
         installing: 'Wird installiert…',
         probing: 'Repository wird untersucht…',
         probeUnavailable: 'Die Plugin-Untersuchung ist in dieser Umgebung nicht verfügbar.',
+        catalogOnly: 'In dieser App können nur Katalogeinträge installiert werden.',
         desktopUnavailable: 'Die Desktop-Plugin-Installation ist in dieser Umgebung nicht verfügbar.',
         selectComponent: 'Wählen Sie mindestens eine Komponente zur Installation aus.',
         agentSuccess: name => `Agent-Plugin ${name} installiert`,

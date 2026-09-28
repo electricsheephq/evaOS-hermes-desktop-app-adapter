@@ -117,6 +117,7 @@ export function PluginInstallModal() {
       const token = ++probeToken.current
       setPhase('probing')
       setProbe(null)
+      setInstalling(false)
       setInstallError(null)
       // Reviewed catalog picks streamline the ceremony: enable defaults ON
       // (installing a reviewed entry to not use it is the rare case).
@@ -253,6 +254,9 @@ export function PluginInstallModal() {
 
     setInstalling(true)
     setInstallError(null)
+    // A request opened while this install runs takes the dialog over; this
+    // install's late answer must not touch it.
+    const token = probeToken.current
 
     const errors: string[] = []
     const successes: string[] = []
@@ -336,6 +340,10 @@ export function PluginInstallModal() {
 
       await loadAgentPlugins(requestGateway, targetProfile)
 
+      if (token !== probeToken.current) {
+        return
+      }
+
       if (errors.length === 0) {
         for (const message of successes) {
           notify({ kind: 'success', message })
@@ -363,6 +371,10 @@ export function PluginInstallModal() {
 
       setInstallError(errors.join('\n'))
     } catch (error) {
+      if (token !== probeToken.current) {
+        return
+      }
+
       const fallback = installDesktop && probe.desktop ? m.desktopFailed : m.agentFailed
 
       for (const message of successes) {
@@ -371,7 +383,9 @@ export function PluginInstallModal() {
 
       setInstallError([...errors, rejectionMessage(error, fallback)].join('\n'))
     } finally {
-      setInstalling(false)
+      if (token === probeToken.current) {
+        setInstalling(false)
+      }
     }
   }
 

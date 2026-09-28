@@ -220,6 +220,23 @@ describe('Install from Git entry flow', () => {
     expect(screen.queryByRole('button', { name: 'Installing…' })).toBeNull()
     expect($pluginInstallRequest.get()).not.toBeNull()
   })
+
+  it('ignores a late install answer once the request was replaced', async () => {
+    probePluginRepo.mockResolvedValue({ ok: true, agent: false, desktop: true, warnings: [] })
+    let fail: (error: Error) => void = () => {}
+    installDesktopPlugin.mockReturnValue(new Promise((_resolve, reject) => (fail = reject)))
+    renderFlow()
+    act(() => openPluginInstallRequest({ repo: 'https://github.com/example/first' }))
+    expect(await screen.findByText('This package includes')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Install' }))
+    expect(await screen.findByRole('button', { name: 'Installing…' })).toBeTruthy()
+    act(() => openPluginInstallRequest({ repo: 'https://github.com/example/second' }))
+    expect(await screen.findByText('This package includes')).toBeTruthy()
+    await act(async () => fail(new Error('Could not write the plugin folder.')))
+    expect(screen.queryByText('Could not write the plugin folder.')).toBeNull()
+    expect((screen.getByRole('button', { name: 'Install' }) as HTMLButtonElement).disabled).toBe(false)
+    expect($pluginInstallRequest.get()?.repo).toBe('https://github.com/example/second')
+  })
 })
 
 describe('Install in the managed build', () => {
