@@ -119,7 +119,10 @@ def _codex_failure(exc: BaseException) -> Optional[dict]:
         except AuthError:
             category = "auth_expired"
     if category == "unavailable" and entries and str(exc).startswith(_CODEX_POOL_EMPTY):
-        category = "rate_limited"  # the pool has entries, but every one is exhausted / cooling down
+        # Unselectable pool: cooling-down (exhausted) entries are a quota wait; dead or empty-token
+        # entries need a re-login — the same message covers both, the persisted status tells them apart.
+        exhausted = any(isinstance(e, dict) and e.get("last_status") == "exhausted" for e in entries)
+        category = "rate_limited" if exhausted else "auth_expired"
     return error_snapshot("openai-codex", category)
 
 

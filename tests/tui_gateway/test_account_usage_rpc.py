@@ -179,6 +179,16 @@ def test_codex_pool_with_only_exhausted_entries_is_a_rate_limited_card(monkeypat
     assert snap["error"] == "rate_limited"
 
 
+def test_codex_pool_with_only_dead_entries_is_an_auth_expired_card(monkeypatch):
+    _write_auth({"credential_pool": {"openai-codex": [
+        {"id": "codex-0", "source": "manual:device_code", "auth_type": "oauth", "access_token": "t0",
+         "refresh_token": "r0", "last_status": "dead", "last_status_at": time.time() - 60},
+        {"id": "codex-1", "source": "manual:device_code", "auth_type": "oauth", "access_token": ""}]}})
+    _codex_fails(monkeypatch, "No available openai-codex credential in credential pool")
+    [snap] = _call({})["snapshots"]
+    assert snap["error"] == "auth_expired"  # nothing is cooling down; a re-login is what fixes it
+
+
 def test_codex_presence_check_never_takes_the_auth_store_lock(monkeypatch):
     import hermes_cli.auth as auth
     _write_auth({"providers": {"openai-codex": {"tokens": {"access_token": "synthetic-access"}}},
