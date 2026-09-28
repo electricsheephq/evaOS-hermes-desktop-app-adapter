@@ -157,6 +157,25 @@ describe('ProfilesView per-profile routing in managed mode (#396)', () => {
     expect(screen.queryByText(/profile is not authorized/)).toBeNull()
   })
 
+  it('shows a 5xx SOUL.md failure raw instead of the unreachable message', async () => {
+    const failure = '500: {"detail":"Failed to read SOUL.md: [Errno 13] Permission denied"}'
+
+    api.mockImplementation(async request => {
+      if (request.profile === SIBLING) {
+        throw new Error(failure)
+      }
+
+      return { content: '', exists: true, ok: true }
+    })
+    vi.stubGlobal('hermesDesktop', { api, eva: {} })
+
+    await renderProfilesView()
+    await selectProfileRow(SIBLING)
+
+    expect(await screen.findByText(failure)).toBeTruthy()
+    expect(screen.queryByText("This profile's gateway is not reachable in this session")).toBeNull()
+  })
+
   it('keeps the upstream ambient scope and error text outside managed mode', async () => {
     api.mockImplementation(async request => {
       if (request.path === `/api/profiles/${SIBLING}/soul`) {

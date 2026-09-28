@@ -366,16 +366,17 @@ function profileSoulScope(profileName: string): ProfileScope {
   return isManagedEvaosAgent() ? { profile: profileName } : undefined
 }
 
-// In managed mode a refusal (the gateway's "profile is not authorized", or the
-// session's own profile-mismatch refusal) or a 5xx means that profile's gateway
-// is not reachable in this session; say so instead of the raw 403.
+// In managed mode only a refusal (the gateway's 403 "profile is not authorized",
+// or the session's own profile-mismatch refusal) means that profile's gateway is
+// not reachable in this session; say so instead of the raw 403. A 5xx and every
+// other error stay raw: the runtime returns 500 for real SOUL.md filesystem
+// failures (read errors, permission denied, disk full), which must stay visible.
 function soulErrorMessage(err: unknown, fallback: string, unreachable: string): string {
   if (isManagedEvaosAgent() && err instanceof Error) {
     const stripped = stripIpcErrorPrefix(err.message).trim()
     const status = Number(/^(\d{3}):/.exec(stripped)?.[1] ?? 0)
 
     if (
-      status >= 500 ||
       (status === 403 && /"detail"\s*:\s*"profile is not authorized"/.test(stripped)) ||
       /^profile \S+ is not authorized for this session$/.test(stripped)
     ) {
