@@ -42,6 +42,9 @@ export function parseManagedUpdateInfo(source) {
   let currentFile = null
   let inFiles = false
   let inVendor = false
+  // The updater reads `vendor.<key>` only, so a key counts only at the first
+  // indentation level under `vendor:`; a nested mapping must not satisfy it.
+  let vendorIndent = null
 
   const finishCurrentFile = () => {
     if (currentFile) {
@@ -56,6 +59,7 @@ export function parseManagedUpdateInfo(source) {
       finishCurrentFile()
       inFiles = topLevel[1] === 'files'
       inVendor = topLevel[1] === 'vendor'
+      vendorIndent = null
 
       if (topLevel[1] === 'version') result.version = unquoteYamlScalar(topLevel[2])
       if (topLevel[1] === 'path') result.path = unquoteYamlScalar(topLevel[2])
@@ -63,9 +67,12 @@ export function parseManagedUpdateInfo(source) {
       continue
     }
 
-    const vendorField = inVendor ? line.match(/^\s+([A-Za-z][A-Za-z0-9_-]*):\s*(.+)$/) : null
-    if (vendorField?.[1] === MIN_BACKEND_CONTRACT_KEY) {
-      result.minBackendContract = Number(unquoteYamlScalar(vendorField[2]))
+    const vendorField = inVendor ? line.match(/^(\s+)([A-Za-z][A-Za-z0-9_-]*):\s*(.*)$/) : null
+    if (vendorField) {
+      vendorIndent ??= vendorField[1].length
+      if (vendorField[1].length === vendorIndent && vendorField[2] === MIN_BACKEND_CONTRACT_KEY && vendorField[3]) {
+        result.minBackendContract = Number(unquoteYamlScalar(vendorField[3]))
+      }
     }
 
     if (!inFiles) {

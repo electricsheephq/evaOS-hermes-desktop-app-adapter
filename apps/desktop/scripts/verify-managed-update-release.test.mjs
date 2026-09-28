@@ -148,8 +148,17 @@ test('parses the minimum agent contract from the vendor block', () => {
   assert.equal(parsed.minBackendContract, 7)
 })
 
+test('ignores a minimum agent contract nested below the vendor block', () => {
+  const nested = ['version: 1.2.3', 'vendor:', '  nested:', '    evaosMinBackendContract: 7'].join('\n')
+  const sibling = ['version: 1.2.3', 'vendor:', '  other: x', '  evaosMinBackendContract: 7'].join('\n')
+
+  assert.equal(parseManagedUpdateInfo(nested).minBackendContract, null)
+  assert.equal(parseManagedUpdateInfo(sibling).minBackendContract, 7)
+})
+
 for (const [label, rewrite] of [
   ['is missing', source => source.replace(/vendor:\n.*\n/, '')],
+  ['is nested below the vendor block', source => source.replace(/vendor:\n/, 'vendor:\n  nested:\n  ')],
   ['differs from REQUIRED_BACKEND_CONTRACT', source => source.replace(/evaosMinBackendContract: \d+/, 'evaosMinBackendContract: 1')]
 ]) {
   test(`rejects an appcast whose minimum agent contract ${label}`, async () => {
