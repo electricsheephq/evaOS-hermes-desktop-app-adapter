@@ -207,6 +207,7 @@ const {
   assertEvaManagedLocalTerminalAllowed,
   buildEvaAccountRendererResetScript,
   EVA_MANAGED_POLICY,
+  probeEvaSecureStorageEarlyKey,
   resolveEvaManagedConnectionFor,
   resolveEvaManagedDesktopProfileFromSources
 } = require('./eva-managed.cjs')
@@ -9464,17 +9465,12 @@ async function resetEvaRendererSessions() {
 // Chromium components/os_crypt/sync/os_crypt_mac.mm
 // OSCryptImpl::IsEncryptionAvailable() -> DeriveKey(). Unmanaged builds and
 // other platforms make no call here (see probeSecureTokenStorage).
-let secureStorageEarlyKey: 'available' | 'unavailable' | 'error' = 'available'
-
-if (EVA_MANAGED_BUILD && process.platform === 'darwin') {
-  try {
-    secureStorageEarlyKey = safeStorage.isEncryptionAvailable() ? 'available' : 'unavailable'
-  } catch {
-    secureStorageEarlyKey = 'error'
-  }
-
-  rememberLog(`[eva-auth] secure-storage early key: ${secureStorageEarlyKey}`)
-}
+const secureStorageEarlyKey: 'available' | 'unavailable' | 'error' = probeEvaSecureStorageEarlyKey({
+  managed: EVA_MANAGED_BUILD,
+  platform: process.platform,
+  isEncryptionAvailable: () => safeStorage.isEncryptionAvailable(),
+  log: rememberLog
+})
 
 const evaManagedRuntime = createEvaManagedRuntime({
   statePath: EVA_ENROLLMENT_STATE_PATH,
