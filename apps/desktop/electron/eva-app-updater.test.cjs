@@ -529,7 +529,7 @@ test('keeps the original electron-updater support check', async () => {
 })
 
 test('fails closed on a malformed minimum-agent field', async () => {
-  for (const malformed of ['eight', '', false, true, -1, 0, 1.5, '8x', ' 8']) {
+  for (const malformed of ['eight', '', false, true, -1, 0, 1.5, '8x', ' 8', [8], { toString: () => '8' }]) {
     const { service } = gatedFixture({ info: { ...RELEASE, vendor: { evaosMinBackendContract: malformed } }, lowest: 99 })
 
     assert.equal((await service.check()).reason, 'agent-update-required', `field ${JSON.stringify(malformed)}`)
@@ -561,16 +561,19 @@ test('agent contract store keeps the latest value per connection and gates on th
   assert.equal(createAgentContractStore({ load: () => null }).lowest(), null)
 })
 
-test('agent contract store forgets a connection that stops reporting a contract', () => {
+test('agent contract store holds for a connection that stops reporting a contract', () => {
   const saved = []
-  const store = createAgentContractStore({ load: () => ({ 'eva-managed://a': 8 }), save: value => saved.push(value) })
+  const store = createAgentContractStore({
+    load: () => ({ 'eva-managed://new': 8, 'eva-managed://old': 6 }),
+    save: value => saved.push(value)
+  })
 
-  assert.equal(store.record('eva-managed://a', 8), false)
-  assert.equal(store.record('eva-managed://b', 6), true)
-  assert.equal(store.record('eva-managed://b', null), true)
+  assert.equal(store.record('eva-managed://new', 8), false)
+  assert.equal(store.record('eva-managed://old', null), true)
+  // A live backend without the field cannot prove it is new enough.
+  assert.equal(store.lowest(), 0)
+  assert.equal(store.record('eva-managed://old', null), false)
+  assert.equal(store.record('eva-managed://old', 8), true)
   assert.equal(store.lowest(), 8)
-  assert.equal(store.record('eva-managed://a', null), true)
-  assert.equal(store.lowest(), null)
-  assert.equal(store.record('eva-managed://a', null), false)
-  assert.deepEqual(saved.at(-1), {})
+  assert.deepEqual(saved.at(-1), { 'eva-managed://new': 8, 'eva-managed://old': 8 })
 })

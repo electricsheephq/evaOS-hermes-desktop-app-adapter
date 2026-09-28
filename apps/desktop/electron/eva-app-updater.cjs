@@ -84,7 +84,7 @@ function agentContractHold(info, lowestAgentContract) {
   if (raw === undefined || raw === null) return null
   // Only a positive integer (or its digits) is a requirement; '', false or -1
   // must not read as 0.
-  const required = typeof raw === 'number' || /^\d+$/.test(String(raw)) ? Number(raw) : NaN
+  const required = typeof raw === 'number' || (typeof raw === 'string' && /^\d+$/.test(raw)) ? Number(raw) : NaN
   if (!Number.isInteger(lowestAgentContract)) return 'waiting-for-agent'
   // A malformed field fails closed: it cannot prove the agent is new enough.
   return Number.isInteger(required) && required > 0 && lowestAgentContract >= required ? null : 'agent-update-required'
@@ -108,16 +108,15 @@ function createAgentContractStore({ load = () => ({}), save = () => undefined } 
       const values = Object.values(current())
       return values.length > 0 ? Math.min(...values) : null
     },
-    /** Records a connection's contract; null forgets it (a backend without the field). Returns whether it changed. */
-    record(connection, contract) {
+    /**
+     * Records a connection's contract. null (a backend without the field) is
+     * stored as 0 so it keeps holding updates. Returns whether it changed.
+     */
+    record(connection, reported) {
       const key = String(connection || '').slice(0, 256)
-      if (contract === null) {
-        if (!key || !(key in current())) return false
-        contracts = Object.fromEntries(Object.entries(current()).filter(([known]) => known !== key))
-      } else {
-        if (!valid([key, contract]) || current()[key] === contract) return false
-        contracts = { ...current(), [key]: contract }
-      }
+      const contract = reported === null ? 0 : reported
+      if (!valid([key, contract]) || current()[key] === contract) return false
+      contracts = { ...current(), [key]: contract }
       try {
         save(contracts)
       } catch {

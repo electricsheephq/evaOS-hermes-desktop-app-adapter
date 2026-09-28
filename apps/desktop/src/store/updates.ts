@@ -166,7 +166,8 @@ function isInstallMethodToastSnoozed(): boolean {
 export function reportBackendContract(contract: number | undefined): void {
   if (isManagedEvaosAgent()) {
     // The app updater holds releases this agent's runtime is too old for. A
-    // backend without the field (e.g. after a rollback) clears its old value.
+    // backend without the field (e.g. after a rollback) reports null, which
+    // the updater stores as 0 so updates stay held.
     void window.hermesDesktop?.updates
       ?.reportAgentContract?.({
         connection: $connection.get()?.baseUrl || 'agent',
