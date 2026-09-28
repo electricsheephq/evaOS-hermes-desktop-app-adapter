@@ -8,6 +8,7 @@ const MANAGED_ALLOWED_GATEWAY_READS = new Set([
   'subscription.state',
   'usage.bars'
 ])
+
 const MANAGED_NOUS_GATEWAY_PREFIXES = ['billing.', 'subscription.']
 
 const MANAGED_HIDDEN_ADVANCED_FIELDS = new Set([
