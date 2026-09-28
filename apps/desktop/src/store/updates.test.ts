@@ -559,6 +559,7 @@ describe('managed evaOS agent backend updates', () => {
 
   it('reports each agent contract to the app updater gate', () => {
     const reportAgentContract = vi.fn().mockResolvedValue(undefined)
+
     ;(window as unknown as { hermesDesktop: { updates: object } }).hermesDesktop.updates = { reportAgentContract }
 
     reportBackendContract(6)

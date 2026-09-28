@@ -890,7 +890,9 @@ describe('useGatewayBoot remote reconnect loop (real hook, fake socket)', () => 
   // trace in the app log. Bounded codes only: no URLs, tickets or tokens.
   it('logs a swallowed reconnect failure with its stage and error class', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+
     const desktop = fakeDesktop()
+
     ;(window as { hermesDesktop?: unknown }).hermesDesktop = desktop
     render(<Harness />)
     await flushAsync()

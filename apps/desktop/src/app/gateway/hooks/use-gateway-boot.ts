@@ -461,6 +461,7 @@ export function useGatewayBoot({
         }
 
         stage = 'ws-url'
+
         // Re-mint the WS URL before reconnecting. OAuth tickets are single-use
         // with a short TTL, so the ticket baked into the cached conn.wsUrl is
         // dead on every reconnect after the initial boot — reusing it surfaces
