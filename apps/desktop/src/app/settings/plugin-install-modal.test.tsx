@@ -175,4 +175,85 @@ describe('Install from Git entry flow', () => {
       )
     )
   })
+
+  it('shows a refused inspection as an error and keeps Cancel usable', async () => {
+    probePluginRepo.mockRejectedValue(
+      new Error("Error invoking remote method 'hermes:plugin:probe': Error: Inspection was refused by this app.")
+    )
+    renderFlow()
+    act(() => openPluginInstallRequest({ repo: 'https://github.com/example/plugin' }))
+    expect(await screen.findByText('Inspection was refused by this app.')).toBeTruthy()
+    expect(screen.queryByText('Inspecting repository…')).toBeNull()
+    expect((screen.getByRole('button', { name: 'Install' }) as HTMLButtonElement).disabled).toBe(true)
+    const cancel = screen.getByRole('button', { name: 'Cancel' }) as HTMLButtonElement
+    expect(cancel.disabled).toBe(false)
+    fireEvent.click(cancel)
+    expect($pluginInstallRequest.get()).toBeNull()
+  })
+
+  it('cancels during an inspection and ignores the late answer', async () => {
+    let answer: (value: unknown) => void = () => {}
+    probePluginRepo.mockReturnValue(new Promise(resolve => (answer = resolve)))
+    renderFlow()
+    act(() => openPluginInstallRequest({ repo: 'https://github.com/example/plugin' }))
+    expect(await screen.findByText('Inspecting repository…')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect($pluginInstallRequest.get()).toBeNull()
+    await act(async () => answer({ ok: true, agent: true, desktop: true, warnings: [] }))
+    expect($pluginInstallRequest.get()).toBeNull()
+    expect(screen.queryByText('This package includes')).toBeNull()
+  })
+
+  it('shows a rejected install step as an error and ends the spinner', async () => {
+    probePluginRepo.mockResolvedValue({ ok: true, agent: false, desktop: true, warnings: [] })
+    installDesktopPlugin.mockRejectedValue(
+      new Error(
+        "Error invoking remote method 'hermes:plugin:installDesktop': Error: Could not write the plugin folder."
+      )
+    )
+    renderFlow()
+    act(() => openPluginInstallRequest({ repo: 'https://github.com/example/plugin' }))
+    expect(await screen.findByText('This package includes')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Install' }))
+    expect(await screen.findByText('Could not write the plugin folder.')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Install' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Installing…' })).toBeNull()
+    expect($pluginInstallRequest.get()).not.toBeNull()
+  })
+})
+
+describe('Install in the managed build', () => {
+  beforeEach(() => {
+    vi.stubGlobal('hermesDesktop', { probePluginRepo, installDesktopPlugin, eva: {} })
+    $connection.set({ mode: 'remote' } as NonNullable<ReturnType<typeof $connection.get>>)
+  })
+
+  it('installs a catalog entry on the agent without a local inspection', async () => {
+    requestGateway.mockImplementation(async method =>
+      method === 'plugins.manage' ? { ok: true, plugin_name: 'plugin', plugins: [] } : { plugins: [] }
+    )
+    renderFlow()
+    act(() => openPluginInstallRequest({ catalogName: 'plugin', repo: 'https://github.com/example/plugin#catalog' }))
+    expect(await screen.findByText('This package includes')).toBeTruthy()
+    expect(screen.queryByText('Inspecting repository…')).toBeNull()
+    expect(screen.getAllByRole('checkbox').map(box => box.getAttribute('aria-checked'))).toEqual(['true'])
+    fireEvent.click(screen.getByRole('button', { name: 'Install' }))
+    await waitFor(() =>
+      expect(requestGateway).toHaveBeenCalledWith(
+        'plugins.manage',
+        expect.objectContaining({ action: 'install', catalog_name: 'plugin' })
+      )
+    )
+    expect(probePluginRepo).not.toHaveBeenCalled()
+    expect(installDesktopPlugin).not.toHaveBeenCalled()
+  })
+
+  it('refuses a repository that is not a catalog entry without contacting the agent', async () => {
+    renderFlow()
+    act(() => openPluginInstallRequest({ repo: 'https://github.com/example/plugin' }))
+    expect(await screen.findByText('Only catalog entries can be installed in this app.')).toBeTruthy()
+    expect((screen.getByRole('button', { name: 'Install' }) as HTMLButtonElement).disabled).toBe(true)
+    expect(probePluginRepo).not.toHaveBeenCalled()
+    expect(requestGateway).not.toHaveBeenCalledWith('plugins.manage', expect.objectContaining({ action: 'install' }))
+  })
 })

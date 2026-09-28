@@ -949,6 +949,7 @@ export const en: Translations = {
         installing: 'Installing…',
         probing: 'Inspecting repository…',
         probeUnavailable: 'Plugin inspection is unavailable in this environment.',
+        catalogOnly: 'Only catalog entries can be installed in this app.',
         desktopUnavailable: 'Desktop plugin install is unavailable in this environment.',
         selectComponent: 'Select at least one component to install.',
         agentSuccess: name => `Agent plugin ${name} installed`,
