@@ -207,6 +207,7 @@ const {
   assertEvaManagedLocalTerminalAllowed,
   buildEvaAccountRendererResetScript,
   EVA_MANAGED_POLICY,
+  probeEvaSecureStorageEarlyKey,
   resolveEvaManagedConnectionFor,
   resolveEvaManagedDesktopProfileFromSources
 } = require('./eva-managed.cjs')
@@ -9379,6 +9380,7 @@ function encryptDesktopSecret(value, options = {}) {
 }
 
 const reportedManagedStorageReadFailures = new Set<string>()
+let lastManagedStorageReadFailure: string | null = null
 
 function decryptDesktopSecret(secret) {
   if (!secret || typeof secret !== 'object') {
@@ -9404,6 +9406,8 @@ function decryptDesktopSecret(secret) {
       appReady: app.isReady(),
       platform: process.platform,
       onFailure: category => {
+        lastManagedStorageReadFailure = category
+
         if (EVA_MANAGED_BUILD && !reportedManagedStorageReadFailures.has(category)) {
           reportedManagedStorageReadFailures.add(category)
           rememberLog(`[eva-auth] secure-storage-read failed: ${category}`)
@@ -9451,8 +9455,27 @@ async function resetEvaRendererSessions() {
   return true
 }
 
+// macOS pins the Keychain item OSCrypt uses at the process's first safeStorage
+// touch: before app-ready it is Chromium's default item, after it the
+// app-named one, and the derived key is cached for the life of the process.
+// A process that starts signed out would otherwise first touch safeStorage at
+// sign-in (after ready) and write with a key no later launch reads with
+// (adapter#351). isEncryptionAvailable() derives and caches the key: Electron
+// shell/browser/api/electron_api_safe_storage.cc IsEncryptionAvailable() ->
+// Chromium components/os_crypt/sync/os_crypt_mac.mm
+// OSCryptImpl::IsEncryptionAvailable() -> DeriveKey(). Unmanaged builds and
+// other platforms make no call here (see probeSecureTokenStorage).
+const secureStorageEarlyKey: 'available' | 'unavailable' | 'error' = probeEvaSecureStorageEarlyKey({
+  managed: EVA_MANAGED_BUILD,
+  platform: process.platform,
+  isEncryptionAvailable: () => safeStorage.isEncryptionAvailable(),
+  log: rememberLog
+})
+
 const evaManagedRuntime = createEvaManagedRuntime({
   statePath: EVA_ENROLLMENT_STATE_PATH,
+  secureStorageState: () => secureStorageEarlyKey,
+  secureStorageReadFailure: () => lastManagedStorageReadFailure,
   encryptSecret: encryptDesktopSecret,
   decryptSecret: decryptDesktopSecret,
   ensureSignInCallbackReady: () => ensureEvaDeepLinkProtocolReady(),

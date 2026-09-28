@@ -1035,6 +1035,21 @@ async function resolveEvaManagedDesktopProfileFromSources(readActiveProfile, rea
   return resolveEvaManagedDesktopProfile(response, { expectedProfileId })
 }
 
+// Managed macOS builds touch safeStorage once before app-ready, so every
+// launch derives the same Keychain key whether or not a sign-in is saved
+// (adapter#351). Other builds and platforms make no call at all.
+function probeEvaSecureStorageEarlyKey({ managed, platform, isEncryptionAvailable, log }) {
+  if (!managed || platform !== 'darwin') return 'available'
+  let state
+  try {
+    state = isEncryptionAvailable() ? 'available' : 'unavailable'
+  } catch {
+    state = 'error'
+  }
+  log(`[eva-auth] secure-storage early key: ${state}`)
+  return state
+}
+
 // Main-process globals stay injected so this managed branch is executable in
 // the Node contract suite without importing Electron's side-effectful entrypoint.
 // It mirrors the registry path's priority lifetime: compute once, mark before
@@ -1079,6 +1094,7 @@ module.exports = {
   normalizeSupportEnrollment,
   parseEvaDesktopAuthCallback,
   pollEvaDeviceCode,
+  probeEvaSecureStorageEarlyKey,
   publicEvaEnrollmentStatus,
   resolveEvaManagedConnectionFor,
   resolveEvaManagedDesktopProfile,

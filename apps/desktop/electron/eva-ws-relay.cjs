@@ -826,11 +826,11 @@ function createEvaWsRelay(options) {
       writeFailure(clientSocket, 401, 'Unauthorized')
       return
     }
-    if (
+    const grantIsStale = () =>
       grant.generation !== null &&
       typeof options.getGeneration === 'function' &&
       options.getGeneration() !== grant.generation
-    ) {
+    if (grantIsStale()) {
       writeFailure(clientSocket, 401, 'Unauthorized')
       return
     }
@@ -874,6 +874,16 @@ function createEvaWsRelay(options) {
         safeDestroy(upstreamSocket)
         return
       }
+      // The sign-in can change while the upstream is still connecting.
+      // disconnectAll() cannot see a socket that does not exist yet, so the
+      // grant is checked again before anything is sent with its credential.
+      if (grantIsStale() || clientSocket.destroyed) {
+        setupFinished = true
+        clearTimeout(setupTimer)
+        writeFailure(clientSocket, 401, 'Unauthorized')
+        safeDestroy(upstreamSocket)
+        return
+      }
       const guardGatewayRpc = grant.endpoint.pathname === '/api/ws'
       upstreamSocket.write(buildUpgradeRequest(request, upstreamUrl, { forwardExtensions: !guardGatewayRpc }))
     } catch (error) {
@@ -914,7 +924,8 @@ function createEvaWsRelay(options) {
       onEvent(`upstream_handshake status=${statusCode || 'invalid'}`)
 
       if (statusCode === 401 || statusCode === 403) {
-        Promise.resolve(options.onAuthRejected?.()).catch(() => undefined)
+        // A rejection of a replaced credential says nothing about the current one.
+        if (!grantIsStale()) Promise.resolve(options.onAuthRejected?.()).catch(() => undefined)
         writeFailure(clientSocket, 401, 'Unauthorized')
         safeDestroy(upstreamSocket)
         return

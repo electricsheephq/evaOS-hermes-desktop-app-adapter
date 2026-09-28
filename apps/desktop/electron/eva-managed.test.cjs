@@ -22,6 +22,7 @@ const {
   normalizeSupportEnrollment,
   parseEvaDesktopAuthCallback,
   pollEvaDeviceCode,
+  probeEvaSecureStorageEarlyKey,
   publicEvaEnrollmentStatus,
   resolveEvaManagedConnectionFor,
   resolveEvaManagedDesktopProfile,
@@ -1250,5 +1251,46 @@ test('broker rejections keep the delegated-support and membership codes the pick
         return true
       }
     )
+  }
+})
+
+test('only managed macOS builds derive the secure-storage key early, once, and report the outcome', () => {
+  for (const [answer, expected] of [
+    [() => true, 'available'],
+    [() => false, 'unavailable'],
+    [
+      () => {
+        throw new Error('keychain detail')
+      },
+      'error'
+    ]
+  ]) {
+    let calls = 0
+    const logs = []
+    const state = probeEvaSecureStorageEarlyKey({
+      managed: true,
+      platform: 'darwin',
+      isEncryptionAvailable: () => {
+        calls += 1
+        return answer()
+      },
+      log: line => logs.push(line)
+    })
+    assert.equal(state, expected)
+    assert.equal(calls, 1)
+    assert.deepEqual(logs, [`[eva-auth] secure-storage early key: ${expected}`])
+  }
+  for (const [managed, platform] of [
+    [false, 'darwin'],
+    [true, 'linux'],
+    [true, 'win32']
+  ]) {
+    const state = probeEvaSecureStorageEarlyKey({
+      managed,
+      platform,
+      isEncryptionAvailable: () => assert.fail('no safeStorage touch outside managed macOS builds'),
+      log: () => assert.fail('nothing to report')
+    })
+    assert.equal(state, 'available')
   }
 })

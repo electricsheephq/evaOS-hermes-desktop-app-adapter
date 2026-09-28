@@ -2429,6 +2429,7 @@ test('a late support claim cannot overwrite a replacement sign-in attempt', asyn
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
   const statePath = path.join(directory, 'eva-enrollment.json')
   writeActiveEnrollment(statePath)
+  const persistedBefore = fs.readFileSync(statePath, 'utf8')
 
   let releaseClaim
   let markClaimStarted
@@ -2462,7 +2463,9 @@ test('a late support claim cannot overwrite a replacement sign-in attempt', asyn
   await assert.rejects(claim, error => error instanceof EvaBrokerError && error.code === 'stale-auth')
   await runtime.close()
   await assert.rejects(replacement, error => error instanceof EvaBrokerError && error.code === 'stale-auth')
-  assert.equal(fs.existsSync(statePath), false)
+  // Neither the late claim nor the cancelled replacement sign-in changed the
+  // retained sign-in (adapter#351: it is replaced only once a new one is stored).
+  assert.equal(fs.readFileSync(statePath, 'utf8'), persistedBefore)
 })
 
 test('renderer reset failure refuses and remotely ends a claimed support session', async t => {
@@ -3283,7 +3286,9 @@ for (const expired of [false, true]) test(`interrupted support sign-in recovers 
   assert.equal(opened, 1)
   assert.equal(launches, 0)
   assert.equal(revoked.length, expired ? 0 : 1)
-  assert.equal(fs.existsSync(statePath), false)
+  // The interrupted enrollment is consumed by the sign-out; only its
+  // signed-out tombstone remains until the new sign-in is stored.
+  assert.equal(JSON.parse(fs.readFileSync(statePath, 'utf8')).desktop, undefined)
   assert.equal(runtime.status().desktopSessionActive, false)
   await runtime.signOut()
   await cancelled
@@ -5703,4 +5708,273 @@ test('a forced re-sign-in during an active support session whose credential the 
   assert.equal(runtime.status().runtimeSessionActive, true)
   assert.equal(persistedSupportLease(statePath), null)
   assert.equal(runtime.status().supportCleanupPending, false)
+})
+
+const SECURE_STORAGE_UNAVAILABLE_MESSAGE =
+  'evaOS Agent cannot use the macOS keychain in this session. Quit evaOS Agent, open it again, then sign in.'
+
+test('sign-in is refused before the browser opens when secure storage is unusable this session', async t => {
+  for (const storageState of ['unavailable', 'error']) {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-sign-in-storage-refused-'))
+    t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+    const statePath = path.join(directory, 'eva-enrollment.json')
+    writeActiveEnrollment(statePath)
+    const persistedBefore = fs.readFileSync(statePath)
+    let opened = 0
+    let polls = 0
+    const runtime = makeManagedRuntime(statePath, {
+      secureStorageState: () => storageState,
+      loginTimeoutMs: 50,
+      openExternal: async () => {
+        opened += 1
+      },
+      pollDeviceCode: async () => {
+        polls += 1
+        throw new Error('no server session may be created')
+      }
+    })
+    t.after(() => runtime.close())
+
+    await assert.rejects(
+      runtime.signIn(),
+      error =>
+        error instanceof EvaBrokerError &&
+        error.code === 'secure-storage-unavailable' &&
+        error.message === SECURE_STORAGE_UNAVAILABLE_MESSAGE
+    )
+    assert.equal(opened, 0)
+    assert.equal(polls, 0)
+    assert.deepEqual(fs.readFileSync(statePath), persistedBefore)
+  }
+})
+
+test('a storage failure while storing the new sign-in revokes it and keeps the retained sign-in', async t => {
+  const failsNewToken = value => {
+    if (value === 'new-desktop-session') throw new Error('Failed to encrypt (keychain detail)')
+    return value
+  }
+  for (const { stage, platform, encryptSecret, failRename, rejects } of [
+    {
+      stage: 'encryption on macOS',
+      platform: 'darwin',
+      encryptSecret: failsNewToken,
+      rejects: error =>
+        error instanceof EvaBrokerError &&
+        error.code === 'secure-storage-unavailable' &&
+        error.message === SECURE_STORAGE_UNAVAILABLE_MESSAGE
+    },
+    {
+      stage: 'encryption on another platform',
+      platform: 'linux',
+      encryptSecret: failsNewToken,
+      rejects: error =>
+        error instanceof EvaBrokerError &&
+        error.statusCode === 503 &&
+        !error.message.includes('macOS') &&
+        !error.message.includes('keychain detail')
+    },
+    {
+      stage: 'file write',
+      platform: 'darwin',
+      encryptSecret: value => value,
+      failRename: true,
+      rejects: error => error.code === 'EIO'
+    }
+  ]) {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-sign-in-storage-write-failed-'))
+    t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+    const statePath = path.join(directory, 'eva-enrollment.json')
+    writeActiveEnrollment(statePath)
+    const persistedBefore = fs.readFileSync(statePath)
+    const renameSync = fs.renameSync
+    if (failRename) {
+      fs.renameSync = (from, to) => {
+        if (to === statePath) throw Object.assign(new Error('injected write failure (disk detail)'), { code: 'EIO' })
+        return renameSync(from, to)
+      }
+    }
+    let opened
+    const revoked = []
+    const logs = []
+    const runtime = makeManagedRuntime(statePath, {
+      platform,
+      encryptSecret,
+      openExternal: async url => {
+        opened = new URL(url)
+      },
+      pollDeviceCode: async () => ({ token: 'new-desktop-session', expiresAt: FUTURE, email: 'second@example.invalid' }),
+      revokeDesktopSession: async token => {
+        revoked.push(token)
+        return true
+      },
+      rememberLog: line => logs.push(line)
+    })
+    t.after(() => runtime.close())
+
+    try {
+      const rejection = assert.rejects(runtime.signIn(), rejects, stage)
+      await new Promise(resolve => setImmediate(resolve))
+      await runtime.completeCallback(
+        `evaos-agent://auth/callback?device_code=ABCDEFGH&desktop_auth_state=${opened.searchParams.get('desktop_auth_state')}`
+      )
+      await rejection
+    } finally {
+      fs.renameSync = renameSync
+    }
+
+    assert.deepEqual(revoked, ['new-desktop-session'], stage)
+    assert.deepEqual(fs.readFileSync(statePath), persistedBefore, stage)
+    const status = runtime.status()
+    assert.equal(status.desktopSessionActive, true, stage)
+    assert.equal(status.agentDisplayName, 'Fixture Agent', stage)
+    assert.equal(/detail|new-desktop-session/.test(logs.join('\n')), false, stage)
+  }
+})
+
+test('an undecryptable saved sign-in says a new sign-in will be kept', async t => {
+  for (const [category, message] of [
+    ['decrypt-failed', 'evaOS Agent could not read the saved sign-in. Sign in again; the new sign-in will be kept.'],
+    [
+      'unavailable',
+      'evaOS Agent could not read managed access from secure storage. Unlock secure storage and try again, or sign in again from Settings.'
+    ]
+  ]) {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-decrypt-failed-'))
+    t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+    const statePath = path.join(directory, 'eva-enrollment.json')
+    writeActiveEnrollment(statePath)
+    const runtime = makeManagedRuntime(statePath, {
+      decryptSecret: () => '',
+      secureStorageReadFailure: () => category
+    })
+    t.after(() => runtime.close())
+
+    await assert.rejects(
+      runtime.resolveBackend(),
+      error =>
+        error instanceof EvaBrokerError &&
+        error.code === 'managed-enrollment-unreadable' &&
+        error.message === message
+    )
+  }
+})
+
+test("a replacement sign-in ends the old account's work before its own enrollment lands", async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-sign-in-replaces-forced-enrollment-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeActiveEnrollment(statePath)
+  let opened
+  let releaseRetained
+  const retainedGate = new Promise(resolve => {
+    releaseRetained = resolve
+  })
+  let releaseReplacement
+  const replacementGate = new Promise(resolve => {
+    releaseReplacement = resolve
+  })
+  const launchedWith = []
+  // Upstream credentials of the relay sockets still open.
+  const liveUpstreams = new Set()
+  let resets = 0
+  const runtime = makeManagedRuntime(statePath, {
+    openExternal: async url => {
+      opened = new URL(url)
+    },
+    pollDeviceCode: async () => ({ token: 'replacement-desktop-session', expiresAt: FUTURE, email: 'second@example.invalid' }),
+    launchRuntime: async token => {
+      launchedWith.push(token)
+      if (token === 'desktop-token') {
+        await retainedGate
+        return freshRuntimeEnrollment()
+      }
+      await replacementGate
+      return { ...freshRuntimeEnrollment(), customerId: 'customer-two', token: 'replacement-runtime-token' }
+    },
+    createWsRelay: relay => ({
+      mintTicket: async () => {
+        liveUpstreams.add((await relay.getUpstream()).token)
+        return 'ws://127.0.0.1:12345/managed'
+      },
+      disconnectAll: () => liveUpstreams.clear(),
+      close: async () => undefined
+    }),
+    resetRenderer: async () => {
+      resets += 1
+    }
+  })
+  t.after(() => runtime.close())
+
+  const signingIn = runtime.signIn()
+  await new Promise(resolve => setImmediate(resolve))
+  // The retained credential is still readable: a reconnect opens a relay with
+  // it, and a forced refresh starts with it.
+  await runtime.resolveBackend()
+  assert.deepEqual([...liveUpstreams], ['runtime-token'])
+  const staleRefresh = runtime.refresh()
+  const staleRejected = assert.rejects(staleRefresh, error => error instanceof EvaBrokerError && error.code === 'stale-auth')
+  await new Promise(resolve => setImmediate(resolve))
+  assert.deepEqual(launchedWith, ['desktop-token'])
+  await runtime.completeCallback(
+    `evaos-agent://auth/callback?device_code=ABCDEFGH&desktop_auth_state=${opened.searchParams.get('desktop_auth_state')}`
+  )
+  for (let i = 0; i < 20 && !launchedWith.includes('replacement-desktop-session'); i += 1) {
+    await new Promise(resolve => setImmediate(resolve))
+  }
+  // The new account's enrollment is still pending; the old account's relay is gone.
+  assert.deepEqual(launchedWith, ['desktop-token', 'replacement-desktop-session'])
+  assert.deepEqual([...liveUpstreams], [])
+  releaseRetained()
+  releaseReplacement()
+
+  const status = await signingIn
+  await staleRejected
+  assert.equal(status.desktopSessionActive, true)
+  assert.equal(resets, 1)
+  const persisted = JSON.parse(fs.readFileSync(statePath, 'utf8'))
+  assert.equal(persisted.desktop.token, 'replacement-desktop-session')
+  assert.equal(persisted.runtime.token, 'replacement-runtime-token')
+  assert.equal(persisted.runtime.customer_id, 'customer-two')
+})
+
+test('a failure after the state file is renamed does not revoke the committed sign-in', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-sign-in-post-rename-failure-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeActiveEnrollment(statePath)
+  // Any chmod of the committed file itself fails; the temporary file is untouched.
+  const chmodSync = fs.chmodSync
+  fs.chmodSync = (target, mode) => {
+    if (target === statePath) throw Object.assign(new Error('injected post-rename failure'), { code: 'EIO' })
+    return chmodSync(target, mode)
+  }
+  t.after(() => {
+    fs.chmodSync = chmodSync
+  })
+  let opened
+  const revoked = []
+  const runtime = makeManagedRuntime(statePath, {
+    openExternal: async url => {
+      opened = new URL(url)
+    },
+    pollDeviceCode: async () => ({ token: 'replacement-desktop-session', expiresAt: FUTURE, email: 'employee@example.invalid' }),
+    launchRuntime: async () => freshRuntimeEnrollment(),
+    revokeDesktopSession: async token => {
+      revoked.push(token)
+      return true
+    }
+  })
+  t.after(() => runtime.close())
+
+  const signingIn = runtime.signIn()
+  await new Promise(resolve => setImmediate(resolve))
+  await runtime.completeCallback(
+    `evaos-agent://auth/callback?device_code=ABCDEFGH&desktop_auth_state=${opened.searchParams.get('desktop_auth_state')}`
+  )
+  const status = await signingIn
+
+  assert.deepEqual(revoked, [])
+  assert.equal(status.desktopSessionActive, true)
+  assert.equal(JSON.parse(fs.readFileSync(statePath, 'utf8')).desktop.token, 'replacement-desktop-session')
+  assert.equal((fs.statSync(statePath).mode & 0o777).toString(8), '600')
 })
