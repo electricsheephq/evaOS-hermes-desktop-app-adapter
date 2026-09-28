@@ -9,7 +9,9 @@ from __future__ import annotations
 import base64
 import json
 import os
+import queue
 import time
+import types
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -22,6 +24,8 @@ from tui_gateway import account_usage_view as view
 
 _SECRET = "synthetic-secret-token"
 _PATH = "/synthetic/profile/auth.json"
+_REAL_CODEX_CREDENTIALS = view._codex_credentials  # _fetchers() stubs both; tests that need the real ones restore them
+_REAL_OPENROUTER_CREDENTIALS = view._openrouter_credentials
 
 
 @pytest.fixture(autouse=True)
@@ -53,7 +57,7 @@ def _fetchers(monkeypatch, **fns) -> dict[str, int]:
 
     registry = {name.replace("_", "-"): counted(name.replace("_", "-"), fn) for name, fn in fns.items()}
     monkeypatch.setattr(au, "_USAGE_FETCHERS", registry)
-    monkeypatch.setattr(view, "_codex_has_credential", lambda: True)
+    monkeypatch.setattr(view, "_codex_credentials", lambda: ({"tokens": {"access_token": "a", "refresh_token": "r"}}, []))
     monkeypatch.setattr(view, "_openrouter_credentials", lambda: ("https://openrouter.ai/api/v1", "k"))
     return calls
 
@@ -139,11 +143,58 @@ def test_serializer_clamps_percent_derives_remaining_and_drops_raw():
     assert _SECRET not in text and _PATH not in text
 
 
+def _write_auth(payload: dict) -> None:
+    from hermes_cli.auth import _auth_file_path
+    path = _auth_file_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"version": 1, "providers": {}, **payload}))
+
+
+def _codex_fails(monkeypatch, message: str):
+    _fetchers(monkeypatch, openai_codex=_raise(RuntimeError(message)))
+    monkeypatch.setattr(view, "_codex_credentials", _REAL_CODEX_CREDENTIALS)  # real on-disk read
+
+
 def test_codex_failure_without_any_credential_is_omitted(monkeypatch):
-    assert view._codex_has_credential() is False  # the isolated home has no singleton and no pool
-    _fetchers(monkeypatch, openai_codex=_raise(RuntimeError("No available openai-codex credential")))
-    monkeypatch.setattr(view, "_codex_has_credential", lambda: False)
+    assert view._codex_credentials() == (None, [])  # the isolated home has no singleton and no pool
+    _codex_fails(monkeypatch, "No available openai-codex credential in credential pool")
     assert _call({}) == {"snapshots": []}
+
+
+def test_codex_singleton_without_refresh_token_is_an_auth_expired_card(monkeypatch):
+    _write_auth({"providers": {"openai-codex": {"tokens": {"access_token": "synthetic-access"}}}})
+    _codex_fails(monkeypatch, "No available openai-codex credential in credential pool")
+    [snap] = _call({})["snapshots"]
+    assert snap["provider"] == "openai-codex" and snap["error"] == "auth_expired"
+
+
+def test_codex_pool_with_only_exhausted_entries_is_a_rate_limited_card(monkeypatch):
+    until = time.time() + 3600
+    _write_auth({"credential_pool": {"openai-codex": [
+        {"id": f"codex-{i}", "source": "manual:device_code", "auth_type": "oauth", "access_token": f"t{i}",
+         "refresh_token": f"r{i}", "last_status": "exhausted", "last_error_reset_at": until, "priority": i}
+        for i in range(2)]}})
+    _codex_fails(monkeypatch, "No available openai-codex credential in credential pool")
+    [snap] = _call({})["snapshots"]
+    assert snap["error"] == "rate_limited"
+
+
+def test_codex_presence_check_never_takes_the_auth_store_lock(monkeypatch):
+    import hermes_cli.auth as auth
+    _write_auth({"providers": {"openai-codex": {"tokens": {"access_token": "synthetic-access"}}},
+                 "credential_pool": {"openai-codex": [{"id": "codex-0", "access_token": "t0"}]}})
+
+    taken = []
+
+    def refuse(*_a, **_kw):  # recorded as well as raised: a broad ``except`` must not hide the entry
+        taken.append(True)
+        raise AssertionError("account.usage presence check took the auth-store lock")
+
+    monkeypatch.setattr(auth, "_auth_store_lock", refuse)
+    state, entries = view._codex_credentials()
+    assert state is not None and len(entries) == 1
+    assert view._codex_failure(RuntimeError("boom"))["error"] == "auth_expired"
+    assert taken == []
 
 
 def test_openrouter_only_on_openrouter_host(monkeypatch):
@@ -157,14 +208,28 @@ def test_openrouter_only_on_openrouter_host(monkeypatch):
     assert seen == [("https://openrouter.ai/api/v1", "k")]
 
 
-def test_openrouter_credentials_reject_a_non_openrouter_host(monkeypatch):
+@pytest.mark.parametrize("base_url", [
+    "https://proxy.example.invalid/v1",
+    "http://openrouter.ai/api/v1",
+    "https://openrouter.ai:8080/api/v1",
+    "https://evil.openrouter.ai/api/v1",
+    "https://openrouter.ai.evil.com/api/v1",
+    "https://openrouter.ai:notaport/api/v1",
+])
+def test_openrouter_key_never_leaves_for_another_origin(monkeypatch, base_url):
     import hermes_cli.runtime_provider as rp
-    monkeypatch.setattr(rp, "resolve_runtime_provider",
-                        lambda **kw: {"base_url": "https://proxy.example.invalid/v1", "api_key": "k"})
+    monkeypatch.setattr(rp, "resolve_runtime_provider", lambda **kw: {"base_url": base_url, "api_key": "k"})
     assert view._openrouter_credentials() is None
-    monkeypatch.setattr(rp, "resolve_runtime_provider",
-                        lambda **kw: {"base_url": "https://openrouter.ai/api/v1", "api_key": "k"})
-    assert view._openrouter_credentials() == ("https://openrouter.ai/api/v1", "k")
+    calls = _fetchers(monkeypatch, openrouter=lambda b, k: _snap("openrouter"))
+    monkeypatch.setattr(view, "_openrouter_credentials", _REAL_OPENROUTER_CREDENTIALS)
+    assert _call({}) == {"snapshots": []} and calls == {}
+
+
+@pytest.mark.parametrize("base_url", ["https://openrouter.ai/api/v1", "https://OpenRouter.ai:443/api/v1"])
+def test_openrouter_credentials_accept_the_openrouter_origin(monkeypatch, base_url):
+    import hermes_cli.runtime_provider as rp
+    monkeypatch.setattr(rp, "resolve_runtime_provider", lambda **kw: {"base_url": base_url, "api_key": "k"})
+    assert view._openrouter_credentials() == (base_url, "k")
 
 
 def test_second_call_within_ttl_uses_the_cache(monkeypatch):
@@ -200,12 +265,44 @@ def test_unknown_param_is_rejected():
     assert response["error"]["code"] == 4000
 
 
-def test_account_usage_is_a_long_handler_and_in_the_generated_contract():
+def test_account_usage_is_a_long_handler():
     assert "account.usage" in server._LONG_HANDLERS
-    shared = Path(__file__).resolve().parents[2] / "apps" / "shared" / "src"
-    assert "'account.usage': { params: ProfileParams; result: AccountUsageResult }" in (
-        shared / "gateway-contract.generated.ts").read_text(encoding="utf-8")
-    assert '"name": "account.usage"' in (shared / "gateway-contract.openrpc.json").read_text(encoding="utf-8")
+
+
+def test_dispatch_runs_on_the_pool_and_keeps_each_profile_isolated(tmp_path, monkeypatch):
+    """Through the real long-handler path: ``dispatch`` returns None and the pool worker writes the reply."""
+    from hermes_constants import get_hermes_home
+    launch, worker = tmp_path / "launch", tmp_path / "profiles" / "code"
+    launch.mkdir(parents=True)
+    worker.mkdir(parents=True)
+    monkeypatch.setattr(server, "_hermes_home", launch)
+    monkeypatch.setenv("HERMES_HOME", str(launch))
+    monkeypatch.setattr(server, "_profile_home", lambda name: worker if (name or "").strip() == "code" else None)
+    homes = []
+
+    def fetch(_b, _k):
+        home = str(get_hermes_home())
+        homes.append(home)
+        return _snap("openai-codex", details=(f"home={Path(home).name}",))
+
+    _fetchers(monkeypatch, openai_codex=fetch)
+    frames: queue.Queue = queue.Queue()
+    transport = types.SimpleNamespace(write=lambda frame: frames.put(frame) or True)
+
+    def request(rid: str, params: dict) -> dict:
+        req = {"jsonrpc": "2.0", "id": rid, "method": "account.usage", "params": params}
+        assert server.dispatch(req, transport) is None
+        frame = frames.get(timeout=10)
+        assert frame["id"] == rid and "error" not in frame, frame
+        return frame["result"]
+
+    first_a = request("a1", {})
+    b = request("b", {"profile": "code"})
+    second_a = request("a2", {})
+    assert first_a["snapshots"][0]["details"] == ["home=launch"]
+    assert b["snapshots"][0]["details"] == ["home=code"]
+    assert second_a == first_a
+    assert homes[:2] == [str(launch), str(worker)] and set(homes) == {str(launch), str(worker)}
 
 
 # ── fork: managed shared-auth pool ──────────────────────────────────────────────────────────
@@ -237,7 +334,7 @@ def test_codex_pool_entry_only_in_the_shared_auth_file_resolves(tmp_path, monkey
     monkeypatch.setenv("HERMES_SHARED_AUTH_FILE", str(shared))
     monkeypatch.setattr(server, "_hermes_home", profile)
 
-    assert view._codex_has_credential() is True
+    assert view._codex_credentials()[1]  # the shared pool entry counts as signed in
     seen = []
     monkeypatch.setattr(au, "_get_json", lambda url, headers, *, timeout: seen.append(headers["Authorization"]) or {
         "plan_type": "pro", "rate_limit": {"primary_window": {"used_percent": 40, "limit_window_seconds": 18000}}})

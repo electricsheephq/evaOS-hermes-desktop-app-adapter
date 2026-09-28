@@ -12,10 +12,12 @@ from __future__ import annotations
 
 import contextvars
 import math
+import os
 import threading
 import time
 from datetime import datetime, timezone
 from typing import Any, Optional
+from urllib.parse import urlsplit
 
 DEADLINE_S = 20.0
 RESULT_TTL_S = 60.0
@@ -81,32 +83,58 @@ def _failure_category(exc: BaseException) -> str:
     return "auth_expired" if isinstance(exc, AuthError) else "unavailable"
 
 
-def _codex_has_credential() -> bool:
+_CODEX_POOL_EMPTY = "No available openai-codex credential"  # agent.account_usage tier 3: pool has no selectable entry
+
+
+def _codex_credentials() -> tuple[Optional[dict], list]:
+    """(singleton provider state, persisted pool entries) — located the way ``_read_codex_tokens(_lock=False)``
+    does (managed shared-auth source incl.) but lock-free and unvalidated: a poll must neither take the
+    auth-store lock nor lose a signed-in-but-broken account to the validator."""
+    from hermes_cli.auth import (_auth_file_path, _load_auth_store, _load_provider_state_with_source, _same_path,
+                                 read_credential_pool)
+    state, source = _load_provider_state_with_source(_load_auth_store(), "openai-codex")
+    managed = bool(os.getenv("HERMES_SHARED_AUTH_FILE", "").strip())
+    if managed and source is not None and not _same_path(source, _auth_file_path()):
+        providers = _load_auth_store(source, fail_closed=True).get("providers")
+        state = providers.get("openai-codex") if isinstance(providers, dict) else None
+    entries = read_credential_pool("openai-codex")
+    return (state if isinstance(state, dict) and isinstance(state.get("tokens"), dict) else None,
+            entries if isinstance(entries, list) else [])
+
+
+def _codex_failure(exc: BaseException) -> Optional[dict]:
     """The Codex fetcher raises (rather than returning None) when nothing is signed in, so a failure
-    is only an error card when a singleton token or a pool entry (incl. the shared pool) exists."""
-    from agent.credential_pool import load_pool
-    from hermes_cli.auth import _read_codex_tokens
+    is only an error card when a singleton state or a pool entry (incl. the shared pool) exists."""
+    from hermes_cli.auth import AuthError, _validated_codex_token_state
     try:
-        if str((_read_codex_tokens().get("tokens") or {}).get("access_token") or "").strip():
-            return True
+        state, entries = _codex_credentials()
     except Exception:
-        pass
-    try:
-        return load_pool("openai-codex").has_credentials()
-    except Exception:
-        return False
+        state, entries = None, []
+    if state is None and not entries:
+        return None
+    category = _failure_category(exc)
+    if category == "unavailable" and state is not None:  # typed HTTP/timeout evidence wins over inference
+        try:
+            _validated_codex_token_state(state)
+        except AuthError:
+            category = "auth_expired"
+    if category == "unavailable" and entries and str(exc).startswith(_CODEX_POOL_EMPTY):
+        category = "rate_limited"  # the pool has entries, but every one is exhausted / cooling down
+    return error_snapshot("openai-codex", category)
 
 
 def _openrouter_credentials() -> Optional[tuple[str, str]]:
-    """(base_url, api_key) only when OpenRouter resolves to a key on openrouter.ai itself."""
+    """(base_url, api_key) only when OpenRouter resolves to a key for https://openrouter.ai itself (exact
+    host, default port) — never plain http, another port or a look-alike/sub-domain host."""
     from hermes_cli.runtime_provider import resolve_runtime_provider
-    from utils import base_url_host_matches
     try:
         runtime = resolve_runtime_provider(requested="openrouter")
-    except Exception:
+        base_url, api_key = str(runtime.get("base_url") or ""), str(runtime.get("api_key") or "").strip()
+        url = urlsplit(base_url)
+        origin_ok = url.scheme == "https" and url.hostname == "openrouter.ai" and url.port in (None, 443)
+    except Exception:  # incl. ValueError from a malformed port
         return None
-    base_url, api_key = str(runtime.get("base_url") or ""), str(runtime.get("api_key") or "").strip()
-    return (base_url, api_key) if api_key and base_url_host_matches(base_url, "openrouter.ai") else None
+    return (base_url, api_key) if api_key and origin_ok else None
 
 
 def _fetch_one(provider: str) -> Optional[dict]:
@@ -122,8 +150,8 @@ def _fetch_one(provider: str) -> Optional[dict]:
     try:
         snapshot = _USAGE_FETCHERS[provider](*args)
     except Exception as exc:
-        if provider == "openai-codex" and not _codex_has_credential():
-            return None
+        if provider == "openai-codex":
+            return _codex_failure(exc)
         return error_snapshot(provider, _failure_category(exc))
     if snapshot is None:
         return None
