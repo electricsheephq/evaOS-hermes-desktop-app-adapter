@@ -50,12 +50,11 @@ test.describe('managed signed-out boot', () => {
     })
   })
 
-  test('the real preload denies unenrolled, wrong-owner and local-terminal requests', async () => {
+  test('the real preload denies unenrolled and wrong-owner requests', async () => {
     const errors = await fixture!.page.evaluate(async () => {
       const desktop = Reflect.get(window, 'hermesDesktop') as {
         getConnection: (profile?: string) => Promise<unknown>
         getConnectionFor: (payload: { connectionId: string; profile: string }) => Promise<unknown>
-        openSessionInTerminal: (sessionId: string) => Promise<unknown>
       }
 
       const rejection = async (request: () => Promise<unknown>) => {
@@ -72,14 +71,33 @@ test.describe('managed signed-out boot', () => {
         unenrolled: await rejection(() => desktop.getConnection()),
         wrongOwner: await rejection(() =>
           desktop.getConnectionFor({ connectionId: 'synthetic-workstation', profile: 'synthetic-owner' })
-        ),
-        terminal: await rejection(() => desktop.openSessionInTerminal('synthetic-session'))
+        )
       }
     })
 
     expect(errors.unenrolled).toContain('Sign in to evaOS Agent from Settings.')
     expect(errors.wrongOwner).toContain('outside the managed runtime route')
-    expect(errors.terminal).toContain('Terminal access is unavailable for this managed remote agent.')
+  })
+
+  // Local-machine actions run as upstream's do: the terminal and the default
+  // project folder live on this computer, never on the remote agent.
+  test('the real preload runs the local terminal and project-folder handlers', async () => {
+    const results = await fixture!.page.evaluate(async () => {
+      const desktop = Reflect.get(window, 'hermesDesktop') as {
+        openSessionInTerminal: (sessionId: string) => Promise<unknown>
+        settings: { getDefaultProjectDir: () => Promise<{ defaultLabel: string; resolvedCwd: string }> }
+      }
+
+      return {
+        // An empty id is answered before any terminal is opened.
+        terminal: await desktop.openSessionInTerminal(''),
+        projectDir: await desktop.settings.getDefaultProjectDir()
+      }
+    })
+
+    expect(results.terminal).toEqual({ ok: false, error: 'invalid-session-id' })
+    expect(results.projectDir.defaultLabel).toBeTruthy()
+    expect(results.projectDir.resolvedCwd).toBeTruthy()
   })
 
   test('support End receives a real click above the managed boot failure', async () => {

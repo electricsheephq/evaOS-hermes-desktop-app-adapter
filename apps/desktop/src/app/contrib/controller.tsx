@@ -41,7 +41,6 @@ import { Slot } from '@/contrib/react/slot'
 import { registry } from '@/contrib/registry'
 import { discoverRuntimePlugins } from '@/contrib/runtime-loader'
 import { LocalizedTabTitle, translateNow } from '@/i18n'
-import { isManagedEvaosAgent } from '@/i18n/managed-brand'
 import { NEW_SESSION_TITLE, sessionTitle as storedSessionTitle } from '@/lib/chat-runtime'
 import {
   Download,
@@ -56,7 +55,6 @@ import {
   Zap
 } from '@/lib/icons'
 import { type KeybindContribution, KEYBINDS_AREA } from '@/lib/keybinds/actions'
-import { isManagedTerminalUiVisible } from '@/lib/managed-ui-policy'
 import { isOnboardingEnabled } from '@/lib/onboarding-enabled'
 import { TRANSCRIPT_DIRECTIVE_AREA, type TranscriptDirectiveContribution } from '@/lib/transcript-directives'
 import { setYoloEnabled } from '@/lib/yolo-session'
@@ -137,7 +135,6 @@ import { ContribWiring, WiredPane } from './wiring'
 // ONE render identity for the workspace pane — syncWorkspaceTitle re-registers
 // the contribution (new title) and a fresh closure would remount the chat.
 const renderWorkspacePane = () => <WiredPane part="chatRoutes" />
-const terminalUiVisible = isManagedTerminalUiVisible(isManagedEvaosAgent())
 
 // Boot-hidden panes mount behind display:none (instant-toggle contract) — defer
 // them to idle so they're off the first-paint path, warm before reveal.
@@ -586,21 +583,17 @@ bindPaneVisibility(
   closeReview,
   () => openReview($reviewScopeCwd.get(), $reviewScopeTarget.get())
 )
-
 // ⌃` / statusbar toggle — the terminal COLLAPSES to a rail (tab stays), not
 // hides; PTYs stay alive while collapsed (see PersistentTerminal). Simple has
 // no terminal: where chrome is off a closed one hides, rail and all, and ⌃`
 // is the door for the session.
-if (terminalUiVisible) {
-  bindToolPaneCollapse(
-    'terminal',
-    $terminalTakeover,
-    () => setTerminalTakeover(false),
-    () => setTerminalTakeover(true),
-    $showsAdvancedChrome
-  )
-}
-
+bindToolPaneCollapse(
+  'terminal',
+  $terminalTakeover,
+  () => setTerminalTakeover(false),
+  () => setTerminalTakeover(true),
+  $showsAdvancedChrome
+)
 // Without the statusbar, the rail is the only way to switch profiles or gateways.
 $profiles.subscribe(profiles => setModeContext({ profileCount: profiles.length }))
 $connectionsRegistry.subscribe(registry => setModeContext({ connectionCount: registry?.connections.length ?? 0 }))
@@ -609,19 +602,17 @@ $connectionsRegistry.subscribe(registry => setModeContext({ connectionCount: reg
 // Reads the TREE like every other pane toggle: `$terminalTakeover` stays true
 // behind a stacked sibling tab or a minimized zone, which would light the row
 // "on" for a terminal that isn't on screen.
-if (terminalUiVisible) {
-  registry.register(
-    paletteToggle({
-      id: 'view.showTerminal',
-      label: 'Toggle terminal',
-      action: 'view.showTerminal',
-      icon: Terminal,
-      keywords: ['terminal', 'shell', 'console', 'pty'],
-      get: () => isPaneVisible('terminal'),
-      set: () => togglePaneVisible('terminal')
-    })
-  )
-}
+registry.register(
+  paletteToggle({
+    id: 'view.showTerminal',
+    label: 'Toggle terminal',
+    action: 'view.showTerminal',
+    icon: Terminal,
+    keywords: ['terminal', 'shell', 'console', 'pty'],
+    get: () => isPaneVisible('terminal'),
+    set: () => togglePaneVisible('terminal')
+  })
+)
 
 // Logs are ⌘K-ONLY chrome: the pane contribution EXISTS only while $logsOpen
 // is on. Off (the default) keeps logs out of the registry and the tree

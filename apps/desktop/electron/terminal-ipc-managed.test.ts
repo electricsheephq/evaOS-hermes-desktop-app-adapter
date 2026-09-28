@@ -2,14 +2,15 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
   handlers: new Map<string, (...args: unknown[]) => unknown>(),
-  spawn: vi.fn(() => ({
+  pty: {
     kill: vi.fn(),
     onData: vi.fn(),
     onExit: vi.fn(),
     pid: 123,
     resize: vi.fn(),
     write: vi.fn()
-  }))
+  },
+  spawn: vi.fn()
 }))
 
 vi.mock('electron', () => ({
@@ -27,49 +28,53 @@ vi.mock('./spawn-helper-perms', () => ({ ensureSpawnHelperExecutable: vi.fn(() =
 
 import { registerTerminalIpc } from './terminal-ipc'
 
-describe('registerTerminalIpc managed boundary', () => {
+const invoke = (channel: string, event: unknown, ...args: unknown[]) => {
+  const handler = mocks.handlers.get(channel)
+  expect(handler, `missing handler for ${channel}`).toBeTypeOf('function')
+
+  return Promise.resolve().then(() => handler?.(event, ...args))
+}
+
+// A managed build talks to a URL remote, so there is no SSH target and the
+// embedded terminal is a local PTY on this computer, as upstream does it. The
+// managed denials are offered here exactly as main.ts used to wire them; they
+// must not be consulted.
+describe('registerTerminalIpc in the managed build', () => {
   beforeEach(() => {
     mocks.handlers.clear()
-    mocks.spawn.mockClear()
-  })
+    mocks.spawn.mockReset().mockReturnValue(mocks.pty)
+    Object.values(mocks.pty).forEach(value => typeof value === 'function' && vi.mocked(value).mockClear())
 
-  it('rejects local terminal creation and control before touching a PTY', async () => {
-    const startBlocked = new Error('managed local terminal blocked')
-    const mutationBlocked = new Error('managed local terminal mutation blocked')
-
-    const deps = {
+    registerTerminalIpc({
       activeSshTerminalTarget: () => null,
       assertLocalMutationAllowed: () => {
-        throw mutationBlocked
+        throw new Error('managed local terminal mutation blocked')
       },
       assertLocalTerminalAllowed: () => {
-        throw startBlocked
+        throw new Error('managed local terminal blocked')
       },
       ensureBackend: async () => null,
       findOnPath: () => null,
       getSshConnectionState: () => undefined,
       isWindows: false,
       rememberLog: () => undefined
-    }
+    } as Parameters<typeof registerTerminalIpc>[0])
+  })
 
-    registerTerminalIpc(deps as Parameters<typeof registerTerminalIpc>[0])
-
+  it('starts, drives and disposes a local terminal', async () => {
     const sender = { id: 7, isDestroyed: () => false, once: vi.fn(), send: vi.fn() }
-    const start = mocks.handlers.get('hermes:terminal:start')
+    const started = (await invoke('hermes:terminal:start', { sender }, {})) as { id: string; shell: string }
 
-    expect(start).toBeTypeOf('function')
-    await expect(Promise.resolve().then(() => start?.({ sender }, {}))).rejects.toBe(startBlocked)
-    expect(mocks.spawn).not.toHaveBeenCalled()
+    expect(started.id).toBeTypeOf('string')
+    expect(started.shell).not.toBe('ssh')
+    expect(mocks.spawn).toHaveBeenCalledTimes(1)
+    expect(mocks.spawn.mock.calls[0]?.[0]).not.toBe('ssh')
 
-    for (const [channel, args] of [
-      ['hermes:terminal:write', ['missing', 'text']],
-      ['hermes:terminal:resize', ['missing', { cols: 80, rows: 24 }]],
-      ['hermes:terminal:dispose', ['missing']]
-    ] as Array<[string, unknown[]]>) {
-      const handler = mocks.handlers.get(channel)
-
-      expect(handler, `missing handler for ${channel}`).toBeTypeOf('function')
-      await expect(Promise.resolve().then(() => handler?.({}, ...args))).rejects.toBe(mutationBlocked)
-    }
+    await expect(invoke('hermes:terminal:write', {}, started.id, 'ls\n')).resolves.toBe(true)
+    expect(mocks.pty.write).toHaveBeenCalledWith('ls\n')
+    await expect(invoke('hermes:terminal:resize', {}, started.id, { cols: 100, rows: 30 })).resolves.toBe(true)
+    expect(mocks.pty.resize).toHaveBeenCalledWith(100, 30)
+    await expect(invoke('hermes:terminal:dispose', {}, started.id)).resolves.toBe(true)
+    expect(mocks.pty.kill).toHaveBeenCalledTimes(1)
   })
 })

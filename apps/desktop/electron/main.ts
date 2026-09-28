@@ -203,8 +203,6 @@ import { describeDevCdpDecision, resolveDevCdpPort } from './dev-cdp'
 import { installEmbedReferer } from './embed-referer'
 const { createEvaAppUpdater, safeApplyFailure, safeCheckFailure } = require('./eva-app-updater.cjs')
 const {
-  assertEvaManagedLocalMutationAllowed,
-  assertEvaManagedLocalTerminalAllowed,
   buildEvaAccountRendererResetScript,
   EVA_MANAGED_POLICY,
   probeEvaSecureStorageEarlyKey,
@@ -10876,15 +10874,6 @@ async function resetPreviewReach(webContentsId?: number) {
  * failure; the pane explains an unreachable one on its own.
  */
 async function reachablePreviewUrl(webContentsId: number, rawUrl: string): Promise<string> {
-  if (EVA_MANAGED_BUILD) {
-    // Managed URL gateways intentionally have no workstation SSH transport.
-    // Never reuse saved Desktop registry credentials to tunnel VM loopback;
-    // authenticated managed port reach is tracked separately.
-    await resetPreviewReach(webContentsId)
-
-    return rawUrl
-  }
-
   let target = activeSshTerminalTarget(webContentsId)
 
   if (target === 'pending') {
@@ -16204,8 +16193,6 @@ ipcMain.handle('hermes:window:openBrowser', async (_event, tabId) => {
 // never ensureRuntime(), which would kick off a first-run install from a menu
 // click; an unresolved runtime is reported instead.
 ipcMain.handle('hermes:window:openInTerminal', async (_event, sessionId, opts) => {
-  assertEvaManagedLocalTerminalAllowed(EVA_MANAGED_BUILD)
-
   if (typeof sessionId !== 'string' || !sessionId.trim()) {
     return { ok: false, error: 'invalid-session-id' }
   }
@@ -18744,21 +18731,15 @@ ipcMain.handle('hermes:openPreviewInBrowser', async (_event, url) => {
 // settings mount and seeds the value into the picker; writing back persists
 // it via writeDefaultProjectDir so resolveHermesCwd picks it up on the next
 // session spawn (no app restart needed).
-ipcMain.handle('hermes:setting:defaultProjectDir:get', async () => {
-  assertEvaManagedLocalMutationAllowed(EVA_MANAGED_BUILD, 'Reading the local default project directory')
-
-  return {
-    dir: readDefaultProjectDir(),
-    defaultLabel: app.getPath('home'),
-    resolvedCwd: resolveHermesCwd()
-  }
-})
+ipcMain.handle('hermes:setting:defaultProjectDir:get', async () => ({
+  dir: readDefaultProjectDir(),
+  defaultLabel: app.getPath('home'),
+  resolvedCwd: resolveHermesCwd()
+}))
 
 ipcMain.handle('hermes:workspace:sanitize', async (_event, cwd) => sanitizeWorkspaceCwd(cwd))
 
 ipcMain.handle('hermes:setting:defaultProjectDir:set', async (_event, dir) => {
-  assertEvaManagedLocalMutationAllowed(EVA_MANAGED_BUILD, 'Changing the local default project directory')
-
   const next = typeof dir === 'string' && dir.trim() ? dir.trim() : null
 
   if (next) {
@@ -18775,8 +18756,6 @@ ipcMain.handle('hermes:setting:defaultProjectDir:set', async (_event, dir) => {
 })
 
 ipcMain.handle('hermes:setting:defaultProjectDir:pick', async () => {
-  assertEvaManagedLocalMutationAllowed(EVA_MANAGED_BUILD, 'Choosing a local default project directory')
-
   const result = await dialog.showOpenDialog({
     title: 'Choose default project directory',
     properties: ['openDirectory', 'createDirectory'],
@@ -18834,11 +18813,7 @@ registerFsIpc({
 })
 
 // Git-driven features (worktrees, review pane, repo scan) — see git-ipc.ts.
-registerGitIpc({
-  assertLocalMutationAllowed: operation => assertEvaManagedLocalMutationAllowed(EVA_MANAGED_BUILD, operation),
-  resolveGitBinary,
-  resolveGhBinary
-})
+registerGitIpc({ resolveGitBinary, resolveGhBinary })
 
 // Client-side loopback callback for MCP OAuth against remote backends — see
 // mcp-oauth-callback-ipc.ts.
@@ -18847,8 +18822,6 @@ registerMcpOauthCallbackIpc()
 // Embedded terminal PTY host (hermes:terminal:*) — see terminal-ipc.ts.
 const terminalIpc = registerTerminalIpc({
   isWindows: IS_WINDOWS,
-  assertLocalMutationAllowed: operation => assertEvaManagedLocalMutationAllowed(EVA_MANAGED_BUILD, operation),
-  assertLocalTerminalAllowed: () => assertEvaManagedLocalTerminalAllowed(EVA_MANAGED_BUILD),
   findOnPath,
   rememberLog,
   activeSshTerminalTarget,
@@ -19282,19 +19255,8 @@ async function runDesktopUninstall(mode) {
   return { ok: true, mode, willRemoveAppBundle: Boolean(removeBundle), scriptPath }
 }
 
-ipcMain.handle('hermes:uninstall:summary', async () => {
-  if (EVA_MANAGED_BUILD) {
-    return { available: false, managed: true, message: 'evaOS Agent does not install a local agent runtime.' }
-  }
-
-  return getUninstallSummary()
-})
-
+ipcMain.handle('hermes:uninstall:summary', async () => getUninstallSummary())
 ipcMain.handle('hermes:uninstall:run', async (_event, payload) => {
-  if (EVA_MANAGED_BUILD) {
-    throw new Error('evaOS Agent does not install a local agent runtime.')
-  }
-
   const mode = payload && typeof payload === 'object' ? payload.mode : payload
 
   return runDesktopUninstall(String(mode || ''))

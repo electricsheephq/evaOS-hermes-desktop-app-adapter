@@ -30,7 +30,6 @@ import {
   Terminal,
   Zap
 } from '@/lib/icons'
-import { isManagedTerminalUiVisible } from '@/lib/managed-ui-policy'
 import { runtimeReadinessDisplay, type RuntimeReadinessResult } from '@/lib/runtime-readiness'
 import { cacheHitLabel, contextBarLabel, LiveDuration, tokensPerSecondLabel, usageContextLabel } from '@/lib/statusbar'
 import { useStoreSelector } from '@/lib/use-session-slice'
@@ -118,7 +117,6 @@ export function useStatusbarItems({
   const copy = t.shell.statusbar
   const freeTierCopy = t.freeTier
   const fileMenu = t.fileMenu
-  const terminalUiVisible = isManagedTerminalUiVisible(Boolean(window.hermesDesktop?.eva))
   const primaryActiveSessionId = useStore($activeSessionId)
   const activeGatewayProfile = useStore($activeGatewayProfile)
   // What the button paints and flips is whether the terminal is ON SCREEN —
@@ -714,7 +712,7 @@ export function useStatusbarItems({
       {
         actionId: 'view.showTerminal',
         className: `w-7 justify-center px-0${terminalShowing ? ' bg-accent/55 text-foreground' : ''}`,
-        hidden: !terminalUiVisible || !chatOpen,
+        hidden: !chatOpen,
         icon: <Terminal className="size-3.5" />,
         id: 'terminal',
         onSelect: () => togglePaneVisible('terminal'),
@@ -743,7 +741,6 @@ export function useStatusbarItems({
       systemResourcesItem,
       terminalShowing,
       tokensPerSecond,
-      terminalUiVisible,
       turnStartedAt
     ]
   )
