@@ -20,8 +20,10 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Switch } from '@/components/ui/switch'
 import { discoverRuntimePlugins } from '@/contrib/runtime-loader'
 import { useI18n } from '@/i18n'
+import { isManagedEvaosAgent } from '@/i18n/managed-brand'
 import { ExternalLink } from '@/lib/external-link'
 import { AlertTriangle } from '@/lib/icons'
+import { stripIpcErrorPrefix } from '@/lib/ipc-error'
 import { resolvePluginSourceLinks } from '@/lib/plugin-source-urls'
 import { type AgentPluginLiveNow, COMMIT_SHA_RE, installAgentPlugin, loadAgentPlugins } from '@/store/agent-plugins'
 import { notify } from '@/store/notifications'
@@ -49,6 +51,13 @@ function installOutcome(m: InstallModalCopy, live: AgentPluginLiveNow, nextChat:
     ...(live.skills.length > 0 ? [m.skillsReady(live.skills)] : []),
     ...(nextChat ? [m.nextChat] : [])
   ]
+}
+
+/** A rejected IPC call as one sentence for the dialog, or the fallback when none is left. */
+function rejectionMessage(error: unknown, fallback: string): string {
+  const message = error instanceof Error ? stripIpcErrorPrefix(error.message) : ''
+
+  return message && !message.includes('\n') && !message.startsWith('Error invoking remote method') ? message : fallback
 }
 
 export function PluginInstallModal() {
@@ -108,11 +117,29 @@ export function PluginInstallModal() {
       const token = ++probeToken.current
       setPhase('probing')
       setProbe(null)
+      setInstalling(false)
       setInstallError(null)
       // Reviewed catalog picks streamline the ceremony: enable defaults ON
       // (installing a reviewed entry to not use it is the rare case).
       setEnableAgent(payload.enable ?? true)
       setForceReinstall(payload.force ?? false)
+
+      // The managed build refuses local repository inspection by policy. The
+      // agent installs a catalog entry by name at its reviewed pin, so only
+      // catalog entries are offered there, and only the agent component.
+      if (isManagedEvaosAgent()) {
+        if (payload.catalogName) {
+          setProbe({ ok: true, agent: true, desktop: false, agentName: payload.catalogName, warnings: [] })
+          setInstallAgent(true)
+          setInstallDesktop(false)
+          setPhase('ready')
+        } else {
+          setPhase('error')
+          setProbe({ ok: false, agent: false, desktop: false, warnings: [], error: m.catalogOnly })
+        }
+
+        return
+      }
 
       const probeFn = window.hermesDesktop?.probePluginRepo
 
@@ -133,7 +160,19 @@ export function PluginInstallModal() {
         return
       }
 
-      const result = await probeFn({ identifier: payload.repo })
+      let result: ProbeResult
+
+      try {
+        result = await probeFn({ identifier: payload.repo })
+      } catch (error) {
+        result = {
+          ok: false,
+          agent: false,
+          desktop: false,
+          warnings: [],
+          error: rejectionMessage(error, m.probeUnavailable)
+        }
+      }
 
       if (token !== probeToken.current) {
         return
@@ -150,7 +189,7 @@ export function PluginInstallModal() {
       applyLegacyHint(payload, result)
       setPhase('ready')
     },
-    [applyLegacyHint, m.probeUnavailable]
+    [applyLegacyHint, m.catalogOnly, m.probeUnavailable]
   )
 
   useEffect(() => {
@@ -215,6 +254,9 @@ export function PluginInstallModal() {
 
     setInstalling(true)
     setInstallError(null)
+    // A request opened while this install runs takes the dialog over; this
+    // install's late answer must not touch it.
+    const token = probeToken.current
 
     const errors: string[] = []
     const successes: string[] = []
@@ -298,6 +340,10 @@ export function PluginInstallModal() {
 
       await loadAgentPlugins(requestGateway, targetProfile)
 
+      if (token !== probeToken.current) {
+        return
+      }
+
       if (errors.length === 0) {
         for (const message of successes) {
           notify({ kind: 'success', message })
@@ -324,8 +370,22 @@ export function PluginInstallModal() {
       }
 
       setInstallError(errors.join('\n'))
+    } catch (error) {
+      if (token !== probeToken.current) {
+        return
+      }
+
+      const fallback = installDesktop && probe.desktop ? m.desktopFailed : m.agentFailed
+
+      for (const message of successes) {
+        notify({ kind: 'success', message })
+      }
+
+      setInstallError([...errors, rejectionMessage(error, fallback)].join('\n'))
     } finally {
-      setInstalling(false)
+      if (token === probeToken.current) {
+        setInstalling(false)
+      }
     }
   }
 
@@ -563,7 +623,7 @@ export function PluginInstallModal() {
         )}
 
         <DialogFooter>
-          <Button disabled={busy} onClick={handleClose} variant="outline">
+          <Button disabled={installing} onClick={handleClose} variant="outline">
             {t.common.cancel}
           </Button>
           {request && !request.repo ? (

@@ -926,6 +926,7 @@ export const fr = defineLocale({
         installing: 'Installation…',
         probing: 'Inspection du dépôt…',
         probeUnavailable: "L'inspection du plugin n'est pas disponible dans cet environnement.",
+        catalogOnly: 'Seules les entrées du catalogue peuvent être installées dans cette application.',
         desktopUnavailable: "L'installation du plugin Desktop n'est pas disponible dans cet environnement.",
         selectComponent: 'Sélectionnez au moins un composant à installer.',
         agentSuccess: name => `Plugin de l'agent ${name} installé`,
