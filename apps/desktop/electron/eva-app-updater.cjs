@@ -95,10 +95,14 @@ function heldStatus(app, info, reason, now = Date.now) {
 }
 
 /**
- * The agent contract each connection reported in this run, kept in memory
- * only: a value saved by an earlier launch could release an update before the
- * agent reconnects (e.g. after a rollback), so each launch holds until its
- * agents report again. The gate uses the lowest across connections.
+ * The lowest agent contract each connection reported in this run, kept in
+ * memory only: a value saved by an earlier launch could release an update
+ * before the agent reconnects (e.g. after a rollback), so each launch holds
+ * until its agents report again. A later, higher report never raises a
+ * connection's value: one managed connection serves every profile of the
+ * account, and those profiles can run different runtimes. The gate uses the
+ * lowest across connections; an agent upgraded mid-run releases the update at
+ * the next launch.
  */
 function createAgentContractStore() {
   const contracts = new Map()
@@ -108,13 +112,15 @@ function createAgentContractStore() {
       return contracts.size > 0 ? Math.min(...contracts.values()) : null
     },
     /**
-     * Records a connection's contract. null (a backend without the field) is
-     * stored as 0 so it keeps holding updates. Returns whether it changed.
+     * Records a connection's contract, keeping the lowest seen this run. null
+     * (a backend without the field) is stored as 0 so it keeps holding
+     * updates. Returns whether the connection's value changed.
      */
     record(connection, reported) {
       const key = String(connection || '').slice(0, 256)
       const contract = reported === null ? 0 : reported
-      if (!key || !Number.isInteger(contract) || contract < 0 || contracts.get(key) === contract) return false
+      if (!key || !Number.isInteger(contract) || contract < 0) return false
+      if (contracts.has(key) && contracts.get(key) <= contract) return false
       contracts.set(key, contract)
       return true
     }

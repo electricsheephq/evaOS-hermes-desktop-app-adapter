@@ -543,20 +543,28 @@ test('accepts the minimum-agent field as digits', async () => {
   assert.equal((await service.check()).updateAvailable, true)
 })
 
-test('agent contract store keeps the latest value per connection and gates on the lowest', () => {
+test('agent contract store keeps the lowest value per connection this run and gates on the lowest', () => {
   const store = createAgentContractStore()
 
   assert.equal(store.lowest(), null)
   assert.equal(store.record('eva-managed://a', 8), true)
   assert.equal(store.record('eva-managed://b', 6), true)
   assert.equal(store.lowest(), 6)
-  assert.equal(store.record('eva-managed://b', 8), true)
-  assert.equal(store.lowest(), 8)
-  assert.equal(store.record('eva-managed://b', 8), false)
+  assert.equal(store.record('eva-managed://a', 7), true)
+  assert.equal(store.lowest(), 6)
   assert.equal(store.record('', 1), false)
   assert.equal(store.record('eva-managed://c', 'nine'), false)
   assert.equal(store.record('eva-managed://c', -1), false)
-  assert.equal(store.lowest(), 8)
+  assert.equal(store.lowest(), 6)
+})
+
+test('a newer profile on the same managed connection does not release an update an older one holds', () => {
+  const store = createAgentContractStore()
+  // Every profile of an account reports through one managed connection key.
+  assert.equal(store.record('eva-managed://acct', 6), true)
+  assert.equal(store.record('eva-managed://acct', 8), false)
+  assert.equal(store.lowest(), 6)
+  assert.equal(agentContractHold({ vendor: { evaosMinBackendContract: 8 } }, store.lowest()), 'agent-update-required')
 })
 
 test('agent contract store holds for a connection that stops reporting a contract', () => {
@@ -568,8 +576,9 @@ test('agent contract store holds for a connection that stops reporting a contrac
   // A live backend without the field cannot prove it is new enough.
   assert.equal(store.lowest(), 0)
   assert.equal(store.record('eva-managed://old', null), false)
-  assert.equal(store.record('eva-managed://old', 8), true)
-  assert.equal(store.lowest(), 8)
+  // Only the next launch trusts a later report from that connection.
+  assert.equal(store.record('eva-managed://old', 8), false)
+  assert.equal(store.lowest(), 0)
 })
 
 test('a new agent contract store starts empty, so a fresh launch holds until an agent reports', () => {
