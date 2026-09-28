@@ -708,6 +708,41 @@ test('ordinary managed REST binding honors query and body profile carriers from 
   )
 })
 
+test('ordinary managed REST binding routes a pinned per-profile SOUL read and write to that profile (#396)', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-profile-soul-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeEnrollment(statePath)
+  const requests = []
+  const runtime = makeManagedRuntime(statePath, {
+    launchRuntime: async () => parsedScopedEnrollment(),
+    fetchJson: async (url, _token, options) => {
+      requests.push({ url: new URL(url), method: options.method, body: options.body })
+      return { ok: true }
+    }
+  })
+  t.after(() => runtime.close())
+
+  // The Profiles page pins each profile's calls to that profile; the pin, not
+  // the bound profile, picks the gateway that answers.
+  await runtime.requestApi({ path: '/api/profiles/alpha/soul', profile: 'alpha' })
+  await runtime.requestApi({ path: '/api/profiles/beta/soul', profile: 'beta' })
+  await runtime.requestApi({ method: 'PUT', path: '/api/profiles/beta/soul', profile: 'beta', body: { content: 'x' } })
+  // Unpinned, a sibling path still lands on the bound profile's gateway.
+  await runtime.requestApi({ path: '/api/profiles/beta/soul' })
+
+  assert.deepEqual(
+    requests.map(request => [request.method, request.url.pathname, request.url.searchParams.get('profile')]),
+    [
+      ['GET', '/api/profiles/alpha/soul', 'alpha'],
+      ['GET', '/api/profiles/beta/soul', 'beta'],
+      ['PUT', '/api/profiles/beta/soul', 'beta'],
+      ['GET', '/api/profiles/beta/soul', 'alpha']
+    ]
+  )
+  assert.deepEqual(requests[2].body, { content: 'x' })
+})
+
 test('ordinary managed REST binding treats a null body profile as absent before binding it', async t => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-null-body-profile-'))
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }))

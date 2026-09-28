@@ -2789,6 +2789,7 @@ export interface Translations {
     failedDelete: string
     failedCopy: string
     failedLoadSoul: string
+    gatewayUnreachable: string
     failedSaveSoul: string
     failedCreate: string
     failedRename: string

@@ -6,11 +6,12 @@ import { CodeEditor } from '@/components/chat/code-editor'
 import { PageLoader } from '@/components/page-loader'
 import { Button } from '@/components/ui/button'
 import { ProfileGlyph } from '@/components/ui/profile-glyph'
-import { getProfileSoul, type ProfileInfo, updateProfileSoul } from '@/hermes'
+import { getProfileSoul, type ProfileInfo, type ProfileScope, updateProfileSoul } from '@/hermes'
 import { useI18n } from '@/i18n'
 import { isManagedEvaosAgent } from '@/i18n/managed-brand'
 import { displayPath } from '@/lib/display-path'
 import { AlertTriangle, Save } from '@/lib/icons'
+import { stripIpcErrorPrefix } from '@/lib/ipc-error'
 import { resolveProfileColor } from '@/lib/profile-color'
 import { normalize } from '@/lib/text'
 import { notify, notifyError } from '@/store/notifications'
@@ -357,6 +358,35 @@ function ProfileDetail({ displayName, profile }: { displayName: string; profile:
   )
 }
 
+// A managed gateway serves exactly its own profile (#396), so each per-profile
+// call is pinned to that profile — the same `profile` pin the sessions API
+// forwards; the managed main process routes it to that profile's gateway.
+// Upstream keeps the ambient scope unchanged.
+function profileSoulScope(profileName: string): ProfileScope {
+  return isManagedEvaosAgent() ? { profile: profileName } : undefined
+}
+
+// In managed mode only a refusal (the gateway's 403 "profile is not authorized",
+// or the session's own profile-mismatch refusal) means that profile's gateway is
+// not reachable in this session; say so instead of the raw 403. A 5xx and every
+// other error stay raw: the runtime returns 500 for real SOUL.md filesystem
+// failures (read errors, permission denied, disk full), which must stay visible.
+function soulErrorMessage(err: unknown, fallback: string, unreachable: string): string {
+  if (isManagedEvaosAgent() && err instanceof Error) {
+    const stripped = stripIpcErrorPrefix(err.message).trim()
+    const status = Number(/^(\d{3}):/.exec(stripped)?.[1] ?? 0)
+
+    if (
+      (status === 403 && /"detail"\s*:\s*"profile is not authorized"/.test(stripped)) ||
+      /^profile \S+ is not authorized for this session$/.test(stripped)
+    ) {
+      return unreachable
+    }
+  }
+
+  return err instanceof Error ? err.message : fallback
+}
+
 function SoulEditor({ profileName }: { profileName: string }) {
   const { t } = useI18n()
   const p = t.profiles
@@ -377,7 +407,7 @@ function SoulEditor({ profileName }: { profileName: string }) {
 
     void (async () => {
       try {
-        const soul = await getProfileSoul(profileName)
+        const soul = await getProfileSoul(profileName, profileSoulScope(profileName))
 
         if (requestRef.current === profileName) {
           setContent(soul.content)
@@ -385,7 +415,7 @@ function SoulEditor({ profileName }: { profileName: string }) {
         }
       } catch (err) {
         if (requestRef.current === profileName) {
-          setError(err instanceof Error ? err.message : p.failedLoadSoul)
+          setError(soulErrorMessage(err, p.failedLoadSoul, p.gatewayUnreachable))
         }
       } finally {
         if (requestRef.current === profileName) {
@@ -402,11 +432,11 @@ function SoulEditor({ profileName }: { profileName: string }) {
     setError(null)
 
     try {
-      await updateProfileSoul(profileName, content)
+      await updateProfileSoul(profileName, content, profileSoulScope(profileName))
       setOriginal(content)
       notify({ kind: 'success', title: p.soulSaved, message: profileName })
     } catch (err) {
-      setError(err instanceof Error ? err.message : p.failedSaveSoul)
+      setError(soulErrorMessage(err, p.failedSaveSoul, p.gatewayUnreachable))
     } finally {
       setSaving(false)
     }

@@ -3306,6 +3306,7 @@ export const en: Translations = {
     failedDelete: 'Failed to delete profile',
     failedCopy: 'Failed to copy setup command',
     failedLoadSoul: 'Failed to load SOUL.md',
+    gatewayUnreachable: "This profile's gateway is not reachable in this session",
     failedSaveSoul: 'Failed to save SOUL.md',
     failedCreate: 'Failed to create profile',
     failedRename: 'Failed to rename profile'
