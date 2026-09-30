@@ -107,8 +107,8 @@ let signedInAs: MacBridgeAccount | null
 let availableAnswer: boolean | null
 let probes: number
 
-const ACCOUNT_A = { customerId: 'jackie-david', agentId: 'alice' }
-const ACCOUNT_B = { customerId: 'jackie-david', agentId: 'bob' }
+const ACCOUNT_A = { customerId: 'customer-a', agentId: 'alice' }
+const ACCOUNT_B = { customerId: 'customer-a', agentId: 'bob' }
 
 function bridge(
   targets: { profile: string; url: () => Promise<string> }[] = [
@@ -359,8 +359,8 @@ describe('targets', () => {
     status: () => ({ desktopSessionActive: true, delegatedSupportActive: false, ...overrides.status }),
     delegatedProfiles: async () => overrides.delegated ?? null,
     // A profile admin administers several profiles; the bridge must not dial them.
-    authorizedProfiles: async () => ['jane', 'louis', 'regan'],
-    assignedProfileId: async () => ('assigned' in overrides ? overrides.assigned : 'jane'),
+    authorizedProfiles: async () => ['agent-one', 'agent-two', 'agent-three'],
+    assignedProfileId: async () => ('assigned' in overrides ? overrides.assigned : 'agent-one'),
     requestApi: async () => ({ ok: true, plugin: 'computer-use' }),
     ownProfileWsUrl: async ({ path: p, profile }: { path: string; profile: string }) => {
       if (overrides.supportStarted?.()) {
@@ -373,8 +373,8 @@ describe('targets', () => {
 
   it('opens one bridge, to the enrollment’s own agent only, through the relay', async () => {
     const targets = await resolveMacBridgeTargets({ managed: true, eva: eva() })
-    expect(targets.map(target => target.profile)).toEqual(['jane'])
-    expect(await targets[0].url()).toBe(`ws://127.0.0.1:9/jane${MAC_BRIDGE_PATH}?ticket=x`)
+    expect(targets.map(target => target.profile)).toEqual(['agent-one'])
+    expect(await targets[0].url()).toBe(`ws://127.0.0.1:9/agent-one${MAC_BRIDGE_PATH}?ticket=x`)
     expect(await resolveMacBridgeTargets({ managed: true, eva: eva({ assigned: null }) })).toEqual([])
     expect(await resolveMacBridgeTargets({ managed: true, eva: eva({ assigned: '' }) })).toEqual([])
   })
@@ -699,7 +699,7 @@ describe('pilot fix round 1', () => {
   }
 
   it('M2: dials that never open for 2 min drop a never-opened link to the long backoff, with the page text', async () => {
-    const mb = bridge([{ profile: 'jane', url: async () => 'ws://gw/bridge' }])
+    const mb = bridge([{ profile: 'agent-one', url: async () => 'ws://gw/bridge' }])
     await mb.setEnabled(true)
     FakeWs.all[0].close(1006) // the relay refused the upgrade (the gateway answered 403)
     fire(1000)
@@ -721,8 +721,8 @@ describe('pilot fix round 1', () => {
     expect(timers.map(timer => timer.ms)).toContain(LONG_BACKOFF_MS)
     expect(timers.map(timer => timer.ms)).not.toContain(8000)
     const [link] = (await mb.status()).connections
-    expect(link).toEqual({ profile: 'jane', state: 'retrying', error: notSetUpText('jane') })
-    expect(link.error).toBe("Computer Use isn't set up for jane yet")
+    expect(link).toEqual({ profile: 'agent-one', state: 'retrying', error: notSetUpText('agent-one') })
+    expect(link.error).toBe("Computer Use isn't set up for agent-one yet")
 
     // A sign-in starts over at once, without waiting out the 10 min.
     await mb.signedIn()
@@ -731,7 +731,7 @@ describe('pilot fix round 1', () => {
   })
 
   it('M2: three quick failed handshakes (Wi-Fi not up yet, a gateway restart) stay on the normal backoff', async () => {
-    const mb = bridge([{ profile: 'jane', url: async () => 'ws://gw/bridge' }])
+    const mb = bridge([{ profile: 'agent-one', url: async () => 'ws://gw/bridge' }])
     await mb.setEnabled(true)
     FakeWs.all[0].onerror?.({ message: 'connection error' })
     FakeWs.all[0].close(1006)
@@ -747,7 +747,7 @@ describe('pilot fix round 1', () => {
     expect(timers.map(timer => timer.ms)).not.toContain(LONG_BACKOFF_MS)
     const [link] = (await mb.status()).connections
     expect(link.state).toBe('retrying')
-    expect(link.error).not.toBe(notSetUpText('jane'))
+    expect(link.error).not.toBe(notSetUpText('agent-one'))
 
     // The gateway is back: the next dial opens.
     fire(8000)
@@ -1167,12 +1167,12 @@ describe('pilot fix round 2 (M7: shown only for agents that have it)', () => {
       status: () => ({
         desktopSessionActive: true,
         delegatedSupportActive: false,
-        agentId: 'jane',
+        agentId: 'agent-one',
         agentDisplayName: 'Jane’s agent',
         ...overrides.status
       }),
       delegatedProfiles: async () => overrides.delegated ?? null,
-      assignedProfileId: async () => ('assigned' in overrides ? overrides.assigned : 'jane'),
+      assignedProfileId: async () => ('assigned' in overrides ? overrides.assigned : 'agent-one'),
       ownProfileWsUrl: async () => 'ws://unused',
       requestApi: async (request: any, retry?: boolean) => {
         calls.push({ request, retry })
@@ -1189,7 +1189,7 @@ describe('pilot fix round 2 (M7: shown only for agents that have it)', () => {
     expect(await probeMacBridgeAvailable({ managed: true, eva: ok.eva })).toBe(true)
     // The own agent only, through the facade's profile request path, never with the re-enrolling retry.
     expect(ok.calls).toEqual([
-      { request: { method: 'GET', path: MAC_BRIDGE_AVAILABLE_PATH, profile: 'jane' }, retry: false }
+      { request: { method: 'GET', path: MAC_BRIDGE_AVAILABLE_PATH, profile: 'agent-one' }, retry: false }
     ])
 
     for (const [status, answer] of [
@@ -1231,7 +1231,7 @@ describe('pilot fix round 2 (M7: shown only for agents that have it)', () => {
     expect(await probeMacBridgeAvailable({ managed: false })).toBe(true) // a remote (dev) gateway, as before
 
     expect(macBridgeAgentName({ managed: true, eva: ok.eva })).toBe('Jane’s agent')
-    expect(macBridgeAgentName({ managed: true, eva: facade(async () => null, { status: { agentDisplayName: null } }).eva })).toBe('jane')
+    expect(macBridgeAgentName({ managed: true, eva: facade(async () => null, { status: { agentDisplayName: null } }).eva })).toBe('agent-one')
     expect(
       macBridgeAgentName({ managed: true, eva: facade(async () => null, { status: { delegatedSupportActive: true } }).eva })
     ).toBeNull()

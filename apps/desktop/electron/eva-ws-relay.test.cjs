@@ -807,7 +807,7 @@ test('a 403 on a Mac bridge ticket (authProbe: false) never invalidates the enro
 
   // A profile without the computer-use plugin: the gateway answers the unmounted route with 403.
   const bridge = await upgrade(
-    await relay.mintTicket({ authProbe: false, path: '/api/plugins/computer-use/bridge', profile: 'jane' })
+    await relay.mintTicket({ authProbe: false, path: '/api/plugins/computer-use/bridge', profile: 'agent-one' })
   )
   assert.match(bridge.response, /^HTTP\/1\.1 401/) // the caller still sees its dial refused
   assert.match(upstream.observed(), /^GET \/api\/plugins\/computer-use\/bridge\?/)
@@ -815,7 +815,7 @@ test('a 403 on a Mac bridge ticket (authProbe: false) never invalidates the enro
   await new Promise(resolve => setImmediate(resolve))
   assert.equal(rejected, 0)
 
-  const chat = await upgrade(await relay.mintTicket({ path: '/api/ws', profile: 'jane' }))
+  const chat = await upgrade(await relay.mintTicket({ path: '/api/ws', profile: 'agent-one' }))
   assert.match(chat.response, /^HTTP\/1\.1 401/)
   chat.socket.destroy()
   await new Promise(resolve => setImmediate(resolve))
