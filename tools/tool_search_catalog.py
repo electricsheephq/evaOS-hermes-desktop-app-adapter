@@ -266,14 +266,21 @@ def build_catalog_listing_with_form(
     (over budget even summarized -> text is None). Ordering is deterministic (sorted groups
     and tools) so the block is byte-stable — the request prefix stays cacheable. Degradation
     is PER SERVER, largest first: one huge server must not cost a small one its listing."""
+    from tools.mcp_tool_schema import split_server_description
+
     groups: Dict[str, List[Tuple[str, str]]] = {}
+    server_descriptions: Dict[str, str] = {}
     for td in deferrable:
         fn = _fn(td)
         name = fn.get("name", "")
         if name:
             # _classify_source gives ("other", "") when unregistered; the label of "" is "other".
             label = _listing_group_label(_classify_source(name)[1])
-            groups.setdefault(label, []).append((name, _short_desc(fn.get("description", ""))))
+            # A server's config ``description`` goes in its heading once, not into every tool line.
+            server_description, description = split_server_description(fn.get("description", "") or "")
+            if server_description:
+                server_descriptions.setdefault(label, server_description)
+            groups.setdefault(label, []).append((name, _short_desc(description)))
     unavailable = hidden_declared_sources()
     if not groups and not unavailable:
         return None, "none"
@@ -281,10 +288,11 @@ def build_catalog_listing_with_form(
     def render_group(label: str, mode: str) -> str:
         """Render one server's block. mode: 'full' | 'names' | 'summary'."""
         tools = sorted(groups[label])
+        title = f"{label} [{server_descriptions[label]}]" if label in server_descriptions else label
         if mode == "summary":
-            return (f"{label} ({len(tools)} tools — names not listed; "
+            return (f"{title} ({len(tools)} tools — names not listed; "
                     f"discover via `{TOOL_SEARCH_NAME}`)")
-        lines = [f"{label} tools ({len(tools)}):"]
+        lines = [f"{title} tools ({len(tools)}):"]
         if mode == "full":
             lines.extend(f"- {name}: {desc}" if desc else f"- {name}" for name, desc in tools)
         else:

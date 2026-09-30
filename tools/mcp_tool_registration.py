@@ -249,7 +249,7 @@ class _Candidate:
 
 
 def _tool_candidates(name: str, tools: Iterable[Any], should_register: Callable[[str], bool],
-                     tool_timeout) -> List[_Candidate]:
+                     tool_timeout, server_description: str = "") -> List[_Candidate]:
     """Native tools (live SDK objects or cache stand-ins) -> candidates. The injection scan runs on
     BOTH paths: the cache file is user-writable JSON."""
     out: List[_Candidate] = []
@@ -258,7 +258,7 @@ def _tool_candidates(name: str, tools: Iterable[Any], should_register: Callable[
             logger.debug("MCP server '%s': skipping tool '%s' (filtered by config)", name, t.name)
             continue
         _schema._scan_mcp_description(name, t.name, t.description or "")
-        schema = _schema._convert_mcp_schema(name, t)
+        schema = _schema._convert_mcp_schema(name, t, server_description)
         handler = _handlers._make_tool_handler(name, t.name, tool_timeout)
         out.append(_Candidate(schema["name"], f"tool {t.name!r}", schema, handler))
     return out
@@ -398,7 +398,8 @@ def _register_server_tools(name: str, server: "MCPServerTask", config: dict) -> 
     should_register = _make_tool_filter(name, config)
     key = _server_key_for_task(server)
     _record_tool_trust_metadata(name, config, server._tools, key)
-    candidates = _tool_candidates(name, server._tools, should_register, server.tool_timeout)
+    candidates = _tool_candidates(name, server._tools, should_register, server.tool_timeout,
+                                  _schema.mcp_server_description(config))
     candidates += _utility_candidates(name, _select_utility_schemas(name, server, config), server.tool_timeout)
     registered = _register_candidates(
         name, _resolve_name_collisions(name, candidates),
@@ -513,7 +514,8 @@ def _register_connected_into_current_scope(servers: dict) -> int:
         _record_scope_trust(name, config, scope)
         if registry.get_tool_names_for_toolset(f"mcp-{name}"):
             continue
-        candidates = _tool_candidates(name, server._tools, _make_tool_filter(name, config), server.tool_timeout)
+        candidates = _tool_candidates(name, server._tools, _make_tool_filter(name, config), server.tool_timeout,
+                                      _schema.mcp_server_description(config))
         candidates += _utility_candidates(
             name, _select_utility_schemas(name, server, config), server.tool_timeout)
         names = _register_candidates(
@@ -539,7 +541,8 @@ def _register_from_cache_sync(name: str, config: dict, entry: dict) -> List[str]
     tool_timeout = _resolve_tool_timeout(config)
     cached_tools = _cached_tools(tools_from_cache_entry(entry))
     _record_tool_trust_metadata(name, config, cached_tools)
-    candidates = _tool_candidates(name, cached_tools, _make_tool_filter(name, config), tool_timeout)
+    candidates = _tool_candidates(name, cached_tools, _make_tool_filter(name, config), tool_timeout,
+                                  _schema.mcp_server_description(config))
     candidates += _utility_candidates(name, utility_tools_from_cache_entry(entry), tool_timeout)
     registered = _register_candidates(
         name, candidates, check_fn=_make_check_fn(name), scope=_core._mcp_registry_scope, lazy=True)

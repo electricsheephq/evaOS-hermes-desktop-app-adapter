@@ -183,12 +183,35 @@ def mcp_prefixed_tool_name(server_name: str, tool_name: str) -> str:
     return full_name[:_MCP_TOOL_NAME_MAX_LENGTH - len(suffix)] + suffix
 
 
-def _convert_mcp_schema(server_name: str, mcp_tool) -> dict:
+# An ``mcp_servers`` entry may carry a display-only ``description`` (e.g. which account a managed
+# route acts for). It prefixes each of the server's tool descriptions; the catalog listing hoists it
+# back into the server heading. Only descriptions this module applied are recognized as prefixes.
+SERVER_DESCRIPTION_SEPARATOR = " — "
+_server_descriptions: set[str] = set()
+
+
+def mcp_server_description(config: Any) -> str:
+    """The entry's optional ``description`` on one line; "" when absent or not a string."""
+    value = config.get("description") if isinstance(config, dict) else None
+    return strip_unicode_tags(" ".join(value.split())) if isinstance(value, str) else ""
+
+
+def split_server_description(description: str) -> tuple[str, str]:
+    """``(server description, tool description)`` for a prefixed description, else ``("", description)``."""
+    head, separator, rest = description.partition(SERVER_DESCRIPTION_SEPARATOR)
+    return (head, rest) if separator and head in _server_descriptions else ("", description)
+
+
+def _convert_mcp_schema(server_name: str, mcp_tool, server_description: str = "") -> dict:
     """Convert an MCP ``Tool`` (``.input_schema``, or ``.inputSchema`` before mcp 2.0) to a
     ``registry.register(schema=...)`` dict."""
+    description = strip_unicode_tags(mcp_tool.description or f"MCP tool {mcp_tool.name} from {server_name}")
+    if server_description:
+        _server_descriptions.add(server_description)
+        description = f"{server_description}{SERVER_DESCRIPTION_SEPARATOR}{description}"
     return {
         "name": mcp_prefixed_tool_name(server_name, mcp_tool.name),
-        "description": strip_unicode_tags(mcp_tool.description or f"MCP tool {mcp_tool.name} from {server_name}"),
+        "description": description,
         "parameters": _normalize_mcp_input_schema(mcp_field(mcp_tool, "input_schema", "inputSchema")),
     }
 
