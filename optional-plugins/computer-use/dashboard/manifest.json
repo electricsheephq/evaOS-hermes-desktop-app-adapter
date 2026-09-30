@@ -1,0 +1,13 @@
+{
+  "name": "computer-use",
+  "label": "Computer Use",
+  "description": "Mac bridge — the user's own Mac, driven by this profile's agents through evaOS Agent and the local CUA",
+  "icon": "Monitor",
+  "version": "1.0.0",
+  "tab": {
+    "path": "/computer-use",
+    "hidden": true
+  },
+  "entry": "dist/index.js",
+  "api": "plugin_api.py"
+}

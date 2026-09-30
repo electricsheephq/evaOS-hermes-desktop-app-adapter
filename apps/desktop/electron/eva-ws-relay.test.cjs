@@ -789,6 +789,39 @@ test('an upstream authentication rejection invalidates the managed enrollment', 
   assert.equal(rejected, 1)
 })
 
+test('a 403 on a Mac bridge ticket (authProbe: false) never invalidates the enrollment; /api/ws still does', async t => {
+  const upstream = fakeUpstream(403)
+  await upstream.start()
+  let rejected = 0
+  const relay = createEvaWsRelay({
+    connectUpstream: () => upstream.connect(),
+    getUpstream: async () => ({ baseUrl: BASE_URL, token: 'runtime-secret' }),
+    onAuthRejected: () => {
+      rejected += 1
+    }
+  })
+  t.after(async () => {
+    await relay.close()
+    await upstream.stop()
+  })
+
+  // A profile without the computer-use plugin: the gateway answers the unmounted route with 403.
+  const bridge = await upgrade(
+    await relay.mintTicket({ authProbe: false, path: '/api/plugins/computer-use/bridge', profile: 'jane' })
+  )
+  assert.match(bridge.response, /^HTTP\/1\.1 401/) // the caller still sees its dial refused
+  assert.match(upstream.observed(), /^GET \/api\/plugins\/computer-use\/bridge\?/)
+  bridge.socket.destroy()
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(rejected, 0)
+
+  const chat = await upgrade(await relay.mintTicket({ path: '/api/ws', profile: 'jane' }))
+  assert.match(chat.response, /^HTTP\/1\.1 401/)
+  chat.socket.destroy()
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(rejected, 1)
+})
+
 test('a sign-in change during the upstream connect sends nothing with the replaced credential', async t => {
   const upstream = fakeUpstream(401)
   await upstream.start()

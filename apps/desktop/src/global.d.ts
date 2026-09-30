@@ -3,6 +3,7 @@ import type { TranslucencyState } from '@hermes/shared/translucency'
 
 import type { ScreenshotApi } from '../electron/command-screenshot-types'
 import type { HudModifierApi } from '../electron/hud-modifier-types'
+import type { MacBridgeStatus } from '../electron/mac-bridge'
 import type { HermesNotification } from '../electron/notification-types'
 import type { PoolLimits } from '../electron/pool-limits'
 
@@ -276,6 +277,13 @@ declare global {
         listSupportTargets: () => Promise<EvaSupportTargetsResult>
         startSupport: (target: EvaSupportTarget) => Promise<EvaSupportStartResult>
         onOpenSupportPicker: (callback: () => void) => () => void
+      }
+      // Computer Use (Mac bridge): this Mac's CUA for the user's own agents.
+      macBridge?: {
+        status: () => Promise<MacBridgeStatus>
+        setEnabled: (enabled: boolean) => Promise<MacBridgeStatus>
+        installCua: () => Promise<void>
+        grantPermissions: () => Promise<void>
       }
       profile: {
         getDefault: () => Promise<DesktopProfileRoute | null>

@@ -1,4 +1,4 @@
-import { execFileSync, spawn } from 'node:child_process'
+import { execFile, execFileSync, spawn } from 'node:child_process'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import http from 'node:http'
@@ -301,6 +301,14 @@ import { CHROMIUM_LOG_FILENAME, enableLinuxCrashDiagnostics, linuxCrashDiagnosti
 import { notifyLauncherWindowRevealed } from './linux-launcher-ready'
 import { createLocalBackendLifecycle, waitForTeardown } from './local-backend-lifecycle'
 import { ACTIVE_LOG_POLL_MS, planLogRotation, reclaimActiveLogIfOversized } from './log-rotation'
+import {
+  createMacBridge,
+  currentMacBridgeAccount,
+  macBridgeAgentName,
+  probeMacBridgeAvailable,
+  registerMacBridgeIpc,
+  resolveMacBridgeTargets
+} from './mac-bridge'
 import { ensureMainWindow } from './main-window-lifecycle'
 const { createManagedBackendGate } = require('./managed-backend-gate.cjs')
 import { classifyManagedDeepLink } from './managed-deep-link'
@@ -7321,9 +7329,14 @@ function registerPowerResumeListeners() {
 
   try {
     // 'resume' covers sleep/wake; 'unlock-screen' covers lock/unlock without a
-    // full suspend. Either can drop an idle socket.
-    powerMonitor.on('resume', sendPowerResume)
-    powerMonitor.on('unlock-screen', sendPowerResume)
+    // full suspend. Either can drop an idle socket, the Mac bridge's included.
+    const onPowerResume = () => {
+      sendPowerResume()
+      macBridge.redial()
+    }
+
+    powerMonitor.on('resume', onPowerResume)
+    powerMonitor.on('unlock-screen', onPowerResume)
     powerMonitor.on('on-battery', () => broadcastBatteryState(true))
     powerMonitor.on('on-ac', () => broadcastBatteryState(false))
     onBatteryPower = powerMonitor.isOnBatteryPower()
@@ -17422,9 +17435,70 @@ ipcMain.handle('hermes:connection-config:apply', async (_event, payload) => {
   return sanitizeDesktopConnectionConfig(config, payload?.profile)
 })
 
+// Computer Use (Mac bridge): this Mac's CUA for the user's own agent, while the app runs.
+// An unpackaged dev build may point the bridge at a plain remote gateway.
+const macBridgeManaged = EVA_MANAGED_BUILD && !(process.env.HERMES_DESKTOP_REMOTE_URL && !IS_PACKAGED)
+
+const macBridge = createMacBridge({
+  spawn,
+  run: (command, args, options = {}) =>
+    new Promise(resolve =>
+      execFile(command, args, { timeout: 20_000, ...options }, (error: any, stdout, stderr) =>
+        resolve({ code: error ? (typeof error.code === 'number' ? error.code : 1) : 0, stdout: `${stdout}`, stderr: `${stderr}` })
+      )
+    ),
+  runSync: (command, args, options = {}) => {
+    try {
+      execFileSync(command, args, { stdio: 'ignore', timeout: 3000, ...options })
+
+      return true
+    } catch {
+      return false
+    }
+  },
+  WebSocket: globalThis.WebSocket,
+  statePath: path.join(app.getPath('userData'), 'mac-bridge.json'),
+  log: rememberLog,
+  account: () => currentMacBridgeAccount({ managed: macBridgeManaged, eva: evaManagedRuntime }),
+  // Shown only for an own agent that has the gateway plugin; asked through the facade's profile API path.
+  available: () => probeMacBridgeAvailable({ managed: macBridgeManaged, eva: evaManagedRuntime }),
+  agentName: () => macBridgeAgentName({ managed: macBridgeManaged, eva: evaManagedRuntime }),
+  resolveTargets: () =>
+    resolveMacBridgeTargets({
+      managed: macBridgeManaged,
+      eva: evaManagedRuntime,
+      remoteWsUrl: async () => {
+        const connection = await resolveRemoteBackend(null)
+
+        if (!connection) {
+          return null
+        }
+
+        return connection.authMode === 'oauth'
+          ? buildGatewayWsUrlWithTicket(connection.baseUrl, await mintGatewayWsTicket(connection.baseUrl, connection.headers))
+          : connection.wsUrl
+      }
+    })
+})
+
+registerMacBridgeIpc(ipcMain, macBridge)
+app.on('will-quit', () => macBridge.stopSync())
+void app.whenReady().then(() => macBridge.init())
+
 ipcMain.handle('hermes:eva:status', async () => evaManagedRuntime.status())
-ipcMain.handle('hermes:eva:sign-in', async () => evaManagedRuntime.signIn())
-ipcMain.handle('hermes:eva:sign-out', async () => evaManagedRuntime.signOut())
+ipcMain.handle('hermes:eva:sign-in', async () => {
+  const status = await evaManagedRuntime.signIn()
+  void macBridge.signedIn()
+
+  return status
+})
+ipcMain.handle('hermes:eva:sign-out', async () => {
+  const status = await evaManagedRuntime.signOut()
+  // The session is gone: the bridge links close now; the daemon and the saved switch stay.
+  void macBridge.retarget()
+
+  return status
+})
 ipcMain.handle('hermes:eva:refresh', async () => evaManagedRuntime.refresh())
 ipcMain.handle('hermes:eva:support:end', async () => evaManagedRuntime.endSupportSession())
 ipcMain.handle('hermes:eva:support:switch-target', async (_event, options) =>
@@ -19329,9 +19403,12 @@ function handleDeepLink(url) {
     const managedLink = classifyManagedDeepLink(url, HERMES_PROTOCOL)
 
     if (managedLink.type === 'auth-callback') {
-      void evaManagedRuntime.completeCallback(url).catch(error => {
-        rememberLog(`[eva-auth] callback rejected: ${error?.code || 'invalid-callback'}`)
-      })
+      void evaManagedRuntime
+        .completeCallback(url)
+        .then(() => void macBridge.signedIn())
+        .catch(error => {
+          rememberLog(`[eva-auth] callback rejected: ${error?.code || 'invalid-callback'}`)
+        })
 
       return
     }
