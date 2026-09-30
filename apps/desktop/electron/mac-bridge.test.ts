@@ -102,7 +102,7 @@ let timers: { fn: () => void; ms: number }[]
 let binary: string
 let clock: number
 let signedInAs: MacBridgeAccount | null
-let availableAnswer: boolean
+let availableAnswer: boolean | null
 let probes: number
 
 const ACCOUNT_A = { customerId: 'jackie-david', agentId: 'alice' }
@@ -1180,7 +1180,7 @@ describe('pilot fix round 2 (M7: shown only for agents that have it)', () => {
     return { eva, calls }
   }
 
-  it('available(): 200 → true; 404, 403, 401, other, network error, no session, delegated support → false', async () => {
+  it('available(): 200 → true; 404, no session, delegated support → false; 401/403/5xx/offline → null (can’t tell)', async () => {
     const ok = facade(async () => ({ ok: true, plugin: 'computer-use' }))
     expect(await probeMacBridgeAvailable({ managed: true, eva: ok.eva })).toBe(true)
     // The own agent only, through the facade's profile request path, never with the re-enrolling retry.
@@ -1188,14 +1188,29 @@ describe('pilot fix round 2 (M7: shown only for agents that have it)', () => {
       { request: { method: 'GET', path: MAC_BRIDGE_AVAILABLE_PATH, profile: 'jane' }, retry: false }
     ])
 
-    for (const status of [404, 403, 401, 500, 502]) {
+    for (const [status, answer] of [
+      [404, false],
+      [403, null],
+      [401, null],
+      [500, null],
+      [502, null]
+    ] as const) {
       const refused = facade(async () => Promise.reject(httpError(status)))
-      expect(await probeMacBridgeAvailable({ managed: true, eva: refused.eva })).toBe(false)
+      expect(await probeMacBridgeAvailable({ managed: true, eva: refused.eva })).toBe(answer)
       expect(refused.calls.map(call => call.retry)).toEqual([false])
     }
 
+    const notOk = facade(async () => ({ plugin: 'computer-use' }))
+    expect(await probeMacBridgeAvailable({ managed: true, eva: notOk.eva })).toBe(false)
+
     const offline = facade(async () => Promise.reject(new Error('getaddrinfo ENOTFOUND')))
-    expect(await probeMacBridgeAvailable({ managed: true, eva: offline.eva })).toBe(false)
+    expect(await probeMacBridgeAvailable({ managed: true, eva: offline.eva })).toBeNull()
+
+    // A lapsed runtime whose re-enrollment fails: can't tell either.
+    const lapsed = facade(async () => ({ ok: true }))
+    lapsed.eva.assignedProfileId = async () => Promise.reject(new Error('broker unreachable'))
+    expect(await probeMacBridgeAvailable({ managed: true, eva: lapsed.eva })).toBeNull()
+    expect(lapsed.calls).toEqual([])
 
     for (const overrides of [
       { status: { desktopSessionActive: false } },
@@ -1306,6 +1321,64 @@ describe('pilot fix round 2 (M7: shown only for agents that have it)', () => {
     await settle()
     expect(lookups).toBe(3)
     expect(FakeWs.all).toHaveLength(2)
+  })
+
+  it('a probe that can’t tell keeps the last answer and the links, and the next 30 s tick asks again', async () => {
+    const mb = bridge()
+    await mb.setEnabled(true)
+    FakeWs.all[0].open()
+    expect(probes).toBe(1)
+
+    // After sleep: the answer is 10 min old and the first probe after wake can't tell (offline, 5xx, 401).
+    availableAnswer = null
+    clock += AVAILABLE_TTL_MS
+    fire(30_000)
+    await settle()
+    expect(probes).toBe(2)
+    expect(FakeWs.all).toHaveLength(1)
+    expect(FakeWs.all[0].closed).toBe(false)
+    let status = await mb.status()
+    expect(status).toMatchObject({ available: true, enabled: true })
+    expect(status.connections).toEqual([{ profile: 'alice', state: 'connected', error: null }])
+
+    // Asked again on the next tick, not in 10 min; a real answer is then cached as before.
+    availableAnswer = true
+    const beforeTick = probes
+    clock += 30_000
+    fire(30_000)
+    await settle()
+    const asked = probes
+    expect(asked).toBe(beforeTick + 1)
+    clock += 30_000
+    fire(30_000)
+    await settle()
+    expect(probes).toBe(asked)
+    expect(FakeWs.all).toHaveLength(1)
+    expect(FakeWs.all[0].closed).toBe(false)
+
+    // A definite no still closes the links.
+    availableAnswer = false
+    clock += AVAILABLE_TTL_MS
+    fire(30_000)
+    await settle()
+    expect(FakeWs.all[0].closed).toBe(true)
+    status = await mb.status()
+    expect(status).toMatchObject({ available: false, enabled: true, connections: [] })
+  })
+
+  it('a first probe that can’t tell for an account reads as not available', async () => {
+    availableAnswer = null
+    const mb = bridge()
+    expect((await mb.status()).available).toBe(false)
+    await mb.setEnabled(true)
+    expect(FakeWs.all).toEqual([])
+
+    // The next check (the page's status poll) asks again and starts it.
+    availableAnswer = true
+    await mb.status()
+    await settle()
+    expect((await mb.status()).available).toBe(true)
+    expect(FakeWs.all).toHaveLength(1)
   })
 
   it('the answer is cached: re-asked on sign-in, an account switch, retarget and after 10 min, not per status', async () => {

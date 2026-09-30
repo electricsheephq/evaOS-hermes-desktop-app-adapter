@@ -105,8 +105,9 @@ export interface MacBridgeDeps {
   WebSocket: any
   statePath: string
   resolveTargets: () => Promise<MacBridgeTarget[]>
-  /** Whether the signed-in user's own agent has the gateway plugin (`probeMacBridgeAvailable`); never throws. */
-  available: () => Promise<boolean>
+  /** Whether the signed-in user's own agent has the gateway plugin (`probeMacBridgeAvailable`); null when it
+   *  could not tell. Never throws. */
+  available: () => Promise<boolean | null>
   /** The signed-in account, or null (signed out, delegated support). */
   account: () => MacBridgeAccount | null
   /** The own agent's display name (else its profile id) for the page, or null. */
@@ -260,10 +261,14 @@ export function macBridgeAgentName(input: { managed: boolean; eva?: EvaFacade })
 /**
  * Whether the signed-in user's OWN agent (the same target as the bridge) has the gateway plugin: a GET of
  * `/available` through the Eva facade's profile request path. 200 → true; 404 (absent or unenabled plugin),
- * any other status, a network error, no session or delegated support → false. `retry: false`: a 401/403/404
- * here never reaches the facade's re-enrollment (`clearRuntimeEnrollment`).
+ * a 200 without `ok: true`, no session or delegated support → false; anything it cannot tell from (a network
+ * error, a timeout, a 5xx, a 401/403, a failed re-enrollment) → null, and the caller keeps its last answer.
+ * `retry: false`: a 401/403/404 here never reaches the facade's re-enrollment (`clearRuntimeEnrollment`).
  */
-export async function probeMacBridgeAvailable(input: { managed: boolean; eva?: EvaFacade }): Promise<boolean> {
+export async function probeMacBridgeAvailable(input: {
+  managed: boolean
+  eva?: EvaFacade
+}): Promise<boolean | null> {
   if (!input.managed) {
     return true // a remote (dev) connection: the one gateway it points at, as before
   }
@@ -289,8 +294,8 @@ export async function probeMacBridgeAvailable(input: { managed: boolean; eva?: E
     const answer = await eva.requestApi({ method: 'GET', path: MAC_BRIDGE_AVAILABLE_PATH, profile }, false)
 
     return answer?.ok === true
-  } catch {
-    return false
+  } catch (error: any) {
+    return Number(error?.statusCode) === 404 ? false : null
   }
 }
 
@@ -469,7 +474,7 @@ export function createMacBridge(deps: MacBridgeDeps) {
   function refreshAvailable(): Promise<boolean> {
     probing ??= (async () => {
       const before = accountKey(deps.account())
-      let answer = false
+      let answer: boolean | null = false
 
       try {
         answer = await deps.available()
@@ -484,12 +489,23 @@ export function createMacBridge(deps: MacBridgeDeps) {
       if (before && before !== after) {
         available = false
         availableFor = null
+        availableAt = now()
+      } else if (answer === null) {
+        // Could not tell (offline after wake, a gateway restart, a failed re-enrollment): keep this account's
+        // last answer, and its links, and ask again on the next tick. A lapsed runtime (no account) keeps it too;
+        // an account never answered for starts at false.
+        if (after && availableFor !== after) {
+          available = false
+          availableFor = after
+        }
+
+        availableAt = now() - AVAILABLE_TTL_MS
       } else {
         available = answer
         availableFor = after
+        availableAt = now()
       }
 
-      availableAt = now()
       probing = null
 
       if (available && enabled && !running && !startTimer) {
@@ -1062,7 +1078,8 @@ export function createMacBridge(deps: MacBridgeDeps) {
 
   /**
    * Open links for new profiles, drop links for profiles no longer offered. `refresh` asks `available` again
-   * (sign-in, sign-out, `retarget`); the tick asks only after an account switch or once the answer is 10 min old.
+   * (sign-in, sign-out, `retarget`); the tick asks only after an account switch, once the answer is 10 min old,
+   * or when the last probe could not tell.
    */
   async function retarget(refresh = false) {
     if (!running || !hello) {
