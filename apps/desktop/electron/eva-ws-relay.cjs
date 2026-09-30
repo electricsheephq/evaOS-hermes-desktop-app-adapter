@@ -925,8 +925,10 @@ function createEvaWsRelay(options) {
       onEvent(`upstream_handshake status=${statusCode || 'invalid'}`)
 
       if (statusCode === 401 || statusCode === 403) {
-        // A rejection of a replaced credential says nothing about the current one.
-        if (!grantIsStale()) Promise.resolve(options.onAuthRejected?.()).catch(() => undefined)
+        // A rejection of a replaced credential says nothing about the current one. A grant minted
+        // with `authProbe: false` (the Mac bridge) only tells its own caller: a route the gateway
+        // does not mount answers 403 too, which says nothing about the credential.
+        if (grant.authProbe && !grantIsStale()) Promise.resolve(options.onAuthRejected?.()).catch(() => undefined)
         writeFailure(clientSocket, 401, 'Unauthorized')
         safeDestroy(upstreamSocket)
         return
@@ -1028,6 +1030,7 @@ function createEvaWsRelay(options) {
       input.generation ?? (typeof options.getGeneration === 'function' ? options.getGeneration() : null)
     const ticket = randomBytes(32).toString('base64url')
     tickets.set(ticket, {
+      authProbe: input.authProbe !== false,
       endpoint,
       expiresAt: now() + TICKET_TTL_MS,
       generation,

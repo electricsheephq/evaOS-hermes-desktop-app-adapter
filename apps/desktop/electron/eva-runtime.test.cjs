@@ -6179,3 +6179,46 @@ test('Mac bridge tickets are only for own profiles, and support activation inval
   }
   assert.equal(minted.length, 1)
 })
+
+test('a profile admin’s Mac bridge dials and mints only the enrollment’s own agent', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-own-agent-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'state.json')
+  writeActiveEnrollment(statePath)
+  const state = JSON.parse(fs.readFileSync(statePath, 'utf8'))
+  state.runtime.agent_id = 'jane'
+  state.runtime.allowed_profiles = ['jane', 'louis', 'regan']
+  state.runtime.primary_profile = 'jane'
+  state.runtime.profile_admin = true
+  fs.writeFileSync(statePath, JSON.stringify(state))
+  const minted = []
+  const runtime = makeManagedRuntime(statePath, {
+    createWsRelay: () => ({
+      mintTicket: async input => {
+        minted.push(input)
+        return 'ws://127.0.0.1:12345/bridge'
+      },
+      disconnectAll: () => undefined,
+      close: async () => undefined
+    })
+  })
+  t.after(() => runtime.close())
+  const path_ = '/api/plugins/computer-use/bridge'
+
+  // What resolveMacBridgeTargets dials (mac-bridge.test.ts): the assigned agent, not every administered profile.
+  assert.deepEqual(await runtime.authorizedProfiles(), ['jane', 'louis', 'regan'])
+  assert.equal(await runtime.assignedProfileId(), 'jane')
+
+  await assert.rejects(runtime.ownProfileWsUrl({ profile: 'louis', path: path_ }), error => {
+    assert.equal(error.statusCode, 403)
+    assert.equal(error.code, 'not-own-profile')
+    return true
+  })
+  assert.equal(minted.length, 0)
+
+  await runtime.ownProfileWsUrl({ profile: 'jane', path: path_ })
+  assert.deepEqual(
+    minted.map(input => [input.profile, input.path, input.authProbe]),
+    [['jane', path_, false]]
+  )
+})
