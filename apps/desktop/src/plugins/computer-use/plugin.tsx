@@ -1,7 +1,7 @@
 /**
  * Computer Use — the left-sidebar page for the Mac bridge (`electron/mac-bridge.ts`):
- * whether CUA is installed and permitted on this Mac, the one Enable switch, and
- * which of the user's agents are connected and using it right now.
+ * whether CUA is installed and permitted on this Mac, the one Enable switch, which
+ * agent it is connected to, and the agent connections open on it (with their last action).
  */
 
 import {
@@ -70,6 +70,8 @@ export function ComputerUsePage() {
   const connected = status?.connections.filter(link => link.state === 'connected') ?? []
   // Another Mac of this user took over a profile: stays so until Enable is toggled.
   const replaced = status?.connections.find(link => link.state === 'replaced')
+  // e.g. "Computer Use isn't set up for jane yet" (the gateway plugin is not installed there).
+  const linkError = status?.connections.find(link => link.error)?.error
 
   return (
     <section className="h-full min-h-0 overflow-y-auto">
@@ -120,7 +122,9 @@ export function ComputerUsePage() {
               checked={status.enabled}
               description={
                 status.error ??
-                (status.daemon.running ? `CUA is running for your agents (${status.daemon.mode}).` : 'Off.')
+                (status.enabled && status.daemon.running
+                  ? `CUA is running for your agents (${status.daemon.mode}).`
+                  : 'Off.')
               }
               disabled={busy || (!status.cua.found && !status.enabled)}
               label="Enable Computer Use"
@@ -133,7 +137,7 @@ export function ComputerUsePage() {
                   : connected.length
                     ? connected.map(link => link.profile).join(', ')
                     : status.enabled
-                      ? 'Connecting…'
+                      ? (linkError ?? 'Connecting…')
                       : 'Not connected.'
               }
               title="Connected to"
@@ -152,7 +156,7 @@ export function ComputerUsePage() {
                   'No agent is using this Mac right now.'
                 )
               }
-              title="In use by"
+              title="Agent connections"
             />
           </div>
         )}

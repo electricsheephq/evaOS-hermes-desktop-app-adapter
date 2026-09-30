@@ -3,17 +3,20 @@
  *
  * When the user turns Computer Use on, main starts a PRIVATE cua-driver daemon
  * (its own socket, launched through CuaDriver.app so macOS permissions stay with
- * `com.trycua.driver`) and opens one outbound WebSocket per profile the user
- * owns, to that profile's `computer-use` gateway plugin. The gateway asks for a
+ * `com.trycua.driver`) and opens one outbound WebSocket to the signed-in user's
+ * own agent's `computer-use` gateway plugin. The gateway asks for a
  * connection (`open`), and each one gets its own `cua-driver mcp` child, so every
  * agent (Desktop chat, Telegram, cron) has its own CUA session and they run in
  * parallel. JSON-RPC passes through untouched: the switch is the user's on/off,
  * not a gate, and nothing here narrows what CUA can do. Never during delegated
- * support: an admin's Mac is never offered to a customer's agents.
+ * support: an admin's Mac is never offered to a customer's agents. The switch
+ * belongs to the account that turned it on: another account signed in on this
+ * Mac dials nothing.
  *
- * Frames (JSON text): Mac→gw `hello`; gw→Mac `open`; both ways `msg` / `close`.
+ * Frames (JSON text): Mac→gw `hello`; gw→Mac `open`; both ways `msg` / `close`;
+ * Mac→gw `ping` every 20 s, answered `pong`. Unknown frame types are ignored.
  * Screenshots stay inside MCP results; the bridge writes no files but its
- * on/off state.
+ * state file (on/off, the account, the private daemon's socket path).
  */
 
 import { randomBytes } from 'node:crypto'
@@ -30,10 +33,21 @@ const READY_TIMEOUT_MS = 15_000
 const RETARGET_MS = 30_000
 const PROTOCOL_VERSION = '2025-06-18'
 const REAP_MIN_MS = 3000
+const PING_MS = 20_000
+/** With no inbound frame this long (once the gateway has answered a ping), the link is dead: redial. */
+export const SILENCE_MS = 45_000
+/** Open this long, or any frame received, before the reconnect backoff starts over. */
+const STABLE_MS = 60_000
+/** Dials whose handshake never opened, in a row, before a link that never opened waits LONG_BACKOFF_MS. */
+const NEVER_OPENED_LIMIT = 3
+export const LONG_BACKOFF_MS = 10 * 60_000
+/** Retries of a failed start while Enable stays on: 30 s, 60 s, then every 5 min. */
+const START_RETRY_MS = [30_000, 60_000, 5 * 60_000]
 /** Largest JSON-RPC message carried either way (CUA results carry MB-sized base64 screenshots). */
 export const MAX_MESSAGE_BYTES = 64 * 1024 * 1024
 export const REPLACED_CODE = 4000
 export const REPLACED_TEXT = 'Taken over by another Mac — turn Enable off and on to take it back.'
+export const notSetUpText = (agent: string) => `Computer Use isn't set up for ${agent} yet`
 
 // Same discovery as the Settings panel's spike (CuaDriver.app first, then PATH).
 const APP_BINARIES = [
@@ -52,6 +66,14 @@ export type Frame =
   | { t: 'open'; c: string }
   | { t: 'msg'; c: string; m: Record<string, unknown> }
   | { t: 'close'; c: string }
+  | { t: 'ping' }
+  | { t: 'pong' }
+
+/** The account Enable belongs to. */
+export interface MacBridgeAccount {
+  customerId: string
+  agentId: string
+}
 
 export interface MacBridgeTarget {
   profile: string
@@ -73,6 +95,8 @@ export interface MacBridgeDeps {
   WebSocket: any
   statePath: string
   resolveTargets: () => Promise<MacBridgeTarget[]>
+  /** The signed-in account, or null (signed out, delegated support). */
+  account: () => MacBridgeAccount | null
   log: (line: string) => void
   env?: NodeJS.ProcessEnv
   candidates?: string[]
@@ -104,6 +128,10 @@ export function decodeFrame(text: string): Frame | null {
 
   if (frame?.t === 'msg' && conn && frame.m && typeof frame.m === 'object' && !Array.isArray(frame.m)) {
     return { t: 'msg', c: frame.c, m: frame.m }
+  }
+
+  if (frame?.t === 'pong') {
+    return { t: 'pong' }
   }
 
   return null
@@ -166,16 +194,46 @@ export function reaperArgs(socket: string, untilMs: number): [string, string[]] 
   return ['/bin/sh', ['-c', REAPER_SCRIPT, 'evaos-cua-reaper', socket, String(Math.ceil(untilMs / 1000))]]
 }
 
-/** Where the bridge dials: every profile the user owns (managed) or the one remote connection. */
+interface EvaFacade {
+  status: () => {
+    desktopSessionActive?: boolean
+    delegatedSupportActive?: boolean
+    customerId?: null | string
+    agentId?: null | string
+  }
+  delegatedProfiles: () => Promise<null | string[]>
+  /** The enrollment's own agent (`runtime.agentId` outside delegated support). */
+  assignedProfileId: () => Promise<null | string>
+  /** Mints only for the user's own agent, checked and bound to the session in the same step. */
+  ownProfileWsUrl: (request: { path: string; profile: string }) => Promise<string>
+}
+
+/** A remote (dev) connection has no account: one fixed identity, so Enable works there as before. */
+const REMOTE_ACCOUNT: MacBridgeAccount = { customerId: 'remote', agentId: 'remote' }
+
+export function sameAccount(a: MacBridgeAccount | null, b: MacBridgeAccount | null): boolean {
+  return Boolean(a && b && a.customerId === b.customerId && a.agentId === b.agentId)
+}
+
+/** The signed-in account Enable is checked against; null when signed out or during delegated support. */
+export function currentMacBridgeAccount(input: { managed: boolean; eva?: EvaFacade }): MacBridgeAccount | null {
+  if (!input.managed) {
+    return REMOTE_ACCOUNT
+  }
+
+  const status = input.eva?.status()
+
+  if (!status?.desktopSessionActive || status.delegatedSupportActive || !status.customerId || !status.agentId) {
+    return null
+  }
+
+  return { customerId: status.customerId, agentId: status.agentId }
+}
+
+/** Where the bridge dials: the signed-in user's own agent (managed) or the one remote connection. */
 export async function resolveMacBridgeTargets(input: {
   managed: boolean
-  eva?: {
-    status: () => { desktopSessionActive?: boolean; delegatedSupportActive?: boolean }
-    delegatedProfiles: () => Promise<null | string[]>
-    authorizedProfiles: () => Promise<string[]>
-    /** Mints only for the user's own profiles, checked and bound to the session in the same step. */
-    ownProfileWsUrl: (request: { path: string; profile: string }) => Promise<string>
-  }
+  eva?: EvaFacade
   remoteWsUrl?: () => Promise<null | string>
 }): Promise<MacBridgeTarget[]> {
   const { eva } = input
@@ -188,11 +246,15 @@ export async function resolveMacBridgeTargets(input: {
       return []
     }
 
+    // Only the enrollment's own agent, never every profile the account administers.
+    const profile = await eva.assignedProfileId()
+
+    if (!profile) {
+      return []
+    }
+
     // Each dial re-checks inside the mint itself: support can start between two reconnects.
-    return (await eva.authorizedProfiles()).map(profile => ({
-      profile,
-      url: () => eva.ownProfileWsUrl({ path: MAC_BRIDGE_PATH, profile })
-    }))
+    return [{ profile, url: () => eva.ownProfileWsUrl({ path: MAC_BRIDGE_PATH, profile }) }]
   }
 
   const base = input.remoteWsUrl ? await input.remoteWsUrl() : null
@@ -230,16 +292,57 @@ interface Link {
   attempts: number
   timer: any
   children: Map<string, Child>
+  /** This attempt created a WebSocket / saw it open; the link has opened at least once. */
+  dialed: boolean
+  opened: boolean
+  everOpened: boolean
+  /** Consecutive dials whose handshake never opened. */
+  neverOpened: number
+  lastInbound: number
+  pongSeen: boolean
+  /** Liveness timers of the current socket: ping, silence watchdog, stable-open reset. */
+  pinger: any
+  watchdog: any
+  stable: any
+}
+
+interface SavedState {
+  enabled: boolean
+  account: MacBridgeAccount | null
+  daemonSocket: null | string
+}
+
+const OWN_SOCKET_RE = /^evaos-cua-[0-9a-f]{12}\.sock$/
+
+function validAccount(value: any): MacBridgeAccount | null {
+  return typeof value?.customerId === 'string' &&
+    value.customerId &&
+    typeof value?.agentId === 'string' &&
+    value.agentId
+    ? { customerId: value.customerId, agentId: value.agentId }
+    : null
 }
 
 export function createMacBridge(deps: MacBridgeDeps) {
   const env = deps.env || process.env
   const now = deps.now || Date.now
-  const setTimer = deps.setTimer || ((fn: () => void, ms: number) => setTimeout(fn, ms))
+
+  const setTimer =
+    deps.setTimer ||
+    ((fn: () => void, ms: number) => {
+      const timer: any = setTimeout(fn, ms)
+      timer.unref?.() // never what keeps a process alive
+
+      return timer
+    })
+
   const clearTimer = deps.clearTimer || ((timer: any) => clearTimeout(timer))
   const log = (line: string) => deps.log(`[mac-bridge] ${line}`)
   const links = new Map<string, Link>()
-  let enabled = readEnabled()
+  const saved = readState()
+  let enabled = saved.enabled
+  let account = saved.account
+  let daemonSocket = saved.daemonSocket
   let running = false
   // Bumped by every start and stop: work that resumes under an older generation is abandoned.
   let gen = 0
@@ -249,14 +352,43 @@ export function createMacBridge(deps: MacBridgeDeps) {
   let retargetTimer: any = null
   let lastError: null | string = null
   let cachedVersion: { binary: string; version: null | string } | null = null
+  let startTimer: any = null
+  let startFailures = 0
 
-  function readEnabled(): boolean {
+  /** A legacy file (no account) reads as off. */
+  function readState(): SavedState {
     try {
-      return JSON.parse(fs.readFileSync(deps.statePath, 'utf8')).enabled === true
+      const state = JSON.parse(fs.readFileSync(deps.statePath, 'utf8'))
+      const owner = validAccount(state.account)
+      const sock = typeof state.daemonSocket === 'string' ? state.daemonSocket : ''
+
+      return {
+        enabled: state.enabled === true && owner !== null,
+        account: owner,
+        daemonSocket: path.isAbsolute(sock) && OWN_SOCKET_RE.test(path.basename(sock)) ? sock : null
+      }
     } catch {
-      return false
+      return { enabled: false, account: null, daemonSocket: null }
     }
   }
+
+  function saveState() {
+    fs.mkdirSync(path.dirname(deps.statePath), { recursive: true })
+    fs.writeFileSync(deps.statePath, JSON.stringify({ enabled, account, ...(daemonSocket ? { daemonSocket } : {}) }))
+  }
+
+  /** The private daemon's socket, on disk before it is launched: a crash leaves the path for the next start to reap. */
+  function recordSocket(sock: null | string) {
+    daemonSocket = sock
+
+    try {
+      saveState()
+    } catch (error: any) {
+      log(`could not save state: ${error?.message || error}`)
+    }
+  }
+
+  const accountMatches = () => sameAccount(account, deps.account())
 
   function locate(): { binary: null | string; app: null | string; source: null | string } {
     const onPath = String(env.PATH || '')
@@ -312,6 +444,7 @@ export function createMacBridge(deps: MacBridgeDeps) {
     // Recorded before launch, so a stop that lands mid-startup still finds (and stops) this daemon.
     const sock = path.join(deps.tmpdir || os.tmpdir(), `evaos-cua-${randomBytes(6).toString('hex')}.sock`)
     starting = { binary, sock, until: now() + READY_TIMEOUT_MS + 1000 }
+    recordSocket(sock)
     await deps.run('/usr/bin/open', ['-n', '-g', '-a', app, '--args', ...serveArgs(sock)], { env: daemonEnv() })
     const deadline = now() + READY_TIMEOUT_MS
 
@@ -367,6 +500,10 @@ export function createMacBridge(deps: MacBridgeDeps) {
 
     socket = null
     starting = null
+
+    if (daemonSocket) {
+      recordSocket(null)
+    }
   }
 
   function spawnChild(): any {
@@ -437,6 +574,16 @@ export function createMacBridge(deps: MacBridgeDeps) {
   }
 
   function openChild(link: Link, conn: string) {
+    if (!socket) {
+      // The private daemon is restarting: the gateway retries this conn, and reopens all of them on hello.
+      const old = link.children.get(conn)
+      link.children.delete(conn)
+      old?.proc.kill()
+      send(link, { t: 'close', c: conn })
+
+      return
+    }
+
     link.children.get(conn)?.proc.kill()
     const proc = spawnChild()
     const child: Child = { proc, profile: link.target.profile, conn, lastActivity: now() }
@@ -469,7 +616,9 @@ export function createMacBridge(deps: MacBridgeDeps) {
   }
 
   function onFrame(link: Link, frame: Frame | null) {
-    if (frame?.t === 'open') {
+    if (frame?.t === 'pong') {
+      link.pongSeen = true
+    } else if (frame?.t === 'open') {
       openChild(link, frame.c)
     } else if (frame?.t === 'msg') {
       const child = link.children.get(frame.c)
@@ -488,6 +637,75 @@ export function createMacBridge(deps: MacBridgeDeps) {
   /** Still the link this run wants: not stopped, not restarted, not dropped by retarget. */
   const tracked = (link: Link) => running && link.gen === gen && links.get(link.target.profile) === link
 
+  function clearLiveness(link: Link) {
+    clearTimer(link.pinger)
+    clearTimer(link.watchdog)
+    clearTimer(link.stable)
+    link.pinger = link.watchdog = link.stable = null
+  }
+
+  /** Ping every 20 s; once the gateway has answered one, 45 s without any inbound frame drops the link. */
+  function startLiveness(link: Link, ws: any) {
+    const ping = () => {
+      if (link.ws === ws) {
+        send(link, { t: 'ping' })
+        link.pinger = setTimer(ping, PING_MS)
+      }
+    }
+
+    link.pinger = setTimer(ping, PING_MS)
+    link.stable = setTimer(() => {
+      if (link.ws === ws) {
+        link.attempts = 0
+      }
+    }, STABLE_MS)
+  }
+
+  function armWatchdog(link: Link, ws: any) {
+    const check = () => {
+      if (link.ws !== ws) {
+        return
+      }
+
+      const silent = now() - link.lastInbound
+
+      if (silent >= SILENCE_MS) {
+        drop(link, ws, `no answer from ${link.target.profile} for ${Math.round(silent / 1000)} s`)
+      } else {
+        link.watchdog = setTimer(check, SILENCE_MS - silent)
+      }
+    }
+
+    link.watchdog = setTimer(check, SILENCE_MS)
+  }
+
+  /** A dead socket (no close will come): forget it now and take the normal reconnect path. */
+  function drop(link: Link, ws: any, why: string) {
+    log(`${why}; reconnecting`)
+    link.ws = null
+    clearLiveness(link)
+    killChildren(link)
+
+    try {
+      ws.close()
+    } catch {
+      // already closed
+    }
+
+    retry(link)
+  }
+
+  /** An attempt ended: count a dial whose handshake never opened. */
+  function settle(link: Link) {
+    if (link.opened) {
+      link.neverOpened = 0
+    } else if (link.dialed) {
+      link.neverOpened += 1
+    }
+
+    link.dialed = link.opened = false
+  }
+
   async function connect(link: Link) {
     link.timer = null
     link.state = 'connecting'
@@ -501,6 +719,7 @@ export function createMacBridge(deps: MacBridgeDeps) {
 
       const ws = new deps.WebSocket(url)
       link.ws = ws
+      link.dialed = true
       const live = () => tracked(link) && link.ws === ws
 
       ws.onopen = () => {
@@ -508,14 +727,32 @@ export function createMacBridge(deps: MacBridgeDeps) {
           return ws.close()
         }
 
-        link.attempts = 0
+        link.opened = link.everOpened = true
+        link.neverOpened = 0
         link.state = 'connected'
         link.error = null
+        link.lastInbound = now()
+        link.pongSeen = false
         send(link, hello!)
+        startLiveness(link, ws)
         log(`connected to ${link.target.profile}`)
       }
 
-      ws.onmessage = (event: any) => (live() ? onFrame(link, decodeFrame(String(event.data))) : ws.close())
+      ws.onmessage = (event: any) => {
+        if (!live()) {
+          return ws.close()
+        }
+
+        link.lastInbound = now()
+        link.attempts = 0
+        const frame = decodeFrame(String(event.data))
+
+        if (frame?.t === 'pong' && !link.pongSeen) {
+          armWatchdog(link, ws) // an old hub never pongs: then only a failed write ends the link
+        }
+
+        onFrame(link, frame)
+      }
 
       ws.onerror = (event: any) => {
         link.error = String(event?.message || event?.error?.message || 'connection error')
@@ -526,10 +763,12 @@ export function createMacBridge(deps: MacBridgeDeps) {
           return
         }
 
+        clearLiveness(link)
         killChildren(link)
 
         if (event?.code === REPLACED_CODE) {
           // Another Mac of this user took over: terminal until the user toggles Enable.
+          settle(link)
           link.ws = null
           link.state = 'replaced'
           link.error = REPLACED_TEXT
@@ -548,6 +787,7 @@ export function createMacBridge(deps: MacBridgeDeps) {
 
   function retry(link: Link) {
     link.ws = null
+    settle(link)
 
     if (!running || links.get(link.target.profile) !== link) {
       link.state = 'closed'
@@ -556,12 +796,20 @@ export function createMacBridge(deps: MacBridgeDeps) {
     }
 
     link.state = 'retrying'
-    link.timer = setTimer(() => void connect(link), backoffMs(link.attempts++))
+
+    // A link that never opened (the gateway plugin is not installed for this agent): stop knocking every 30 s.
+    if (!link.everOpened && link.neverOpened >= NEVER_OPENED_LIMIT) {
+      link.error = notSetUpText(link.target.profile)
+      link.timer = setTimer(() => void connect(link), LONG_BACKOFF_MS)
+    } else {
+      link.timer = setTimer(() => void connect(link), backoffMs(link.attempts++))
+    }
   }
 
   function closeLink(link: Link) {
     links.delete(link.target.profile)
     clearTimer(link.timer)
+    clearLiveness(link)
     link.state = 'closed'
     const ws = link.ws
     link.ws = null
@@ -569,54 +817,162 @@ export function createMacBridge(deps: MacBridgeDeps) {
     ws?.close()
   }
 
-  /** Open links for new profiles, drop links for profiles no longer offered. */
-  async function retarget() {
-    if (!running) {
+  /** After sleep or a screen lock: every socket may be dead without a close, so redial them all now. */
+  function redial() {
+    for (const link of links.values()) {
+      if (link.state === 'replaced' || link.state === 'closed' || (link.state === 'connecting' && !link.ws)) {
+        continue // terminal, or still minting its URL
+      }
+
+      const ws = link.ws
+      link.ws = null
+      clearTimer(link.timer)
+      clearLiveness(link)
+      killChildren(link)
+      ws?.close()
+      settle(link)
+      link.attempts = 0
+      void connect(link)
+    }
+  }
+
+  /** A sign-in starts the backoff over, including the long one. */
+  async function signedIn() {
+    for (const link of links.values()) {
+      if (link.state === 'retrying') {
+        clearTimer(link.timer)
+        link.attempts = link.neverOpened = 0
+        void connect(link)
+      }
+    }
+
+    await retarget()
+  }
+
+  /** The 30 s tick: the private daemon must still answer on our socket (never the user's own daemon). */
+  async function checkDaemon(my: number) {
+    const { binary } = locate()
+    const sock = socket
+
+    if (!sock || !binary) {
       return
     }
 
-    const my = gen
-    let targets: MacBridgeTarget[] = []
+    const up = (await deps.run(binary, ['status', '--socket', sock], { env: daemonEnv() })).code === 0
+
+    if (up || gen !== my || socket !== sock) {
+      return
+    }
+
+    log('private daemon stopped answering; restarting it')
+    socket = null
+
+    for (const link of links.values()) {
+      killChildren(link) // their daemon is gone
+    }
+
+    stopDaemonAt(binary, sock, now())
 
     try {
-      targets = await deps.resolveTargets()
-      lastError = null
+      await startDaemon(my)
+      const next = await readHello()
+
+      if (gen !== my) {
+        return
+      }
+
+      hello = next
+
+      for (const link of links.values()) {
+        if (link.state === 'connected') {
+          send(link, hello) // the gateway opens a fresh child for every conn
+        }
+      }
     } catch (error: any) {
-      lastError = error?.message || String(error)
+      if (gen === my) {
+        fail(error)
+      }
+    }
+  }
+
+  async function tick() {
+    const my = gen
+
+    try {
+      await checkDaemon(my)
+    } catch (error: any) {
+      log(`daemon check failed: ${error?.message || error}`)
+    }
+
+    if (gen === my) {
+      await retarget()
+    }
+  }
+
+  /** Open links for new profiles, drop links for profiles no longer offered. */
+  async function retarget() {
+    if (!running || !hello) {
+      return // start() retargets once the daemon is up
+    }
+
+    const my = gen
+    let targets: MacBridgeTarget[] | null = null
+
+    if (!accountMatches()) {
+      targets = [] // signed out, or another account: this Mac is not theirs to offer
+    } else {
+      try {
+        targets = await deps.resolveTargets()
+        lastError = null
+      } catch (error: any) {
+        // Transient (e.g. a refresh that failed): keep the links we have.
+        lastError = error?.message || String(error)
+      }
     }
 
     if (!running || gen !== my) {
       return
     }
 
-    const wanted = new Map(targets.map(target => [target.profile, target]))
+    if (targets) {
+      const wanted = new Map(targets.map(target => [target.profile, target]))
 
-    for (const link of [...links.values()]) {
-      if (!wanted.has(link.target.profile)) {
-        closeLink(link)
-      }
-    }
-
-    for (const target of wanted.values()) {
-      if (running && !links.has(target.profile)) {
-        const link: Link = {
-          target,
-          ws: null,
-          state: 'connecting',
-          error: null,
-          attempts: 0,
-          timer: null,
-          children: new Map(),
-          gen
+      for (const link of [...links.values()]) {
+        if (!wanted.has(link.target.profile)) {
+          closeLink(link)
         }
+      }
 
-        links.set(target.profile, link)
-        void connect(link)
+      for (const target of wanted.values()) {
+        if (running && !links.has(target.profile)) {
+          const link: Link = {
+            target,
+            ws: null,
+            state: 'connecting',
+            error: null,
+            attempts: 0,
+            timer: null,
+            children: new Map(),
+            gen,
+            dialed: false,
+            opened: false,
+            everOpened: false,
+            neverOpened: 0,
+            lastInbound: 0,
+            pongSeen: false,
+            pinger: null,
+            watchdog: null,
+            stable: null
+          }
+
+          links.set(target.profile, link)
+          void connect(link)
+        }
       }
     }
 
     clearTimer(retargetTimer)
-    retargetTimer = running ? setTimer(() => void retarget(), RETARGET_MS) : null
+    retargetTimer = running ? setTimer(() => void tick(), RETARGET_MS) : null
   }
 
   async function start() {
@@ -624,6 +980,8 @@ export function createMacBridge(deps: MacBridgeDeps) {
       return
     }
 
+    clearTimer(startTimer)
+    startTimer = null
     running = true
     const my = ++gen
     lastError = null
@@ -637,17 +995,35 @@ export function createMacBridge(deps: MacBridgeDeps) {
       }
 
       hello = next
+      startFailures = 0
       await retarget()
     } catch (error: any) {
       if (gen === my) {
-        lastError = error?.message || String(error)
-        log(`start failed: ${lastError}`)
-        stopSync()
+        fail(error)
       }
     }
   }
 
-  function stopSync() {
+  /** Start failed (or the daemon could not be restarted): stop, and try again later while Enable stays on. */
+  function fail(error: any) {
+    lastError = error?.message || String(error)
+    log(`start failed: ${lastError}`)
+    halt()
+
+    if (enabled) {
+      const delay = START_RETRY_MS[Math.min(startFailures, START_RETRY_MS.length - 1)]
+      startFailures += 1
+      startTimer = setTimer(() => {
+        startTimer = null
+
+        if (enabled) {
+          void start()
+        }
+      }, delay)
+    }
+  }
+
+  function halt() {
     gen += 1
     running = false
     clearTimer(retargetTimer)
@@ -661,15 +1037,26 @@ export function createMacBridge(deps: MacBridgeDeps) {
     hello = null
   }
 
+  function stopSync() {
+    clearTimer(startTimer)
+    startTimer = null
+    startFailures = 0
+    halt()
+  }
+
   async function setEnabled(value: boolean) {
     enabled = value
-    fs.mkdirSync(path.dirname(deps.statePath), { recursive: true })
-    fs.writeFileSync(deps.statePath, JSON.stringify({ enabled }))
+    // Turning it on (or off) makes it this account's switch.
+    account = deps.account()
+    saveState()
 
-    if (enabled) {
-      await start()
-    } else {
+    if (!enabled) {
       stopSync()
+    } else if (running) {
+      await retarget() // the daemon already runs (for this or another account): dial for this one
+    } else {
+      startFailures = 0
+      await start()
     }
 
     return status()
@@ -692,7 +1079,8 @@ export function createMacBridge(deps: MacBridgeDeps) {
     const found = locate()
 
     return {
-      enabled,
+      // Shown off to any other account signed in on this Mac.
+      enabled: enabled && accountMatches(),
       cua: {
         found: Boolean(found.binary),
         path: found.binary,
@@ -722,11 +1110,25 @@ export function createMacBridge(deps: MacBridgeDeps) {
     proc.unref?.()
   }
 
+  /** App start: reap a daemon a crash left behind (its path was recorded before launch), then start if on. */
+  function init() {
+    if (daemonSocket) {
+      const [command, args] = reaperArgs(daemonSocket, Date.now() + REAP_MIN_MS)
+      deps.spawn(command, args, { detached: true, stdio: 'ignore' }).unref?.()
+      log('reaping a private daemon left by an earlier run')
+      recordSocket(null)
+    }
+
+    return enabled ? start() : Promise.resolve()
+  }
+
   return {
-    init: () => (enabled ? start() : Promise.resolve()),
+    init,
     setEnabled,
     status,
     retarget,
+    redial,
+    signedIn,
     installCua: () => launch(installCommand()),
     grantPermissions: async () => {
       const { binary } = locate()

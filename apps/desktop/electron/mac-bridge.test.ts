@@ -15,12 +15,16 @@ import {
   encodeFrame,
   grantCommand,
   installCommand,
+  LONG_BACKOFF_MS,
   MAC_BRIDGE_PATH,
+  type MacBridgeAccount,
+  notSetUpText,
   reaperArgs,
   REPLACED_CODE,
   REPLACED_TEXT,
   resolveMacBridgeTargets,
-  serveArgs
+  serveArgs,
+  SILENCE_MS
 } from './mac-bridge'
 
 class FakeProc extends EventEmitter {
@@ -92,6 +96,11 @@ let runs: { command: string; args: string[]; options: any }[]
 let syncRuns: { command: string; args: string[] }[]
 let timers: { fn: () => void; ms: number }[]
 let binary: string
+let clock: number
+let signedInAs: MacBridgeAccount | null
+
+const ACCOUNT_A = { customerId: 'jackie-david', agentId: 'alice' }
+const ACCOUNT_B = { customerId: 'jackie-david', agentId: 'bob' }
 
 function bridge(
   targets: { profile: string; url: () => Promise<string> }[] = [
@@ -131,9 +140,11 @@ function bridge(
     WebSocket: FakeWs,
     statePath: path.join(dir, 'mac-bridge.json'),
     resolveTargets: async () => targets,
+    account: () => signedInAs,
     log: () => undefined,
     candidates: [binary],
     tmpdir: dir,
+    now: () => clock,
     setTimer: (fn, ms) => {
       const timer = { fn, ms }
       timers.push(timer)
@@ -160,6 +171,8 @@ beforeEach(() => {
   syncRuns = []
   timers = []
   FakeWs.all = []
+  clock = 1_000_000
+  signedInAs = ACCOUNT_A
 })
 
 afterEach(() => fs.rmSync(dir, { recursive: true, force: true }))
@@ -176,6 +189,9 @@ describe('frames', () => {
     expect(
       JSON.parse(encodeFrame({ t: 'hello', v: 1, cua_version: '0.30.2', permission_mode: 'unrestricted', tools: [] }))
     ).toEqual({ t: 'hello', v: 1, cua_version: '0.30.2', permission_mode: 'unrestricted', tools: [] })
+
+    expect(decodeFrame('{"t":"pong"}')).toEqual({ t: 'pong' })
+    expect(encodeFrame({ t: 'ping' })).toBe('{"t":"ping"}')
 
     for (const bad of ['nope', '{"t":"open"}', '{"t":"msg","c":"a","m":[1]}', '{"t":"exec","c":"a"}']) {
       expect(decodeFrame(bad)).toBeNull()
@@ -289,7 +305,10 @@ describe('the bridge', () => {
     expect(status.enabled).toBe(false)
     expect(status.daemon.running).toBe(false)
     expect(status.connections).toEqual([])
-    expect(JSON.parse(fs.readFileSync(path.join(dir, 'mac-bridge.json'), 'utf8'))).toEqual({ enabled: false })
+    expect(JSON.parse(fs.readFileSync(path.join(dir, 'mac-bridge.json'), 'utf8'))).toEqual({
+      enabled: false,
+      account: ACCOUNT_A
+    })
     expect(timers).toEqual([]) // no reconnect, no retarget
   })
 
@@ -306,6 +325,7 @@ describe('the bridge', () => {
       WebSocket: FakeWs,
       statePath: path.join(dir, 'x.json'),
       resolveTargets: async () => [],
+      account: () => ACCOUNT_A,
       log: () => undefined,
       candidates: [binary]
     })
@@ -320,7 +340,9 @@ describe('targets', () => {
   const eva = (overrides: any = {}) => ({
     status: () => ({ desktopSessionActive: true, delegatedSupportActive: false, ...overrides.status }),
     delegatedProfiles: async () => overrides.delegated ?? null,
-    authorizedProfiles: async () => ['alice', 'alice-work'],
+    // A profile admin administers several profiles; the bridge must not dial them.
+    authorizedProfiles: async () => ['jane', 'louis', 'regan'],
+    assignedProfileId: async () => ('assigned' in overrides ? overrides.assigned : 'jane'),
     ownProfileWsUrl: async ({ path: p, profile }: { path: string; profile: string }) => {
       if (overrides.supportStarted?.()) {
         throw new Error('This profile is not one of your own agents.')
@@ -330,10 +352,12 @@ describe('targets', () => {
     }
   })
 
-  it('opens one bridge per profile the signed-in user owns, through the relay', async () => {
+  it('opens one bridge, to the enrollment’s own agent only, through the relay', async () => {
     const targets = await resolveMacBridgeTargets({ managed: true, eva: eva() })
-    expect(targets.map(target => target.profile)).toEqual(['alice', 'alice-work'])
-    expect(await targets[1].url()).toBe(`ws://127.0.0.1:9/alice-work${MAC_BRIDGE_PATH}?ticket=x`)
+    expect(targets.map(target => target.profile)).toEqual(['jane'])
+    expect(await targets[0].url()).toBe(`ws://127.0.0.1:9/jane${MAC_BRIDGE_PATH}?ticket=x`)
+    expect(await resolveMacBridgeTargets({ managed: true, eva: eva({ assigned: null }) })).toEqual([])
+    expect(await resolveMacBridgeTargets({ managed: true, eva: eva({ assigned: '' }) })).toEqual([])
   })
 
   it('opens NO bridge during delegated support or when signed out', async () => {
@@ -637,4 +661,325 @@ describe('review round 3: a daemon that becomes ready after Disable or quit is s
       expect(alive(other)).toBe(true)
     }
   }, 20_000)
+})
+
+describe('pilot fix round 1', () => {
+  const statePath = () => path.join(dir, 'mac-bridge.json')
+  const saved = () => JSON.parse(fs.readFileSync(statePath(), 'utf8'))
+
+  /** Run (and drop) the newest pending timer of `ms`. */
+  const fire = (ms: number) => {
+    const timer = timers.filter(entry => entry.ms === ms).at(-1)
+
+    if (!timer) {
+      throw new Error(`no ${ms} ms timer (have ${timers.map(entry => entry.ms).join(', ')})`)
+    }
+
+    timers = timers.filter(entry => entry !== timer)
+    timer.fn()
+  }
+
+  it('M2: three dials that never open drop a never-opened link to the long backoff, with the page text', async () => {
+    const mb = bridge([{ profile: 'jane', url: async () => 'ws://gw/bridge' }])
+    await mb.setEnabled(true)
+    FakeWs.all[0].close(1006) // the relay refused the upgrade (the gateway answered 403)
+    fire(1000)
+    await flush()
+    FakeWs.all[1].close(1006)
+    fire(2000)
+    await flush()
+    FakeWs.all[2].close(1006)
+
+    expect(timers.map(timer => timer.ms)).toContain(LONG_BACKOFF_MS)
+    expect(timers.map(timer => timer.ms)).not.toContain(4000)
+    const [link] = (await mb.status()).connections
+    expect(link).toEqual({ profile: 'jane', state: 'retrying', error: notSetUpText('jane') })
+    expect(link.error).toBe("Computer Use isn't set up for jane yet")
+
+    // A sign-in starts over at once, without waiting out the 10 min.
+    await mb.signedIn()
+    expect(FakeWs.all).toHaveLength(4)
+    expect(timers.map(timer => timer.ms)).not.toContain(LONG_BACKOFF_MS)
+  })
+
+  it('M2: a link that has opened before keeps the normal backoff (a gateway restart is not "not set up")', async () => {
+    const mb = bridge()
+    await mb.setEnabled(true)
+    FakeWs.all[0].open()
+    FakeWs.all[0].close(1006)
+
+    for (const [index, ms] of [1000, 2000, 4000, 8000].entries()) {
+      fire(ms)
+      await flush()
+      FakeWs.all[index + 1].close(1006)
+    }
+
+    expect(timers.map(timer => timer.ms)).toContain(16_000)
+    expect(timers.map(timer => timer.ms)).not.toContain(LONG_BACKOFF_MS)
+  })
+
+  it('M3: pings every 20 s; after a pong, 45 s of silence redials (not terminal)', async () => {
+    const mb = bridge()
+    await mb.setEnabled(true)
+    const ws = FakeWs.all[0]
+    ws.open()
+    ws.frame({ t: 'open', c: 'c1' })
+
+    clock += 20_000
+    fire(20_000)
+    expect(ws.sent.at(-1)).toEqual({ t: 'ping' })
+    ws.frame({ t: 'pong' })
+
+    // An inbound frame 30 s later pushes the deadline out.
+    clock += 30_000
+    ws.frame({ t: 'something-new' }) // unknown frames are ignored, but they are inbound
+    clock += 15_000
+    fire(SILENCE_MS) // 15 s since the last frame: re-armed for the remaining 30 s
+    expect(ws.closed).toBe(false)
+
+    clock += 30_000
+    fire(30_000) // the newest 30 s timer is the watchdog (the other is the retarget tick)
+    expect(ws.closed).toBe(true)
+    expect(children()[0].proc.killed).toBe(true)
+    expect((await mb.status()).connections[0].state).toBe('retrying')
+
+    fire(1000)
+    await flush()
+    expect(FakeWs.all).toHaveLength(2)
+    FakeWs.all[1].open()
+    expect((await mb.status()).connections[0].state).toBe('connected')
+  })
+
+  it('M3: against a hub that never pongs, silence alone never drops the link', async () => {
+    const mb = bridge()
+    await mb.setEnabled(true)
+    FakeWs.all[0].open()
+
+    for (let tick = 0; tick < 5; tick += 1) {
+      clock += 20_000
+      fire(20_000)
+    }
+
+    expect(timers.map(timer => timer.ms)).not.toContain(SILENCE_MS)
+    expect(FakeWs.all[0].closed).toBe(false)
+    expect((await mb.status()).connections[0].state).toBe('connected')
+  })
+
+  it('M3: resume / unlock redials every link at once', async () => {
+    const mb = bridge()
+    await mb.setEnabled(true)
+    FakeWs.all[0].open()
+    FakeWs.all[0].frame({ t: 'open', c: 'c1' })
+
+    mb.redial()
+    await flush()
+    expect(FakeWs.all[0].closed).toBe(true)
+    expect(children()[0].proc.killed).toBe(true)
+    expect(FakeWs.all).toHaveLength(2)
+    FakeWs.all[1].open()
+    expect(FakeWs.all[1].sent[0].t).toBe('hello')
+  })
+
+  it('M4: enabled by A, signed in as B: no dial and the switch shows off; back to A dials without a toggle', async () => {
+    const mb = bridge()
+    await mb.setEnabled(true)
+    expect(saved()).toMatchObject({ enabled: true, account: ACCOUNT_A })
+    FakeWs.all[0].open()
+
+    signedInAs = ACCOUNT_B
+    fire(30_000) // the retarget tick
+    await flush()
+    expect(FakeWs.all[0].closed).toBe(true)
+    expect(FakeWs.all).toHaveLength(1)
+    let status = await mb.status()
+    expect(status.enabled).toBe(false)
+    expect(status.connections).toEqual([])
+    expect(status.daemon.running).toBe(true) // kept for A
+
+    signedInAs = ACCOUNT_A
+    fire(30_000)
+    await flush()
+    expect(FakeWs.all).toHaveLength(2)
+    status = await mb.status()
+    expect(status.enabled).toBe(true)
+
+    // B turning it on makes it B's switch.
+    signedInAs = ACCOUNT_B
+    await mb.setEnabled(true)
+    expect(saved()).toMatchObject({ enabled: true, account: ACCOUNT_B })
+    expect((await mb.status()).enabled).toBe(true)
+  })
+
+  it('M4: sign-out closes the links at once and keeps the daemon and the saved switch', async () => {
+    const mb = bridge()
+    await mb.setEnabled(true)
+    FakeWs.all[0].open()
+    FakeWs.all[0].frame({ t: 'open', c: 'c1' })
+
+    signedInAs = null // main calls retarget() right after signOut()
+    await mb.retarget()
+    expect(FakeWs.all[0].closed).toBe(true)
+    expect(children()[0].proc.killed).toBe(true)
+    expect(stops()).toEqual([])
+    expect(saved()).toMatchObject({ enabled: true, account: ACCOUNT_A })
+  })
+
+  it('M4: a legacy {enabled:true} file (no account) is off', async () => {
+    fs.writeFileSync(statePath(), JSON.stringify({ enabled: true }))
+    const mb = bridge()
+    await mb.init()
+    expect(runs.filter(entry => entry.command === '/usr/bin/open')).toEqual([])
+    expect((await mb.status()).enabled).toBe(false)
+  })
+
+  it('S1: a failed target lookup keeps the current links', async () => {
+    let failing = false
+
+    const mb = bridge(undefined, {
+      resolveTargets: async () => {
+        if (failing) {
+          throw new Error('broker unreachable')
+        }
+
+        return [{ profile: 'alice', url: async () => 'ws://gw/bridge' }]
+      }
+    })
+
+    await mb.setEnabled(true)
+    FakeWs.all[0].open()
+    failing = true
+    await mb.retarget()
+    const status = await mb.status()
+    expect(FakeWs.all[0].closed).toBe(false)
+    expect(status.connections).toEqual([{ profile: 'alice', state: 'connected', error: null }])
+    expect(status.error).toBe('broker unreachable')
+  })
+
+  it('S2: an open alone does not reset the backoff; a first frame or 60 s open does', async () => {
+    const mb = bridge()
+    await mb.setEnabled(true)
+    FakeWs.all[0].open()
+    FakeWs.all[0].close(1006) // accepted, then dropped at once (a failing hub)
+    fire(1000)
+    await flush()
+    FakeWs.all[1].open()
+    FakeWs.all[1].close(1006)
+    expect(timers.map(timer => timer.ms)).toContain(2000) // not back to 1 s
+
+    fire(2000)
+    await flush()
+    FakeWs.all[2].open()
+    FakeWs.all[2].frame({ t: 'pong' })
+    FakeWs.all[2].close(1006)
+    expect(timers.map(timer => timer.ms)).toContain(1000)
+
+    fire(1000)
+    await flush()
+    FakeWs.all[3].open()
+    fire(60_000)
+    FakeWs.all[3].close(1006)
+    expect(timers.filter(timer => timer.ms === 1000)).toHaveLength(1)
+  })
+
+  it('S3: a failed start retries at 30 s, 60 s, then every 5 min while enabled', async () => {
+    const mb = bridge(undefined, {
+      run: async (command, args, options) => {
+        runs.push({ command, args, options })
+
+        return { code: 0, stdout: '', stderr: command === '/usr/bin/codesign' ? 'Identifier=com.example\n' : '' }
+      }
+    })
+
+    expect((await mb.setEnabled(true)).error).toMatch(/not CUA's signed/)
+    const delays: number[] = []
+
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const pending = timers.find(timer => [30_000, 60_000, 300_000].includes(timer.ms))!
+      delays.push(pending.ms)
+      fire(pending.ms)
+      await flush()
+      await flush()
+    }
+
+    expect(delays).toEqual([30_000, 60_000, 300_000, 300_000])
+    await mb.setEnabled(false)
+    expect(timers).toEqual([])
+  })
+
+  it('S3: the 30 s tick restarts a private daemon that stopped answering and re-sends hello', async () => {
+    let dead = ''
+
+    const mb = bridge(undefined, {
+      run: async (command, args, options) => {
+        runs.push({ command, args, options })
+
+        if (command === '/usr/bin/codesign') {
+          return { code: 0, stdout: '', stderr: 'Identifier=com.trycua.driver\nTeamIdentifier=YCK386LBJ7\n' }
+        }
+
+        return { code: args[0] === 'status' && args[2] === dead ? 1 : 0, stdout: '', stderr: '' }
+      }
+    })
+
+    await mb.setEnabled(true)
+    const ws = FakeWs.all[0]
+    ws.open()
+    ws.frame({ t: 'open', c: 'c1' })
+    dead = runs.find(entry => entry.command === '/usr/bin/open')!.args[8]
+
+    fire(30_000)
+
+    for (let i = 0; i < 5; i += 1) {
+      await flush()
+    }
+
+    const opens = runs.filter(entry => entry.command === '/usr/bin/open')
+    expect(opens).toHaveLength(2)
+    expect(opens[1].args[8]).not.toBe(dead)
+    expect(stops()).toEqual([{ command: binary, args: ['stop', '--socket', dead] }])
+    expect(children()[0].proc.killed).toBe(true)
+    expect(ws.sent.filter(frame => frame.t === 'hello')).toHaveLength(2)
+    expect(ws.closed).toBe(false)
+    // Our own socket only: the user's daemon is never asked about or stopped.
+    expect(runs.filter(entry => entry.args[0] === 'status').every(entry => entry.args[1] === '--socket')).toBe(true)
+  })
+
+  it('S4: the daemon socket is saved before launch and reaped at the next start after a crash', async () => {
+    let onDisk: any = null
+
+    const mb = bridge(undefined, {
+      run: async (command, args, options) => {
+        runs.push({ command, args, options })
+
+        if (command === '/usr/bin/open') {
+          onDisk = saved()
+        }
+
+        if (command === '/usr/bin/codesign') {
+          return { code: 0, stdout: '', stderr: 'Identifier=com.trycua.driver\nTeamIdentifier=YCK386LBJ7\n' }
+        }
+
+        return { code: 0, stdout: '', stderr: '' }
+      }
+    })
+
+    await mb.setEnabled(true)
+    const sock = runs.find(entry => entry.command === '/usr/bin/open')!.args[8]
+    expect(onDisk.daemonSocket).toBe(sock)
+    expect(saved().daemonSocket).toBe(sock)
+
+    // The app crashes (no will-quit): the next run reaps that exact path before starting.
+    procs = []
+    const next = bridge()
+    await next.init()
+    const reaper = procs.find(entry => entry.command === '/bin/sh')!
+    expect(reaper.args.slice(0, 4)).toEqual(reaperArgs(sock, 0)[1].slice(0, 4))
+    expect(reaper.options).toMatchObject({ detached: true })
+    const newSock = runs.filter(entry => entry.command === '/usr/bin/open').at(-1)!.args[8]
+    expect(newSock).not.toBe(sock)
+    expect(saved().daemonSocket).toBe(newSock)
+
+    next.stopSync()
+    expect(saved().daemonSocket).toBeUndefined()
+  })
 })
