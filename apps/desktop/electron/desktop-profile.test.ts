@@ -5,12 +5,17 @@ import path from 'node:path'
 
 import { test } from 'vitest'
 
+import { BackendDialClaims } from './backend-dial-claim'
+import { backendScopeKey, migrateV1ToRegistry } from './connection-registry'
 import {
   createDesktopProfilePreferences,
+  type DesktopProfileRoute,
+  dialDesktopProfileRoute,
   resolveDesktopConnectionRequest,
   resolveDesktopWindowLaunch,
   resolveDesktopWindowRoute
 } from './desktop-profile'
+import { EVA_MANAGED_CONNECTION_ID, normalizeEvaManagedActiveRoute } from './plugin-profile-routes'
 import { WindowConnectionRouteRegistry } from './window-connection-route'
 
 test('failed authoritative writes leave the previous default and listeners untouched', () => {
@@ -214,3 +219,108 @@ test.each([null, 'local'])(
     }
   }
 )
+
+// `hermes:connection` in main.ts: the window route recorded by
+// recordWindowConnectionRoute, resolved like the IPC handler, dialed through
+// connectDesktopProfileRoute's real claim. Only the two backends are fakes;
+// the registry one looks the id up exactly as ensureRegistryBackend does
+// against a fresh workstation connections.json. `hold` parks ensureBackend
+// until released, so concurrent dials can meet inside one claim.
+function hermesConnectionHarness(managed: boolean, savedConnectionIds: string[] = []) {
+  const routes = new WindowConnectionRouteRegistry()
+  const registry = migrateV1ToRegistry({})
+  const known = new Set([...registry.connections.map(c => c.id), ...savedConnectionIds])
+  const dialClaims = new BackendDialClaims()
+  const dials: string[] = []
+  const claims: string[] = []
+  let held: null | Promise<void> = null
+  let release = () => undefined as void
+
+  return {
+    claims,
+    dials,
+    hold() {
+      held = new Promise<void>(resolve => {
+        release = resolve
+      })
+    },
+    release: () => release(),
+    recordWindowConnectionRoute(id: number, route: unknown) {
+      routes.set(id, managed ? normalizeEvaManagedActiveRoute(route) : route)
+    },
+    getConnection(id: number, profile?: string) {
+      const route: DesktopProfileRoute = resolveDesktopConnectionRequest(profile, routes.get(id), 'default')
+
+      return dialDesktopProfileRoute(route, 'foreground', {
+        applySpawnPriority: () => () => undefined,
+        backendScopeKey,
+        ensureBackend: async dialed => {
+          dials.push(`backend:${dialed}`)
+          await held
+
+          return { profile: dialed }
+        },
+        ensureRegistryBackend: async connectionId => {
+          const id = String(connectionId || '').trim() || registry.primary
+
+          if (!known.has(id)) {
+            throw new Error(`No connection with id "${id}".`)
+          }
+
+          dials.push(`registry:${id}`)
+
+          return { profile: id }
+        },
+        managed,
+        runDialClaim: (scopeKey, dial) => {
+          claims.push(scopeKey)
+
+          return dialClaims.run(scopeKey, dial)
+        }
+      })
+    }
+  }
+}
+
+test('a managed profile-less reconnect dials the managed backend, coalescing with boot (#388)', async () => {
+  const app = hermesConnectionHarness(true)
+  app.recordWindowConnectionRoute(1, {
+    connectionId: EVA_MANAGED_CONNECTION_ID,
+    profile: 'e-test',
+    registryScoped: true
+  })
+
+  // Boot passes the profile explicitly; reconnect after sleep/wake passes none.
+  assert.deepEqual(await app.getConnection(1, 'e-test'), { profile: 'e-test' })
+  assert.deepEqual(await app.getConnection(1), { profile: 'e-test' })
+  assert.deepEqual(app.dials, ['backend:e-test', 'backend:e-test'])
+  assert.deepEqual(app.claims, ['e-test', 'e-test'])
+})
+
+test('a concurrent managed boot and reconnect share one managed dial (#388)', async () => {
+  const app = hermesConnectionHarness(true)
+  app.recordWindowConnectionRoute(1, {
+    connectionId: EVA_MANAGED_CONNECTION_ID,
+    profile: 'e-test',
+    registryScoped: true
+  })
+  app.hold()
+
+  const boot = app.getConnection(1, 'e-test')
+  const reconnect = app.getConnection(1)
+  app.release()
+  const [booted, reconnected] = await Promise.all([boot, reconnect])
+
+  assert.deepEqual(app.dials, ['backend:e-test'])
+  assert.equal(reconnected, booted)
+})
+
+test('an upstream profile-less reconnect still dials its registry connection', async () => {
+  const app = hermesConnectionHarness(false, ['remote-a'])
+  app.recordWindowConnectionRoute(1, { connectionId: 'remote-a', profile: 'research', registryScoped: true })
+
+  assert.deepEqual(await app.getConnection(1, 'research'), { profile: 'research' })
+  assert.deepEqual(await app.getConnection(1), { profile: 'remote-a' })
+  assert.deepEqual(app.dials, ['backend:research', 'registry:remote-a'])
+  assert.deepEqual(app.claims, ['research', 'conn:remote-a::research'])
+})
