@@ -29,7 +29,7 @@ const BUNDLE_ID = 'com.trycua.driver'
 const READY_TIMEOUT_MS = 15_000
 const RETARGET_MS = 30_000
 const PROTOCOL_VERSION = '2025-06-18'
-const STOP_WAIT_MS = 5000
+const REAP_MIN_MS = 3000
 /** Largest JSON-RPC message carried either way (CUA results carry MB-sized base64 screenshots). */
 export const MAX_MESSAGE_BYTES = 64 * 1024 * 1024
 export const REPLACED_CODE = 4000
@@ -138,6 +138,34 @@ export function serveArgs(socket: string): string[] {
   return ['serve', '--embedded', '--socket', socket, ...UNRESTRICTED]
 }
 
+/**
+ * Detached reaper for the daemon launched on `socket` (`open` gives no pid): until `untilMs` it looks for a
+ * process running `serve` on exactly that path (a whole argv token, never a shorter or longer path),
+ * SIGTERMs it, SIGKILLs it 2 s later if still there, removes the socket and exits. Detached so it outlives
+ * quit; the random per-launch path is ours alone.
+ */
+const REAPER_SCRIPT = `S=$1; END=$2
+ours() {
+  for p in $(/usr/bin/pgrep -f -- "$S"); do
+    [ "$p" = "$$" ] && continue
+    case " $(/bin/ps -ww -o command= -p "$p") " in *" serve "*" --socket $S "*) echo "$p" ;; esac
+  done
+}
+while :; do
+  hit=$(ours)
+  if [ -n "$hit" ]; then
+    kill -TERM $hit 2>/dev/null; sleep 2
+    left=$(ours); [ -n "$left" ] && kill -KILL $left 2>/dev/null
+    rm -f "$S"; exit 0
+  fi
+  [ "$(/bin/date +%s)" -ge "$END" ] && exit 0
+  sleep 0.5
+done`
+
+export function reaperArgs(socket: string, untilMs: number): [string, string[]] {
+  return ['/bin/sh', ['-c', REAPER_SCRIPT, 'evaos-cua-reaper', socket, String(Math.ceil(untilMs / 1000))]]
+}
+
 /** Where the bridge dials: every profile the user owns (managed) or the one remote connection. */
 export async function resolveMacBridgeTargets(input: {
   managed: boolean
@@ -216,7 +244,7 @@ export function createMacBridge(deps: MacBridgeDeps) {
   // Bumped by every start and stop: work that resumes under an older generation is abandoned.
   let gen = 0
   let socket: null | string = null
-  let starting: null | { binary: string; sock: string } = null
+  let starting: null | { binary: string; sock: string; until: number } = null
   let hello: Frame | null = null
   let retargetTimer: any = null
   let lastError: null | string = null
@@ -283,7 +311,7 @@ export function createMacBridge(deps: MacBridgeDeps) {
 
     // Recorded before launch, so a stop that lands mid-startup still finds (and stops) this daemon.
     const sock = path.join(deps.tmpdir || os.tmpdir(), `evaos-cua-${randomBytes(6).toString('hex')}.sock`)
-    starting = { binary, sock }
+    starting = { binary, sock, until: now() + READY_TIMEOUT_MS + 1000 }
     await deps.run('/usr/bin/open', ['-n', '-g', '-a', app, '--args', ...serveArgs(sock)], { env: daemonEnv() })
     const deadline = now() + READY_TIMEOUT_MS
 
@@ -310,24 +338,19 @@ export function createMacBridge(deps: MacBridgeDeps) {
     }
 
     starting = null
-    stopDaemonAt(binary, sock, false)
+    stopDaemonAt(binary, sock, now())
     throw new Error('The private CUA daemon did not become ready within 15 s.')
   }
 
-  /** One `cua-driver stop` for a daemon we launched; when it may still be starting, wait (briefly) until it listens. */
-  function stopDaemonAt(binary: string, sock: string, mayBeStarting: boolean) {
-    const deadline = now() + STOP_WAIT_MS
-
-    while (
-      mayBeStarting &&
-      now() < deadline &&
-      !deps.runSync(binary, ['status', '--socket', sock], { env: daemonEnv() })
-    ) {
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100)
-    }
-
+  /**
+   * `cua-driver stop` for a daemon that is up, plus the reaper, which owns `sock` until `until`: it kills a
+   * daemon that only becomes ready after Disable or quit (inside the startup window) or that `stop` missed.
+   */
+  function stopDaemonAt(binary: string, sock: string, until: number) {
     deps.runSync(binary, ['stop', '--socket', sock], { env: daemonEnv(), timeout: 3000 })
     fs.rmSync(sock, { force: true })
+    const [command, args] = reaperArgs(sock, Date.now() + Math.max(REAP_MIN_MS, until - now()))
+    deps.spawn(command, args, { detached: true, stdio: 'ignore' }).unref?.()
     log('private daemon stopped')
   }
 
@@ -335,11 +358,11 @@ export function createMacBridge(deps: MacBridgeDeps) {
     const { binary } = locate()
 
     if (socket && binary) {
-      stopDaemonAt(binary, socket, false)
+      stopDaemonAt(binary, socket, now())
     }
 
     if (starting) {
-      stopDaemonAt(starting.binary, starting.sock, true)
+      stopDaemonAt(starting.binary, starting.sock, starting.until)
     }
 
     socket = null

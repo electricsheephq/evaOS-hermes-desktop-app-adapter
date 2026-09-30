@@ -1,3 +1,4 @@
+import { spawn as spawnReal } from 'node:child_process'
 import { EventEmitter } from 'node:events'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -15,6 +16,7 @@ import {
   grantCommand,
   installCommand,
   MAC_BRIDGE_PATH,
+  reaperArgs,
   REPLACED_CODE,
   REPLACED_TEXT,
   resolveMacBridgeTargets,
@@ -497,4 +499,142 @@ describe('review round 2', () => {
     children()[0].proc.stdout.emit('data', bytes.subarray(cut))
     expect(FakeWs.all[0].sent.at(-1).m.result.text).toBe('café ✓')
   })
+})
+
+describe('review round 3: a daemon that becomes ready after Disable or quit is still stopped', () => {
+  // Real processes: the real reaper (/bin/sh) and a stand-in daemon whose argv is `… serve … --socket <sock> …`.
+  const live: any[] = []
+  const alive = (proc: any) => proc.exitCode === null && proc.signalCode === null
+  const exited = (proc: any) => (alive(proc) ? new Promise(done => proc.once('exit', done)) : Promise.resolve())
+
+  const fakeDaemon = (argv: string[]) => {
+    const proc = spawnReal(process.execPath, ['-e', 'setInterval(() => {}, 1000)', '--', ...argv], { stdio: 'ignore' })
+    live.push(proc)
+
+    return proc
+  }
+
+  afterEach(() => {
+    for (const proc of live.splice(0)) {
+      if (alive(proc)) {
+        proc.kill('SIGKILL')
+      }
+    }
+  })
+
+  /** A bridge whose `open` launches the stand-in daemon after `readyAfterMs`; reapers run for real. */
+  function lateBridge(readyAfterMs: number, stopWorks = true) {
+    const state: { daemon: any; reapers: any[]; unrefs: number } = { daemon: null, reapers: [], unrefs: 0 }
+
+    const mb = bridge(undefined, {
+      spawn: (command, args, options) => {
+        if (command === '/bin/sh') {
+          const proc = spawnReal(command, args, options)
+          const unref = proc.unref.bind(proc)
+          proc.unref = () => ((state.unrefs += 1), unref())
+          state.reapers.push({ proc, options })
+          live.push(proc)
+
+          return proc
+        }
+
+        const proc = new FakeProc()
+        procs.push({ command, args, options, proc })
+
+        return proc
+      },
+      run: async (command, args, options) => {
+        runs.push({ command, args, options })
+
+        if (command === '/usr/bin/codesign') {
+          return { code: 0, stdout: '', stderr: 'Identifier=com.trycua.driver\nTeamIdentifier=YCK386LBJ7\n' }
+        }
+
+        if (command === '/usr/bin/open') {
+          const argv = args.slice(args.indexOf('--args') + 1)
+          const launch = () => (state.daemon = fakeDaemon(argv))
+          readyAfterMs ? setTimeout(launch, readyAfterMs) : launch()
+        }
+
+        const up = args[0] === 'status' && state.daemon && alive(state.daemon)
+
+        return { code: args[0] === 'status' && !up ? 1 : 0, stdout: '', stderr: '' }
+      },
+      runSync: (command, args) => {
+        syncRuns.push({ command, args })
+
+        return stopWorks
+      }
+    })
+
+    return { mb, state }
+  }
+
+  const untilLaunched = async (state: { daemon: any }) => {
+    while (!state.daemon) {
+      await new Promise(resolve => setTimeout(resolve, 50))
+    }
+  }
+
+  it('ready at 6 s, Disable at once: the reaper kills it; nothing stays running', async () => {
+    const { mb, state } = lateBridge(6000)
+    void mb.setEnabled(true)
+    await flush()
+    const off = await mb.setEnabled(false)
+    expect(off.daemon.running).toBe(false)
+    expect(state.reapers).toHaveLength(1)
+    expect(state.reapers[0].options).toMatchObject({ detached: true })
+
+    const t0 = Date.now()
+    await untilLaunched(state)
+    await exited(state.daemon)
+    expect(state.daemon.signalCode).toBe('SIGTERM')
+    expect(Date.now() - t0).toBeLessThan(8000)
+    await exited(state.reapers[0].proc)
+  }, 20_000)
+
+  it('ready at 6 s, quit at once: the detached reaper (unref’d, outlives quit) kills it', async () => {
+    const { mb, state } = lateBridge(6000)
+    void mb.setEnabled(true)
+    await flush()
+    mb.stopSync() // main's will-quit
+    expect(state.reapers).toHaveLength(1)
+    expect(state.reapers[0].options).toMatchObject({ detached: true, stdio: 'ignore' })
+    expect(state.unrefs).toBe(1)
+
+    await untilLaunched(state)
+    await exited(state.daemon)
+    expect(state.daemon.signalCode).toBe('SIGTERM')
+    await exited(state.reapers[0].proc)
+  }, 20_000)
+
+  it('a failed `cua-driver stop` still ends in the pid kill', async () => {
+    const { mb, state } = lateBridge(0, false)
+    await mb.setEnabled(true)
+    expect((await mb.status()).daemon.running).toBe(true)
+    await mb.setEnabled(false)
+    expect(stops()).toHaveLength(1)
+    await exited(state.daemon)
+    expect(state.daemon.signalCode).toBe('SIGTERM')
+  }, 20_000)
+
+  it('matches only `serve` on the exact socket path (positive and negative controls)', async () => {
+    const sock = path.join(dir, 'evaos-cua-0123456789ab.sock')
+    const ours = fakeDaemon(['serve', '--embedded', '--socket', sock, '--no-permissions-gate'])
+    const longer = fakeDaemon(['serve', '--embedded', '--socket', `${sock}2`])
+    const sibling = fakeDaemon(['serve', '--embedded', '--socket', path.join(dir, 'evaos-cua-0123456789ac.sock')])
+    const shorter = fakeDaemon(['serve', '--embedded', '--socket', sock.slice(0, -5)])
+    const child = fakeDaemon(['mcp', '--embedded', '--socket', sock])
+    const [command, args] = reaperArgs(sock, Date.now() + 3000)
+    const reaper = spawnReal(command, args, { stdio: 'ignore' })
+    live.push(reaper)
+
+    await exited(ours)
+    await exited(reaper)
+    expect(ours.signalCode).toBe('SIGTERM')
+
+    for (const other of [longer, sibling, shorter, child]) {
+      expect(alive(other)).toBe(true)
+    }
+  }, 20_000)
 })
