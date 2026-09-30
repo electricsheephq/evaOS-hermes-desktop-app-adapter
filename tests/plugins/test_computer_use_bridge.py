@@ -20,7 +20,8 @@ from pathlib import Path
 
 import pytest
 
-PLUGIN_DIR = Path(__file__).resolve().parents[2] / "plugins" / "computer-use"
+REPO = Path(__file__).resolve().parents[2]
+PLUGIN_DIR = REPO / "optional-plugins" / "computer-use"
 
 
 def _load(name: str, path: Path):
@@ -33,7 +34,9 @@ def _load(name: str, path: Path):
 api = _load("computer_use_plugin_api", PLUGIN_DIR / "dashboard" / "plugin_api.py")
 shim_mod = _load("computer_use_shim", PLUGIN_DIR / "mcp_stdio_shim.py")
 
-OFFLINE = "Your Mac isn't connected. Ask the user to open evaOS Agent and turn on Computer Use (left sidebar)."
+OFFLINE = "Your Mac isn't connected. Ask the user to open evaOS Agent → Computer Use → Enable."
+DROPPED = ("The connection to the user's Mac dropped during this action; it may or may not have run. "
+           "Check the Mac's state before retrying.")
 
 
 @pytest.fixture
@@ -116,14 +119,14 @@ def test_newest_mac_connection_wins(home):
         client = LineClient(hub.sock_path)
         await client.open()
         await _until(lambda: first.of("open"))
-        await hub.attach_mac(second)
-        assert first.closed == (4000, "replaced by a newer connection")
-        assert hub.mac is second and not hub.ready
-        await _until(lambda: {"t": "offline"} in client.frames)
-        # The old connection's late frames are ignored; the new Mac gets the shim once it says hello.
-        await hub.on_mac_frame(first, {"t": "msg", "c": first.of("open")[0]["c"], "m": {"id": 1, "result": {}}})
+        await hub.on_mac_frame(second, {"t": "msg", "c": "x", "m": {}})  # no hello yet: not the Mac
+        assert hub.mac is first and first.closed is None
         await hub.on_mac_frame(second, HELLO)
-        await _until(lambda: second.of("open"))
+        assert first.closed == (4000, "replaced by a newer connection")
+        assert hub.mac is second and hub.ready
+        await _until(lambda: {"t": "offline"} in client.frames and second.of("open"))
+        # The old connection's late frames are ignored.
+        await hub.on_mac_frame(first, {"t": "msg", "c": first.of("open")[0]["c"], "m": {"id": 1, "result": {}}})
         assert not any(f.get("t") == "msg" for f in client.frames)
         await hub.detach_mac(first)  # a stale close must not take the new Mac down
         assert hub.mac is second
@@ -260,10 +263,14 @@ def test_going_offline_answers_in_flight_requests(home):
     shim.from_hermes({"jsonrpc": "2.0", "id": 10, "method": "resources/read", "params": {}})
     shim.from_dashboard({"t": "offline"})
     by_id = {m["id"]: m for m in _out(out)}
-    assert by_id[9]["result"]["content"][0]["text"] == OFFLINE and by_id[9]["result"]["isError"] is True
+    # In flight when the link dropped: it may or may not have run.
+    assert by_id[9]["result"]["content"][0]["text"] == DROPPED and by_id[9]["result"]["isError"] is True
     assert by_id[10]["error"]["code"] == -32601
     shim.from_hermes({"jsonrpc": "2.0", "id": 11, "method": "tools/call", "params": {"name": "click"}})
     assert len(shim.sock.lines) == 2  # offline now: nothing more goes up
+    # A new call while offline gets the offline sentence.
+    assert _out(out)[-1]["result"]["content"][0]["text"] == OFFLINE
+    assert shim_mod.DROPPED_TEXT == DROPPED
 
 
 def test_shim_process_end_to_end_against_the_hub(home):
@@ -403,3 +410,163 @@ def test_over_limit_frames_fail_that_call_and_keep_the_connection(home, monkeypa
         assert [f["m"]["id"] for f in mac.of("msg")] == [2]
         assert not mac.of("close")
     asyncio.run(run())
+
+
+# --- pilot fix round 1 ----------------------------------------------------------------------------
+
+
+class RouteWs(FakeMac):
+    """What the ``/bridge`` route sees: frames arrive through ``inbox``; ``None`` is a disconnect."""
+
+    def __init__(self):
+        super().__init__()
+        self.inbox: asyncio.Queue = asyncio.Queue()
+
+    async def accept(self):
+        pass
+
+    async def receive_text(self):
+        item = await self.inbox.get()
+        if item is None:
+            raise api.WebSocketDisconnect(1000)
+        return json.dumps(item)
+
+
+@pytest.fixture
+def route(home, monkeypatch):
+    monkeypatch.setattr(api, "_ws_upgrade_authorized", lambda ws: True)
+    monkeypatch.setattr(api, "_current_home", lambda: home)
+    monkeypatch.setattr(api, "_hubs", {})
+    return lambda: api.hub_for(home)
+
+
+def test_hub_answers_ping_and_ignores_unknown_frames(route):
+    async def run():
+        ws = RouteWs()
+        task = asyncio.create_task(api.mac_bridge(ws))
+        await ws.inbox.put({"t": "ping"})
+        await ws.inbox.put({"t": "something-new", "x": 1})
+        await ws.inbox.put(HELLO)
+        await _until(lambda: route().ready)
+        await ws.inbox.put({"t": "ping"})
+        await _until(lambda: len(ws.of("pong")) == 2)
+        assert ws.closed is None
+        await ws.inbox.put(None)
+        await task
+        assert route().mac is None
+    asyncio.run(run())
+
+
+def test_an_upgrade_that_never_says_hello_does_not_evict_the_live_mac(route):
+    async def run():
+        live, silent = RouteWs(), RouteWs()
+        live_task = asyncio.create_task(api.mac_bridge(live))
+        await live.inbox.put(HELLO)
+        await _until(lambda: route().ready)
+        silent_task = asyncio.create_task(api.mac_bridge(silent))
+        await silent.inbox.put({"t": "ping"})
+        await silent.inbox.put({"t": "msg", "c": "x", "m": {"id": 1}})
+        await _until(lambda: silent.of("pong"))
+        await silent.inbox.put(None)
+        await silent_task
+        assert live.closed is None and route().mac is live and route().ready
+        await live.inbox.put(None)
+        await live_task
+    asyncio.run(run())
+
+
+def test_a_silent_mac_is_dropped_and_in_flight_calls_are_answered(route, monkeypatch):
+    """No frame for RECEIVE_TIMEOUT_SECONDS: the hub drops the Mac, every shim goes offline, and a call already
+    on the Mac is answered at once (the real shim, over the real socket)."""
+    monkeypatch.setattr(api, "RECEIVE_TIMEOUT_SECONDS", 0.3)
+    monkeypatch.setattr(shim_mod, "RETRY_SECONDS", 0.05)
+    loop = asyncio.new_event_loop()
+    threading.Thread(target=loop.run_forever, daemon=True).start()
+    call = lambda coro: asyncio.run_coroutine_threadsafe(coro, loop).result(5)  # noqa: E731
+    try:
+        ws = call(asyncio.sleep(0, RouteWs()))  # built on the hub's loop
+        task = asyncio.run_coroutine_threadsafe(api.mac_bridge(ws), loop)
+        call(ws.inbox.put(HELLO))
+        stdout = io.StringIO()
+        shim = shim_mod.Shim(str(route().sock_path), out=stdout)
+        threading.Thread(target=shim.socket_loop, daemon=True).start()
+        deadline = time.monotonic() + 5
+        while not shim.online and time.monotonic() < deadline:
+            call(ws.inbox.put({"t": "ping"}))  # keep the link alive until the shim is online
+            time.sleep(0.05)
+        assert shim.online
+        shim.from_hermes({"jsonrpc": "2.0", "id": 21, "method": "tools/call", "params": {"name": "click"}})
+        started = time.monotonic()
+        task.result(5)  # the route returns on its own: no frame for 0.3 s
+        deadline = time.monotonic() + 5
+        while shim.online and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert not shim.online and time.monotonic() - started < 3
+        assert ws.closed == (1001, "no frames")
+        assert route().mac is None
+        answer = next(m for m in _out(stdout) if m.get("id") == 21)
+        assert answer["result"]["content"][0]["text"] == DROPPED
+    finally:
+        loop.call_soon_threadsafe(loop.stop)
+
+
+def test_a_socket_error_at_setup_closes_with_a_retryable_code(route, monkeypatch):
+    async def run():
+        async def broken(self):
+            raise OSError("read-only file system")
+
+        monkeypatch.setattr(api.Hub, "ensure_socket", broken)
+        ws = RouteWs()
+        await api.mac_bridge(ws)
+        assert ws.closed == (1011, "bridge socket unavailable")  # not 4000: the Mac retries
+    asyncio.run(run())
+
+
+def test_a_repeat_hello_gives_every_conn_a_fresh_child(home):
+    async def run():
+        hub = api.Hub(home)
+        await hub.ensure_socket()
+        mac = FakeMac()
+        await hub.on_mac_frame(mac, HELLO)
+        client = LineClient(hub.sock_path)
+        await client.open()
+        await _until(lambda: mac.of("open"))
+        await hub.on_mac_frame(mac, HELLO)  # the Mac restarted its daemon
+        await _until(lambda: len(client.frames) == 3)
+        assert client.frames == [{"t": "online"}, {"t": "offline"}, {"t": "online"}]
+        assert len(mac.of("open")) == 2 and mac.closed is None
+    asyncio.run(run())
+
+
+def test_reopen_backs_off_2s_doubling_to_60s_and_resets_after_30s_open(home, monkeypatch):
+    clock = [1000.0]
+    monkeypatch.setattr(api, "_clock", lambda: clock[0])
+    hub = api.Hub(home)
+    assert [hub._reopen_delay("c") for _ in range(7)] == [2, 4, 8, 16, 32, 60, 60]
+    hub._opened_at["c"] = clock[0]
+    clock[0] += 29
+    assert hub._reopen_delay("c") == 60  # that open lasted 29 s: no reset
+    hub._opened_at["c"] = clock[0]
+    clock[0] += 30
+    assert hub._reopen_delay("c") == 2  # lasted 30 s: back to the start
+
+
+def test_ships_as_an_optional_user_plugin_not_a_bundled_one(tmp_path, monkeypatch):
+    """Bundled dashboard plugins mount on every profile unless disabled; this one must be opt-in per profile."""
+    from hermes_cli import web_server_dashboard as dashboard
+
+    assert not (REPO / "plugins" / "computer-use").exists()
+    assert (PLUGIN_DIR / "dashboard" / "manifest.json").is_file()
+    monkeypatch.delenv("HERMES_BUNDLED_PLUGINS", raising=False)
+    monkeypatch.delenv("HERMES_ENABLE_PROJECT_PLUGINS", raising=False)
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    found = {p["name"]: p for p in dashboard._discover_dashboard_plugins()}
+    assert "computer-use" not in found
+    assert found, "positive control: the bundled scan does list other dashboard plugins"
+
+    # Installed as the README says, it is a user plugin, mounted only once in plugins.enabled.
+    shutil.copytree(PLUGIN_DIR, tmp_path / "plugins" / "computer-use")
+    entry = {p["name"]: p for p in dashboard._discover_dashboard_plugins()}["computer-use"]
+    assert entry["source"] == "user"
+    assert dashboard._plugin_api_mount_skip_reason(entry, set(), set()) == "not in plugins.enabled"
+    assert dashboard._plugin_api_mount_skip_reason(entry, {"computer-use"}, set()) is None

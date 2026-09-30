@@ -7,8 +7,10 @@ process of this profile (gateway, Desktop agent, cron) spawns ``mcp_stdio_shim.p
 own conn-id, so the Mac runs one cua-driver MCP child per agent connection.
 
 Frames (JSON text): Mac→gw ``hello`` (tools manifest), gw→Mac ``open``, both ways ``msg`` / ``close``.
-Shim↔gw lines: ``msg`` both ways, gw→shim ``online`` / ``offline``. Nothing here approves or restricts
-anything: the newest Mac connection wins (routing), and the 0600 socket keeps profiles apart.
+Liveness: the Mac sends ``ping`` (answered ``pong``); a Mac silent for ``RECEIVE_TIMEOUT_SECONDS`` is
+dropped, so every shim goes offline at once. Unknown frame types are ignored. Shim↔gw lines: ``msg`` both
+ways, gw→shim ``online`` / ``offline``. Nothing here approves or restricts anything: the newest Mac that says
+``hello`` wins (routing), and the 0600 socket keeps profiles apart.
 """
 
 from __future__ import annotations
@@ -28,7 +30,12 @@ log = logging.getLogger(__name__)
 
 router = APIRouter()
 
+# A conn whose Mac child ends is reopened after 2 s, doubling to 60 s; an open that lasted 30 s resets it.
 REOPEN_DELAY_SECONDS = 2.0
+REOPEN_MAX_SECONDS = 60.0
+REOPEN_STABLE_SECONDS = 30.0
+# The Mac pings every 20 s: this long without any frame means the link is dead (sleep, lost network).
+RECEIVE_TIMEOUT_SECONDS = 60.0
 # Largest JSON-RPC message carried either way (base64 screenshots are MB-sized); the shim and the Mac
 # answer a bigger one with an error for that call, so the socket reader only needs envelope headroom.
 MAX_MESSAGE_BYTES = 64 * 1024 * 1024
@@ -43,6 +50,10 @@ def _ws_upgrade_authorized(ws: "WebSocket") -> bool:
     except Exception:
         return True
     return bool(_ws._ws_auth_ok(ws))
+
+
+def _clock() -> float:
+    return time.monotonic()
 
 
 def _line(frame: Dict[str, Any]) -> bytes:
@@ -61,6 +72,8 @@ class Hub:
         self._server: Optional[asyncio.AbstractServer] = None
         self._send_lock = asyncio.Lock()
         self._tasks: set = set()
+        self._reopen_attempts: Dict[str, int] = {}
+        self._opened_at: Dict[str, float] = {}
 
     async def ensure_socket(self) -> None:
         if self._server is not None:
@@ -105,9 +118,14 @@ class Hub:
         if mac is None or mac is not self.mac or not self.ready:
             return
         if await self._to_mac({"t": "open", "c": cid}, mac) and mac is self.mac:
+            self._opened_at[cid] = _clock()
             await self._to_shim(cid, {"t": "online"})
 
     async def attach_mac(self, ws: WebSocket) -> None:
+        """Make ``ws`` the current Mac. Called on its ``hello``, never at the upgrade: an upgrade that never
+        says hello must not evict the live Mac (4000 is terminal on the Mac until the user toggles Enable)."""
+        if ws is self.mac:
+            return
         old, self.mac, self.ready = self.mac, ws, False
         if old is not None:
             log.info("computer-use: a newer Mac connection replaced the previous one")
@@ -119,6 +137,13 @@ class Hub:
                 pass
 
     async def on_hello(self, ws: WebSocket, hello: Dict[str, Any]) -> None:
+        if not isinstance(hello.get("tools"), list):
+            return
+        if ws is self.mac and self.ready:
+            # A repeat hello (the Mac restarted its daemon): every conn gets a fresh child, re-initialized.
+            for cid in list(self.shims):
+                await self._to_shim(cid, {"t": "offline"})
+        await self.attach_mac(ws)
         if ws is not self.mac:
             return
         self.save_tools(hello)
@@ -141,13 +166,21 @@ class Hub:
         elif kind == "close" and cid in self.shims:
             # The Mac's child for this conn ended: the shim goes offline and gets a fresh child shortly.
             await self._to_shim(cid, {"t": "offline"})
-            task = asyncio.create_task(self._reopen_later(ws, cid))
+            task = asyncio.create_task(self._reopen_later(ws, cid, self._reopen_delay(cid)))
             self._tasks.add(task)
             task.add_done_callback(self._tasks.discard)
 
-    async def _reopen_later(self, ws: WebSocket, cid: str) -> None:
-        await asyncio.sleep(REOPEN_DELAY_SECONDS)
-        if cid in self.shims:
+    def _reopen_delay(self, cid: str) -> float:
+        opened = self._opened_at.pop(cid, None)
+        if opened is not None and _clock() - opened >= REOPEN_STABLE_SECONDS:
+            self._reopen_attempts[cid] = 0
+        attempt = self._reopen_attempts.get(cid, 0)
+        self._reopen_attempts[cid] = attempt + 1
+        return min(REOPEN_MAX_SECONDS, REOPEN_DELAY_SECONDS * 2 ** attempt)
+
+    async def _reopen_later(self, ws: WebSocket, cid: str, delay: float) -> None:
+        await asyncio.sleep(delay)
+        if cid in self.shims and cid not in self._opened_at:  # not already reopened by a hello meanwhile
             await self._open(cid, ws)
 
     async def detach_mac(self, ws: WebSocket) -> None:
@@ -181,6 +214,8 @@ class Hub:
             pass
         finally:
             self.shims.pop(cid, None)
+            self._reopen_attempts.pop(cid, None)
+            self._opened_at.pop(cid, None)
             if self.ready:
                 await self._to_mac({"t": "close", "c": cid})
             writer.close()
@@ -201,6 +236,13 @@ def _current_home() -> Path:
     return Path(get_hermes_home())
 
 
+async def _close_quietly(ws: WebSocket, code: int, reason: str) -> None:
+    try:
+        await asyncio.wait_for(ws.close(code=code, reason=reason), 5)
+    except Exception:
+        pass
+
+
 @router.websocket("/bridge")
 async def mac_bridge(ws: WebSocket):
     if not _ws_upgrade_authorized(ws):
@@ -208,19 +250,30 @@ async def mac_bridge(ws: WebSocket):
         return
     await ws.accept()
     hub = hub_for(_current_home())
-    await hub.ensure_socket()
-    await hub.attach_mac(ws)
     try:
+        await hub.ensure_socket()
         while True:
-            raw = await ws.receive_text()
+            try:
+                raw = await asyncio.wait_for(ws.receive_text(), RECEIVE_TIMEOUT_SECONDS)
+            except asyncio.TimeoutError:
+                log.info("computer-use: no frame from the Mac for %ds; dropping it", RECEIVE_TIMEOUT_SECONDS)
+                await _close_quietly(ws, 1001, "no frames")
+                break
             try:
                 frame = json.loads(raw)
             except ValueError:
                 continue
-            if isinstance(frame, dict):
+            if not isinstance(frame, dict):
+                continue
+            if frame.get("t") == "ping":
+                await hub._to_mac({"t": "pong"}, ws)
+            else:
                 await hub.on_mac_frame(ws, frame)
     except (WebSocketDisconnect, asyncio.CancelledError):
         pass
+    except OSError as exc:
+        log.warning("computer-use: bridge socket unavailable: %s", exc)
+        await _close_quietly(ws, 1011, "bridge socket unavailable")
     except Exception as exc:  # never crash the dashboard worker
         log.warning("computer-use bridge error: %s", exc)
     finally:

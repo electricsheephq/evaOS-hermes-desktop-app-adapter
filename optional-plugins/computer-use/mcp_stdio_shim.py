@@ -4,7 +4,8 @@ Hermes spawns it from ``mcp_servers.my-mac``. It connects to the profile's bridg
 dashboard's ``computer-use`` plugin) and, while the Mac is online, passes JSON-RPC through message for
 message to a cua-driver MCP child on the Mac. While the Mac is offline it answers ``initialize`` and
 ``tools/list`` itself (from ``tools.json`` beside the socket, else the bundled ``default_tools.json``)
-and fails ``tools/call`` with a plain sentence the agent can relay. When the Mac comes (back) online
+and fails ``tools/call`` with a plain sentence the agent can relay (a call in flight when the link drops
+gets its own sentence: it may or may not have run). When the Mac comes (back) online
 mid-session it re-initializes the new child with Hermes's original ``initialize`` params and emits
 ``notifications/tools/list_changed``. Stdlib only.
 """
@@ -20,7 +21,9 @@ import time
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-OFFLINE_TEXT = "Your Mac isn't connected. Ask the user to open evaOS Agent and turn on Computer Use (left sidebar)."
+OFFLINE_TEXT = "Your Mac isn't connected. Ask the user to open evaOS Agent → Computer Use → Enable."
+DROPPED_TEXT = ("The connection to the user's Mac dropped during this action; it may or may not have run. "
+                "Check the Mac's state before retrying.")
 RETRY_SECONDS = 2.0
 REPLAY_ID = "my-mac-reinit"
 MAX_MESSAGE_BYTES = 64 * 1024 * 1024  # matches the dashboard hub and the Mac
@@ -67,7 +70,7 @@ class Shim:
                 return False
 
     # -- offline answers --------------------------------------------------------------------------
-    def answer_offline(self, message: Dict[str, Any]) -> None:
+    def answer_offline(self, message: Dict[str, Any], text: str = OFFLINE_TEXT) -> None:
         method, rid = message.get("method"), message.get("id")
         if rid is None:
             return  # a notification: nothing to answer
@@ -79,14 +82,14 @@ class Shim:
         elif method == "tools/list":
             result = {"tools": self.cached()["tools"]}
         elif method == "tools/call":
-            result = {"content": [{"type": "text", "text": OFFLINE_TEXT}], "isError": True}
+            result = {"content": [{"type": "text", "text": text}], "isError": True}
         elif method == "ping":
             result = {}
         elif method in ("resources/list", "prompts/list", "resources/templates/list"):
             key = {"resources/list": "resources", "prompts/list": "prompts"}.get(method, "resourceTemplates")
             result = {key: []}
         else:
-            self.emit({"jsonrpc": "2.0", "id": rid, "error": {"code": -32601, "message": OFFLINE_TEXT}})
+            self.emit({"jsonrpc": "2.0", "id": rid, "error": {"code": -32601, "message": text}})
             return
         self.emit({"jsonrpc": "2.0", "id": rid, "result": result})
 
@@ -126,8 +129,9 @@ class Shim:
         with self.lock:
             self.online = False
             pending, self.pending = self.pending, {}
+        # Calls already on the Mac when the link dropped may have run: say so, unlike a call made offline.
         for rid, method in pending.items():
-            self.answer_offline({"id": rid, "method": method})
+            self.answer_offline({"id": rid, "method": method}, DROPPED_TEXT)
 
     def from_dashboard(self, frame: Dict[str, Any]) -> None:
         kind = frame.get("t")
