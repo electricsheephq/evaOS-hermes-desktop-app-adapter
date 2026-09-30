@@ -42,6 +42,9 @@ RECEIVE_TIMEOUT_SECONDS = 60.0
 # answer a bigger one with an error for that call, so the socket reader only needs envelope headroom.
 MAX_MESSAGE_BYTES = 64 * 1024 * 1024
 LINE_LIMIT = MAX_MESSAGE_BYTES + 64 * 1024
+# The dashboard's plugin gate is HTTP middleware; a connected bridge re-asks it this often (4000 when disabled).
+PLUGIN_CHECK_SECONDS = 30.0
+PLUGIN_NAME = "computer-use"
 
 
 def _ws_upgrade_authorized(ws: "WebSocket") -> bool:
@@ -52,6 +55,23 @@ def _ws_upgrade_authorized(ws: "WebSocket") -> bool:
     except Exception:
         return True
     return bool(_ws._ws_auth_ok(ws))
+
+
+def _plugin_disabled(profile: Optional[str]) -> bool:
+    """The runtime plugin gate's decision (``web_server._plugin_api_runtime_gate``, which does not run for
+    WebSockets) for ``profile``'s config: the same enabled/disabled sets, plugin list and trust rule. False when
+    the dashboard isn't importable (bare-FastAPI test harness)."""
+    try:
+        from hermes_cli.plugins_cmd import _get_disabled_set, _get_enabled_set
+        from hermes_cli.web_server import _get_dashboard_plugins
+        from hermes_cli.web_server_dashboard import _plugin_api_mount_skip_reason
+        from hermes_cli.web_server_profiles import _config_profile_scope
+    except ImportError:
+        return False
+    with _config_profile_scope(profile or None):
+        enabled, disabled = _get_enabled_set(), _get_disabled_set()
+    plugin = next((p for p in _get_dashboard_plugins() if p.get("name") == PLUGIN_NAME), None)
+    return _plugin_api_mount_skip_reason(plugin or {"name": PLUGIN_NAME, "source": "user"}, enabled, disabled) is not None
 
 
 def _clock() -> float:
@@ -238,6 +258,21 @@ def _current_home() -> Path:
     return Path(get_hermes_home())
 
 
+def _profile_home(profile: str) -> Optional[Path]:
+    """The home whose agents this bridge serves: the relay's ``?profile=`` (one process may serve many
+    profiles), resolved as the dashboard's per-profile routes do; none named = this process's own. None
+    when the name can't be resolved here."""
+    if not profile or profile.lower() == "current":
+        return _current_home()
+    try:
+        from hermes_cli.web_server_profiles import _resolve_profile_dir
+        target = _resolve_profile_dir(profile)
+    except Exception:
+        return None
+    current = _current_home()
+    return current if target.resolve() == current.resolve() else target
+
+
 async def _close_quietly(ws: WebSocket, code: int, reason: str) -> None:
     try:
         await asyncio.wait_for(ws.close(code=code, reason=reason), 5)
@@ -257,17 +292,44 @@ async def mac_bridge(ws: WebSocket):
     if not _ws_upgrade_authorized(ws):
         await ws.close(code=http_status.WS_1008_POLICY_VIOLATION)
         return
+    profile = (ws.query_params.get("profile") or "").strip()
+    home = _profile_home(profile)
+    try:
+        disabled = home is None or _plugin_disabled(profile)
+    except Exception as exc:
+        log.warning("computer-use: could not read the plugin setting: %s", exc)
+        disabled = True
+    if disabled:
+        await ws.close(code=http_status.WS_1008_POLICY_VIOLATION)
+        return
     await ws.accept()
-    hub = hub_for(_current_home())
+    hub = hub_for(home)
     try:
         await hub.ensure_socket()
+        last_frame = checked = _clock()
         while True:
+            now = _clock()
+            if now - checked >= PLUGIN_CHECK_SECONDS:
+                checked = now
+                try:
+                    disabled = _plugin_disabled(profile)
+                except Exception as exc:  # can't tell: keep the Mac
+                    log.warning("computer-use: could not re-read the plugin setting: %s", exc)
+                if disabled:
+                    log.info("computer-use: the plugin was disabled; dropping the Mac")
+                    await hub.detach_mac(ws)  # every shim offline: calls on the Mac are answered now
+                    await _close_quietly(ws, 4000, "computer-use plugin disabled")
+                    break
+            wait = min(RECEIVE_TIMEOUT_SECONDS - (now - last_frame), PLUGIN_CHECK_SECONDS - (now - checked))
             try:
-                raw = await asyncio.wait_for(ws.receive_text(), RECEIVE_TIMEOUT_SECONDS)
+                raw = await asyncio.wait_for(ws.receive_text(), max(wait, 0.0))
             except asyncio.TimeoutError:
+                if _clock() - last_frame < RECEIVE_TIMEOUT_SECONDS:
+                    continue  # only the plugin check is due
                 log.info("computer-use: no frame from the Mac for %ds; dropping it", RECEIVE_TIMEOUT_SECONDS)
                 await _close_quietly(ws, 1001, "no frames")
                 break
+            last_frame = _clock()
             try:
                 frame = json.loads(raw)
             except ValueError:

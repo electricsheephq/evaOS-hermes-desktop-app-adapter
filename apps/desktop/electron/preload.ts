@@ -332,12 +332,16 @@ contextBridge.exposeInMainWorld('hermesDesktop', {
       return () => ipcRenderer.removeListener('hermes:eva:support:open-picker', listener)
     }
   },
-  macBridge: {
-    status: () => ipcRenderer.invoke('hermes:macBridge:status'),
-    setEnabled: (enabled: boolean) => ipcRenderer.invoke('hermes:macBridge:setEnabled', enabled),
-    installCua: () => ipcRenderer.invoke('hermes:macBridge:installCua'),
-    grantPermissions: () => ipcRenderer.invoke('hermes:macBridge:grantPermissions')
-  },
+  // Computer Use (Mac bridge): macOS only; elsewhere there is no bridge, so no page entry and no Install CUA.
+  macBridge:
+    process.platform === 'darwin'
+      ? {
+          status: () => ipcRenderer.invoke('hermes:macBridge:status'),
+          setEnabled: (enabled: boolean) => ipcRenderer.invoke('hermes:macBridge:setEnabled', enabled),
+          installCua: () => ipcRenderer.invoke('hermes:macBridge:installCua'),
+          grantPermissions: () => ipcRenderer.invoke('hermes:macBridge:grantPermissions')
+        }
+      : undefined,
   profile: {
     getDefault: () => ipcRenderer.invoke('hermes:profile:default:get'),
     setDefault: (route: DesktopProfileRoute) => ipcRenderer.invoke('hermes:profile:default:set', route),

@@ -418,12 +418,14 @@ def test_over_limit_frames_fail_that_call_and_keep_the_connection(home, monkeypa
 class RouteWs(FakeMac):
     """What the ``/bridge`` route sees: frames arrive through ``inbox``; ``None`` is a disconnect."""
 
-    def __init__(self):
+    def __init__(self, profile=None):
         super().__init__()
         self.inbox: asyncio.Queue = asyncio.Queue()
+        self.query_params = {"profile": profile} if profile else {}
+        self.accepted = False
 
     async def accept(self):
-        pass
+        self.accepted = True
 
     async def receive_text(self):
         item = await self.inbox.get()
@@ -436,6 +438,7 @@ class RouteWs(FakeMac):
 def route(home, monkeypatch):
     monkeypatch.setattr(api, "_ws_upgrade_authorized", lambda ws: True)
     monkeypatch.setattr(api, "_current_home", lambda: home)
+    monkeypatch.setattr(api, "_plugin_disabled", lambda profile: False)
     monkeypatch.setattr(api, "_hubs", {})
     return lambda: api.hub_for(home)
 
@@ -597,3 +600,142 @@ def test_reopen_attempts_never_overflow(home):
     assert hub._reopen_attempts["c"] <= api.REOPEN_ATTEMPTS_CAP + 1
     for _ in range(2000):
         assert hub._reopen_delay("c") == 60
+
+
+# --- review-bot round (r3) ------------------------------------------------------------------------
+
+
+@pytest.fixture
+def two_homes(route, home, monkeypatch):
+    """This process's home (A, the route fixture's) and a second profile ``bob`` it also serves (B)."""
+    from fastapi import HTTPException
+    from hermes_cli import web_server_profiles
+
+    other = Path(tempfile.mkdtemp(prefix="cu"))
+
+    def resolve(name):
+        if name == "bob":
+            return other
+        raise HTTPException(status_code=404, detail=f"Profile '{name}' does not exist.")
+
+    monkeypatch.setattr(web_server_profiles, "_resolve_profile_dir", resolve)
+    yield home, other
+    shutil.rmtree(other, ignore_errors=True)
+
+
+def test_b1_a_bridge_for_profile_b_lands_on_b_socket_never_a(two_homes):
+    home_a, home_b = two_homes
+
+    async def run():
+        ws = RouteWs(profile="bob")
+        task = asyncio.create_task(api.mac_bridge(ws))
+        await ws.inbox.put(HELLO)
+        await _until(lambda: api.hub_for(home_b).ready)
+        assert (home_b / "computer-use" / "bridge.sock").exists()
+        assert not (home_a / "computer-use").exists()
+        assert list(api._hubs) == [str(home_b)]
+        assert json.loads((home_b / "computer-use" / "tools.json").read_text())["tools"] == HELLO["tools"]
+        await ws.inbox.put(None)
+        await task
+    asyncio.run(run())
+
+
+def test_b1_an_unknown_profile_is_refused_before_accept(two_homes):
+    async def run():
+        ws = RouteWs(profile="nobody")
+        await api.mac_bridge(ws)
+        assert ws.closed == (1008, "") and not ws.accepted
+        assert api._hubs == {}
+    asyncio.run(run())
+
+
+def test_b1_no_profile_param_keeps_this_process_home(two_homes):
+    home_a, home_b = two_homes
+
+    async def run():
+        for ws in (RouteWs(), RouteWs(profile="current")):
+            task = asyncio.create_task(api.mac_bridge(ws))
+            await ws.inbox.put(HELLO)
+            await _until(lambda: api.hub_for(home_a).mac is ws and api.hub_for(home_a).ready)
+            await ws.inbox.put(None)
+            await task
+        assert list(api._hubs) == [str(home_a)]
+        assert (home_a / "computer-use" / "bridge.sock").exists()
+        assert not (home_b / "computer-use").exists()
+    asyncio.run(run())
+
+
+def test_b2_disabled_at_upgrade_is_refused_before_accept(route, monkeypatch):
+    asked = []
+    monkeypatch.setattr(api, "_plugin_disabled", lambda profile: asked.append(profile) or True)
+
+    async def run():
+        ws = RouteWs()
+        await api.mac_bridge(ws)
+        assert ws.closed == (1008, "") and not ws.accepted
+        assert asked == [""] and api._hubs == {}
+    asyncio.run(run())
+
+
+def test_b2_disabled_while_connected_closes_4000_and_answers_in_flight_calls(route, monkeypatch):
+    """Re-checked every PLUGIN_CHECK_SECONDS (a short one here): the Mac gets 4000 (terminal, no redial) and the
+    shims go offline, so a call already on the Mac is answered at once (the real shim, over the real socket)."""
+    monkeypatch.setattr(api, "PLUGIN_CHECK_SECONDS", 0.2)
+    monkeypatch.setattr(shim_mod, "RETRY_SECONDS", 0.05)
+    state = {"disabled": False, "checks": 0}
+
+    def disabled(profile):
+        state["checks"] += 1
+        return state["disabled"]
+
+    monkeypatch.setattr(api, "_plugin_disabled", disabled)
+    loop = asyncio.new_event_loop()
+    threading.Thread(target=loop.run_forever, daemon=True).start()
+    call = lambda coro: asyncio.run_coroutine_threadsafe(coro, loop).result(5)  # noqa: E731
+    try:
+        ws = call(asyncio.sleep(0, RouteWs()))
+        task = asyncio.run_coroutine_threadsafe(api.mac_bridge(ws), loop)
+        call(ws.inbox.put(HELLO))
+        stdout = io.StringIO()
+        shim = shim_mod.Shim(str(route().sock_path), out=stdout)
+        threading.Thread(target=shim.socket_loop, daemon=True).start()
+        deadline = time.monotonic() + 5
+        while not shim.online and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert shim.online
+        time.sleep(0.5)  # a few checks pass while enabled, with no frame from the Mac: nothing happens
+        assert state["checks"] >= 2 and ws.closed is None and route().mac is ws
+        shim.from_hermes({"jsonrpc": "2.0", "id": 31, "method": "tools/call", "params": {"name": "click"}})
+        state["disabled"] = True
+        started = time.monotonic()
+        task.result(5)
+        assert time.monotonic() - started < 1.5
+        assert ws.closed == (4000, "computer-use plugin disabled")
+        assert route().mac is None
+        deadline = time.monotonic() + 5
+        while shim.online and time.monotonic() < deadline:
+            time.sleep(0.02)
+        answer = next(m for m in _out(stdout) if m.get("id") == 31)
+        assert answer["result"]["content"][0]["text"] == DROPPED
+    finally:
+        loop.call_soon_threadsafe(loop.stop)
+
+
+def test_b2_the_check_is_the_dashboard_gate_decision(tmp_path, monkeypatch):
+    """The real predicate against a real config: enabled → allowed; plugins.disabled or absent from
+    plugins.enabled → disabled (the same sets and trust rule as the HTTP gate)."""
+    from hermes_cli import web_server
+
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    shutil.copytree(PLUGIN_DIR, tmp_path / "plugins" / "computer-use")
+    web_server._get_dashboard_plugins(force_rescan=True)
+    try:
+        config = tmp_path / "config.yaml"
+        config.write_text("plugins:\n  enabled: [computer-use]\n", encoding="utf-8")
+        assert api._plugin_disabled(None) is False
+        config.write_text("plugins:\n  enabled: [computer-use]\n  disabled: [computer-use]\n", encoding="utf-8")
+        assert api._plugin_disabled(None) is True
+        config.write_text("plugins:\n  enabled: [kanban]\n", encoding="utf-8")
+        assert api._plugin_disabled(None) is True
+    finally:
+        web_server._get_dashboard_plugins(force_rescan=True)

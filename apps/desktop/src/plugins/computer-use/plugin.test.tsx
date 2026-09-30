@@ -1,5 +1,5 @@
 import { ROUTES_AREA, SIDEBAR_NAV_AREA } from '@hermes/plugin-sdk'
-import { act, cleanup, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 // Test harness builds the context the plugin loader hands to register().
@@ -94,5 +94,45 @@ describe('Computer Use sidebar entry and page', () => {
     expect(screen.getByRole('button', { name: 'Grant permissions' })).toBeTruthy()
     expect(screen.getByText('Enable Computer Use')).toBeTruthy()
     expect(screen.getByRole('switch')).toBeTruthy() // the control the not-set-up page must not show
+  })
+
+  it('B6: one status poll at a time: a slow status() starts no second call until it answers', async () => {
+    current = status(true)
+    let answer: (value: ReturnType<typeof status>) => void = () => undefined
+    const macBridge = (window as any).hermesDesktop.macBridge
+    macBridge.status.mockImplementation(() => new Promise(resolve => (answer = resolve)))
+
+    render(<ComputerUsePage />)
+    await act(async () => void (await vi.advanceTimersByTimeAsync(10_000)))
+    expect(macBridge.status).toHaveBeenCalledTimes(1)
+
+    await act(async () => answer(current))
+    await act(async () => void (await vi.advanceTimersByTimeAsync(2000)))
+    expect(macBridge.status).toHaveBeenCalledTimes(2)
+  })
+
+  it('B6: a poll that started before Disable and answers after it is dropped', async () => {
+    const macBridge = (window as any).hermesDesktop.macBridge
+    const on = status(true)
+    const off = { ...status(true), enabled: false }
+    let late: (value: ReturnType<typeof status>) => void = () => undefined
+    macBridge.status.mockImplementationOnce(async () => on)
+    macBridge.status.mockImplementationOnce(() => new Promise(resolve => (late = resolve)))
+    macBridge.status.mockImplementation(async () => off)
+    macBridge.setEnabled.mockImplementation(async () => off)
+
+    render(<ComputerUsePage />)
+    await settle()
+    expect(screen.getByRole('switch').getAttribute('aria-checked')).toBe('true')
+    await act(async () => void (await vi.advanceTimersByTimeAsync(2000))) // the slow poll starts
+    expect(macBridge.status).toHaveBeenCalledTimes(2)
+
+    fireEvent.click(screen.getByRole('switch'))
+    await settle()
+    expect(macBridge.setEnabled).toHaveBeenCalledWith(false)
+    expect(screen.getByRole('switch').getAttribute('aria-checked')).toBe('false')
+
+    await act(async () => late(on)) // read before Disable: stale
+    expect(screen.getByRole('switch').getAttribute('aria-checked')).toBe('false')
   })
 })

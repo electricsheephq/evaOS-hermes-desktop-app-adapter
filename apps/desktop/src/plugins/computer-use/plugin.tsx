@@ -16,7 +16,7 @@ import {
   type SidebarNavContribution,
   ToggleRow
 } from '@hermes/plugin-sdk'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 type MacBridgeStatus = Awaited<ReturnType<NonNullable<Window['hermesDesktop']['macBridge']>['status']>>
 
@@ -48,6 +48,10 @@ export function ComputerUsePage() {
   const bridge = window.hermesDesktop?.macBridge
   const [status, setStatus] = useState<MacBridgeStatus | null>(null)
   const [busy, setBusy] = useState(false)
+  // Bumped by each poll and each Enable/Disable: only the newest answer is shown, so a slow poll that
+  // started before a toggle never overwrites the toggle's answer.
+  const generation = useRef(0)
+  const acting = useRef(false)
 
   useEffect(() => {
     if (!bridge) {
@@ -55,14 +59,32 @@ export function ComputerUsePage() {
     }
 
     let live = true
+    let polling = false
 
-    const read = () =>
-      void bridge.status().then(next => {
-        if (live) {
-          setStatus(next)
-          reportAvailable(next.available === true)
-        }
-      })
+    const read = () => {
+      // One poll at a time, and none while Enable/Disable runs.
+      if (polling || acting.current) {
+        return
+      }
+
+      polling = true
+      const mine = ++generation.current
+
+      void bridge
+        .status()
+        .then(
+          next => {
+            if (live && mine === generation.current) {
+              setStatus(next)
+              reportAvailable(next.available === true)
+            }
+          },
+          () => undefined
+        )
+        .finally(() => {
+          polling = false
+        })
+    }
 
     read()
     const timer = window.setInterval(read, POLL_MS)
@@ -75,10 +97,17 @@ export function ComputerUsePage() {
 
   const toggle = async (on: boolean) => {
     setBusy(true)
+    acting.current = true
+    const mine = ++generation.current
 
     try {
-      setStatus(await bridge!.setEnabled(on))
+      const next = await bridge!.setEnabled(on)
+
+      if (mine === generation.current) {
+        setStatus(next)
+      }
     } finally {
+      acting.current = false
       setBusy(false)
     }
   }

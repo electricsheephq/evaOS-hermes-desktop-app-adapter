@@ -24,6 +24,7 @@ import {
   notSetUpText,
   probeMacBridgeAvailable,
   reaperArgs,
+  registerMacBridgeIpc,
   REPLACED_CODE,
   REPLACED_TEXT,
   resolveMacBridgeTargets,
@@ -57,6 +58,7 @@ class FakeProc extends EventEmitter {
   kill() {
     this.killed = true
     this.emit('exit', null, 'SIGTERM')
+    this.emit('close', null, 'SIGTERM') // stdio drained
   }
 }
 
@@ -279,7 +281,7 @@ describe('the bridge', () => {
 
     ws.frame({ t: 'close', c: 'c1' })
     expect(one.killed).toBe(true)
-    one.emit('exit') // a gateway-requested close is not echoed back
+    one.emit('close') // a gateway-requested close is not echoed back
     two.kill() // a child that exits on its own is reported
     expect(ws.sent.filter(frame => frame.t === 'close')).toEqual([{ t: 'close', c: 'c2' }])
   })
@@ -1504,5 +1506,113 @@ describe('pilot fix round 2 (M7: shown only for agents that have it)', () => {
     await mb.setEnabled(false)
     expect(timers).toEqual([])
     expect(opens()).toHaveLength(waiting)
+  })
+})
+
+describe('review-bot round (r3)', () => {
+  const statePath = () => path.join(dir, 'mac-bridge.json')
+  const saved = () => JSON.parse(fs.readFileSync(statePath(), 'utf8'))
+  const reapers = () => procs.filter(entry => entry.command === '/bin/sh')
+
+  it('B3: Disable whose save fails still stops the daemon and the links, and says why', async () => {
+    const mb = bridge()
+    await mb.setEnabled(true)
+    const sock = runs.find(entry => entry.command === '/usr/bin/open')!.args[8]
+    FakeWs.all[0].open()
+    FakeWs.all[0].frame({ t: 'open', c: 'c1' })
+
+    // The state file can't be written any more (a directory in its place: EISDIR).
+    fs.rmSync(statePath())
+    fs.mkdirSync(statePath())
+
+    const status = await mb.setEnabled(false)
+    expect(stops()).toEqual([{ command: binary, args: ['stop', '--socket', sock] }])
+    expect(reapers().map(entry => entry.args[3])).toEqual([sock])
+    expect(FakeWs.all[0].closed).toBe(true)
+    expect(children()[0].proc.killed).toBe(true)
+    expect(status.enabled).toBe(false)
+    expect(status.daemon.running).toBe(false)
+    expect(status.connections).toEqual([])
+    expect(status.error).toMatch(/^Could not save the Computer Use setting: /)
+    expect(timers).toEqual([])
+  })
+
+  it('B4: the CUA binary gone at Disable: the reaper still runs, and the recorded socket clears only after it', async () => {
+    let recordedAtReap: any = 'not reaped'
+
+    const mb = bridge(undefined, {
+      spawn: (command, args, options) => {
+        const proc = new FakeProc()
+        procs.push({ command, args, options, proc })
+
+        if (command === '/bin/sh') {
+          recordedAtReap = saved().daemonSocket
+        }
+
+        return proc
+      }
+    })
+
+    await mb.setEnabled(true)
+    const sock = runs.find(entry => entry.command === '/usr/bin/open')!.args[8]
+    expect(saved().daemonSocket).toBe(sock)
+
+    fs.rmSync(binary) // CuaDriver.app removed while the daemon runs
+    await mb.setEnabled(false)
+    expect(stops()).toEqual([]) // `cua-driver stop` needs the binary
+    expect(reapers()).toHaveLength(1)
+    expect(reapers()[0].args.slice(0, 4)).toEqual(reaperArgs(sock, 0)[1].slice(0, 4))
+    expect(reapers()[0].options).toMatchObject({ detached: true })
+    expect(recordedAtReap).toBe(sock)
+    expect(saved().daemonSocket).toBeUndefined()
+  })
+
+  it('B5: off macOS the bridge is never available, starts nothing and offers no installer; no IPC is registered', async () => {
+    const mb = bridge(undefined, { platform: 'linux' })
+    const status = await mb.setEnabled(true)
+    expect(status.available).toBe(false)
+    expect(probes).toBe(0)
+    expect(runs.filter(entry => entry.command === '/usr/bin/open')).toEqual([])
+    expect(FakeWs.all).toEqual([])
+    await mb.installCua()
+    expect(procs.filter(entry => entry.command === '/usr/bin/osascript')).toEqual([])
+
+    const channels: string[] = []
+    const ipc = { handle: (channel: string) => void channels.push(channel) }
+    registerMacBridgeIpc(ipc, mb, 'linux')
+    registerMacBridgeIpc(ipc, mb, 'win32')
+    expect(channels).toEqual([])
+    registerMacBridgeIpc(ipc, bridge(), 'darwin') // positive control
+    expect(channels).toContain('hermes:macBridge:status')
+  })
+
+  it('B5: an installer that fails to spawn is logged, never an unhandled error event', async () => {
+    const lines: string[] = []
+    const mb = bridge(undefined, { platform: 'darwin', log: line => void lines.push(line) })
+    await mb.installCua()
+    const installer = procs.find(entry => entry.command === '/usr/bin/osascript')!.proc
+    expect(() => installer.emit('error', new Error('spawn EACCES'))).not.toThrow()
+    expect(lines.some(line => line.includes('could not run /usr/bin/osascript: spawn EACCES'))).toBe(true)
+  })
+
+  it('B7: a child whose exit lands before its last line: that answer goes once, then the close', async () => {
+    const mb = bridge()
+    await mb.setEnabled(true)
+    const ws = FakeWs.all[0]
+    ws.open()
+    ws.frame({ t: 'open', c: 'c1' })
+    const child = children()[0].proc
+    ws.frame({ t: 'msg', c: 'c1', m: { jsonrpc: '2.0', id: 9, method: 'tools/call', params: { name: 'click' } } })
+
+    child.emit('exit', 0, null) // the process ended; stdout still holds its answer
+    expect(ws.sent.filter(frame => frame.c === 'c1')).toEqual([])
+    child.reply({ id: 9, result: { content: [] } })
+    child.emit('close', 0, null)
+
+    expect(ws.sent.filter(frame => frame.c === 'c1')).toEqual([
+      { t: 'msg', c: 'c1', m: { jsonrpc: '2.0', id: 9, result: { content: [] } } },
+      { t: 'close', c: 'c1' }
+    ])
+    expect((await mb.status()).inUse).toEqual([])
   })
 })

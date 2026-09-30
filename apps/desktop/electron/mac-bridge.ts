@@ -120,6 +120,8 @@ export interface MacBridgeDeps {
   setTimer?: (fn: () => void, ms: number) => any
   clearTimer?: (timer: any) => void
   maxMessageBytes?: number
+  /** `process.platform`; Computer Use is macOS only. */
+  platform?: string
 }
 
 export function encodeFrame(frame: Frame): string {
@@ -395,6 +397,8 @@ function validAccount(value: any): MacBridgeAccount | null {
 
 export function createMacBridge(deps: MacBridgeDeps) {
   const env = deps.env || process.env
+  // Anywhere but macOS it is never available, so nothing starts and the page never shows.
+  const onMac = (deps.platform ?? process.platform) === 'darwin'
   const now = deps.now || Date.now
 
   const setTimer =
@@ -477,7 +481,7 @@ export function createMacBridge(deps: MacBridgeDeps) {
       let answer: boolean | null = false
 
       try {
-        answer = await deps.available()
+        answer = onMac ? await deps.available() : false
       } catch {
         answer = false
       }
@@ -611,8 +615,12 @@ export function createMacBridge(deps: MacBridgeDeps) {
    * `cua-driver stop` for a daemon that is up, plus the reaper, which owns `sock` until `until`: it kills a
    * daemon that only becomes ready after Disable or quit (inside the startup window) or that `stop` missed.
    */
-  function stopDaemonAt(binary: string, sock: string, until: number) {
-    deps.runSync(binary, ['stop', '--socket', sock], { env: daemonEnv(), timeout: 3000 })
+  function stopDaemonAt(binary: null | string, sock: string, until: number) {
+    // `stop` needs the binary; the reaper does not (a CuaDriver.app removed meanwhile still gets reaped).
+    if (binary) {
+      deps.runSync(binary, ['stop', '--socket', sock], { env: daemonEnv(), timeout: 3000 })
+    }
+
     fs.rmSync(sock, { force: true })
     const [command, args] = reaperArgs(sock, Date.now() + Math.max(REAP_MIN_MS, until - now()))
     deps.spawn(command, args, { detached: true, stdio: 'ignore' }).unref?.()
@@ -620,10 +628,8 @@ export function createMacBridge(deps: MacBridgeDeps) {
   }
 
   function stopDaemon() {
-    const { binary } = locate()
-
-    if (socket && binary) {
-      stopDaemonAt(binary, socket, now())
+    if (socket) {
+      stopDaemonAt(locate().binary, socket, now())
     }
 
     if (starting) {
@@ -731,7 +737,8 @@ export function createMacBridge(deps: MacBridgeDeps) {
       send(link, { t: 'msg', c: conn, m: message })
     })
     proc.stderr?.on('data', () => undefined)
-    proc.once('exit', () => {
+    // `close`, not `exit`: stdout is drained by then, so a last answer reaches the gateway before the close.
+    proc.once('close', () => {
       if (link.children.get(conn) === child) {
         link.children.delete(conn)
         send(link, { t: 'close', c: conn })
@@ -1258,7 +1265,15 @@ export function createMacBridge(deps: MacBridgeDeps) {
     enabled = value
     // Turning it on (or off) makes it this account's switch.
     account = deps.account()
-    saveState()
+    let saveError: null | string = null
+
+    try {
+      saveState()
+    } catch (error: any) {
+      // Not saved: the switch still acts now (Disable always stops everything), and the page says why.
+      saveError = `Could not save the Computer Use setting: ${error?.message || error}`
+      log(saveError)
+    }
 
     if (!enabled) {
       stopSync()
@@ -1267,6 +1282,10 @@ export function createMacBridge(deps: MacBridgeDeps) {
     } else {
       startFailures = 0
       await start()
+    }
+
+    if (saveError) {
+      lastError = saveError
     }
 
     return status()
@@ -1327,6 +1346,7 @@ export function createMacBridge(deps: MacBridgeDeps) {
 
   async function launch([command, args]: [string, string[]]) {
     const proc = deps.spawn(command, args, { detached: true, stdio: 'ignore', env })
+    proc.on?.('error', (error: any) => log(`could not run ${command}: ${error?.message || error}`))
     proc.unref?.()
   }
 
@@ -1349,7 +1369,7 @@ export function createMacBridge(deps: MacBridgeDeps) {
     retarget: () => retarget(true),
     redial,
     signedIn,
-    installCua: () => launch(installCommand()),
+    installCua: () => (onMac ? launch(installCommand()) : Promise.resolve()),
     grantPermissions: async () => {
       const { binary } = locate()
 
@@ -1366,8 +1386,13 @@ export type MacBridgeStatus = Awaited<ReturnType<MacBridge['status']>>
 
 export function registerMacBridgeIpc(
   ipcMain: { handle: (channel: string, listener: (...args: any[]) => any) => void },
-  bridge: MacBridge
+  bridge: MacBridge,
+  platform: string = process.platform
 ): void {
+  if (platform !== 'darwin') {
+    return // macOS only: no handlers, and the preload exposes no bridge
+  }
+
   ipcMain.handle('hermes:macBridge:status', () => bridge.status())
   ipcMain.handle('hermes:macBridge:setEnabled', (_event, value: boolean) => bridge.setEnabled(value === true))
   ipcMain.handle('hermes:macBridge:installCua', () => bridge.installCua())
