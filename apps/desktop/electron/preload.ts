@@ -332,6 +332,12 @@ contextBridge.exposeInMainWorld('hermesDesktop', {
       return () => ipcRenderer.removeListener('hermes:eva:support:open-picker', listener)
     }
   },
+  macBridge: {
+    status: () => ipcRenderer.invoke('hermes:macBridge:status'),
+    setEnabled: (enabled: boolean) => ipcRenderer.invoke('hermes:macBridge:setEnabled', enabled),
+    installCua: () => ipcRenderer.invoke('hermes:macBridge:installCua'),
+    grantPermissions: () => ipcRenderer.invoke('hermes:macBridge:grantPermissions')
+  },
   profile: {
     getDefault: () => ipcRenderer.invoke('hermes:profile:default:get'),
     setDefault: (route: DesktopProfileRoute) => ipcRenderer.invoke('hermes:profile:default:set', route),

@@ -1,4 +1,4 @@
-import { execFileSync, spawn } from 'node:child_process'
+import { execFile, execFileSync, spawn } from 'node:child_process'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import http from 'node:http'
@@ -300,6 +300,7 @@ import { CHROMIUM_LOG_FILENAME, enableLinuxCrashDiagnostics, linuxCrashDiagnosti
 import { notifyLauncherWindowRevealed } from './linux-launcher-ready'
 import { createLocalBackendLifecycle, waitForTeardown } from './local-backend-lifecycle'
 import { ACTIVE_LOG_POLL_MS, planLogRotation, reclaimActiveLogIfOversized } from './log-rotation'
+import { createMacBridge, registerMacBridgeIpc, resolveMacBridgeTargets } from './mac-bridge'
 import { ensureMainWindow } from './main-window-lifecycle'
 const { createManagedBackendGate } = require('./managed-backend-gate.cjs')
 import { classifyManagedDeepLink } from './managed-deep-link'
@@ -17430,6 +17431,48 @@ ipcMain.handle('hermes:connection-config:apply', async (_event, payload) => {
 
   return sanitizeDesktopConnectionConfig(config, payload?.profile)
 })
+
+// Computer Use (Mac bridge): this Mac's CUA for the user's own agents, while the app runs.
+const macBridge = createMacBridge({
+  spawn,
+  run: (command, args, options = {}) =>
+    new Promise(resolve =>
+      execFile(command, args, { timeout: 20_000, ...options }, (error: any, stdout, stderr) =>
+        resolve({ code: error ? (typeof error.code === 'number' ? error.code : 1) : 0, stdout: `${stdout}`, stderr: `${stderr}` })
+      )
+    ),
+  runSync: (command, args, options = {}) => {
+    try {
+      execFileSync(command, args, { stdio: 'ignore', ...options })
+    } catch {
+      // already stopped
+    }
+  },
+  WebSocket: globalThis.WebSocket,
+  statePath: path.join(app.getPath('userData'), 'mac-bridge.json'),
+  log: rememberLog,
+  resolveTargets: () =>
+    resolveMacBridgeTargets({
+      // An unpackaged dev build may point the bridge at a plain remote gateway.
+      managed: EVA_MANAGED_BUILD && !(process.env.HERMES_DESKTOP_REMOTE_URL && !IS_PACKAGED),
+      eva: evaManagedRuntime,
+      remoteWsUrl: async () => {
+        const connection = await resolveRemoteBackend(null)
+
+        if (!connection) {
+          return null
+        }
+
+        return connection.authMode === 'oauth'
+          ? buildGatewayWsUrlWithTicket(connection.baseUrl, await mintGatewayWsTicket(connection.baseUrl, connection.headers))
+          : connection.wsUrl
+      }
+    })
+})
+
+registerMacBridgeIpc(ipcMain, macBridge)
+app.on('will-quit', () => macBridge.stopSync())
+void app.whenReady().then(() => macBridge.init())
 
 ipcMain.handle('hermes:eva:status', async () => evaManagedRuntime.status())
 ipcMain.handle('hermes:eva:sign-in', async () => evaManagedRuntime.signIn())
