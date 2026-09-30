@@ -83,6 +83,47 @@ export function resolveDesktopConnectionRequest(
   return { connectionId: null, profile: requested || primaryProfile }
 }
 
+export interface DesktopProfileDialDeps<Connection, Priority> {
+  applySpawnPriority: (scopeKey: string, spawnPriority: Priority) => () => void
+  backendScopeKey: (connectionId: null | string, profile: string) => string
+  ensureBackend: (profile: string, opts: { spawnPriority: Priority }) => Promise<Connection>
+  ensureRegistryBackend: (
+    connectionId: string,
+    profile: string,
+    managedUpdateCorrelation: string,
+    opts: { spawnPriority: Priority }
+  ) => Promise<Connection>
+  managed: boolean
+  runDialClaim: (scopeKey: string, dial: () => Promise<Connection>) => Promise<Connection>
+}
+
+// Coalesce concurrent renderer dials for one profile scope (#90812): the
+// renderer-side reconnect lock is per-window, so two windows waking at once
+// both land here. The claim key mirrors ensureBackend()'s own profile
+// normalization so every spelling of the primary coalesces onto one dial.
+// A managed window route names the enrolled runtime by a synthetic id that no
+// workstation registry holds, so a managed profile-less reconnect dials by
+// profile, exactly as boot's explicit profile does, and joins its claim (#388).
+export async function dialDesktopProfileRoute<Connection, Priority>(
+  route: DesktopProfileRoute,
+  spawnPriority: Priority,
+  deps: DesktopProfileDialDeps<Connection, Priority>
+): Promise<Connection> {
+  const dialRoute = deps.managed ? { ...route, connectionId: null } : route
+  const scopeKey = deps.backendScopeKey(dialRoute.connectionId, dialRoute.profile)
+  const clearSpawnPriority = deps.applySpawnPriority(scopeKey, spawnPriority)
+
+  try {
+    return await deps.runDialClaim(scopeKey, () =>
+      dialRoute.connectionId
+        ? deps.ensureRegistryBackend(dialRoute.connectionId, dialRoute.profile, '', { spawnPriority })
+        : deps.ensureBackend(dialRoute.profile, { spawnPriority })
+    )
+  } finally {
+    clearSpawnPriority()
+  }
+}
+
 // The legacy profile field records last use. defaultRoute is an explicit,
 // app-wide preference, never changed by switching workspaces in any window.
 export function createDesktopProfilePreferences(

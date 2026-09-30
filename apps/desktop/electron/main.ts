@@ -186,6 +186,7 @@ import {
   createDesktopProfilePreferences,
   DESKTOP_PROFILE_NAME_RE,
   type DesktopProfileRoute,
+  dialDesktopProfileRoute,
   resolveDesktopConnectionRequest,
   resolveDesktopWindowLaunch
 } from './desktop-profile'
@@ -15938,24 +15939,14 @@ async function connectDesktopProfileRoute(
   route: DesktopProfileRoute,
   spawnPriority: LocalBackendSpawnPriority = 'foreground'
 ) {
-  // Coalesce concurrent renderer dials for one profile scope (#90812): the
-  // renderer-side reconnect lock is per-window, so two windows waking at once
-  // both land here. The claim key mirrors ensureBackend()'s own profile
-  // normalization so every spelling of the primary coalesces onto one dial.
-  const scopeKey = backendScopeKey(route.connectionId, route.profile)
-  const clearSpawnPriority = applySpawnPriority(scopeKey, spawnPriority)
-
-  let connection
-
-  try {
-    connection = await backendDialClaims.run(scopeKey, () =>
-      route.connectionId
-        ? ensureRegistryBackend(route.connectionId, route.profile, '', { spawnPriority })
-        : ensureBackend(route.profile, { spawnPriority })
-    )
-  } finally {
-    clearSpawnPriority()
-  }
+  const connection = await dialDesktopProfileRoute(route, spawnPriority, {
+    applySpawnPriority,
+    backendScopeKey,
+    ensureBackend,
+    ensureRegistryBackend,
+    managed: EVA_MANAGED_BUILD,
+    runDialClaim: (scopeKey, dial) => backendDialClaims.run(scopeKey, dial)
+  })
 
   if (route.connectionId && !EVA_MANAGED_BUILD) {
     return { ...connection, connectionId: route.connectionId, registryScoped: true }
