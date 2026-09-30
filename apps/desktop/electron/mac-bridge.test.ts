@@ -679,7 +679,7 @@ describe('pilot fix round 1', () => {
     timer.fn()
   }
 
-  it('M2: three dials that never open drop a never-opened link to the long backoff, with the page text', async () => {
+  it('M2: dials that never open for 2 min drop a never-opened link to the long backoff, with the page text', async () => {
     const mb = bridge([{ profile: 'jane', url: async () => 'ws://gw/bridge' }])
     await mb.setEnabled(true)
     FakeWs.all[0].close(1006) // the relay refused the upgrade (the gateway answered 403)
@@ -690,16 +690,51 @@ describe('pilot fix round 1', () => {
     await flush()
     FakeWs.all[2].close(1006)
 
+    // Three in ~3 s is a short outage as far as the Mac can tell: still the normal backoff.
+    expect(timers.map(timer => timer.ms)).toContain(4000)
+    expect(timers.map(timer => timer.ms)).not.toContain(LONG_BACKOFF_MS)
+
+    clock += 2 * 60_000
+    fire(4000)
+    await flush()
+    FakeWs.all[3].close(1006)
+
     expect(timers.map(timer => timer.ms)).toContain(LONG_BACKOFF_MS)
-    expect(timers.map(timer => timer.ms)).not.toContain(4000)
+    expect(timers.map(timer => timer.ms)).not.toContain(8000)
     const [link] = (await mb.status()).connections
     expect(link).toEqual({ profile: 'jane', state: 'retrying', error: notSetUpText('jane') })
     expect(link.error).toBe("Computer Use isn't set up for jane yet")
 
     // A sign-in starts over at once, without waiting out the 10 min.
     await mb.signedIn()
-    expect(FakeWs.all).toHaveLength(4)
+    expect(FakeWs.all).toHaveLength(5)
     expect(timers.map(timer => timer.ms)).not.toContain(LONG_BACKOFF_MS)
+  })
+
+  it('M2: three quick failed handshakes (Wi-Fi not up yet, a gateway restart) stay on the normal backoff', async () => {
+    const mb = bridge([{ profile: 'jane', url: async () => 'ws://gw/bridge' }])
+    await mb.setEnabled(true)
+    FakeWs.all[0].onerror?.({ message: 'connection error' })
+    FakeWs.all[0].close(1006)
+
+    for (const [index, ms] of [1000, 2000, 4000].entries()) {
+      clock += ms
+      fire(ms)
+      await flush()
+      FakeWs.all[index + 1].close(1006)
+    }
+
+    expect(timers.map(timer => timer.ms)).toContain(8000)
+    expect(timers.map(timer => timer.ms)).not.toContain(LONG_BACKOFF_MS)
+    const [link] = (await mb.status()).connections
+    expect(link.state).toBe('retrying')
+    expect(link.error).not.toBe(notSetUpText('jane'))
+
+    // The gateway is back: the next dial opens.
+    fire(8000)
+    await flush()
+    FakeWs.all[4].open()
+    expect((await mb.status()).connections[0].state).toBe('connected')
   })
 
   it('M2: a link that has opened before keeps the normal backoff (a gateway restart is not "not set up")', async () => {
@@ -853,6 +888,105 @@ describe('pilot fix round 1', () => {
     expect(FakeWs.all[0].closed).toBe(false)
     expect(status.connections).toEqual([{ profile: 'alice', state: 'connected', error: null }])
     expect(status.error).toBe('broker unreachable')
+  })
+
+  it('M4: a lapsed runtime (same account, desktop session on) is re-enrolled by the tick; the link stays', async () => {
+    let lookups = 0
+
+    const mb = bridge(undefined, {
+      resolveTargets: async () => {
+        lookups += 1
+        signedInAs = ACCOUNT_A // the lookup's ensureRuntimeEnrollment re-enrolls
+
+        return [{ profile: 'alice', url: async () => 'ws://gw/bridge' }]
+      }
+    })
+
+    await mb.setEnabled(true)
+    FakeWs.all[0].open()
+    FakeWs.all[0].frame({ t: 'open', c: 'c1' })
+    const before = lookups
+
+    signedInAs = null // the runtime expired while the Mac slept: status() has no customerId / agentId
+    expect((await mb.status()).enabled).toBe(true)
+    fire(30_000)
+    await flush()
+    expect(lookups).toBe(before + 1)
+    expect(FakeWs.all).toHaveLength(1)
+    expect(FakeWs.all[0].closed).toBe(false)
+    expect(children()[0].proc.killed).toBe(false)
+    const status = await mb.status()
+    expect(status.enabled).toBe(true)
+    expect(status.connections).toEqual([{ profile: 'alice', state: 'connected', error: null }])
+  })
+
+  it('M4: a lapsed runtime whose re-enrollment fails keeps the links (S1) and the switch shows on', async () => {
+    let failing = false
+
+    const mb = bridge(undefined, {
+      resolveTargets: async () => {
+        if (failing) {
+          throw new Error('offline after wake')
+        }
+
+        return [{ profile: 'alice', url: async () => 'ws://gw/bridge' }]
+      }
+    })
+
+    await mb.setEnabled(true)
+    FakeWs.all[0].open()
+    signedInAs = null
+    failing = true
+    fire(30_000)
+    await flush()
+    const status = await mb.status()
+    expect(FakeWs.all[0].closed).toBe(false)
+    expect(status.enabled).toBe(true)
+    expect(status.connections).toEqual([{ profile: 'alice', state: 'connected', error: null }])
+
+    // Back online: the next tick re-enrolls and nothing was redialed or toggled.
+    failing = false
+    signedInAs = ACCOUNT_A
+    fire(30_000)
+    await flush()
+    expect(FakeWs.all).toHaveLength(1)
+    expect((await mb.status()).enabled).toBe(true)
+  })
+
+  it('M4: a lookup started under A that ends after sign-out and B signing in dials nothing', async () => {
+    let held: null | ((targets: any[]) => void) = null
+    let hold = false
+    const target = (profile: string) => ({ profile, url: async () => `ws://gw/bridge?${profile}` })
+
+    const mb = bridge(undefined, {
+      resolveTargets: () =>
+        hold
+          ? new Promise(resolve => {
+              held = resolve
+              hold = false
+            })
+          : Promise.resolve(signedInAs ? [target(signedInAs.agentId)] : [])
+    })
+
+    await mb.setEnabled(true)
+    FakeWs.all[0].open()
+
+    hold = true
+    const tick = mb.retarget() // A's lookup, still running
+    await flush()
+    signedInAs = null
+    await mb.retarget() // sign-out
+    expect(FakeWs.all[0].closed).toBe(true)
+    signedInAs = ACCOUNT_B
+    await mb.signedIn()
+    held!([target('bob')]) // the old lookup's enrollment is now B's
+    await tick
+    await flush()
+
+    expect(FakeWs.all).toHaveLength(1)
+    const status = await mb.status()
+    expect(status.enabled).toBe(false)
+    expect(status.connections).toEqual([])
   })
 
   it('S2: an open alone does not reset the backoff; a first frame or 60 s open does', async () => {

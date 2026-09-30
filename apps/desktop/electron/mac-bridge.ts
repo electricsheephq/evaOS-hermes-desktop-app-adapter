@@ -38,8 +38,13 @@ const PING_MS = 20_000
 export const SILENCE_MS = 45_000
 /** Open this long, or any frame received, before the reconnect backoff starts over. */
 const STABLE_MS = 60_000
-/** Dials whose handshake never opened, in a row, before a link that never opened waits LONG_BACKOFF_MS. */
+/**
+ * Dials whose handshake never opened, in a row and spanning at least NEVER_OPENED_SPAN_MS, before a link
+ * that never opened waits LONG_BACKOFF_MS. The span keeps a short outage (Wi-Fi not up yet at login, a
+ * gateway restart) out of it: the Mac cannot tell a relay 502 from a 403.
+ */
 const NEVER_OPENED_LIMIT = 3
+const NEVER_OPENED_SPAN_MS = 2 * 60_000
 export const LONG_BACKOFF_MS = 10 * 60_000
 /** Retries of a failed start while Enable stays on: 30 s, 60 s, then every 5 min. */
 const START_RETRY_MS = [30_000, 60_000, 5 * 60_000]
@@ -296,8 +301,9 @@ interface Link {
   dialed: boolean
   opened: boolean
   everOpened: boolean
-  /** Consecutive dials whose handshake never opened. */
+  /** Consecutive dials whose handshake never opened, and when the first of them ended. */
   neverOpened: number
+  firstNeverOpenedAt: number
   lastInbound: number
   pongSeen: boolean
   /** Liveness timers of the current socket: ping, silence watchdog, stable-open reset. */
@@ -699,8 +705,8 @@ export function createMacBridge(deps: MacBridgeDeps) {
   function settle(link: Link) {
     if (link.opened) {
       link.neverOpened = 0
-    } else if (link.dialed) {
-      link.neverOpened += 1
+    } else if (link.dialed && link.neverOpened++ === 0) {
+      link.firstNeverOpenedAt = now()
     }
 
     link.dialed = link.opened = false
@@ -798,7 +804,11 @@ export function createMacBridge(deps: MacBridgeDeps) {
     link.state = 'retrying'
 
     // A link that never opened (the gateway plugin is not installed for this agent): stop knocking every 30 s.
-    if (!link.everOpened && link.neverOpened >= NEVER_OPENED_LIMIT) {
+    if (
+      !link.everOpened &&
+      link.neverOpened >= NEVER_OPENED_LIMIT &&
+      now() - link.firstNeverOpenedAt >= NEVER_OPENED_SPAN_MS
+    ) {
       link.error = notSetUpText(link.target.profile)
       link.timer = setTimer(() => void connect(link), LONG_BACKOFF_MS)
     } else {
@@ -916,11 +926,14 @@ export function createMacBridge(deps: MacBridgeDeps) {
     }
 
     const my = gen
+    const before = deps.account()
     let targets: MacBridgeTarget[] | null = null
 
-    if (!accountMatches()) {
-      targets = [] // signed out, or another account: this Mac is not theirs to offer
+    if (before && !sameAccount(account, before)) {
+      targets = [] // another account: this Mac is not theirs to offer
     } else {
+      // Also with no account: signed out resolves to none, and a lapsed runtime (sleep, a missed refresh)
+      // is re-enrolled by the lookup itself.
       try {
         targets = await deps.resolveTargets()
         lastError = null
@@ -932,6 +945,13 @@ export function createMacBridge(deps: MacBridgeDeps) {
 
     if (!running || gen !== my) {
       return
+    }
+
+    // Checked again after the lookup: the account can change while it runs, and nothing is dialed for another.
+    const current = deps.account()
+
+    if (current ? !sameAccount(account, current) : targets !== null) {
+      targets = [] // a failed lookup with no account (a lapsed runtime) keeps the links, as above
     }
 
     if (targets) {
@@ -958,6 +978,7 @@ export function createMacBridge(deps: MacBridgeDeps) {
             opened: false,
             everOpened: false,
             neverOpened: 0,
+            firstNeverOpenedAt: 0,
             lastInbound: 0,
             pongSeen: false,
             pinger: null,
@@ -1079,8 +1100,8 @@ export function createMacBridge(deps: MacBridgeDeps) {
     const found = locate()
 
     return {
-      // Shown off to any other account signed in on this Mac.
-      enabled: enabled && accountMatches(),
+      // Shown off to any other account signed in on this Mac; on while a lapsed runtime keeps this one's links.
+      enabled: enabled && (accountMatches() || (deps.account() === null && links.size > 0)),
       cua: {
         found: Boolean(found.binary),
         path: found.binary,
