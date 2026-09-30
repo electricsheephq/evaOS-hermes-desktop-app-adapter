@@ -81,6 +81,42 @@ test.describe('managed signed-out boot', () => {
     expect(errors.otherConnectionId).toContain('Sign in to evaOS Agent from Settings.')
   })
 
+  // A reconnect after sleep/wake passes no profile, so main resolves the
+  // window's recorded managed route; it must reach the managed gate as boot's
+  // explicit profile does, never the workstation registry (#388).
+  test('a profile-less reconnect on a managed window route reaches the managed gate', async () => {
+    const errors = await fixture!.page.evaluate(async () => {
+      const desktop = Reflect.get(window, 'hermesDesktop') as {
+        getConnection: (profile?: string) => Promise<unknown>
+        setActiveConnectionRoute: (route: { connectionId: string; profile: string }) => void
+      }
+
+      const rejection = async (request: () => Promise<unknown>) => {
+        try {
+          await request()
+
+          return 'unexpected success'
+        } catch (error) {
+          return String(error)
+        }
+      }
+
+      // send() and invoke() from one frame share one ordered IPC pipe, so main
+      // records this route before it handles the getConnection() below.
+      desktop.setActiveConnectionRoute({ connectionId: 'eva-managed-runtime', profile: 'e-test' })
+
+      return {
+        reconnect: await rejection(() => desktop.getConnection()),
+        boot: await rejection(() => desktop.getConnection('e-test'))
+      }
+    })
+
+    for (const error of [errors.reconnect, errors.boot]) {
+      expect(error).toContain('Sign in to evaOS Agent from Settings.')
+      expect(error).not.toContain('No connection with id')
+    }
+  })
+
   // Local-machine actions run as upstream's do: the terminal and the default
   // project folder live on this computer, never on the remote agent.
   test('the real preload runs the local terminal and project-folder handlers', async () => {
