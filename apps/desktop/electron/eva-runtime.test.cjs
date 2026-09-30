@@ -6186,9 +6186,9 @@ test('a profile admin’s Mac bridge dials and mints only the enrollment’s own
   const statePath = path.join(directory, 'state.json')
   writeActiveEnrollment(statePath)
   const state = JSON.parse(fs.readFileSync(statePath, 'utf8'))
-  state.runtime.agent_id = 'jane'
-  state.runtime.allowed_profiles = ['jane', 'louis', 'regan']
-  state.runtime.primary_profile = 'jane'
+  state.runtime.agent_id = 'agent-one'
+  state.runtime.allowed_profiles = ['agent-one', 'agent-two', 'agent-three']
+  state.runtime.primary_profile = 'agent-one'
   state.runtime.profile_admin = true
   fs.writeFileSync(statePath, JSON.stringify(state))
   const minted = []
@@ -6206,20 +6206,20 @@ test('a profile admin’s Mac bridge dials and mints only the enrollment’s own
   const path_ = '/api/plugins/computer-use/bridge'
 
   // What resolveMacBridgeTargets dials (mac-bridge.test.ts): the assigned agent, not every administered profile.
-  assert.deepEqual(await runtime.authorizedProfiles(), ['jane', 'louis', 'regan'])
-  assert.equal(await runtime.assignedProfileId(), 'jane')
+  assert.deepEqual(await runtime.authorizedProfiles(), ['agent-one', 'agent-two', 'agent-three'])
+  assert.equal(await runtime.assignedProfileId(), 'agent-one')
 
-  await assert.rejects(runtime.ownProfileWsUrl({ profile: 'louis', path: path_ }), error => {
+  await assert.rejects(runtime.ownProfileWsUrl({ profile: 'agent-two', path: path_ }), error => {
     assert.equal(error.statusCode, 403)
     assert.equal(error.code, 'not-own-profile')
     return true
   })
   assert.equal(minted.length, 0)
 
-  await runtime.ownProfileWsUrl({ profile: 'jane', path: path_ })
+  await runtime.ownProfileWsUrl({ profile: 'agent-one', path: path_ })
   assert.deepEqual(
     minted.map(input => [input.profile, input.path, input.authProbe]),
-    [['jane', path_, false]]
+    [['agent-one', path_, false]]
   )
 })
 

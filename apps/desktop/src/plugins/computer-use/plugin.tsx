@@ -115,7 +115,7 @@ export function ComputerUsePage() {
   const connected = status?.connections.filter(link => link.state === 'connected') ?? []
   // Another Mac of this user took over a profile: stays so until Enable is toggled.
   const replaced = status?.connections.find(link => link.state === 'replaced')
-  // e.g. "Computer Use isn't set up for jane yet" (the gateway plugin is not installed there).
+  // e.g. "Computer Use isn't set up for agent-one yet" (the gateway plugin is not installed there).
   const linkError = status?.connections.find(link => link.error)?.error
 
   return (
