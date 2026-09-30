@@ -109,7 +109,8 @@ test('managed app updater always restores the fixed Electric Sheep feed and forw
   assert.deepEqual(updater.feedCalls.at(-1), {
     provider: 'generic',
     url: EVA_APP_UPDATE_FEED,
-    channel: 'latest'
+    channel: 'latest',
+    useMultipleRangeRequest: false
   })
   assert.equal(updater.autoDownload, false)
   assert.equal(updater.autoInstallOnAppQuit, false)
@@ -117,6 +118,97 @@ test('managed app updater always restores the fixed Electric Sheep feed and forw
   assert.equal(updater.allowPrerelease, true)
   assert.equal(updater.channel, 'latest')
   assert.deepEqual(progress, [])
+})
+
+// adapter#411: the GitHub release CDN answers multi-range requests with 501.
+// This runs the app's own feed options through the pinned electron-updater and
+// a real differential download against a server that refuses multi-range the
+// same way, so a renamed or ignored option fails here, not in production.
+test('the pinned electron-updater downloads differentially with single-range requests when multi-range is refused', async () => {
+  const crypto = require('node:crypto')
+  const fs = require('node:fs')
+  const http = require('node:http')
+  const os = require('node:os')
+  const path = require('node:path')
+  const { CancellationToken, HttpExecutor } = require('builder-util-runtime')
+  const { createClient } = require('electron-updater/out/providerFactory')
+  const {
+    GenericDifferentialDownloader
+  } = require('electron-updater/out/differentialDownloader/GenericDifferentialDownloader')
+
+  const silent = { info() {}, warn() {}, error() {} }
+  const { service, updater } = fixture()
+  await service.check()
+  const provider = createClient(
+    updater.feedCalls.at(-1),
+    { channel: 'latest', allowPrerelease: true, _logger: silent, httpExecutor: {}, isAddNoCacheQuery: false },
+    { isUseMultipleRangeRequest: true, platform: 'darwin', executor: {} }
+  )
+  assert.equal(provider.isUseMultipleRangeRequest, false)
+
+  const block = byte => Buffer.alloc(64, byte)
+  const oldFile = Buffer.concat([block(1), block(2), block(3), block(4)])
+  const newFile = Buffer.concat([block(1), block(9), block(3), block(8)])
+  const blockMap = checksums => ({
+    version: '2',
+    files: [{ name: 'file', offset: 0, checksums, sizes: [64, 64, 64, 64] }]
+  })
+  const oldMap = blockMap(['a', 'b', 'c', 'd'])
+  const newMap = blockMap(['a', 'x', 'c', 'y'])
+
+  const ranges = []
+  const server = http.createServer((req, res) => {
+    const range = req.headers.range || ''
+    ranges.push(range)
+    const match = /^bytes=(\d+)-(\d+)$/.exec(range)
+    if (!match) {
+      res.writeHead(501)
+      res.end('Unsupported client range')
+      return
+    }
+    const start = Number(match[1])
+    const end = Number(match[2])
+    res.writeHead(206, { 'content-range': `bytes ${start}-${end}/${newFile.length}` })
+    res.end(newFile.subarray(start, end + 1))
+  })
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+
+  class NodeExecutor extends HttpExecutor {
+    createRequest(options, callback) {
+      return http.request(options, callback)
+    }
+  }
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-updater-411-'))
+  try {
+    fs.writeFileSync(path.join(dir, 'old.zip'), oldFile)
+    const run = (useMultipleRangeRequest, outName) =>
+      new GenericDifferentialDownloader(
+        { size: newFile.length, sha512: crypto.createHash('sha512').update(newFile).digest('base64') },
+        new NodeExecutor(),
+        {
+          newUrl: new URL(`http://127.0.0.1:${server.address().port}/app.zip`),
+          oldFile: path.join(dir, 'old.zip'),
+          newFile: path.join(dir, outName),
+          logger: silent,
+          isUseMultipleRangeRequest: useMultipleRangeRequest,
+          requestHeaders: {},
+          cancellationToken: new CancellationToken()
+        }
+      ).download(oldMap, newMap)
+
+    await run(provider.isUseMultipleRangeRequest, 'single.zip')
+    assert.deepEqual(ranges, ['bytes=64-127', 'bytes=192-255'])
+    assert.deepEqual(fs.readFileSync(path.join(dir, 'single.zip')), newFile)
+
+    // Control: the multi-range default fails against the same server.
+    ranges.length = 0
+    await assert.rejects(run(true, 'multi.zip'))
+    assert.ok(ranges.some(range => range.includes(',')))
+  } finally {
+    server.close()
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
 })
 
 test('release notes become normal update-overlay entries without executable content', () => {
