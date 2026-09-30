@@ -68,6 +68,8 @@ export function ComputerUsePage() {
   }
 
   const connected = status?.connections.filter(link => link.state === 'connected') ?? []
+  // Another Mac of this user took over a profile: stays so until Enable is toggled.
+  const replaced = status?.connections.find(link => link.state === 'replaced')
 
   return (
     <section className="h-full min-h-0 overflow-y-auto">
@@ -126,11 +128,13 @@ export function ComputerUsePage() {
             />
             <ListRow
               description={
-                connected.length
-                  ? connected.map(link => link.profile).join(', ')
-                  : status.enabled
-                    ? 'Connecting…'
-                    : 'Not connected.'
+                replaced
+                  ? replaced.error
+                  : connected.length
+                    ? connected.map(link => link.profile).join(', ')
+                    : status.enabled
+                      ? 'Connecting…'
+                      : 'Not connected.'
               }
               title="Connected to"
             />

@@ -6136,3 +6136,46 @@ test('a failure after the state file is renamed does not revoke the committed si
   assert.equal(JSON.parse(fs.readFileSync(statePath, 'utf8')).desktop.token, 'replacement-desktop-session')
   assert.equal((fs.statSync(statePath).mode & 0o777).toString(8), '600')
 })
+
+test('Mac bridge tickets are only for own profiles, and support activation invalidates one already minted', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-own-profile-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'state.json')
+  writeActiveEnrollment(statePath)
+  const minted = []
+  let relay = null
+  const payload = supportEnrollment(Date.now(), { profile: 'support' })
+  payload.remote_backend.allowed_profiles = ['support']
+  const runtime = makeManagedRuntime(statePath, {
+    brokerPost: async () => payload,
+    createWsRelay: options => {
+      relay = options
+      return {
+        mintTicket: async input => {
+          minted.push(input)
+          return 'ws://127.0.0.1:12345/bridge'
+        },
+        disconnectAll: () => undefined,
+        close: async () => undefined
+      }
+    }
+  })
+  t.after(() => runtime.close())
+  const path_ = '/api/plugins/computer-use/bridge'
+
+  await runtime.ownProfileWsUrl({ profile: 'main', path: path_ })
+  assert.deepEqual(minted.map(input => [input.profile, input.path]), [['main', path_]])
+  assert.equal(minted[0].profileBinder, undefined)
+  assert.equal(minted[0].generation, relay.getGeneration())
+  await assert.rejects(runtime.ownProfileWsUrl({ profile: 'someone-else', path: path_ }), /not one of your own/)
+
+  // Support activates after the mint: the minted ticket's generation is stale, so the relay refuses it.
+  await runtime.claimSupportRequest('bridge-support-request')
+  assert.notEqual(minted[0].generation, relay.getGeneration())
+
+  // And while support is active nothing is minted at all, for any profile.
+  for (const profile of ['main', 'support', 'default']) {
+    await assert.rejects(runtime.ownProfileWsUrl({ profile, path: path_ }), /not one of your own/)
+  }
+  assert.equal(minted.length, 1)
+})

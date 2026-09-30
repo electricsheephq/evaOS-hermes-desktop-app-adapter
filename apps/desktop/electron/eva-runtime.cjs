@@ -2735,6 +2735,22 @@ function createEvaManagedRuntime(options) {
         ...(profileBinder ? { profileBinder } : {})
       })
     },
+    // A ticket for one of the signed-in user's OWN profiles (the Mac bridge), never a delegated
+    // one. Checked and bound to the session generation in the same tick as the mint: support that
+    // activates later bumps the generation, so the relay refuses this ticket at the upgrade.
+    ownProfileWsUrl: async (input = {}) => {
+      const runtime = await ensureRuntimeEnrollment()
+      const generation = runtimeSessionGeneration
+      const profile = normalizeEvaWsProfile(input.profile)
+      if (
+        runtime.sessionKind === 'delegated_support' ||
+        currentState().delegatedSupport ||
+        !runtime.allowedProfiles?.includes(profile)
+      ) {
+        throw new EvaBrokerError('This profile is not one of your own agents.', 403, 'not-own-profile')
+      }
+      return getWsRelay().mintTicket({ generation, path: normalizeEvaWsEndpoint(input.path).path, profile })
+    },
     requestApi,
     requestMedia,
     resolveBackend,

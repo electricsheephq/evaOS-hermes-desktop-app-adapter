@@ -17443,9 +17443,11 @@ const macBridge = createMacBridge({
     ),
   runSync: (command, args, options = {}) => {
     try {
-      execFileSync(command, args, { stdio: 'ignore', ...options })
+      execFileSync(command, args, { stdio: 'ignore', timeout: 3000, ...options })
+
+      return true
     } catch {
-      // already stopped
+      return false
     }
   },
   WebSocket: globalThis.WebSocket,

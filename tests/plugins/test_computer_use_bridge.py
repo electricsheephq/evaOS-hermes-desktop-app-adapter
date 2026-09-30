@@ -300,3 +300,106 @@ def test_manifest_mounts_the_api_without_a_tab():
     manifest = json.loads((PLUGIN_DIR / "dashboard" / "manifest.json").read_text())
     assert manifest["name"] == "computer-use" and manifest["api"] == "plugin_api.py" and manifest["tab"]["hidden"]
     assert [r.path for r in api.router.routes] == ["/bridge"]
+
+
+# --- review round 2 -------------------------------------------------------------------------------
+
+
+def test_a_stale_hello_handler_does_not_duplicate_opens_on_the_newer_mac(home):
+    """Mac 1's hello loop pauses in a shim write; Mac 2 takes over and opens every shim; Mac 1's loop then
+    resumes. The newer Mac must see each conn opened once (the review's probe saw a, b, b)."""
+    async def run():
+        hub = api.Hub(home)
+        await hub.ensure_socket()
+        a, b = LineClient(hub.sock_path), LineClient(hub.sock_path)
+        await a.open()
+        await _until(lambda: len(hub.shims) == 1)
+        await b.open()
+        await _until(lambda: len(hub.shims) == 2)
+        cid_a, cid_b = list(hub.shims)
+
+        gate, paused = asyncio.Event(), asyncio.Event()
+        real_to_shim = hub._to_shim
+
+        async def slow_first_online(cid, frame):
+            if frame == {"t": "online"} and not paused.is_set():
+                paused.set()
+                await gate.wait()
+            await real_to_shim(cid, frame)
+
+        hub._to_shim = slow_first_online
+        mac1, mac2 = FakeMac(), FakeMac()
+        await hub.attach_mac(mac1)
+        old_hello = asyncio.create_task(hub.on_mac_frame(mac1, HELLO))
+        await paused.wait()  # Mac 1 opened a and is stuck telling shim a it is online
+        await hub.attach_mac(mac2)
+        await hub.on_mac_frame(mac2, HELLO)
+        gate.set()
+        await old_hello
+        assert [f["c"] for f in mac2.of("open")] == [cid_a, cid_b]
+        assert [f["c"] for f in mac1.of("open")] == [cid_a]
+    asyncio.run(run())
+
+
+def test_a_70kb_call_and_an_8mb_result_cross_the_socket_intact(home):
+    loop = asyncio.new_event_loop()
+    hub, mac = api.Hub(home), FakeMac()
+    threading.Thread(target=loop.run_forever, daemon=True).start()
+    call = lambda coro: asyncio.run_coroutine_threadsafe(coro, loop).result(10)  # noqa: E731
+    stdout = io.StringIO()
+    shim = shim_mod.Shim(str(hub.sock_path), out=stdout)
+    shim_mod.RETRY_SECONDS = 0.05
+    try:
+        call(hub.ensure_socket())
+        call(hub.attach_mac(mac))
+        call(hub.on_mac_frame(mac, HELLO))
+        threading.Thread(target=shim.socket_loop, daemon=True).start()
+        deadline = time.monotonic() + 5
+        while not shim.online and time.monotonic() < deadline:
+            time.sleep(0.02)
+        cid = mac.of("open")[0]["c"]
+
+        big_call = {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                    "params": {"name": "type_text", "arguments": {"text": "é" * 35_000}}}  # 70 KB of UTF-8
+        shim.from_hermes(big_call)
+        deadline = time.monotonic() + 5
+        while not mac.of("msg") and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert mac.of("msg") == [{"t": "msg", "c": cid, "m": big_call}]
+
+        result = {"jsonrpc": "2.0", "id": 1,
+                  "result": {"content": [{"type": "image", "mimeType": "image/png", "data": "A" * (8 * 1024 * 1024)}]}}
+        call(hub.on_mac_frame(mac, {"t": "msg", "c": cid, "m": result}))
+        deadline = time.monotonic() + 10
+        while not stdout.getvalue().endswith("\n") and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert _out(stdout) == [result]
+    finally:
+        loop.call_soon_threadsafe(loop.stop)
+
+
+def test_over_limit_frames_fail_that_call_and_keep_the_connection(home, monkeypatch):
+    shim, out = _shim(home)
+    shim.from_dashboard({"t": "online"})
+    monkeypatch.setattr(shim_mod, "MAX_MESSAGE_BYTES", 1000)
+    shim.from_hermes({"jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": {"text": "x" * 2000}})
+    assert shim.sock.lines == [] and shim.pending == {}
+    assert _out(out)[0]["id"] == 4 and _out(out)[0]["error"]["code"] == -32000
+
+    monkeypatch.setattr(api, "LINE_LIMIT", 1000)
+
+    async def run():
+        hub = api.Hub(home)
+        await hub.ensure_socket()
+        mac = FakeMac()
+        await hub.attach_mac(mac)
+        await hub.on_mac_frame(mac, HELLO)
+        client = LineClient(hub.sock_path)
+        await client.open()
+        await _until(lambda: mac.of("open"))
+        await client.send({"t": "msg", "m": {"id": 1, "pad": "y" * 5000}})
+        await client.send({"t": "msg", "m": {"id": 2}})
+        await _until(lambda: mac.of("msg"))
+        assert [f["m"]["id"] for f in mac.of("msg")] == [2]
+        assert not mac.of("close")
+    asyncio.run(run())

@@ -20,6 +20,7 @@ import { randomBytes } from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { StringDecoder } from 'node:string_decoder'
 
 export const MAC_BRIDGE_PATH = '/api/plugins/computer-use/bridge'
 export const CUA_INSTALL_SCRIPT = '/bin/bash -c "$(curl -fsSL https://cua.ai/driver/install.sh)"'
@@ -28,6 +29,11 @@ const BUNDLE_ID = 'com.trycua.driver'
 const READY_TIMEOUT_MS = 15_000
 const RETARGET_MS = 30_000
 const PROTOCOL_VERSION = '2025-06-18'
+const STOP_WAIT_MS = 5000
+/** Largest JSON-RPC message carried either way (CUA results carry MB-sized base64 screenshots). */
+export const MAX_MESSAGE_BYTES = 64 * 1024 * 1024
+export const REPLACED_CODE = 4000
+export const REPLACED_TEXT = 'Taken over by another Mac — turn Enable off and on to take it back.'
 
 // Same discovery as the Settings panel's spike (CuaDriver.app first, then PATH).
 const APP_BINARIES = [
@@ -62,7 +68,8 @@ export interface RunResult {
 export interface MacBridgeDeps {
   spawn: (command: string, args: string[], options: any) => any
   run: (command: string, args: string[], options?: any) => Promise<RunResult>
-  runSync: (command: string, args: string[], options?: any) => void
+  /** Synchronous run; true when the command exited 0. */
+  runSync: (command: string, args: string[], options?: any) => boolean
   WebSocket: any
   statePath: string
   resolveTargets: () => Promise<MacBridgeTarget[]>
@@ -73,6 +80,7 @@ export interface MacBridgeDeps {
   now?: () => number
   setTimer?: (fn: () => void, ms: number) => any
   clearTimer?: (timer: any) => void
+  maxMessageBytes?: number
 }
 
 export function encodeFrame(frame: Frame): string {
@@ -137,7 +145,8 @@ export async function resolveMacBridgeTargets(input: {
     status: () => { desktopSessionActive?: boolean; delegatedSupportActive?: boolean }
     delegatedProfiles: () => Promise<null | string[]>
     authorizedProfiles: () => Promise<string[]>
-    freshWsUrl: (request: { path: string; profile: string }) => Promise<string>
+    /** Mints only for the user's own profiles, checked and bound to the session in the same step. */
+    ownProfileWsUrl: (request: { path: string; profile: string }) => Promise<string>
   }
   remoteWsUrl?: () => Promise<null | string>
 }): Promise<MacBridgeTarget[]> {
@@ -151,16 +160,10 @@ export async function resolveMacBridgeTargets(input: {
       return []
     }
 
+    // Each dial re-checks inside the mint itself: support can start between two reconnects.
     return (await eva.authorizedProfiles()).map(profile => ({
       profile,
-      url: async () => {
-        // Checked again per dial: support can start between two reconnects.
-        if (eva.status().delegatedSupportActive || (await eva.delegatedProfiles()) !== null) {
-          throw new Error('delegated support is active')
-        }
-
-        return eva.freshWsUrl({ path: MAC_BRIDGE_PATH, profile })
-      }
+      url: () => eva.ownProfileWsUrl({ path: MAC_BRIDGE_PATH, profile })
     }))
   }
 
@@ -193,7 +196,8 @@ interface Child {
 interface Link {
   target: MacBridgeTarget
   ws: any
-  state: 'connecting' | 'connected' | 'retrying' | 'closed'
+  state: 'connecting' | 'connected' | 'retrying' | 'replaced' | 'closed'
+  gen: number
   error: null | string
   attempts: number
   timer: any
@@ -209,7 +213,10 @@ export function createMacBridge(deps: MacBridgeDeps) {
   const links = new Map<string, Link>()
   let enabled = readEnabled()
   let running = false
+  // Bumped by every start and stop: work that resumes under an older generation is abandoned.
+  let gen = 0
   let socket: null | string = null
+  let starting: null | { binary: string; sock: string } = null
   let hello: Frame | null = null
   let retargetTimer: any = null
   let lastError: null | string = null
@@ -254,7 +261,9 @@ export function createMacBridge(deps: MacBridgeDeps) {
     return cachedVersion.version
   }
 
-  async function startDaemon(): Promise<void> {
+  const cancelled = () => new Error('Computer Use was turned off while CUA was starting.')
+
+  async function startDaemon(my: number): Promise<void> {
     const { binary, app } = locate()
 
     if (!binary || !app) {
@@ -268,12 +277,25 @@ export function createMacBridge(deps: MacBridgeDeps) {
       throw new Error(`${app} is not CUA's signed CuaDriver.app (expected ${BUNDLE_ID}, team ${TEAM_ID}).`)
     }
 
+    if (gen !== my) {
+      throw cancelled()
+    }
+
+    // Recorded before launch, so a stop that lands mid-startup still finds (and stops) this daemon.
     const sock = path.join(deps.tmpdir || os.tmpdir(), `evaos-cua-${randomBytes(6).toString('hex')}.sock`)
+    starting = { binary, sock }
     await deps.run('/usr/bin/open', ['-n', '-g', '-a', app, '--args', ...serveArgs(sock)], { env: daemonEnv() })
     const deadline = now() + READY_TIMEOUT_MS
 
     while (now() < deadline) {
-      if ((await deps.run(binary, ['status', '--socket', sock], { env: daemonEnv() })).code === 0) {
+      const ready = (await deps.run(binary, ['status', '--socket', sock], { env: daemonEnv() })).code === 0
+
+      if (gen !== my) {
+        throw cancelled() // stopSync owned `starting` and stopped it
+      }
+
+      if (ready) {
+        starting = null
         socket = sock
         log(`private daemon ready (unrestricted) on ${sock}`)
 
@@ -281,22 +303,47 @@ export function createMacBridge(deps: MacBridgeDeps) {
       }
 
       await new Promise(resolve => setTimer(() => resolve(null), 100))
+
+      if (gen !== my) {
+        throw cancelled()
+      }
+    }
+
+    starting = null
+    stopDaemonAt(binary, sock, false)
+    throw new Error('The private CUA daemon did not become ready within 15 s.')
+  }
+
+  /** One `cua-driver stop` for a daemon we launched; when it may still be starting, wait (briefly) until it listens. */
+  function stopDaemonAt(binary: string, sock: string, mayBeStarting: boolean) {
+    const deadline = now() + STOP_WAIT_MS
+
+    while (
+      mayBeStarting &&
+      now() < deadline &&
+      !deps.runSync(binary, ['status', '--socket', sock], { env: daemonEnv() })
+    ) {
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100)
     }
 
     deps.runSync(binary, ['stop', '--socket', sock], { env: daemonEnv(), timeout: 3000 })
-    throw new Error('The private CUA daemon did not become ready within 15 s.')
+    fs.rmSync(sock, { force: true })
+    log('private daemon stopped')
   }
 
   function stopDaemon() {
     const { binary } = locate()
 
     if (socket && binary) {
-      deps.runSync(binary, ['stop', '--socket', socket], { env: daemonEnv(), timeout: 3000 })
-      fs.rmSync(socket, { force: true })
-      log('private daemon stopped')
+      stopDaemonAt(binary, socket, false)
+    }
+
+    if (starting) {
+      stopDaemonAt(starting.binary, starting.sock, true)
     }
 
     socket = null
+    starting = null
   }
 
   function spawnChild(): any {
@@ -306,17 +353,19 @@ export function createMacBridge(deps: MacBridgeDeps) {
     })
   }
 
-  function onLines(stream: any, handle: (message: any) => void) {
+  function onLines(stream: any, handle: (message: any, bytes: number) => void) {
+    // One decoder per stream: a multibyte character split across two chunks stays intact.
+    const decoder = new StringDecoder('utf8')
     let buffered = ''
 
     stream.on('data', (chunk: Buffer | string) => {
-      buffered += String(chunk)
+      buffered += typeof chunk === 'string' ? chunk : decoder.write(chunk)
       const lines = buffered.split('\n')
       buffered = lines.pop() || ''
 
       for (const line of lines) {
         try {
-          handle(JSON.parse(line))
+          handle(JSON.parse(line), Buffer.byteLength(line))
         } catch {
           // not JSON-RPC (stray output): dropped
         }
@@ -369,8 +418,14 @@ export function createMacBridge(deps: MacBridgeDeps) {
     const proc = spawnChild()
     const child: Child = { proc, profile: link.target.profile, conn, lastActivity: now() }
     link.children.set(conn, child)
-    onLines(proc.stdout, message => {
+    onLines(proc.stdout, (message, bytes) => {
       child.lastActivity = now()
+
+      if (bytes > (deps.maxMessageBytes ?? MAX_MESSAGE_BYTES) && message.id !== undefined) {
+        const error = { code: -32000, message: `The result (${bytes} bytes) is larger than the bridge carries.` }
+        message = { jsonrpc: '2.0', id: message.id, error }
+      }
+
       send(link, { t: 'msg', c: conn, m: message })
     })
     proc.stderr?.on('data', () => undefined)
@@ -407,15 +462,29 @@ export function createMacBridge(deps: MacBridgeDeps) {
     }
   }
 
+  /** Still the link this run wants: not stopped, not restarted, not dropped by retarget. */
+  const tracked = (link: Link) => running && link.gen === gen && links.get(link.target.profile) === link
+
   async function connect(link: Link) {
     link.timer = null
     link.state = 'connecting'
 
     try {
-      const ws = new deps.WebSocket(await link.target.url())
+      const url = await link.target.url()
+
+      if (!tracked(link)) {
+        return
+      }
+
+      const ws = new deps.WebSocket(url)
       link.ws = ws
+      const live = () => tracked(link) && link.ws === ws
 
       ws.onopen = () => {
+        if (!live()) {
+          return ws.close()
+        }
+
         link.attempts = 0
         link.state = 'connected'
         link.error = null
@@ -423,21 +492,34 @@ export function createMacBridge(deps: MacBridgeDeps) {
         log(`connected to ${link.target.profile}`)
       }
 
-      ws.onmessage = (event: any) => onFrame(link, decodeFrame(String(event.data)))
+      ws.onmessage = (event: any) => (live() ? onFrame(link, decodeFrame(String(event.data))) : ws.close())
 
       ws.onerror = (event: any) => {
         link.error = String(event?.message || event?.error?.message || 'connection error')
       }
 
-      ws.onclose = () => {
-        if (link.ws === ws) {
-          killChildren(link)
+      ws.onclose = (event: any) => {
+        if (link.ws !== ws) {
+          return
+        }
+
+        killChildren(link)
+
+        if (event?.code === REPLACED_CODE) {
+          // Another Mac of this user took over: terminal until the user toggles Enable.
+          link.ws = null
+          link.state = 'replaced'
+          link.error = REPLACED_TEXT
+        } else {
           retry(link)
         }
       }
     } catch (error: any) {
       link.error = error?.message || String(error)
-      retry(link)
+
+      if (tracked(link)) {
+        retry(link)
+      }
     }
   }
 
@@ -470,6 +552,7 @@ export function createMacBridge(deps: MacBridgeDeps) {
       return
     }
 
+    const my = gen
     let targets: MacBridgeTarget[] = []
 
     try {
@@ -477,6 +560,10 @@ export function createMacBridge(deps: MacBridgeDeps) {
       lastError = null
     } catch (error: any) {
       lastError = error?.message || String(error)
+    }
+
+    if (!running || gen !== my) {
+      return
     }
 
     const wanted = new Map(targets.map(target => [target.profile, target]))
@@ -496,7 +583,8 @@ export function createMacBridge(deps: MacBridgeDeps) {
           error: null,
           attempts: 0,
           timer: null,
-          children: new Map()
+          children: new Map(),
+          gen
         }
 
         links.set(target.profile, link)
@@ -514,19 +602,30 @@ export function createMacBridge(deps: MacBridgeDeps) {
     }
 
     running = true
+    const my = ++gen
+    lastError = null
 
     try {
-      await startDaemon()
-      hello = await readHello()
+      await startDaemon(my)
+      const next = await readHello()
+
+      if (gen !== my) {
+        return
+      }
+
+      hello = next
       await retarget()
     } catch (error: any) {
-      lastError = error?.message || String(error)
-      log(`start failed: ${lastError}`)
-      stopSync()
+      if (gen === my) {
+        lastError = error?.message || String(error)
+        log(`start failed: ${lastError}`)
+        stopSync()
+      }
     }
   }
 
   function stopSync() {
+    gen += 1
     running = false
     clearTimer(retargetTimer)
     retargetTimer = null

@@ -29,6 +29,10 @@ log = logging.getLogger(__name__)
 router = APIRouter()
 
 REOPEN_DELAY_SECONDS = 2.0
+# Largest JSON-RPC message carried either way (base64 screenshots are MB-sized); the shim and the Mac
+# answer a bigger one with an error for that call, so the socket reader only needs envelope headroom.
+MAX_MESSAGE_BYTES = 64 * 1024 * 1024
+LINE_LIMIT = MAX_MESSAGE_BYTES + 64 * 1024
 
 
 def _ws_upgrade_authorized(ws: "WebSocket") -> bool:
@@ -65,7 +69,7 @@ class Hub:
         os.chmod(self.dir, 0o700)
         if self.sock_path.exists() or self.sock_path.is_symlink():
             self.sock_path.unlink()  # stale socket from an earlier dashboard process
-        self._server = await asyncio.start_unix_server(self._serve_shim, path=str(self.sock_path))
+        self._server = await asyncio.start_unix_server(self._serve_shim, path=str(self.sock_path), limit=LINE_LIMIT)
         os.chmod(self.sock_path, 0o600)
 
     def save_tools(self, hello: Dict[str, Any]) -> None:
@@ -95,9 +99,12 @@ class Hub:
         except Exception:
             return False
 
-    async def _open(self, cid: str) -> None:
-        """Ask the current Mac for a CUA child for ``cid``, then tell its shim it is online."""
-        if self.ready and await self._to_mac({"t": "open", "c": cid}):
+    async def _open(self, cid: str, mac: Optional[WebSocket]) -> None:
+        """Ask ``mac`` for a CUA child for ``cid``, then tell its shim it is online. Bound to that Mac:
+        once a newer Mac has taken over (during any await), this work is dropped."""
+        if mac is None or mac is not self.mac or not self.ready:
+            return
+        if await self._to_mac({"t": "open", "c": cid}, mac) and mac is self.mac:
             await self._to_shim(cid, {"t": "online"})
 
     async def attach_mac(self, ws: WebSocket) -> None:
@@ -119,7 +126,9 @@ class Hub:
         log.info("computer-use: Mac connected (cua-driver %s, %s, %d tools)", hello.get("cua_version"),
                  hello.get("permission_mode"), len(hello.get("tools") or []))
         for cid in list(self.shims):
-            await self._open(cid)
+            if ws is not self.mac:
+                return
+            await self._open(cid, ws)
 
     async def on_mac_frame(self, ws: WebSocket, frame: Dict[str, Any]) -> None:
         kind, cid = frame.get("t"), str(frame.get("c") or "")
@@ -138,8 +147,8 @@ class Hub:
 
     async def _reopen_later(self, ws: WebSocket, cid: str) -> None:
         await asyncio.sleep(REOPEN_DELAY_SECONDS)
-        if ws is self.mac and cid in self.shims:
-            await self._open(cid)
+        if cid in self.shims:
+            await self._open(cid, ws)
 
     async def detach_mac(self, ws: WebSocket) -> None:
         if ws is not self.mac:
@@ -152,9 +161,16 @@ class Hub:
     async def _serve_shim(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         cid = uuid.uuid4().hex[:12]
         self.shims[cid] = writer
-        await self._open(cid)
+        await self._open(cid, self.mac)
         try:
-            while line := await reader.readline():
+            while True:
+                try:
+                    line = await reader.readline()
+                except ValueError:  # over LINE_LIMIT: that frame is dropped, the connection stays
+                    log.warning("computer-use: dropped a shim frame over %d bytes", LINE_LIMIT)
+                    continue
+                if not line:
+                    break
                 try:
                     frame = json.loads(line)
                 except ValueError:

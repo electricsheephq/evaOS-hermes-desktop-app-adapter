@@ -15,6 +15,8 @@ import {
   grantCommand,
   installCommand,
   MAC_BRIDGE_PATH,
+  REPLACED_CODE,
+  REPLACED_TEXT,
   resolveMacBridgeTargets,
   serveArgs
 } from './mac-bridge'
@@ -55,7 +57,7 @@ class FakeWs {
   closed = false
   onopen?: () => void
   onmessage?: (event: { data: string }) => void
-  onclose?: () => void
+  onclose?: (event?: { code: number }) => void
   onerror?: (event: any) => void
 
   constructor(readonly url: string) {
@@ -75,10 +77,10 @@ class FakeWs {
     this.onmessage?.({ data: JSON.stringify(frame) })
   }
 
-  close() {
+  close(code = 1000) {
     this.closed = true
     this.readyState = 3
-    this.onclose?.()
+    this.onclose?.({ code })
   }
 }
 
@@ -89,7 +91,12 @@ let syncRuns: { command: string; args: string[] }[]
 let timers: { fn: () => void; ms: number }[]
 let binary: string
 
-function bridge(targets = [{ profile: 'alice', url: async () => 'ws://gw/api/plugins/computer-use/bridge?token=t' }]) {
+function bridge(
+  targets: { profile: string; url: () => Promise<string> }[] = [
+    { profile: 'alice', url: async () => 'ws://gw/api/plugins/computer-use/bridge?token=t' }
+  ],
+  overrides: Partial<Parameters<typeof createMacBridge>[0]> = {}
+) {
   return createMacBridge({
     spawn: (command, args, options) => {
       const proc = new FakeProc()
@@ -114,7 +121,11 @@ function bridge(targets = [{ profile: 'alice', url: async () => 'ws://gw/api/plu
 
       return { code: 0, stdout: '', stderr: '' }
     },
-    runSync: (command, args) => void syncRuns.push({ command, args }),
+    runSync: (command, args) => {
+      syncRuns.push({ command, args })
+
+      return true
+    },
     WebSocket: FakeWs,
     statePath: path.join(dir, 'mac-bridge.json'),
     resolveTargets: async () => targets,
@@ -127,9 +138,12 @@ function bridge(targets = [{ profile: 'alice', url: async () => 'ws://gw/api/plu
 
       return timer
     },
-    clearTimer: timer => void (timers = timers.filter(entry => entry !== timer))
+    clearTimer: timer => void (timers = timers.filter(entry => entry !== timer)),
+    ...overrides
   })
 }
+
+const stops = () => syncRuns.filter(entry => entry.args[0] === 'stop')
 
 const flush = () => new Promise(resolve => setImmediate(resolve))
 const children = () => procs.filter(entry => entry.args[0] === 'mcp').slice(1) // [0] is the hello probe
@@ -269,7 +283,7 @@ describe('the bridge', () => {
     const status = await mb.setEnabled(false)
     expect(FakeWs.all[0].closed).toBe(true)
     expect(children()[0].proc.killed).toBe(true)
-    expect(syncRuns).toEqual([{ command: binary, args: ['stop', '--socket', sock] }])
+    expect(stops()).toEqual([{ command: binary, args: ['stop', '--socket', sock] }])
     expect(status.enabled).toBe(false)
     expect(status.daemon.running).toBe(false)
     expect(status.connections).toEqual([])
@@ -305,8 +319,13 @@ describe('targets', () => {
     status: () => ({ desktopSessionActive: true, delegatedSupportActive: false, ...overrides.status }),
     delegatedProfiles: async () => overrides.delegated ?? null,
     authorizedProfiles: async () => ['alice', 'alice-work'],
-    freshWsUrl: async ({ path: p, profile }: { path: string; profile: string }) =>
-      `ws://127.0.0.1:9/${profile}${p}?ticket=x`
+    ownProfileWsUrl: async ({ path: p, profile }: { path: string; profile: string }) => {
+      if (overrides.supportStarted?.()) {
+        throw new Error('This profile is not one of your own agents.')
+      }
+
+      return `ws://127.0.0.1:9/${profile}${p}?ticket=x`
+    }
   })
 
   it('opens one bridge per profile the signed-in user owns, through the relay', async () => {
@@ -324,12 +343,11 @@ describe('targets', () => {
       await resolveMacBridgeTargets({ managed: true, eva: eva({ status: { desktopSessionActive: false } }) })
     ).toEqual([])
 
-    // Support starting between two dials is caught at the dial.
-    let delegated: null | string[] = null
-    const live = { ...eva(), delegatedProfiles: async () => delegated }
-    const [target] = await resolveMacBridgeTargets({ managed: true, eva: live })
-    delegated = ['customer']
-    await expect(target.url()).rejects.toThrow(/delegated support/)
+    // Support starting between two dials is refused inside the mint itself (eva-runtime.test.cjs).
+    let started = false
+    const [target] = await resolveMacBridgeTargets({ managed: true, eva: eva({ supportStarted: () => started }) })
+    started = true
+    await expect(target.url()).rejects.toThrow(/not one of your own/)
   })
 
   it('uses the single remote connection in remote mode', async () => {
@@ -341,5 +359,142 @@ describe('targets', () => {
     expect(targets.map(target => target.profile)).toEqual(['remote'])
     expect(await targets[0].url()).toBe(`ws://127.0.0.1:19480${MAC_BRIDGE_PATH}?token=abc`)
     expect(await resolveMacBridgeTargets({ managed: false, remoteWsUrl: async () => null })).toEqual([])
+  })
+})
+
+describe('review round 2', () => {
+  const deferred = <T>() => {
+    let resolve!: (value: T) => void
+    const promise = new Promise<T>(done => (resolve = done))
+
+    return { promise, resolve }
+  }
+
+  it('a dial refused by the mint opens no WebSocket', async () => {
+    const mb = bridge([{ profile: 'alice', url: async () => Promise.reject(new Error('not one of your own agents')) }])
+    await mb.setEnabled(true)
+    expect(FakeWs.all).toEqual([])
+    expect((await mb.status()).connections[0]).toMatchObject({ state: 'retrying', error: 'not one of your own agents' })
+  })
+
+  it('Disable during daemon startup stops that daemon exactly once and leaves nothing running', async () => {
+    const ready = deferred<{ code: number; stdout: string; stderr: string }>()
+
+    const mb = bridge(undefined, {
+      run: async (command, args, options) => {
+        runs.push({ command, args, options })
+
+        if (command === '/usr/bin/codesign') {
+          return { code: 0, stdout: '', stderr: 'Identifier=com.trycua.driver\nTeamIdentifier=YCK386LBJ7\n' }
+        }
+
+        return args[0] === 'status' ? ready.promise : { code: 0, stdout: '', stderr: '' }
+      }
+    })
+
+    const enabling = mb.setEnabled(true)
+    await flush()
+    const sock = runs.find(entry => entry.command === '/usr/bin/open')!.args[8]
+
+    const off = await mb.setEnabled(false)
+    expect(stops()).toEqual([{ command: binary, args: ['stop', '--socket', sock] }])
+    ready.resolve({ code: 0, stdout: '', stderr: '' }) // the daemon comes up after the stop was issued
+    await enabling
+    await flush()
+
+    expect(stops()).toHaveLength(1)
+    expect(off.daemon.running).toBe(false)
+    expect((await mb.status()).daemon.running).toBe(false)
+    expect(procs.filter(entry => entry.args[0] === 'mcp')).toEqual([])
+    expect(FakeWs.all).toEqual([])
+  })
+
+  it('Disable while the URL is resolving leaves no WebSocket; stale sockets spawn nothing after re-enable', async () => {
+    const url = deferred<string>()
+    const mb = bridge([{ profile: 'alice', url: () => url.promise }])
+    await mb.setEnabled(true)
+    await mb.setEnabled(false)
+    url.resolve('ws://gw/bridge')
+    await flush()
+    expect(FakeWs.all).toEqual([])
+
+    const live = bridge()
+    await live.setEnabled(true)
+    const old = FakeWs.all[0]
+    old.open()
+    await live.setEnabled(false)
+    await live.setEnabled(true)
+    const before = procs.length
+    old.onmessage?.({ data: JSON.stringify({ t: 'open', c: 'stale' }) })
+    expect(procs.length).toBe(before)
+    expect((await live.status()).inUse).toEqual([])
+  })
+
+  it('close code 4000 (another Mac took over) is terminal until Enable is toggled', async () => {
+    const mb = bridge()
+    await mb.setEnabled(true)
+    FakeWs.all[0].open()
+    FakeWs.all[0].frame({ t: 'open', c: 'c1' })
+    FakeWs.all[0].close(REPLACED_CODE)
+
+    expect(children()[0].proc.killed).toBe(true)
+    expect(timers.map(timer => timer.ms)).toEqual([30_000]) // the retarget tick only: no redial
+    const status = await mb.status()
+    expect(status.connections).toEqual([{ profile: 'alice', state: 'replaced', error: REPLACED_TEXT }])
+    await mb.retarget()
+    expect(FakeWs.all).toHaveLength(1)
+
+    await mb.setEnabled(false)
+    await mb.setEnabled(true)
+    expect(FakeWs.all).toHaveLength(2)
+  })
+
+  it('carries a 70 KB call and an 8 MB result intact, and answers an over-limit result with an error', async () => {
+    const mb = bridge(undefined, { maxMessageBytes: 9 * 1024 * 1024 })
+    await mb.setEnabled(true)
+    const ws = FakeWs.all[0]
+    ws.open()
+    ws.frame({ t: 'open', c: 'c1' })
+    const child = children()[0].proc
+
+    const call = {
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: { name: 'type_text', arguments: { text: 'k'.repeat(70_000) } }
+    }
+
+    ws.frame({ t: 'msg', c: 'c1', m: call })
+    expect(child.written).toEqual([call])
+
+    const big = {
+      jsonrpc: '2.0',
+      id: 1,
+      result: { content: [{ type: 'image', data: 'A'.repeat(8 * 1024 * 1024), mimeType: 'image/png' }] }
+    }
+
+    const line = Buffer.from(`${JSON.stringify(big)}\n`)
+
+    for (let at = 0; at < line.length; at += 65_536) {
+      child.stdout.emit('data', line.subarray(at, at + 65_536))
+    }
+
+    expect(ws.sent.at(-1)).toEqual({ t: 'msg', c: 'c1', m: big })
+
+    const huge = { jsonrpc: '2.0', id: 2, result: { content: [{ type: 'text', text: 'B'.repeat(10 * 1024 * 1024) }] } }
+    child.stdout.emit('data', Buffer.from(`${JSON.stringify(huge)}\n`))
+    expect(ws.sent.at(-1).m).toMatchObject({ id: 2, error: { code: -32000 } })
+  })
+
+  it('keeps a multibyte character split across two chunks intact', async () => {
+    const mb = bridge()
+    await mb.setEnabled(true)
+    FakeWs.all[0].open()
+    FakeWs.all[0].frame({ t: 'open', c: 'c1' })
+    const bytes = Buffer.from(`${JSON.stringify({ jsonrpc: '2.0', id: 3, result: { text: 'café ✓' } })}\n`)
+    const cut = bytes.indexOf(Buffer.from('é')) + 1 // between the two bytes of é
+    children()[0].proc.stdout.emit('data', bytes.subarray(0, cut))
+    children()[0].proc.stdout.emit('data', bytes.subarray(cut))
+    expect(FakeWs.all[0].sent.at(-1).m.result.text).toBe('café ✓')
   })
 })

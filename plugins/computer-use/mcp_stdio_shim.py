@@ -23,6 +23,7 @@ from typing import Any, Dict, Optional
 OFFLINE_TEXT = "Your Mac isn't connected. Ask the user to open evaOS Agent and turn on Computer Use (left sidebar)."
 RETRY_SECONDS = 2.0
 REPLAY_ID = "my-mac-reinit"
+MAX_MESSAGE_BYTES = 64 * 1024 * 1024  # matches the dashboard hub and the Mac
 
 
 class Shim:
@@ -53,11 +54,14 @@ class Shim:
             self.out.flush()
 
     def send_up(self, message: Dict[str, Any]) -> bool:
+        line = (json.dumps({"t": "msg", "m": message}, separators=(",", ":")) + "\n").encode()
+        if len(line) > MAX_MESSAGE_BYTES:
+            raise OverflowError(f"The call ({len(line)} bytes) is larger than the bridge carries.")
         with self.lock:
             if self.sock is None:
                 return False
             try:
-                self.sock.sendall((json.dumps({"t": "msg", "m": message}, separators=(",", ":")) + "\n").encode())
+                self.sock.sendall(line)
                 return True
             except OSError:
                 return False
@@ -94,7 +98,13 @@ class Shim:
             rid = message.get("id")
             if self.online and "method" in message and rid is not None:
                 self.pending[rid] = message["method"]
-            if self.online and self.send_up(message):
+            try:
+                if self.online and self.send_up(message):
+                    return
+            except OverflowError as exc:
+                self.pending.pop(rid, None)
+                if rid is not None:
+                    self.emit({"jsonrpc": "2.0", "id": rid, "error": {"code": -32000, "message": str(exc)}})
                 return
             self.pending.pop(rid, None)
         self.answer_offline(message)
