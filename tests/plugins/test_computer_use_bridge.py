@@ -306,7 +306,7 @@ def test_shim_process_end_to_end_against_the_hub(home):
 def test_manifest_mounts_the_api_without_a_tab():
     manifest = json.loads((PLUGIN_DIR / "dashboard" / "manifest.json").read_text())
     assert manifest["name"] == "computer-use" and manifest["api"] == "plugin_api.py" and manifest["tab"]["hidden"]
-    assert [r.path for r in api.router.routes] == ["/bridge"]
+    assert sorted(r.path for r in api.router.routes) == ["/available", "/bridge"]
 
 
 # --- review round 2 -------------------------------------------------------------------------------
@@ -555,7 +555,8 @@ def test_ships_as_an_optional_user_plugin_not_a_bundled_one(tmp_path, monkeypatc
     """Bundled dashboard plugins mount on every profile unless disabled; this one must be opt-in per profile."""
     from hermes_cli import web_server_dashboard as dashboard
 
-    assert not (REPO / "plugins" / "computer-use").exists()
+    # The manifest, not the folder: an ignored __pycache__ left by an older checkout must not fail this.
+    assert not (REPO / "plugins" / "computer-use" / "dashboard" / "manifest.json").exists()
     assert (PLUGIN_DIR / "dashboard" / "manifest.json").is_file()
     monkeypatch.delenv("HERMES_BUNDLED_PLUGINS", raising=False)
     monkeypatch.delenv("HERMES_ENABLE_PROJECT_PLUGINS", raising=False)
@@ -570,3 +571,29 @@ def test_ships_as_an_optional_user_plugin_not_a_bundled_one(tmp_path, monkeypatc
     assert entry["source"] == "user"
     assert dashboard._plugin_api_mount_skip_reason(entry, set(), set()) == "not in plugins.enabled"
     assert dashboard._plugin_api_mount_skip_reason(entry, {"computer-use"}, set()) is None
+
+
+# --- pilot fix round 2 ------------------------------------------------------------------------------
+
+
+def test_available_answers_200_with_the_plugin_mounted_and_nothing_else():
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    app = FastAPI()
+    app.include_router(api.router, prefix="/api/plugins/computer-use")
+    client = TestClient(app)
+    response = client.get("/api/plugins/computer-use/available")
+    assert response.status_code == 200
+    assert response.json() == {"ok": True, "plugin": "computer-use"}
+    # Negative control: a profile without the plugin mounted has no such route.
+    assert TestClient(FastAPI()).get("/api/plugins/computer-use/available").status_code == 404
+
+
+def test_reopen_attempts_never_overflow(home):
+    hub = api.Hub(home)
+    hub._reopen_attempts["c"] = 5000  # 2.0 * 2 ** 1024 raised OverflowError before the cap
+    assert hub._reopen_delay("c") == 60
+    assert hub._reopen_attempts["c"] <= api.REOPEN_ATTEMPTS_CAP + 1
+    for _ in range(2000):
+        assert hub._reopen_delay("c") == 60

@@ -7,6 +7,7 @@ import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import {
+  AVAILABLE_TTL_MS,
   backoffMs,
   createMacBridge,
   CUA_INSTALL_SCRIPT,
@@ -16,9 +17,12 @@ import {
   grantCommand,
   installCommand,
   LONG_BACKOFF_MS,
+  MAC_BRIDGE_AVAILABLE_PATH,
   MAC_BRIDGE_PATH,
   type MacBridgeAccount,
+  macBridgeAgentName,
   notSetUpText,
+  probeMacBridgeAvailable,
   reaperArgs,
   REPLACED_CODE,
   REPLACED_TEXT,
@@ -98,6 +102,8 @@ let timers: { fn: () => void; ms: number }[]
 let binary: string
 let clock: number
 let signedInAs: MacBridgeAccount | null
+let availableAnswer: boolean
+let probes: number
 
 const ACCOUNT_A = { customerId: 'jackie-david', agentId: 'alice' }
 const ACCOUNT_B = { customerId: 'jackie-david', agentId: 'bob' }
@@ -140,6 +146,11 @@ function bridge(
     WebSocket: FakeWs,
     statePath: path.join(dir, 'mac-bridge.json'),
     resolveTargets: async () => targets,
+    available: async () => {
+      probes += 1
+
+      return availableAnswer
+    },
     account: () => signedInAs,
     log: () => undefined,
     candidates: [binary],
@@ -173,6 +184,8 @@ beforeEach(() => {
   FakeWs.all = []
   clock = 1_000_000
   signedInAs = ACCOUNT_A
+  availableAnswer = true
+  probes = 0
 })
 
 afterEach(() => fs.rmSync(dir, { recursive: true, force: true }))
@@ -325,6 +338,7 @@ describe('the bridge', () => {
       WebSocket: FakeWs,
       statePath: path.join(dir, 'x.json'),
       resolveTargets: async () => [],
+      available: async () => true,
       account: () => ACCOUNT_A,
       log: () => undefined,
       candidates: [binary]
@@ -343,6 +357,7 @@ describe('targets', () => {
     // A profile admin administers several profiles; the bridge must not dial them.
     authorizedProfiles: async () => ['jane', 'louis', 'regan'],
     assignedProfileId: async () => ('assigned' in overrides ? overrides.assigned : 'jane'),
+    requestApi: async () => ({ ok: true, plugin: 'computer-use' }),
     ownProfileWsUrl: async ({ path: p, profile }: { path: string; profile: string }) => {
       if (overrides.supportStarted?.()) {
         throw new Error('This profile is not one of your own agents.')
@@ -1115,5 +1130,306 @@ describe('pilot fix round 1', () => {
 
     next.stopSync()
     expect(saved().daemonSocket).toBeUndefined()
+  })
+})
+
+describe('pilot fix round 2 (M7: shown only for agents that have it)', () => {
+  const saved = () => JSON.parse(fs.readFileSync(path.join(dir, 'mac-bridge.json'), 'utf8'))
+  const opens = () => runs.filter(entry => entry.command === '/usr/bin/open')
+
+  const settle = async () => {
+    for (let i = 0; i < 6; i += 1) {
+      await flush()
+    }
+  }
+
+  const fire = (ms: number) => {
+    const timer = timers.filter(entry => entry.ms === ms).at(-1)
+
+    if (!timer) {
+      throw new Error(`no ${ms} ms timer (have ${timers.map(entry => entry.ms).join(', ')})`)
+    }
+
+    timers = timers.filter(entry => entry !== timer)
+    timer.fn()
+  }
+
+  const httpError = (statusCode: number) => Object.assign(new Error(`${statusCode}: nope`), { statusCode })
+
+  const facade = (answer: () => Promise<any>, overrides: any = {}) => {
+    const calls: { request: any; retry: any }[] = []
+
+    const eva = {
+      status: () => ({
+        desktopSessionActive: true,
+        delegatedSupportActive: false,
+        agentId: 'jane',
+        agentDisplayName: 'Jane’s agent',
+        ...overrides.status
+      }),
+      delegatedProfiles: async () => overrides.delegated ?? null,
+      assignedProfileId: async () => ('assigned' in overrides ? overrides.assigned : 'jane'),
+      ownProfileWsUrl: async () => 'ws://unused',
+      requestApi: async (request: any, retry?: boolean) => {
+        calls.push({ request, retry })
+
+        return answer()
+      }
+    }
+
+    return { eva, calls }
+  }
+
+  it('available(): 200 → true; 404, 403, 401, other, network error, no session, delegated support → false', async () => {
+    const ok = facade(async () => ({ ok: true, plugin: 'computer-use' }))
+    expect(await probeMacBridgeAvailable({ managed: true, eva: ok.eva })).toBe(true)
+    // The own agent only, through the facade's profile request path, never with the re-enrolling retry.
+    expect(ok.calls).toEqual([
+      { request: { method: 'GET', path: MAC_BRIDGE_AVAILABLE_PATH, profile: 'jane' }, retry: false }
+    ])
+
+    for (const status of [404, 403, 401, 500, 502]) {
+      const refused = facade(async () => Promise.reject(httpError(status)))
+      expect(await probeMacBridgeAvailable({ managed: true, eva: refused.eva })).toBe(false)
+      expect(refused.calls.map(call => call.retry)).toEqual([false])
+    }
+
+    const offline = facade(async () => Promise.reject(new Error('getaddrinfo ENOTFOUND')))
+    expect(await probeMacBridgeAvailable({ managed: true, eva: offline.eva })).toBe(false)
+
+    for (const overrides of [
+      { status: { desktopSessionActive: false } },
+      { status: { delegatedSupportActive: true } },
+      { delegated: ['customer'] },
+      { assigned: null }
+    ]) {
+      const none = facade(async () => ({ ok: true }), overrides)
+      expect(await probeMacBridgeAvailable({ managed: true, eva: none.eva })).toBe(false)
+      expect(none.calls).toEqual([]) // nothing asked at all
+    }
+
+    expect(await probeMacBridgeAvailable({ managed: true })).toBe(false)
+    expect(await probeMacBridgeAvailable({ managed: false })).toBe(true) // a remote (dev) gateway, as before
+
+    expect(macBridgeAgentName({ managed: true, eva: ok.eva })).toBe('Jane’s agent')
+    expect(macBridgeAgentName({ managed: true, eva: facade(async () => null, { status: { agentDisplayName: null } }).eva })).toBe('jane')
+    expect(
+      macBridgeAgentName({ managed: true, eva: facade(async () => null, { status: { delegatedSupportActive: true } }).eva })
+    ).toBeNull()
+  })
+
+  it('turning on asks first: not available → no daemon, no lookup, no dial, and the saved switch stays on', async () => {
+    availableAnswer = false
+    let lookups = 0
+
+    const mb = bridge(undefined, {
+      resolveTargets: async () => {
+        lookups += 1
+
+        return [{ profile: 'alice', url: async () => 'ws://gw/bridge' }]
+      }
+    })
+
+    const status = await mb.setEnabled(true)
+    expect(probes).toBe(1)
+    expect(opens()).toEqual([])
+    expect(FakeWs.all).toEqual([])
+    expect(lookups).toBe(0)
+    expect(saved()).toMatchObject({ enabled: true, account: ACCOUNT_A })
+    expect(status).toMatchObject({ available: false, enabled: true, daemon: { running: false } })
+    expect(timers).toEqual([]) // nothing ticking
+
+    // The same at app start with the switch saved on.
+    procs = []
+    const next = bridge()
+    await next.init()
+    expect(opens()).toEqual([])
+    expect(FakeWs.all).toEqual([])
+
+    // The plugin is set up later: the next answer (a sign-in here) starts it and dials.
+    availableAnswer = true
+    await mb.signedIn()
+    await settle()
+    expect(opens()).toHaveLength(1)
+    expect(FakeWs.all).toHaveLength(1)
+    expect(lookups).toBe(1)
+    expect((await mb.status()).available).toBe(true)
+  })
+
+  it('unavailable while running: the links close and the 30 s tick does no lookup until it is available again', async () => {
+    let lookups = 0
+
+    const mb = bridge(undefined, {
+      resolveTargets: async () => {
+        lookups += 1
+
+        return [{ profile: 'alice', url: async () => 'ws://gw/bridge' }]
+      }
+    })
+
+    await mb.setEnabled(true)
+    FakeWs.all[0].open()
+    expect(lookups).toBe(1)
+
+    // Within 10 min the tick reuses the answer.
+    fire(30_000)
+    await settle()
+    expect(probes).toBe(1)
+    expect(lookups).toBe(2)
+
+    availableAnswer = false
+    clock += AVAILABLE_TTL_MS
+    fire(30_000)
+    await settle()
+    expect(probes).toBe(2)
+    expect(lookups).toBe(2) // the tick that learned it asked nothing else
+    expect(FakeWs.all[0].closed).toBe(true)
+
+    for (let i = 0; i < 5; i += 1) {
+      clock += 30_000
+      fire(30_000)
+      await settle()
+    }
+
+    expect(lookups).toBe(2)
+    expect(probes).toBe(2)
+    expect(FakeWs.all).toHaveLength(1)
+    const status = await mb.status()
+    expect(status).toMatchObject({ available: false, enabled: true, connections: [] })
+    expect(saved()).toMatchObject({ enabled: true, account: ACCOUNT_A })
+    expect(stops()).toEqual([]) // M4 semantics: the switch and the daemon are left alone
+
+    // Set up again: the next 10 min answer dials.
+    availableAnswer = true
+    clock += AVAILABLE_TTL_MS
+    fire(30_000)
+    await settle()
+    expect(lookups).toBe(3)
+    expect(FakeWs.all).toHaveLength(2)
+  })
+
+  it('the answer is cached: re-asked on sign-in, an account switch, retarget and after 10 min, not per status', async () => {
+    const mb = bridge()
+    expect((await mb.status()).available).toBe(true)
+    expect(probes).toBe(1)
+
+    for (let i = 0; i < 5; i += 1) {
+      await mb.status()
+    }
+
+    expect(probes).toBe(1)
+
+    await mb.setEnabled(true) // a fresh answer is reused to start
+    expect(probes).toBe(1)
+    expect(FakeWs.all).toHaveLength(1)
+
+    await mb.signedIn()
+    expect(probes).toBe(2)
+    await mb.retarget()
+    expect(probes).toBe(3)
+
+    signedInAs = ACCOUNT_B // an account switch waits for its own answer
+    availableAnswer = false
+    expect((await mb.status()).available).toBe(false)
+    expect(probes).toBe(4)
+
+    clock += AVAILABLE_TTL_MS - 1
+    await mb.status()
+    expect(probes).toBe(4)
+    clock += 1
+    availableAnswer = true
+    await mb.status() // stale: refreshed in the background
+    await settle()
+    expect(probes).toBe(5)
+    expect((await mb.status()).available).toBe(true)
+  })
+
+  it('an answer that lands after another account signed in is not kept for them', async () => {
+    let release: (value: boolean) => void = () => undefined
+
+    const mb = bridge(undefined, {
+      available: () =>
+        new Promise(resolve => {
+          probes += 1
+          release = resolve
+        })
+    })
+
+    const first = mb.status()
+    await flush()
+    signedInAs = ACCOUNT_B
+    release(true) // A's answer, landing after B signed in
+    expect((await first).available).toBe(false)
+
+    const second = mb.status() // B's own check
+    await flush()
+    expect(probes).toBe(2)
+    release(true)
+    expect((await second).available).toBe(true)
+  })
+
+  it('R3: health-check restarts in a row wait 30 s, 60 s, then 5 min; two good checks start the ladder over', async () => {
+    let dead = ''
+
+    const mb = bridge(undefined, {
+      run: async (command, args, options) => {
+        runs.push({ command, args, options })
+
+        if (command === '/usr/bin/codesign') {
+          return { code: 0, stdout: '', stderr: 'Identifier=com.trycua.driver\nTeamIdentifier=YCK386LBJ7\n' }
+        }
+
+        return { code: args[0] === 'status' && args[2] === dead ? 1 : 0, stdout: '', stderr: '' }
+      }
+    })
+
+    await mb.setEnabled(true)
+    const current = () => opens().at(-1)!.args[8]
+
+    const tick = async () => {
+      fire(30_000) // the newest 30 s timer is the retarget tick
+      await settle()
+    }
+
+    dead = current()
+    await tick()
+    expect(opens()).toHaveLength(2) // the first restart is at once
+
+    const delays: number[] = []
+
+    for (let i = 0; i < 4; i += 1) {
+      dead = current()
+      const before = new Set(timers)
+      const count = opens().length
+      await tick()
+      const added = timers.filter(timer => !before.has(timer))
+      expect(added).toHaveLength(2) // the paced restart, then the next tick
+      const [restart] = added
+      delays.push(restart.ms)
+      expect(opens()).toHaveLength(count) // not restarted yet
+      timers = timers.filter(timer => timer !== restart)
+      restart.fn()
+      await settle()
+      expect(opens()).toHaveLength(count + 1)
+    }
+
+    expect(delays).toEqual([30_000, 60_000, 300_000, 300_000])
+
+    // The restarted daemon answers twice: the next failure restarts at once again.
+    await tick()
+    await tick()
+    dead = current()
+    const count = opens().length
+    await tick()
+    expect(opens()).toHaveLength(count + 1)
+
+    // Disable while a paced restart waits: it never runs.
+    dead = current()
+    await tick()
+    expect(timers.filter(timer => timer.ms === 30_000)).toHaveLength(2)
+    const waiting = opens().length
+    await mb.setEnabled(false)
+    expect(timers).toEqual([])
+    expect(opens()).toHaveLength(waiting)
   })
 })

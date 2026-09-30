@@ -11,7 +11,8 @@
  * not a gate, and nothing here narrows what CUA can do. Never during delegated
  * support: an admin's Mac is never offered to a customer's agents. The switch
  * belongs to the account that turned it on: another account signed in on this
- * Mac dials nothing.
+ * Mac dials nothing. Nothing starts or dials unless the own agent has the gateway
+ * plugin (`available`, asked through the Eva facade and cached for 10 min).
  *
  * Frames (JSON text): Mac→gw `hello`; gw→Mac `open`; both ways `msg` / `close`;
  * Mac→gw `ping` every 20 s, answered `pong`. Unknown frame types are ignored.
@@ -26,6 +27,10 @@ import path from 'node:path'
 import { StringDecoder } from 'node:string_decoder'
 
 export const MAC_BRIDGE_PATH = '/api/plugins/computer-use/bridge'
+/** 200 when the gateway plugin is set up for the profile; Hermes answers 404 for an absent or unenabled one. */
+export const MAC_BRIDGE_AVAILABLE_PATH = '/api/plugins/computer-use/available'
+/** How long an `available` answer is reused (sign-in, an account switch and `retarget` ask again at once). */
+export const AVAILABLE_TTL_MS = 10 * 60_000
 export const CUA_INSTALL_SCRIPT = '/bin/bash -c "$(curl -fsSL https://cua.ai/driver/install.sh)"'
 const TEAM_ID = 'YCK386LBJ7'
 const BUNDLE_ID = 'com.trycua.driver'
@@ -100,8 +105,12 @@ export interface MacBridgeDeps {
   WebSocket: any
   statePath: string
   resolveTargets: () => Promise<MacBridgeTarget[]>
+  /** Whether the signed-in user's own agent has the gateway plugin (`probeMacBridgeAvailable`); never throws. */
+  available: () => Promise<boolean>
   /** The signed-in account, or null (signed out, delegated support). */
   account: () => MacBridgeAccount | null
+  /** The own agent's display name (else its profile id) for the page, or null. */
+  agentName?: () => null | string
   log: (line: string) => void
   env?: NodeJS.ProcessEnv
   candidates?: string[]
@@ -211,6 +220,8 @@ interface EvaFacade {
   assignedProfileId: () => Promise<null | string>
   /** Mints only for the user's own agent, checked and bound to the session in the same step. */
   ownProfileWsUrl: (request: { path: string; profile: string }) => Promise<string>
+  /** The facade's profile API request; `retry: false` never refreshes or clears the enrollment on a 401/403. */
+  requestApi: (request: { method: string; path: string; profile: string }, retry?: boolean) => Promise<any>
 }
 
 /** A remote (dev) connection has no account: one fixed identity, so Enable works there as before. */
@@ -233,6 +244,54 @@ export function currentMacBridgeAccount(input: { managed: boolean; eva?: EvaFaca
   }
 
   return { customerId: status.customerId, agentId: status.agentId }
+}
+
+/** The own agent's name for the page: its display name, else its profile id; null during delegated support. */
+export function macBridgeAgentName(input: { managed: boolean; eva?: EvaFacade }): null | string {
+  const status: any = input.managed ? input.eva?.status() : null
+
+  if (!status || status.delegatedSupportActive) {
+    return null
+  }
+
+  return status.agentDisplayName || status.agentId || null
+}
+
+/**
+ * Whether the signed-in user's OWN agent (the same target as the bridge) has the gateway plugin: a GET of
+ * `/available` through the Eva facade's profile request path. 200 → true; 404 (absent or unenabled plugin),
+ * any other status, a network error, no session or delegated support → false. `retry: false`: a 401/403/404
+ * here never reaches the facade's re-enrollment (`clearRuntimeEnrollment`).
+ */
+export async function probeMacBridgeAvailable(input: { managed: boolean; eva?: EvaFacade }): Promise<boolean> {
+  if (!input.managed) {
+    return true // a remote (dev) connection: the one gateway it points at, as before
+  }
+
+  const { eva } = input
+  const status = eva?.status()
+
+  if (!eva || !status?.desktopSessionActive || status.delegatedSupportActive) {
+    return false
+  }
+
+  try {
+    if ((await eva.delegatedProfiles()) !== null) {
+      return false
+    }
+
+    const profile = await eva.assignedProfileId()
+
+    if (!profile) {
+      return false
+    }
+
+    const answer = await eva.requestApi({ method: 'GET', path: MAC_BRIDGE_AVAILABLE_PATH, profile }, false)
+
+    return answer?.ok === true
+  } catch {
+    return false
+  }
 }
 
 /** Where the bridge dials: the signed-in user's own agent (managed) or the one remote connection. */
@@ -360,6 +419,15 @@ export function createMacBridge(deps: MacBridgeDeps) {
   let cachedVersion: { binary: string; version: null | string } | null = null
   let startTimer: any = null
   let startFailures = 0
+  // Health-check restarts in a row, and checks the restarted daemon has passed since (2 start the ladder over).
+  let restarts = 0
+  let healthyChecks = 0
+  let restartTimer: any = null
+  // The last `available` answer, when, and for which signed-in account; one probe at a time.
+  let available = false
+  let availableAt = 0
+  let availableFor: null | string = null
+  let probing: null | Promise<boolean> = null
 
   /** A legacy file (no account) reads as off. */
   function readState(): SavedState {
@@ -395,6 +463,48 @@ export function createMacBridge(deps: MacBridgeDeps) {
   }
 
   const accountMatches = () => sameAccount(account, deps.account())
+  const accountKey = (value: MacBridgeAccount | null) => (value ? `${value.customerId}\n${value.agentId}` : '')
+
+  /** Ask whether the signed-in user's own agent has the gateway plugin; starts the bridge if that makes it ready. */
+  function refreshAvailable(): Promise<boolean> {
+    probing ??= (async () => {
+      const before = accountKey(deps.account())
+      let answer = false
+
+      try {
+        answer = await deps.available()
+      } catch {
+        answer = false
+      }
+
+      const after = accountKey(deps.account())
+
+      // Another account signed in while it ran: the answer is not theirs, so the next check asks again.
+      // (No account before, one after: the probe itself re-enrolled a lapsed runtime.)
+      if (before && before !== after) {
+        available = false
+        availableFor = null
+      } else {
+        available = answer
+        availableFor = after
+      }
+
+      availableAt = now()
+      probing = null
+
+      if (available && enabled && !running && !startTimer) {
+        void start()
+      }
+
+      return available
+    })()
+
+    return probing
+  }
+
+  /** Never asked for this account, or the answer is older than 10 min. */
+  const availableUnknown = () => availableFor !== accountKey(deps.account())
+  const availableStale = () => availableUnknown() || now() - availableAt >= AVAILABLE_TTL_MS
 
   function locate(): { binary: null | string; app: null | string; source: null | string } {
     const onPath = String(env.PATH || '')
@@ -846,8 +956,12 @@ export function createMacBridge(deps: MacBridgeDeps) {
     }
   }
 
-  /** A sign-in starts the backoff over, including the long one. */
+  /** A sign-in asks `available` again and starts the backoff over, including the long one. */
   async function signedIn() {
+    if (!(await refreshAvailable())) {
+      return retarget() // closes the links (no dial while unavailable)
+    }
+
     for (const link of links.values()) {
       if (link.state === 'retrying') {
         clearTimer(link.timer)
@@ -870,7 +984,16 @@ export function createMacBridge(deps: MacBridgeDeps) {
 
     const up = (await deps.run(binary, ['status', '--socket', sock], { env: daemonEnv() })).code === 0
 
-    if (up || gen !== my || socket !== sock) {
+    if (gen !== my || socket !== sock) {
+      return
+    }
+
+    if (up) {
+      // A restarted daemon that has passed 2 checks: the next failure restarts at once again.
+      if (restarts > 0 && ++healthyChecks >= 2) {
+        restarts = 0
+      }
+
       return
     }
 
@@ -882,7 +1005,25 @@ export function createMacBridge(deps: MacBridgeDeps) {
     }
 
     stopDaemonAt(binary, sock, now())
+    // Restarts in a row are paced like a failed start: at once, then 30 s, 60 s, then every 5 min.
+    const delay = restarts > 0 ? START_RETRY_MS[Math.min(restarts - 1, START_RETRY_MS.length - 1)] : 0
+    restarts += 1
+    healthyChecks = 0
 
+    if (delay > 0) {
+      restartTimer = setTimer(() => {
+        restartTimer = null
+
+        if (gen === my) {
+          void restartDaemon(my)
+        }
+      }, delay)
+    } else {
+      await restartDaemon(my)
+    }
+  }
+
+  async function restartDaemon(my: number) {
     try {
       await startDaemon(my)
       const next = await readHello()
@@ -919,17 +1060,31 @@ export function createMacBridge(deps: MacBridgeDeps) {
     }
   }
 
-  /** Open links for new profiles, drop links for profiles no longer offered. */
-  async function retarget() {
+  /**
+   * Open links for new profiles, drop links for profiles no longer offered. `refresh` asks `available` again
+   * (sign-in, sign-out, `retarget`); the tick asks only after an account switch or once the answer is 10 min old.
+   */
+  async function retarget(refresh = false) {
     if (!running || !hello) {
       return // start() retargets once the daemon is up
     }
 
     const my = gen
+
+    if (refresh || availableStale()) {
+      await refreshAvailable()
+
+      if (!running || gen !== my) {
+        return
+      }
+    }
+
     const before = deps.account()
     let targets: MacBridgeTarget[] | null = null
 
-    if (before && !sameAccount(account, before)) {
+    if (!available) {
+      targets = [] // not set up for this agent: no lookup, so nothing reaches the enrollment either
+    } else if (before && !sameAccount(account, before)) {
       targets = [] // another account: this Mac is not theirs to offer
     } else {
       // Also with no account: signed out resolves to none, and a lapsed runtime (sleep, a missed refresh)
@@ -1006,8 +1161,23 @@ export function createMacBridge(deps: MacBridgeDeps) {
     running = true
     const my = ++gen
     lastError = null
+    restarts = healthyChecks = 0
 
     try {
+      // Nothing starts for an agent without the gateway plugin (a fresh true is reused, anything else asked
+      // again); a later answer of true starts it then.
+      if (!(available && !availableStale()) && !(await refreshAvailable())) {
+        if (gen === my) {
+          running = false
+        }
+
+        return
+      }
+
+      if (gen !== my) {
+        return
+      }
+
       await startDaemon(my)
       const next = await readHello()
 
@@ -1049,6 +1219,8 @@ export function createMacBridge(deps: MacBridgeDeps) {
     running = false
     clearTimer(retargetTimer)
     retargetTimer = null
+    clearTimer(restartTimer)
+    restartTimer = null
 
     for (const link of [...links.values()]) {
       closeLink(link)
@@ -1099,7 +1271,17 @@ export function createMacBridge(deps: MacBridgeDeps) {
   async function status() {
     const found = locate()
 
+    // The page and its sidebar entry follow this: a new account waits for its own answer, an old one is
+    // refreshed in the background.
+    if (availableUnknown()) {
+      await refreshAvailable()
+    } else if (availableStale()) {
+      void refreshAvailable()
+    }
+
     return {
+      available,
+      agent: deps.agentName?.() ?? null,
       // Shown off to any other account signed in on this Mac; on while a lapsed runtime keeps this one's links.
       enabled: enabled && (accountMatches() || (deps.account() === null && links.size > 0)),
       cua: {
@@ -1147,7 +1329,7 @@ export function createMacBridge(deps: MacBridgeDeps) {
     init,
     setEnabled,
     status,
-    retarget,
+    retarget: () => retarget(true),
     redial,
     signedIn,
     installCua: () => launch(installCommand()),

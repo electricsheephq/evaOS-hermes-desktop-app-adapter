@@ -2,6 +2,7 @@
  * Computer Use — the left-sidebar page for the Mac bridge (`electron/mac-bridge.ts`):
  * whether CUA is installed and permitted on this Mac, the one Enable switch, which
  * agent it is connected to, and the agent connections open on it (with their last action).
+ * The sidebar entry is there only while the user's own agent has the gateway plugin.
  */
 
 import {
@@ -21,6 +22,13 @@ type MacBridgeStatus = Awaited<ReturnType<NonNullable<Window['hermesDesktop']['m
 
 const PATH = '/computer-use'
 const POLL_MS = 2000
+/** While the page is not open: how often the sidebar entry re-checks `available`. */
+const NAV_POLL_MS = 30_000
+
+/** The sidebar entry's sync, set by `register`; the open page reports each status it reads. */
+let reportAvailable: (available: boolean) => void = () => undefined
+
+export const notSetUpLine = (agent: null | string) => `Computer Use isn't set up for ${agent || 'your agent'} yet.`
 
 function granted(value: boolean | null | undefined) {
   return (
@@ -47,7 +55,15 @@ export function ComputerUsePage() {
     }
 
     let live = true
-    const read = () => void bridge.status().then(next => live && setStatus(next))
+
+    const read = () =>
+      void bridge.status().then(next => {
+        if (live) {
+          setStatus(next)
+          reportAvailable(next.available === true)
+        }
+      })
+
     read()
     const timer = window.setInterval(read, POLL_MS)
 
@@ -86,6 +102,8 @@ export function ComputerUsePage() {
 
         {!bridge || !status ? (
           <p className="text-sm text-muted-foreground">Checking this Mac…</p>
+        ) : status.available !== true ? (
+          <p className="text-sm text-muted-foreground">{notSetUpLine(status.agent)}</p>
         ) : (
           <div className="grid">
             <ListRow
@@ -170,20 +188,57 @@ const plugin: HermesPlugin = {
   name: 'Computer Use',
   description: 'Lets your agents operate this Mac in the background through CUA while the app runs.',
   register(ctx) {
-    ctx.registerMany([
-      {
-        id: 'page',
-        area: ROUTES_AREA,
-        data: { path: PATH } satisfies RouteContribution,
-        render: () => <ComputerUsePage />
-      },
-      {
-        id: 'nav',
-        area: SIDEBAR_NAV_AREA,
-        order: 40,
-        data: { codicon: 'device-desktop', label: 'Computer Use', path: PATH } satisfies SidebarNavContribution
+    ctx.register({
+      id: 'page',
+      area: ROUTES_AREA,
+      data: { path: PATH } satisfies RouteContribution,
+      render: () => <ComputerUsePage />
+    })
+
+    const bridge = window.hermesDesktop?.macBridge
+
+    if (!bridge) {
+      return
+    }
+
+    // The sidebar entry only while the user's own agent has the gateway plugin.
+    let live = true
+    let removeNav: (() => void) | null = null
+
+    const sync = (available: boolean) => {
+      if (!live) {
+        return
       }
-    ])
+
+      if (available && !removeNav) {
+        removeNav = ctx.register({
+          id: 'nav',
+          area: SIDEBAR_NAV_AREA,
+          order: 40,
+          data: { codicon: 'device-desktop', label: 'Computer Use', path: PATH } satisfies SidebarNavContribution
+        })
+      } else if (!available && removeNav) {
+        removeNav()
+        removeNav = null
+      }
+    }
+
+    const check = () =>
+      void bridge.status().then(
+        next => sync(next.available === true),
+        () => undefined
+      )
+
+    reportAvailable = sync
+    ctx.onDispose(() => {
+      live = false
+
+      if (reportAvailable === sync) {
+        reportAvailable = () => undefined
+      }
+    })
+    check()
+    ctx.setInterval(check, NAV_POLL_MS)
   }
 }
 

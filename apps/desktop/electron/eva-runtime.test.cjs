@@ -6222,3 +6222,54 @@ test('a profile admin’s Mac bridge dials and mints only the enrollment’s own
     [['jane', path_, false]]
   )
 })
+
+test('the Mac bridge available() probe (requestApi, retry false) never clears or re-enrolls on a 401/403/404', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-bridge-available-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'state.json')
+  writeActiveEnrollment(statePath)
+  const fetched = []
+  let status = 404
+  let launches = 0
+  const runtime = makeManagedRuntime(statePath, {
+    // What main's fetchJson (api-transport httpStatusError) rejects with for an HTTP error.
+    fetchJson: async url => {
+      fetched.push(url)
+      if (status === 200) return { ok: true, plugin: 'computer-use' }
+      throw Object.assign(new Error(`${status}: {"detail":"Not Found"}`), { statusCode: status })
+    },
+    launchRuntime: async () => {
+      launches += 1
+      return {
+        schemaVersion: 'evaos.hermes_desktop_enrollment.v1',
+        customerId: 'customer-one',
+        runtime: 'hermes',
+        agentId: 'main',
+        baseUrl: 'https://hermes-customer-one.ecs.electricsheephq.com',
+        token: 'refreshed-runtime-token',
+        expiresAt: FUTURE
+      }
+    }
+  })
+  t.after(() => runtime.close())
+  const probe = retry =>
+    runtime.requestApi({ method: 'GET', path: '/api/plugins/computer-use/available', profile: 'main' }, retry)
+
+  for (status of [401, 403, 404]) {
+    await assert.rejects(probe(false))
+  }
+  assert.equal(launches, 0)
+  assert.equal(JSON.parse(fs.readFileSync(statePath, 'utf8')).runtime.token, 'runtime-token')
+  assert.equal(runtime.status().agentId, 'main')
+  assert.deepEqual(fetched, Array(3).fill(
+    'https://hermes-customer-one.ecs.electricsheephq.com/api/plugins/computer-use/available?profile=main'
+  ))
+
+  status = 200
+  assert.deepEqual(await probe(false), { ok: true, plugin: 'computer-use' })
+
+  // Positive control: the default retry is the path that re-enrolls on a 401, which the probe must not take.
+  status = 401
+  await assert.rejects(probe(true))
+  assert.equal(launches, 1)
+})

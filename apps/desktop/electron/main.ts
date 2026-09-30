@@ -304,6 +304,8 @@ import { ACTIVE_LOG_POLL_MS, planLogRotation, reclaimActiveLogIfOversized } from
 import {
   createMacBridge,
   currentMacBridgeAccount,
+  macBridgeAgentName,
+  probeMacBridgeAvailable,
   registerMacBridgeIpc,
   resolveMacBridgeTargets
 } from './mac-bridge'
@@ -17458,6 +17460,9 @@ const macBridge = createMacBridge({
   statePath: path.join(app.getPath('userData'), 'mac-bridge.json'),
   log: rememberLog,
   account: () => currentMacBridgeAccount({ managed: macBridgeManaged, eva: evaManagedRuntime }),
+  // Shown only for an own agent that has the gateway plugin; asked through the facade's profile API path.
+  available: () => probeMacBridgeAvailable({ managed: macBridgeManaged, eva: evaManagedRuntime }),
+  agentName: () => macBridgeAgentName({ managed: macBridgeManaged, eva: evaManagedRuntime }),
   resolveTargets: () =>
     resolveMacBridgeTargets({
       managed: macBridgeManaged,

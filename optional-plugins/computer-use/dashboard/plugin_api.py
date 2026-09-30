@@ -34,6 +34,8 @@ router = APIRouter()
 REOPEN_DELAY_SECONDS = 2.0
 REOPEN_MAX_SECONDS = 60.0
 REOPEN_STABLE_SECONDS = 30.0
+# Past this many reopens in a row the delay is REOPEN_MAX_SECONDS anyway; the count stops here (no overflow).
+REOPEN_ATTEMPTS_CAP = 16
 # The Mac pings every 20 s: this long without any frame means the link is dead (sleep, lost network).
 RECEIVE_TIMEOUT_SECONDS = 60.0
 # Largest JSON-RPC message carried either way (base64 screenshots are MB-sized); the shim and the Mac
@@ -174,7 +176,7 @@ class Hub:
         opened = self._opened_at.pop(cid, None)
         if opened is not None and _clock() - opened >= REOPEN_STABLE_SECONDS:
             self._reopen_attempts[cid] = 0
-        attempt = self._reopen_attempts.get(cid, 0)
+        attempt = min(self._reopen_attempts.get(cid, 0), REOPEN_ATTEMPTS_CAP)
         self._reopen_attempts[cid] = attempt + 1
         return min(REOPEN_MAX_SECONDS, REOPEN_DELAY_SECONDS * 2 ** attempt)
 
@@ -241,6 +243,13 @@ async def _close_quietly(ws: WebSocket, code: int, reason: str) -> None:
         await asyncio.wait_for(ws.close(code=code, reason=reason), 5)
     except Exception:
         pass
+
+
+@router.get("/available")
+async def available() -> Dict[str, Any]:
+    """The Mac app shows Computer Use only for a profile that answers this (Hermes answers 404 for an absent or
+    unenabled plugin). Behind the dashboard's normal HTTP auth; says nothing else."""
+    return {"ok": True, "plugin": "computer-use"}
 
 
 @router.websocket("/bridge")
