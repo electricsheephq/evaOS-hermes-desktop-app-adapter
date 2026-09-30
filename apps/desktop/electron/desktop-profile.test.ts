@@ -5,12 +5,16 @@ import path from 'node:path'
 
 import { test } from 'vitest'
 
+import { backendScopeKey, migrateV1ToRegistry } from './connection-registry'
 import {
   createDesktopProfilePreferences,
+  type DesktopProfileRoute,
+  dialDesktopProfileRoute,
   resolveDesktopConnectionRequest,
   resolveDesktopWindowLaunch,
   resolveDesktopWindowRoute
 } from './desktop-profile'
+import { EVA_MANAGED_CONNECTION_ID, normalizeEvaManagedActiveRoute } from './plugin-profile-routes'
 import { WindowConnectionRouteRegistry } from './window-connection-route'
 
 test('failed authoritative writes leave the previous default and listeners untouched', () => {
@@ -214,3 +218,79 @@ test.each([null, 'local'])(
     }
   }
 )
+
+// `hermes:connection` in main.ts: the window route recorded by
+// recordWindowConnectionRoute, resolved like the IPC handler, dialed through
+// connectDesktopProfileRoute's claim. Only the two backends are fakes; the
+// registry one looks the id up exactly as ensureRegistryBackend does against a
+// fresh workstation connections.json.
+function hermesConnectionHarness(managed: boolean, savedConnectionIds: string[] = []) {
+  const routes = new WindowConnectionRouteRegistry()
+  const registry = migrateV1ToRegistry({})
+  const known = new Set([...registry.connections.map(c => c.id), ...savedConnectionIds])
+  const dials: string[] = []
+  const claims: string[] = []
+
+  return {
+    claims,
+    dials,
+    recordWindowConnectionRoute(id: number, route: unknown) {
+      routes.set(id, managed ? normalizeEvaManagedActiveRoute(route) : route)
+    },
+    getConnection(id: number, profile?: string) {
+      const route: DesktopProfileRoute = resolveDesktopConnectionRequest(profile, routes.get(id), 'default')
+
+      return dialDesktopProfileRoute(route, 'foreground', {
+        applySpawnPriority: () => () => undefined,
+        backendScopeKey,
+        ensureBackend: async dialed => {
+          dials.push(`backend:${dialed}`)
+
+          return { profile: dialed }
+        },
+        ensureRegistryBackend: async connectionId => {
+          const id = String(connectionId || '').trim() || registry.primary
+
+          if (!known.has(id)) {
+            throw new Error(`No connection with id "${id}".`)
+          }
+
+          dials.push(`registry:${id}`)
+
+          return { profile: id }
+        },
+        managed,
+        runDialClaim: (scopeKey, dial) => {
+          claims.push(scopeKey)
+
+          return dial()
+        }
+      })
+    }
+  }
+}
+
+test('a managed profile-less reconnect dials the managed backend, coalescing with boot (#388)', async () => {
+  const app = hermesConnectionHarness(true)
+  app.recordWindowConnectionRoute(1, {
+    connectionId: EVA_MANAGED_CONNECTION_ID,
+    profile: 'e-test',
+    registryScoped: true
+  })
+
+  // Boot passes the profile explicitly; reconnect after sleep/wake passes none.
+  assert.deepEqual(await app.getConnection(1, 'e-test'), { profile: 'e-test' })
+  assert.deepEqual(await app.getConnection(1), { profile: 'e-test' })
+  assert.deepEqual(app.dials, ['backend:e-test', 'backend:e-test'])
+  assert.deepEqual(app.claims, ['e-test', 'e-test'])
+})
+
+test('an upstream profile-less reconnect still dials its registry connection', async () => {
+  const app = hermesConnectionHarness(false, ['remote-a'])
+  app.recordWindowConnectionRoute(1, { connectionId: 'remote-a', profile: 'research', registryScoped: true })
+
+  assert.deepEqual(await app.getConnection(1, 'research'), { profile: 'research' })
+  assert.deepEqual(await app.getConnection(1), { profile: 'remote-a' })
+  assert.deepEqual(app.dials, ['backend:research', 'registry:remote-a'])
+  assert.deepEqual(app.claims, ['research', 'conn:remote-a::research'])
+})
