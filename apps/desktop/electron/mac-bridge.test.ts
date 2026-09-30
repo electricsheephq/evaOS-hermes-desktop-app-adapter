@@ -117,6 +117,7 @@ function bridge(
   overrides: Partial<Parameters<typeof createMacBridge>[0]> = {}
 ) {
   return createMacBridge({
+    platform: 'darwin', // the behaviour under test is the macOS one; the non-darwin tests override it
     spawn: (command, args, options) => {
       const proc = new FakeProc()
       procs.push({ command, args, options, proc })
@@ -334,6 +335,7 @@ describe('the bridge', () => {
 
     const unsigned = createMacBridge({
       ...({} as any),
+      platform: 'darwin',
       spawn: () => new FakeProc(),
       run: async () => ({ code: 0, stdout: '', stderr: 'Identifier=com.example.fake\nTeamIdentifier=XXXX\n' }),
       runSync: () => undefined,
