@@ -242,6 +242,7 @@ class _Candidate:
     origin: str
     schema: dict
     handler: Callable
+    source_description: str = ""
 
     @property
     def is_utility(self) -> bool:
@@ -260,7 +261,7 @@ def _tool_candidates(name: str, tools: Iterable[Any], should_register: Callable[
         _schema._scan_mcp_description(name, t.name, t.description or "")
         schema = _schema._convert_mcp_schema(name, t, server_description)
         handler = _handlers._make_tool_handler(name, t.name, tool_timeout)
-        out.append(_Candidate(schema["name"], f"tool {t.name!r}", schema, handler))
+        out.append(_Candidate(schema["name"], f"tool {t.name!r}", schema, handler, server_description))
     return out
 
 
@@ -346,7 +347,8 @@ def _register_candidates(name: str, candidates: List[_Candidate], *, check_fn: C
             continue
         registry.register(
             name=c.registry_name, toolset=toolset_name, schema=c.schema, handler=c.handler, check_fn=check_fn,
-            is_async=False, description=c.schema.get("description") or "", scope=scope_value)
+            is_async=False, description=c.schema.get("description") or "", scope=scope_value,
+            source_description=c.source_description)
         if registry.get_toolset_for_tool(c.registry_name) == toolset_name:
             _track_mcp_tool_server(c.registry_name, name)
             if scope_value is not None:

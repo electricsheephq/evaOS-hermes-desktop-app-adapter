@@ -74,3 +74,53 @@ def test_absent_or_unusable_description_changes_nothing(config):
         f"{TOOL}search": "Search messages.",
     }
     assert f"{SERVER} tools (2):" in listing
+
+
+def _listing_for(scope, monkeypatch, *, max_tokens=4000):
+    monkeypatch.setattr(registry, "current_scope_key", lambda: scope)
+    names = registry.get_tool_names_for_toolset(f"mcp-{SERVER}")
+    defs = [{"type": "function", "function": registry.get_entry(name).schema} for name in names]
+    return build_catalog_listing_with_form(defs, max_tokens=max_tokens)
+
+
+def test_another_profiles_description_never_changes_this_profiles_listing(monkeypatch):
+    """B has no description and a native tool whose own text looks prefixed."""
+    import tools.mcp_tool as core
+
+    native = {"fingerprint": "b", "utility_tools": [], "tools": [
+        {"name": "search", "description": "Gmail — Search messages.",
+         "inputSchema": {"type": "object", "properties": {}}}]}
+    labelled = {**native, "tools": [{**native["tools"][0], "description": "Search messages."}]}
+    registered = []
+    try:
+        monkeypatch.setattr(core, "_mcp_registry_scope", lambda: "B")
+        registered += _mcp_registration._register_from_cache_sync(SERVER, _config(), native)
+        before = _listing_for("B", monkeypatch)
+        monkeypatch.setattr(core, "_mcp_registry_scope", lambda: "A")
+        registered += _mcp_registration._register_from_cache_sync(
+            SERVER, _config(description="Gmail"), labelled)
+        assert f"{SERVER} [Gmail] tools (1):" in _listing_for("A", monkeypatch)[0]
+        after = _listing_for("B", monkeypatch)
+    finally:
+        for scope in ("A", "B"):
+            for name in set(registered):
+                registry.deregister(name, scope=scope)
+    assert before == after
+    assert f"{SERVER} tools (1):\n- {TOOL}search: Gmail — Search messages." in after[0]
+
+
+def test_em_dash_label_survives_every_listing_form():
+    label = "Gmail · Work — Sales · work@example.test"
+    names = _mcp_registration._register_from_cache_sync(SERVER, _config(description=label), _entry())
+    defs = [{"type": "function", "function": registry.get_entry(name).schema} for name in names]
+    forms = {}
+    for max_tokens in range(4000, 0, -1):
+        text, form = build_catalog_listing_with_form(defs, max_tokens=max_tokens)
+        if text is None:
+            break
+        forms.setdefault(form, text)
+    assert {"full", "names", "groups"} <= set(forms)
+    for text in forms.values():
+        assert f"{SERVER} [{label}] " in text
+        assert text.count("work@example.test") == 1
+    assert f"- {TOOL}send: Send an email." in forms["full"]

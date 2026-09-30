@@ -266,7 +266,7 @@ def build_catalog_listing_with_form(
     (over budget even summarized -> text is None). Ordering is deterministic (sorted groups
     and tools) so the block is byte-stable — the request prefix stays cacheable. Degradation
     is PER SERVER, largest first: one huge server must not cost a small one its listing."""
-    from tools.mcp_tool_schema import split_server_description
+    from tools.mcp_tool_schema import SERVER_DESCRIPTION_SEPARATOR
 
     groups: Dict[str, List[Tuple[str, str]]] = {}
     server_descriptions: Dict[str, str] = {}
@@ -277,8 +277,12 @@ def build_catalog_listing_with_form(
             # _classify_source gives ("other", "") when unregistered; the label of "" is "other".
             label = _listing_group_label(_classify_source(name)[1])
             # A server's config ``description`` goes in its heading once, not into every tool line.
-            server_description, description = split_server_description(fn.get("description", "") or "")
-            if server_description:
+            # Read from this profile's own registry entry: strip only the prefix it applied.
+            description = fn.get("description", "") or ""
+            server_description = getattr(_registry_entry(name), "source_description", "") or ""
+            prefix = f"{server_description}{SERVER_DESCRIPTION_SEPARATOR}"
+            if server_description and description.startswith(prefix):
+                description = description[len(prefix):]
                 server_descriptions.setdefault(label, server_description)
             groups.setdefault(label, []).append((name, _short_desc(description)))
     unavailable = hidden_declared_sources()
