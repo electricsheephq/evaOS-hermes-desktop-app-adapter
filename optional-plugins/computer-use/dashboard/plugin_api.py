@@ -22,7 +22,7 @@ import os
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, status as http_status
 
@@ -258,19 +258,34 @@ def _current_home() -> Path:
     return Path(get_hermes_home())
 
 
-def _profile_home(profile: str) -> Optional[Path]:
-    """The home whose agents this bridge serves: the relay's ``?profile=`` (one process may serve many
-    profiles), resolved as the dashboard's per-profile routes do; none named = this process's own. None
-    when the name can't be resolved here."""
-    if not profile or profile.lower() == "current":
-        return _current_home()
+def _served_profile(requested: str) -> Optional[str]:
+    """The relay's ``?profile=`` as one of the profiles Hermes lists for this process (``list_profiles``; on a
+    managed one-profile gateway only its own). Paths and config scopes below use Hermes' own name, never the
+    request's. None when it names no profile served here."""
+    try:
+        from hermes_cli.profiles import list_profiles, normalize_profile_name
+        wanted = normalize_profile_name(requested)
+        return next((p.name for p in list_profiles(lazy_skill_count=True) if p.name == wanted), None)
+    except Exception:
+        return None
+
+
+def _profile_target(requested: str) -> Optional[Tuple[str, Path]]:
+    """(profile, home) whose agents this bridge serves: the relay's ``?profile=`` (one process may serve many
+    profiles), resolved as the dashboard's per-profile routes do; none named = ("", this process's own home).
+    None when the request names no profile served here."""
+    if not requested or requested.lower() == "current":
+        return "", _current_home()
+    profile = _served_profile(requested)
+    if profile is None:
+        return None
     try:
         from hermes_cli.web_server_profiles import _resolve_profile_dir
         target = _resolve_profile_dir(profile)
     except Exception:
         return None
     current = _current_home()
-    return current if target.resolve() == current.resolve() else target
+    return profile, (current if target.resolve() == current.resolve() else target)
 
 
 async def _close_quietly(ws: WebSocket, code: int, reason: str) -> None:
@@ -292,16 +307,16 @@ async def mac_bridge(ws: WebSocket):
     if not _ws_upgrade_authorized(ws):
         await ws.close(code=http_status.WS_1008_POLICY_VIOLATION)
         return
-    profile = (ws.query_params.get("profile") or "").strip()
-    home = _profile_home(profile)
+    target = _profile_target((ws.query_params.get("profile") or "").strip())
     try:
-        disabled = home is None or _plugin_disabled(profile)
+        disabled = target is None or _plugin_disabled(target[0])
     except Exception as exc:
         log.warning("computer-use: could not read the plugin setting: %s", exc)
         disabled = True
-    if disabled:
+    if disabled or target is None:
         await ws.close(code=http_status.WS_1008_POLICY_VIOLATION)
         return
+    profile, home = target
     await ws.accept()
     hub = hub_for(home)
     try:

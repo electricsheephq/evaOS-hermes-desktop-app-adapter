@@ -619,6 +619,11 @@ def two_homes(route, home, monkeypatch):
         raise HTTPException(status_code=404, detail=f"Profile '{name}' does not exist.")
 
     monkeypatch.setattr(web_server_profiles, "_resolve_profile_dir", resolve)
+    # The names this process serves, as Hermes lists them (the bridge only ever uses a listed name).
+    from types import SimpleNamespace
+    from hermes_cli import profiles as profiles_mod
+    monkeypatch.setattr(profiles_mod, "list_profiles",
+                        lambda **_: [SimpleNamespace(name="default"), SimpleNamespace(name="bob")])
     yield home, other
     shutil.rmtree(other, ignore_errors=True)
 
@@ -739,3 +744,16 @@ def test_b2_the_check_is_the_dashboard_gate_decision(tmp_path, monkeypatch):
         assert api._plugin_disabled(None) is True
     finally:
         web_server._get_dashboard_plugins(force_rescan=True)
+
+
+def test_b1_the_bridge_only_uses_a_profile_name_hermes_lists(two_homes, monkeypatch):
+    from types import SimpleNamespace
+    from hermes_cli import profiles as profiles_mod
+    listed = SimpleNamespace(name="bob")
+    monkeypatch.setattr(profiles_mod, "list_profiles", lambda **_: [SimpleNamespace(name="default"), listed])
+    assert api._served_profile("Bob") is listed.name  # normalized request, Hermes' own string
+    assert api._served_profile("../bob") is None
+    assert api._served_profile("carol") is None
+    # A name the resolver would accept but Hermes does not list for this process is refused.
+    monkeypatch.setattr(profiles_mod, "list_profiles", lambda **_: [SimpleNamespace(name="default")])
+    assert api._profile_target("bob") is None
