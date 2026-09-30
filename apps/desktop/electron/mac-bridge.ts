@@ -675,6 +675,9 @@ export function createMacBridge(deps: MacBridgeDeps) {
   async function readHello(): Promise<Frame> {
     const child = spawnChild()
     const waiting = new Map<number, (result: any) => void>()
+    // As for relay children: a failed spawn or a write after exit is logged; the ask times out and the caller retries.
+    child.on('error', (error: Error) => log(`cua-driver mcp (manifest): ${error.message}`))
+    child.stdin?.on?.('error', () => undefined)
     onLines(child.stdout, message => waiting.get(message.id)?.(message.result))
 
     const ask = (id: number, method: string, params: unknown) =>

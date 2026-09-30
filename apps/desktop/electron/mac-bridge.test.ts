@@ -1631,4 +1631,14 @@ describe('review-bot round (r3)', () => {
     expect(lines.some(line => line.includes('cua-driver mcp: spawn ENOENT'))).toBe(true)
     expect(ws.sent.filter(frame => frame.c === 'c1')).toEqual([{ t: 'close', c: 'c1' }])
   })
+
+  it('the manifest (hello) child has an error listener too: a spawn error is logged, never thrown', async () => {
+    const lines: string[] = []
+    const mb = bridge(undefined, { log: line => void lines.push(line) })
+    await mb.setEnabled(true)
+    const hello = procs.filter(entry => entry.args[0] === 'mcp')[0].proc
+
+    expect(() => hello.emit('error', new Error('spawn ENOENT'))).not.toThrow()
+    expect(lines.some(line => line.includes('cua-driver mcp (manifest): spawn ENOENT'))).toBe(true)
+  })
 })
