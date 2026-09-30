@@ -737,6 +737,10 @@ export function createMacBridge(deps: MacBridgeDeps) {
       send(link, { t: 'msg', c: conn, m: message })
     })
     proc.stderr?.on('data', () => undefined)
+    // A child that cannot start (CuaDriver removed) or a write after it died must never reach Electron's
+    // uncaught-exception path: log it; `close` still follows and tells the gateway.
+    proc.on('error', (error: Error) => log(`cua-driver mcp: ${error.message}`))
+    proc.stdin?.on?.('error', () => undefined)
     // `close`, not `exit`: stdout is drained by then, so a last answer reaches the gateway before the close.
     proc.once('close', () => {
       if (link.children.get(conn) === child) {

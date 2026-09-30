@@ -1615,4 +1615,20 @@ describe('review-bot round (r3)', () => {
     ])
     expect((await mb.status()).inUse).toEqual([])
   })
+
+  it('a child that fails to start is logged, never thrown, and its close still reaches the gateway', async () => {
+    const lines: string[] = []
+    const mb = bridge(undefined, { log: line => void lines.push(line) })
+    await mb.setEnabled(true)
+    const ws = FakeWs.all[0]
+    ws.open()
+    ws.frame({ t: 'open', c: 'c1' })
+    const child = children()[0].proc
+
+    expect(() => child.emit('error', new Error('spawn ENOENT'))).not.toThrow()
+    child.emit('close', -2, null)
+
+    expect(lines.some(line => line.includes('cua-driver mcp: spawn ENOENT'))).toBe(true)
+    expect(ws.sent.filter(frame => frame.c === 'c1')).toEqual([{ t: 'close', c: 'c1' }])
+  })
 })
