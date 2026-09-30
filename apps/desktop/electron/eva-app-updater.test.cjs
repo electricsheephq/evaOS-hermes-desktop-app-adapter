@@ -109,7 +109,8 @@ test('managed app updater always restores the fixed Electric Sheep feed and forw
   assert.deepEqual(updater.feedCalls.at(-1), {
     provider: 'generic',
     url: EVA_APP_UPDATE_FEED,
-    channel: 'latest'
+    channel: 'latest',
+    useMultipleRangeRequest: false
   })
   assert.equal(updater.autoDownload, false)
   assert.equal(updater.autoInstallOnAppQuit, false)

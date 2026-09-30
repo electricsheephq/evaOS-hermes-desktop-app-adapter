@@ -205,10 +205,14 @@ function createEvaAppUpdater(options) {
     // channel first, then restore the product's forward-only invariant.
     autoUpdater.channel = EVA_APP_UPDATE_CHANNEL
     autoUpdater.allowDowngrade = false
+    // The GitHub release CDN answers multi-range requests with 501, which
+    // made every differential update fall back to the full zip (adapter#411).
+    // Single-range requests are accepted, so the downloader sends one per run.
     autoUpdater.setFeedURL({
       provider: 'generic',
       url: EVA_APP_UPDATE_FEED,
-      channel: EVA_APP_UPDATE_CHANNEL
+      channel: EVA_APP_UPDATE_CHANNEL,
+      useMultipleRangeRequest: false
     })
     // Never offer an app update the connected agent runtime is too old for.
     autoUpdater.isUpdateSupported = async info => {
