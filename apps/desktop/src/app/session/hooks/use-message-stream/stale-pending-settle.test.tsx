@@ -8,6 +8,7 @@ import type { GatewayEvent } from '@hermes/shared'
 import { act, cleanup } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { $clarifyRequests, setClarifyRequest } from '@/store/clarify'
 import { clearAllPrompts, sessionApprovalRequest, setApprovalRequest } from '@/store/prompts'
 
 import { type MessageStreamHarness, renderMessageStream } from './test-harness'
@@ -118,6 +119,20 @@ describe('turn end without message.complete (session.info running=false)', () =>
     expect(sessionApprovalRequest(SID).get()).toBeNull()
     // Bystander sessions keep their prompts: only the finished turn clears.
     expect(sessionApprovalRequest(OTHER_SID).get()?.command).toBe('rm other')
+  })
+
+  // A reconnect can replay a pre-clarify snapshot with running=false while the
+  // server is still parked on the open clarify request (upstream #83319). Without
+  // upstream's settled-clarify guard, this edge must leave the clarify card alone.
+  it('keeps an open clarify card through a running=false edge of a live turn', async () => {
+    await mountHarness()
+
+    emit({ session_id: SID, type: 'message.start', payload: {} })
+    setClarifyRequest({ choices: ['a', 'b'], multiSelect: false, question: 'Which one?', requestId: 'clarify-1', sessionId: SID })
+
+    emit({ payload: { running: false }, session_id: SID, type: 'session.info' })
+
+    expect($clarifyRequests.get()[SID]?.requestId).toBe('clarify-1')
   })
 
   // An idle session's running=false heartbeat carries no turn edge, so it

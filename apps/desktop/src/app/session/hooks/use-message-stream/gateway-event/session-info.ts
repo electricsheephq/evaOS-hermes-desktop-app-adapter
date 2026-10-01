@@ -1,7 +1,6 @@
 import { normalizePersonalityValue } from '@/lib/chat-runtime'
 import { modelOptionsQueryKey } from '@/lib/model-options'
 import { reconcileApprovalModeForProfile } from '@/store/approval-mode'
-import { clearClarifyRequest } from '@/store/clarify'
 import { reconcileSessionCompacting } from '@/store/compaction'
 import { requestDesktopOnboardingForCredentialWarning } from '@/store/onboarding'
 import { followActiveSessionCwd } from '@/store/projects'
@@ -289,7 +288,11 @@ export function handleSessionInfoEvent(ctx: GatewayEventContext): boolean {
       // scoped to this sessionId.
       if (!payload!.running && (knownState?.busy || knownState?.awaitingResponse)) {
         clearAllPrompts(sessionId)
-        clearClarifyRequest(undefined, sessionId)
+        // The open clarify card is deliberately NOT cleared here: a reconnect can
+        // replay a pre-clarify snapshot with running=false while the server is
+        // still parked on that clarify request (upstream adb1cbde32 / #83319).
+        // Upstream guards it with clearSettledClarifyRequest, which needs code we
+        // do not carry yet, so the clarify card keeps its pre-es.13 behaviour.
       }
 
       // Set when THIS event releases a confirmed live turn whose terminal
