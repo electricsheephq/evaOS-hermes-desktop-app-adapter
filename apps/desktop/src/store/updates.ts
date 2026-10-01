@@ -1058,6 +1058,9 @@ export const BACKGROUND_UPDATE_CHECK_MS = 24 * 60 * 60 * 1000
 // Focus re-checks are bounded by the same day-long cadence, tracked here so a
 // user who alt-tabs every minute never turns focus into a poll.
 const FOCUS_RECHECK_KEY = 'hermes.updates.last-passive-check'
+// A failed passive check is asked again after this long instead of a day; it
+// still gates focus so an offline Mac does not turn every alt-tab into a check.
+export const FAILED_PASSIVE_RETRY_MS = 60 * 60 * 1000
 
 function passiveCheckDue(now: number): boolean {
   const last = Number(storedString(FOCUS_RECHECK_KEY) ?? 0)
@@ -1066,8 +1069,14 @@ function passiveCheckDue(now: number): boolean {
 }
 
 function runPassiveChecks(): void {
-  persistString(FOCUS_RECHECK_KEY, String(Date.now()))
-  void checkUpdates()
+  const startedAt = Date.now()
+  persistString(FOCUS_RECHECK_KEY, String(startedAt))
+  void checkUpdates().then(status => {
+    // Only a successful check holds the day-long window.
+    if (!status || status.error) {
+      persistString(FOCUS_RECHECK_KEY, String(startedAt - BACKGROUND_UPDATE_CHECK_MS + FAILED_PASSIVE_RETRY_MS))
+    }
+  })
   void checkBackendUpdates()
 }
 

@@ -3450,6 +3450,11 @@ function getEvaAppUpdater() {
       emitProgress: emitUpdateProgress,
       getLowestAgentContract: () => evaAgentContracts.lowest(),
       isPackaged: IS_PACKAGED,
+      onChecked: ({ current, latest, available, held }) => {
+        rememberLog(
+          `[updates] managed check ok: current=${current} latest=${latest ?? 'unknown'} available=${available} held=${held ?? 'none'}`
+        )
+      },
       onError: (stage, error) => {
         const message = error instanceof Error ? error.message : String(error || 'Unknown updater error')
         rememberLog(`[updates] managed ${stage} failed: ${message}`)

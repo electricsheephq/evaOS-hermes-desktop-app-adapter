@@ -418,6 +418,29 @@ test('check failures remain renderer-safe and a later apply retries in the same 
   assert.equal(scheduled.length, 1)
 })
 
+test('a successful check reports one summary; a failed check reports none', async () => {
+  const checked = []
+  const { service, updater } = fixture({ onChecked: summary => checked.push(summary) })
+
+  await service.check()
+  assert.deepEqual(checked, [{ current: '2026.7.20-es.8', latest: '2026.7.20-es.9', available: true, held: null }])
+
+  updater.checkForUpdates = async () => {
+    throw new Error('net::ERR_FAILED')
+  }
+  const failed = await service.check()
+  assert.equal(failed.error, 'check-failed')
+  assert.equal(checked.length, 1)
+
+  // A throwing diagnostics callback never replaces the result.
+  const { service: noisy } = fixture({
+    onChecked: () => {
+      throw new Error('log sink down')
+    }
+  })
+  assert.equal((await noisy.check()).updateAvailable, true)
+})
+
 test('a check without update info does not invent an available target', async () => {
   const updater = new FakeUpdater()
   updater.checkForUpdates = async function () {
@@ -484,6 +507,24 @@ function gatedFixture({ info, lowest = null, originalSupported = true }) {
 
 const RELEASE = { version: '2026.7.20-es.9' }
 const GATED_RELEASE = { ...RELEASE, vendor: { evaosMinBackendContract: 8 } }
+
+test('the check summary names a contract hold', async () => {
+  const checked = []
+  const service = createEvaAppUpdater({
+    app: { getVersion: () => '2026.7.20-es.8', isPackaged: true },
+    arch: 'arm64',
+    autoUpdater: new GatedUpdater(GATED_RELEASE),
+    isPackaged: true,
+    now: () => 1234,
+    onChecked: summary => checked.push(summary),
+    platform: 'darwin'
+  })
+
+  await service.check()
+  assert.deepEqual(checked, [
+    { current: '2026.7.20-es.8', latest: '2026.7.20-es.9', available: false, held: 'waiting-for-agent' }
+  ])
+})
 
 test('offers a release without the minimum-agent field (older releases)', async () => {
   const { service } = gatedFixture({ info: RELEASE })

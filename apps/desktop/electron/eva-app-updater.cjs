@@ -163,6 +163,7 @@ function createEvaAppUpdater(options) {
     getLowestAgentContract = () => null,
     isPackaged = app?.isPackaged,
     now = Date.now,
+    onChecked = () => undefined,
     onError = () => undefined,
     platform = process.platform,
     prepareInstallHandoff = () => undefined,
@@ -225,6 +226,20 @@ function createEvaAppUpdater(options) {
   function reportError(stage, error) {
     try {
       onError(stage, error)
+    } catch {
+      // Diagnostics must never replace the stable updater result.
+    }
+  }
+
+  // One summary per successful check, so the log shows that checks work.
+  function reportChecked(status, info) {
+    try {
+      onChecked({
+        current: app.getVersion(),
+        latest: normalizeVersion(info) || null,
+        available: status?.updateAvailable === true,
+        held: status?.reason || null
+      })
     } catch {
       // Diagnostics must never replace the stable updater result.
     }
@@ -295,14 +310,15 @@ function createEvaAppUpdater(options) {
         lastStatus = null
         contractHold = null
         const result = await autoUpdater.checkForUpdates()
+        const info = result?.updateInfo
         if (!lastStatus) {
-          const info = result?.updateInfo
           const version = normalizeVersion(info)
           lastAvailableInfo = info
           lastStatus = contractHold
             ? heldStatus(app, info, contractHold, now)
             : statusFor(app, info, Boolean(version && version !== app.getVersion()), now)
         }
+        reportChecked(lastStatus, info)
         return lastStatus
       } catch (error) {
         reportError('check', error)

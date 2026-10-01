@@ -101,7 +101,8 @@ const {
   startUpdatePoller,
   stopUpdatePoller,
   $updateStatus,
-  BACKGROUND_UPDATE_CHECK_MS
+  BACKGROUND_UPDATE_CHECK_MS,
+  FAILED_PASSIVE_RETRY_MS
 } = await import('./updates')
 
 const { setConnection } = await import('./session')
@@ -1523,6 +1524,31 @@ describe('startUpdatePoller', () => {
     expect(checkMock).not.toHaveBeenCalled()
 
     vi.setSystemTime(Date.now() + BACKGROUND_UPDATE_CHECK_MS)
+    listeners['focus']?.()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(checkMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('a failed passive check is asked again on focus after an hour, not a day', async () => {
+    checkMock.mockResolvedValue({ supported: true, error: 'check-failed', message: 'offline', fetchedAt: 0 })
+    startUpdatePoller()
+    await vi.advanceTimersByTimeAsync(0)
+    checkMock.mockClear()
+
+    // Inside the hour, focus does not turn into a poll.
+    vi.setSystemTime(Date.now() + FAILED_PASSIVE_RETRY_MS - 1_000)
+    listeners['focus']?.()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(checkMock).not.toHaveBeenCalled()
+
+    // After it, focus asks again; a success then holds the daily window.
+    checkMock.mockResolvedValue({ supported: true, behind: 0, fetchedAt: 0 })
+    vi.setSystemTime(Date.now() + 1_000)
+    listeners['focus']?.()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(checkMock).toHaveBeenCalledTimes(1)
+
+    vi.setSystemTime(Date.now() + FAILED_PASSIVE_RETRY_MS)
     listeners['focus']?.()
     await vi.advanceTimersByTimeAsync(0)
     expect(checkMock).toHaveBeenCalledTimes(1)
