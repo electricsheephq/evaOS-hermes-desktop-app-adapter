@@ -86,6 +86,26 @@ def test_annotation_capture_fails_closed_for_missing_or_malformed_hints():
     }
 
 
+def test_annotation_capture_reads_mcp2_snake_case_hint():
+    """mcp 2.x exposes ``read_only_hint``; camelCase is only a pydantic alias, invisible to getattr."""
+    snake = SimpleNamespace(name="snake_read", description="", inputSchema={},
+                            annotations=SimpleNamespace(read_only_hint=True))
+    snake_write = SimpleNamespace(name="snake_write", description="", inputSchema={},
+                                  annotations=SimpleNamespace(read_only_hint=False))
+    snake_truthy = SimpleNamespace(name="snake_truthy", description="", inputSchema={},
+                                   annotations=SimpleNamespace(read_only_hint="yes"))
+    cached_snake = SimpleNamespace(name="cached_snake", description="", inputSchema={},
+                                   annotations={"read_only_hint": True})
+    _mcp_registration._record_tool_trust_metadata("pipedream", {}, [snake, snake_write, snake_truthy, cached_snake])
+
+    assert mcp_tool._tool_read_only_hints["pipedream"] == {
+        "snake_read": True,
+        "snake_write": False,
+        "snake_truthy": False,
+        "cached_snake": True,
+    }
+
+
 def test_cached_annotation_metadata_has_live_path_parity():
     cached, missing = _mcp_registration._cached_tools([
         {
