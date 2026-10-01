@@ -336,7 +336,7 @@ contextBridge.exposeInMainWorld('hermesDesktop', {
   macBridge:
     process.platform === 'darwin'
       ? {
-          status: () => ipcRenderer.invoke('hermes:macBridge:status'),
+          status: (options?: { reprobe?: boolean }) => ipcRenderer.invoke('hermes:macBridge:status', options),
           setEnabled: (enabled: boolean) => ipcRenderer.invoke('hermes:macBridge:setEnabled', enabled),
           installCua: () => ipcRenderer.invoke('hermes:macBridge:installCua'),
           grantPermissions: () => ipcRenderer.invoke('hermes:macBridge:grantPermissions')

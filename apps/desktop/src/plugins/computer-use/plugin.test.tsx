@@ -96,6 +96,16 @@ describe('Computer Use sidebar entry and page', () => {
     expect(screen.getByRole('switch')).toBeTruthy() // the control the not-set-up page must not show
   })
 
+  it('opening the page asks `available` again once; later polls use the cache', async () => {
+    const macBridge = (window as any).hermesDesktop.macBridge
+    render(<ComputerUsePage />)
+    await settle()
+    await act(async () => void (await vi.advanceTimersByTimeAsync(4000)))
+    expect(macBridge.status.mock.calls.length).toBeGreaterThanOrEqual(3)
+    expect(macBridge.status.mock.calls[0]).toEqual([{ reprobe: true }])
+    expect(macBridge.status.mock.calls.slice(1).every((call: unknown[]) => call[0] === undefined)).toBe(true)
+  })
+
   it('B6: one status poll at a time: a slow status() starts no second call until it answers', async () => {
     current = status(true)
     let answer: (value: ReturnType<typeof status>) => void = () => undefined

@@ -29,7 +29,8 @@ import {
   REPLACED_TEXT,
   resolveMacBridgeTargets,
   serveArgs,
-  SILENCE_MS
+  SILENCE_MS,
+  UNAVAILABLE_TTL_MS
 } from './mac-bridge'
 
 class FakeProc extends EventEmitter {
@@ -1304,6 +1305,7 @@ describe('pilot fix round 2 (M7: shown only for agents that have it)', () => {
     expect(lookups).toBe(2) // the tick that learned it asked nothing else
     expect(FakeWs.all[0].closed).toBe(true)
 
+    // A "not set up" answer is asked again every 60 s (here at +60 s and +120 s), still with no lookup.
     for (let i = 0; i < 5; i += 1) {
       clock += 30_000
       fire(30_000)
@@ -1311,7 +1313,7 @@ describe('pilot fix round 2 (M7: shown only for agents that have it)', () => {
     }
 
     expect(lookups).toBe(2)
-    expect(probes).toBe(2)
+    expect(probes).toBe(4)
     expect(FakeWs.all).toHaveLength(1)
     const status = await mb.status()
     expect(status).toMatchObject({ available: false, enabled: true, connections: [] })
@@ -1385,7 +1387,7 @@ describe('pilot fix round 2 (M7: shown only for agents that have it)', () => {
     expect(FakeWs.all).toHaveLength(1)
   })
 
-  it('the answer is cached: re-asked on sign-in, an account switch, retarget and after 10 min, not per status', async () => {
+  it('the answer is cached: re-asked on sign-in, an account switch, retarget, after 60 s (a no) or 10 min (a yes), not per status', async () => {
     const mb = bridge()
     expect((await mb.status()).available).toBe(true)
     expect(probes).toBe(1)
@@ -1410,7 +1412,8 @@ describe('pilot fix round 2 (M7: shown only for agents that have it)', () => {
     expect((await mb.status()).available).toBe(false)
     expect(probes).toBe(4)
 
-    clock += AVAILABLE_TTL_MS - 1
+    // A no is reused for 60 s only.
+    clock += UNAVAILABLE_TTL_MS - 1
     await mb.status()
     expect(probes).toBe(4)
     clock += 1
@@ -1419,6 +1422,36 @@ describe('pilot fix round 2 (M7: shown only for agents that have it)', () => {
     await settle()
     expect(probes).toBe(5)
     expect((await mb.status()).available).toBe(true)
+
+    // A yes is reused for 10 min.
+    clock += AVAILABLE_TTL_MS - 1
+    await mb.status()
+    expect(probes).toBe(5)
+    clock += 1
+    await mb.status()
+    await settle()
+    expect(probes).toBe(6)
+  })
+
+  it('opening the page asks again: it waits for a fresh answer after a no, and refreshes a yes in the background', async () => {
+    availableAnswer = false
+    const mb = bridge()
+    expect((await mb.status()).available).toBe(false)
+    expect(probes).toBe(1)
+
+    // The plugin was installed seconds later; the cached no is not shown when the page opens.
+    availableAnswer = true
+    expect((await mb.status({ reprobe: true })).available).toBe(true)
+    expect(probes).toBe(2)
+
+    // An ordinary poll reuses the fresh yes; opening the page again asks without waiting.
+    await mb.status()
+    expect(probes).toBe(2)
+    availableAnswer = false
+    expect((await mb.status({ reprobe: true })).available).toBe(true)
+    await settle()
+    expect(probes).toBe(3)
+    expect((await mb.status()).available).toBe(false)
   })
 
   it('an answer that lands after another account signed in is not kept for them', async () => {
@@ -1586,6 +1619,18 @@ describe('review-bot round (r3)', () => {
     expect(channels).toEqual([])
     registerMacBridgeIpc(ipc, bridge(), 'darwin') // positive control
     expect(channels).toContain('hermes:macBridge:status')
+  })
+
+  it('the status IPC forwards only a boolean reprobe flag', async () => {
+    const handlers = new Map<string, (...args: any[]) => any>()
+    const calls: unknown[] = []
+    const fake = { status: async (options: unknown) => void calls.push(options) } as any
+    registerMacBridgeIpc({ handle: (channel, listener) => void handlers.set(channel, listener) }, fake, 'darwin')
+    const handler = handlers.get('hermes:macBridge:status')!
+    await handler({}, { reprobe: true })
+    await handler({})
+    await handler({}, { reprobe: 'yes' })
+    expect(calls).toEqual([{ reprobe: true }, { reprobe: false }, { reprobe: false }])
   })
 
   it('B5: an installer that fails to spawn is logged, never an unhandled error event', async () => {

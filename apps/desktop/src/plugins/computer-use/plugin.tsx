@@ -60,6 +60,8 @@ export function ComputerUsePage() {
 
     let live = true
     let polling = false
+    // Opening the page asks `available` again, so a "not set up" answer is never shown from the cache.
+    let reprobe = true
 
     const read = () => {
       // One poll at a time, and none while Enable/Disable runs.
@@ -69,9 +71,11 @@ export function ComputerUsePage() {
 
       polling = true
       const mine = ++generation.current
+      const options = reprobe ? { reprobe: true } : undefined
+      reprobe = false
 
       void bridge
-        .status()
+        .status(options)
         .then(
           next => {
             if (live && mine === generation.current) {
