@@ -305,6 +305,7 @@ import {
   createMacBridge,
   currentMacBridgeAccount,
   macBridgeAgentName,
+  macBridgeProfileNames,
   probeMacBridgeAvailable,
   registerMacBridgeIpc,
   resolveMacBridgeTargets
@@ -17463,6 +17464,7 @@ const macBridge = createMacBridge({
   // Shown only for an own agent that has the gateway plugin; asked through the facade's profile API path.
   available: () => probeMacBridgeAvailable({ managed: macBridgeManaged, eva: evaManagedRuntime }),
   agentName: () => macBridgeAgentName({ managed: macBridgeManaged, eva: evaManagedRuntime }),
+  profileNames: () => macBridgeProfileNames({ managed: macBridgeManaged, eva: evaManagedRuntime }),
   resolveTargets: () =>
     resolveMacBridgeTargets({
       managed: macBridgeManaged,

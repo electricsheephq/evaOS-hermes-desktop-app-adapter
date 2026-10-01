@@ -186,7 +186,7 @@ export function ComputerUsePage() {
                 replaced
                   ? replaced.error
                   : connected.length
-                    ? connected.map(link => link.profile).join(', ')
+                    ? connected.map(link => link.name || link.profile).join(', ')
                     : status.enabled
                       ? (linkError ?? 'Connecting…')
                       : 'Not connected.'
@@ -199,7 +199,8 @@ export function ComputerUsePage() {
                   <span className="grid gap-1">
                     {status.inUse.map(use => (
                       <span key={use.conn}>
-                        {use.profile} · agent connection {use.conn.slice(0, 6)} · last action {ago(use.lastActivity)}
+                        {use.name || use.profile} · agent connection {use.conn.slice(0, 6)} · last action{' '}
+                        {ago(use.lastActivity)}
                       </span>
                     ))}
                   </span>

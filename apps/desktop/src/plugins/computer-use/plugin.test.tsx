@@ -96,6 +96,22 @@ describe('Computer Use sidebar entry and page', () => {
     expect(screen.getByRole('switch')).toBeTruthy() // the control the not-set-up page must not show
   })
 
+  it('"Connected to" and the agent connections show the display name, else the profile id', async () => {
+    current = {
+      ...status(true),
+      connections: [
+        { profile: 'agent-one', name: 'Jane’s agent', state: 'connected', error: null },
+        { profile: 'agent-two', state: 'connected', error: null }
+      ],
+      inUse: [{ profile: 'agent-one', name: 'Jane’s agent', conn: 'abcdef123', lastActivity: Date.now() }]
+    } as any
+    render(<ComputerUsePage />)
+    await settle()
+    expect(screen.getByText('Jane’s agent, agent-two')).toBeTruthy()
+    expect(screen.getByText(/^Jane’s agent · agent connection abcdef · last action/)).toBeTruthy()
+    expect(screen.queryByText(/agent-one/)).toBeNull()
+  })
+
   it('opening the page asks `available` again once; later polls use the cache', async () => {
     const macBridge = (window as any).hermesDesktop.macBridge
     render(<ComputerUsePage />)

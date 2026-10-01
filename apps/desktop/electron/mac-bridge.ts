@@ -114,6 +114,8 @@ export interface MacBridgeDeps {
   account: () => MacBridgeAccount | null
   /** The own agent's display name (else its profile id) for the page, or null. */
   agentName?: () => null | string
+  /** Profile id → display name for the page's connection rows (`macBridgeProfileNames`). */
+  profileNames?: () => Promise<Record<string, string>>
   log: (line: string) => void
   env?: NodeJS.ProcessEnv
   candidates?: string[]
@@ -219,8 +221,11 @@ interface EvaFacade {
     delegatedSupportActive?: boolean
     customerId?: null | string
     agentId?: null | string
+    agentDisplayName?: null | string
   }
   delegatedProfiles: () => Promise<null | string[]>
+  /** Profile display names from the roster read (#308), keyed by profile id. */
+  profileMetadata?: () => Promise<Record<string, { display_name?: null | string }>>
   /** The enrollment's own agent (`runtime.agentId` outside delegated support). */
   assignedProfileId: () => Promise<null | string>
   /** Mints only for the user's own agent, checked and bound to the session in the same step. */
@@ -260,6 +265,43 @@ export function macBridgeAgentName(input: { managed: boolean; eva?: EvaFacade })
   }
 
   return status.agentDisplayName || status.agentId || null
+}
+
+/**
+ * Display names for the page's "Connected to" and agent-connection rows: the profile list's display names
+ * (#308), and the own agent's display name for its profile when the list has none. Ids stay the fallback.
+ */
+export async function macBridgeProfileNames(input: {
+  managed: boolean
+  eva?: EvaFacade
+}): Promise<Record<string, string>> {
+  const status = input.managed ? input.eva?.status() : null
+
+  if (!status?.desktopSessionActive || status.delegatedSupportActive) {
+    return {}
+  }
+
+  const names: Record<string, string> = {}
+
+  try {
+    for (const [profile, meta] of Object.entries((await input.eva?.profileMetadata?.()) ?? {})) {
+      const name = String(meta?.display_name ?? '').trim()
+
+      if (name) {
+        names[profile] = name
+      }
+    }
+  } catch {
+    // Presentation only: the page falls back to the profile id.
+  }
+
+  const own = String(status.agentDisplayName ?? '').trim()
+
+  if (status.agentId && own && !names[status.agentId]) {
+    names[status.agentId] = own
+  }
+
+  return names
 }
 
 /**
@@ -1326,6 +1368,9 @@ export function createMacBridge(deps: MacBridgeDeps) {
       void refreshAvailable()
     }
 
+    // Display names only matter while a link is listed; the id is the fallback.
+    const names: Record<string, string> = links.size ? ((await deps.profileNames?.().catch(() => null)) ?? {}) : {}
+
     return {
       available,
       agent: deps.agentName?.() ?? null,
@@ -1341,12 +1386,14 @@ export function createMacBridge(deps: MacBridgeDeps) {
       daemon: { running: Boolean(socket), mode: socket ? 'unrestricted' : null },
       connections: [...links.values()].map(link => ({
         profile: link.target.profile,
+        name: names[link.target.profile] as string | undefined,
         state: link.state,
         error: link.error
       })),
       inUse: [...links.values()].flatMap(link =>
         [...link.children.values()].map(child => ({
           profile: child.profile,
+          name: names[child.profile] as string | undefined,
           conn: child.conn,
           lastActivity: child.lastActivity
         }))

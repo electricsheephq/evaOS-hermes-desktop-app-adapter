@@ -21,6 +21,7 @@ import {
   MAC_BRIDGE_PATH,
   type MacBridgeAccount,
   macBridgeAgentName,
+  macBridgeProfileNames,
   notSetUpText,
   probeMacBridgeAvailable,
   reaperArgs,
@@ -286,6 +287,34 @@ describe('the bridge', () => {
     one.emit('close') // a gateway-requested close is not echoed back
     two.kill() // a child that exits on its own is reported
     expect(ws.sent.filter(frame => frame.t === 'close')).toEqual([{ t: 'close', c: 'c2' }])
+  })
+
+  it('status names each connection and agent connection by display name, with the profile id kept', async () => {
+    let lookups = 0
+
+    const mb = bridge(undefined, {
+      profileNames: async () => {
+        lookups += 1
+
+        return { alice: 'Alice’s agent' }
+      }
+    })
+
+    expect((await mb.status()).connections).toEqual([])
+    expect(lookups).toBe(0) // nothing listed, nothing looked up
+
+    await mb.setEnabled(true)
+    FakeWs.all[0].open()
+    FakeWs.all[0].frame({ t: 'open', c: 'c1' })
+    const status = await mb.status()
+    expect(status.connections).toEqual([{ profile: 'alice', name: 'Alice’s agent', state: 'connected', error: null }])
+    expect(status.inUse.map(use => [use.profile, use.name, use.conn])).toEqual([['alice', 'Alice’s agent', 'c1']])
+
+    // A failing lookup leaves the ids.
+    const plain = bridge(undefined, { profileNames: async () => Promise.reject(new Error('offline')) })
+    await plain.setEnabled(true)
+    FakeWs.all.at(-1)!.open()
+    expect((await plain.status()).connections.map(link => [link.profile, link.name])).toEqual([['alice', undefined]])
   })
 
   it('reconnects with backoff and kills the connection’s children when the socket drops', async () => {
@@ -1236,6 +1265,38 @@ describe('pilot fix round 2 (M7: shown only for agents that have it)', () => {
     expect(
       macBridgeAgentName({ managed: true, eva: facade(async () => null, { status: { delegatedSupportActive: true } }).eva })
     ).toBeNull()
+  })
+
+  it('profile names for the page: the roster display names (#308), the own agent’s name, ids otherwise', async () => {
+    const withRoster = facade(async () => null)
+
+    ;(withRoster.eva as any).profileMetadata = async () => ({
+      'agent-one': {},
+      helper: { display_name: ' Helper Bot ' },
+      blank: { display_name: '  ' }
+    })
+    expect(await macBridgeProfileNames({ managed: true, eva: withRoster.eva })).toEqual({
+      'agent-one': 'Jane’s agent',
+      helper: 'Helper Bot'
+    })
+
+    // An explicit roster display name wins over the enrollment's name.
+    const explicit = facade(async () => null)
+
+    ;(explicit.eva as any).profileMetadata = async () => ({ 'agent-one': { display_name: 'Jane (desk)' } })
+    expect(await macBridgeProfileNames({ managed: true, eva: explicit.eva })).toEqual({ 'agent-one': 'Jane (desk)' })
+
+    // A failed roster read still names the own agent; no session or delegated support names nothing.
+    const failing = facade(async () => null)
+
+    ;(failing.eva as any).profileMetadata = async () => Promise.reject(new Error('offline'))
+    expect(await macBridgeProfileNames({ managed: true, eva: failing.eva })).toEqual({ 'agent-one': 'Jane’s agent' })
+
+    for (const status of [{ desktopSessionActive: false }, { delegatedSupportActive: true }]) {
+      expect(await macBridgeProfileNames({ managed: true, eva: facade(async () => null, { status }).eva })).toEqual({})
+    }
+
+    expect(await macBridgeProfileNames({ managed: false })).toEqual({})
   })
 
   it('turning on asks first: not available → no daemon, no lookup, no dial, and the saved switch stays on', async () => {
