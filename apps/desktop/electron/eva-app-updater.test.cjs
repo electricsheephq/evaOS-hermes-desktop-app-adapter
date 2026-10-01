@@ -465,6 +465,38 @@ test('a Network Service restart moves electron-updater to a fresh net session be
   assert.deepEqual(sessions, [1]) // one fresh session per restart, not per check
 })
 
+test('fresh updater sessions are bounded per process; past the cap a failed check asks for a relaunch', async () => {
+  let generation = 0
+  let failing = false
+  const sessions = []
+  const updater = new FakeUpdater()
+  updater.httpExecutor = { cachedSession: 'electron-updater' }
+  const originalCheck = updater.checkForUpdates.bind(updater)
+  updater.checkForUpdates = async () => {
+    if (failing) throw new Error('net::ERR_FAILED')
+    return originalCheck()
+  }
+  const { service } = fixture({
+    autoUpdater: updater,
+    getNetworkGeneration: () => generation,
+    netSessionFor: value => {
+      sessions.push(value)
+      return `electron-updater-ns${value}`
+    }
+  })
+
+  for (generation = 1; generation <= 8; generation += 1) await service.check()
+  assert.deepEqual(sessions, [1, 2, 3, 4, 5, 6, 7, 8])
+  assert.equal(updater.httpExecutor.cachedSession, 'electron-updater-ns8')
+
+  generation = 9
+  failing = true
+  const status = await service.check()
+  assert.deepEqual(sessions, [1, 2, 3, 4, 5, 6, 7, 8]) // no ninth session
+  assert.equal(updater.httpExecutor.cachedSession, 'electron-updater-ns8')
+  assert.equal(status.message, 'Restart evaOS Agent to check for updates.')
+})
+
 test('a Network Service restart during a download leaves that download on its session', async () => {
   let generation = 0
   let releaseDownload

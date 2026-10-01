@@ -7,6 +7,10 @@ const EVA_APP_UPDATE_BRANCH = 'managed-beta'
 const SAFE_CHECK_FAILURE_MESSAGE = 'evaOS Agent could not check for updates. Try again.'
 const SAFE_APPLY_FAILURE_MESSAGE = 'evaOS Agent could not install the update. Try again.'
 const RESTART_TO_CHECK_MESSAGE = 'Restart evaOS Agent to check for updates.'
+// Electron keeps every partition session for the life of the process, so a
+// process gets a bounded number of fresh updater sessions; past that a failed
+// check asks for a restart.
+const MAX_UPDATER_NET_SESSIONS = 8
 // latest-mac.yml `vendor` key written at build time from the renderer's
 // REQUIRED_BACKEND_CONTRACT (scripts/backend-contract.mjs).
 const EVA_MIN_BACKEND_CONTRACT_KEY = 'evaosMinBackendContract'
@@ -199,6 +203,7 @@ function createEvaAppUpdater(options) {
   let downloading = false
   let netGeneration = 0
   let netSessionStale = false
+  let netSessionsCreated = 0
 
   function supported() {
     return Boolean(isPackaged) && platform === 'darwin' && arch === 'arm64'
@@ -244,9 +249,15 @@ function createEvaAppUpdater(options) {
     const generation = Number(getNetworkGeneration()) || 0
     if (generation === netGeneration || downloading) return
     const executor = autoUpdater.httpExecutor
-    if (typeof netSessionFor === 'function' && executor && 'cachedSession' in executor) {
+    if (
+      typeof netSessionFor === 'function' &&
+      executor &&
+      'cachedSession' in executor &&
+      netSessionsCreated < MAX_UPDATER_NET_SESSIONS
+    ) {
       try {
         executor.cachedSession = netSessionFor(generation)
+        netSessionsCreated += 1
         netGeneration = generation
         netSessionStale = false
         return
