@@ -102,8 +102,9 @@ def test_shared_mode_same_sequence_is_safe(tmp_path, monkeypatch):
     shared.write_text(json.dumps({"version": 1, "providers": {}, "credential_pool": {"openai-codex": [{
         "id": "row1", "source": "manual:device_code", "auth_type": "oauth", "priority": 0,
         "last_status": "ok", **ep.pairs[0]}]}}))
-    shared.chmod(0o660)
-    os.chown(shared, -1, os.getgid())
+    if os.name != "nt":
+        shared.chmod(0o660)
+        os.chown(shared, -1, os.getgid())
     monkeypatch.setenv("HERMES_SHARED_AUTH_FILE", str(shared))
     monkeypatch.setattr(auth_codex, "_codex_http_client", lambda **kw: ep)
     pools = []

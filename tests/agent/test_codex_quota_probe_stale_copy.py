@@ -25,8 +25,9 @@ def _setup(tmp_path, monkeypatch, *, singleton):
         "id": "manual-codex", "source": "manual:device_code", "auth_type": "oauth", "priority": 0,
         "last_status": "exhausted", "last_status_at": now, "last_error_code": 429,
         "last_error_reason": "usage_limit_reached", "last_error_reset_at": now + 3600, **ep.pairs[0]}]}}))
-    shared.chmod(0o660)
-    os.chown(shared, -1, os.getgid())
+    if os.name != "nt":
+        shared.chmod(0o660)
+        os.chown(shared, -1, os.getgid())
     monkeypatch.setenv("HERMES_SHARED_AUTH_FILE", str(shared))
     monkeypatch.setattr(auth_codex, "_codex_http_client", lambda **kw: ep)
     auth_codex._codex_quota_probe_cache.clear()
