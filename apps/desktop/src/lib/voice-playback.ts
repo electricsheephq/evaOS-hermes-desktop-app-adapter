@@ -171,8 +171,10 @@ export async function resolveSpeakStreamUrl(owner?: OwnerScope): Promise<null | 
 
     // Managed loopback tickets are minted for one exact endpoint. Reject any
     // broker or bridge response that silently points somewhere else instead
-    // of sending the ticket to an unintended WebSocket route.
-    if (url.pathname !== '/api/audio/speak-stream') {
+    // of sending the ticket to an unintended WebSocket route. A failed managed
+    // mint leaves the non-dialable descriptor URL (#410): no stream, so the
+    // caller falls back instead of `new WebSocket` throwing on its scheme.
+    if (url.pathname !== '/api/audio/speak-stream' || (url.protocol !== 'ws:' && url.protocol !== 'wss:')) {
       return null
     }
 

@@ -31,7 +31,7 @@ interface WindowLike {
 }
 
 // Bounded renderer diagnostics persisted at info level: no URLs or secrets.
-const REMEMBERED_RENDERER_DIAGNOSTIC_PREFIXES = ['[gateway-profile-adoption]', '[gateway-reconnect]']
+const REMEMBERED_RENDERER_DIAGNOSTIC_PREFIXES = ['[gateway-profile-adoption]', '[gateway-reconnect]', '[gateway-liveness]']
 
 /** Normalize Electron's two `console-message` signatures into one line, or
  *  null for non-error levels except the one bounded boot diagnostic persisted

@@ -671,6 +671,10 @@ export function useGatewayBoot({
           return
         }
 
+        // Persisted (renderer-log prefix): the renderer side of a relay pair_closed line.
+        console.info(
+          `[gateway-liveness] force-close reason=${decision.reason} failures=${livenessProbeFailures} working=${$workingSessionIds.get().length}`
+        )
         livenessProbeFailures = 0
         gateway.close()
       }
@@ -1457,6 +1461,13 @@ export function useGatewayBoot({
         // terminal at their own boundaries.
         if (conn.mode === 'remote' && isGatewayWebSocketUrl(wsUrl)) {
           stage = 'dialing'
+        } else if (isManagedEvaosAgent() && conn.mode === 'remote') {
+          // A managed descriptor carries no dialable URL: every dial mints its
+          // own relay ticket. A failed mint leaves the placeholder, which is a
+          // failure of this dial, not of the backend, so it takes the bounded
+          // retry; the retry re-resolves and surfaces a sign-in requirement.
+          stage = 'dialing'
+          throw new Error(translateNow('boot.errors.gatewayConnectionLost'))
         }
 
         await gateway.connect(wsUrl)

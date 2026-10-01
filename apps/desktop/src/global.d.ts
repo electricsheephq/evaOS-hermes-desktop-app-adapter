@@ -280,7 +280,8 @@ declare global {
       }
       // Computer Use (Mac bridge): this Mac's CUA for the user's own agents.
       macBridge?: {
-        status: () => Promise<MacBridgeStatus>
+        /** `reprobe`: ask `available` again now (the page asks when it opens). */
+        status: (options?: { reprobe?: boolean }) => Promise<MacBridgeStatus>
         setEnabled: (enabled: boolean) => Promise<MacBridgeStatus>
         installCua: () => Promise<void>
         grantPermissions: () => Promise<void>

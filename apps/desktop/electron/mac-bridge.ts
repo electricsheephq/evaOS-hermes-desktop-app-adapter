@@ -12,7 +12,7 @@
  * support: an admin's Mac is never offered to a customer's agents. The switch
  * belongs to the account that turned it on: another account signed in on this
  * Mac dials nothing. Nothing starts or dials unless the own agent has the gateway
- * plugin (`available`, asked through the Eva facade and cached for 10 min).
+ * plugin (`available`, asked through the Eva facade; a yes is cached for 10 min, a no for 60 s).
  *
  * Frames (JSON text): Mac→gw `hello`; gw→Mac `open`; both ways `msg` / `close`;
  * Mac→gw `ping` every 20 s, answered `pong`. Unknown frame types are ignored.
@@ -31,6 +31,8 @@ export const MAC_BRIDGE_PATH = '/api/plugins/computer-use/bridge'
 export const MAC_BRIDGE_AVAILABLE_PATH = '/api/plugins/computer-use/available'
 /** How long an `available` answer is reused (sign-in, an account switch and `retarget` ask again at once). */
 export const AVAILABLE_TTL_MS = 10 * 60_000
+/** A "not set up" answer is reused only this long: installing the gateway plugin shows up within a minute. */
+export const UNAVAILABLE_TTL_MS = 60_000
 export const CUA_INSTALL_SCRIPT = '/bin/bash -c "$(curl -fsSL https://cua.ai/driver/install.sh)"'
 const TEAM_ID = 'YCK386LBJ7'
 const BUNDLE_ID = 'com.trycua.driver'
@@ -112,6 +114,8 @@ export interface MacBridgeDeps {
   account: () => MacBridgeAccount | null
   /** The own agent's display name (else its profile id) for the page, or null. */
   agentName?: () => null | string
+  /** Profile id → display name for the page's connection rows (`macBridgeProfileNames`). */
+  profileNames?: () => Promise<Record<string, string>>
   log: (line: string) => void
   env?: NodeJS.ProcessEnv
   candidates?: string[]
@@ -217,8 +221,11 @@ interface EvaFacade {
     delegatedSupportActive?: boolean
     customerId?: null | string
     agentId?: null | string
+    agentDisplayName?: null | string
   }
   delegatedProfiles: () => Promise<null | string[]>
+  /** Profile display names from the roster read (#308), keyed by profile id. */
+  profileMetadata?: () => Promise<Record<string, { display_name?: null | string }>>
   /** The enrollment's own agent (`runtime.agentId` outside delegated support). */
   assignedProfileId: () => Promise<null | string>
   /** Mints only for the user's own agent, checked and bound to the session in the same step. */
@@ -258,6 +265,43 @@ export function macBridgeAgentName(input: { managed: boolean; eva?: EvaFacade })
   }
 
   return status.agentDisplayName || status.agentId || null
+}
+
+/**
+ * Display names for the page's "Connected to" and agent-connection rows: the profile list's display names
+ * (#308), and the own agent's display name for its profile when the list has none. Ids stay the fallback.
+ */
+export async function macBridgeProfileNames(input: {
+  managed: boolean
+  eva?: EvaFacade
+}): Promise<Record<string, string>> {
+  const status = input.managed ? input.eva?.status() : null
+
+  if (!status?.desktopSessionActive || status.delegatedSupportActive) {
+    return {}
+  }
+
+  const names: Record<string, string> = {}
+
+  try {
+    for (const [profile, meta] of Object.entries((await input.eva?.profileMetadata?.()) ?? {})) {
+      const name = String(meta?.display_name ?? '').trim()
+
+      if (name) {
+        names[profile] = name
+      }
+    }
+  } catch {
+    // Presentation only: the page falls back to the profile id.
+  }
+
+  const own = String(status.agentDisplayName ?? '').trim()
+
+  if (status.agentId && own && !names[status.agentId]) {
+    names[status.agentId] = own
+  }
+
+  return names
 }
 
 /**
@@ -522,9 +566,11 @@ export function createMacBridge(deps: MacBridgeDeps) {
     return probing
   }
 
-  /** Never asked for this account, or the answer is older than 10 min. */
+  /** Never asked for this account, or the answer is older than 10 min (a yes) or 60 s (a no). */
   const availableUnknown = () => availableFor !== accountKey(deps.account())
-  const availableStale = () => availableUnknown() || now() - availableAt >= AVAILABLE_TTL_MS
+
+  const availableStale = () =>
+    availableUnknown() || now() - availableAt >= (available ? AVAILABLE_TTL_MS : UNAVAILABLE_TTL_MS)
 
   function locate(): { binary: null | string; app: null | string; source: null | string } {
     const onPath = String(env.PATH || '')
@@ -1311,16 +1357,19 @@ export function createMacBridge(deps: MacBridgeDeps) {
     }
   }
 
-  async function status() {
+  async function status(options: { reprobe?: boolean } = {}) {
     const found = locate()
 
     // The page and its sidebar entry follow this: a new account waits for its own answer, an old one is
-    // refreshed in the background.
-    if (availableUnknown()) {
+    // refreshed in the background. Opening the page asks again, and waits when the last answer was "not set up".
+    if (availableUnknown() || (options.reprobe && !available)) {
       await refreshAvailable()
-    } else if (availableStale()) {
+    } else if (options.reprobe || availableStale()) {
       void refreshAvailable()
     }
+
+    // Display names only matter while a link is listed; the id is the fallback.
+    const names: Record<string, string> = links.size ? ((await deps.profileNames?.().catch(() => null)) ?? {}) : {}
 
     return {
       available,
@@ -1337,12 +1386,14 @@ export function createMacBridge(deps: MacBridgeDeps) {
       daemon: { running: Boolean(socket), mode: socket ? 'unrestricted' : null },
       connections: [...links.values()].map(link => ({
         profile: link.target.profile,
+        name: names[link.target.profile] as string | undefined,
         state: link.state,
         error: link.error
       })),
       inUse: [...links.values()].flatMap(link =>
         [...link.children.values()].map(child => ({
           profile: child.profile,
+          name: names[child.profile] as string | undefined,
           conn: child.conn,
           lastActivity: child.lastActivity
         }))
@@ -1400,7 +1451,9 @@ export function registerMacBridgeIpc(
     return // macOS only: no handlers, and the preload exposes no bridge
   }
 
-  ipcMain.handle('hermes:macBridge:status', () => bridge.status())
+  ipcMain.handle('hermes:macBridge:status', (_event, options?: { reprobe?: boolean }) =>
+    bridge.status({ reprobe: options?.reprobe === true })
+  )
   ipcMain.handle('hermes:macBridge:setEnabled', (_event, value: boolean) => bridge.setEnabled(value === true))
   ipcMain.handle('hermes:macBridge:installCua', () => bridge.installCua())
   ipcMain.handle('hermes:macBridge:grantPermissions', () => bridge.grantPermissions())

@@ -33,6 +33,25 @@ it('accepts only the exact managed speech-stream endpoint', async () => {
   expect(getGatewayWsUrl).toHaveBeenCalledWith('research', '/api/audio/speak-stream')
 })
 
+it('returns no stream when a managed mint fails and only the non-dialable descriptor URL is left (#410)', async () => {
+  const getConnection = vi.fn(async (profile: null | string) => ({
+    authMode: 'token',
+    baseUrl: 'eva-managed://assigned',
+    profile,
+    wsUrl: 'eva-managed://relay-ticket-per-dial/api/ws'
+  }))
+
+  const getGatewayWsUrl = vi.fn(async () => {
+    throw new Error('relay mint failed')
+  })
+
+  ;(window as { hermesDesktop?: unknown }).hermesDesktop = { getConnection, getGatewayWsUrl }
+  setApiRequestProfile('research')
+
+  await expect(resolveSpeakStreamUrl()).resolves.toBeNull()
+  expect(getGatewayWsUrl).toHaveBeenCalledWith('research', '/api/audio/speak-stream')
+})
+
 it('mints an endpoint-bound managed ticket after resolving the owning registry route', async () => {
   const getConnectionFor = vi.fn(async () => ({
     authMode: 'token',

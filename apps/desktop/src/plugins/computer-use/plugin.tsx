@@ -60,6 +60,8 @@ export function ComputerUsePage() {
 
     let live = true
     let polling = false
+    // Opening the page asks `available` again, so a "not set up" answer is never shown from the cache.
+    let reprobe = true
 
     const read = () => {
       // One poll at a time, and none while Enable/Disable runs.
@@ -69,9 +71,11 @@ export function ComputerUsePage() {
 
       polling = true
       const mine = ++generation.current
+      const options = reprobe ? { reprobe: true } : undefined
+      reprobe = false
 
       void bridge
-        .status()
+        .status(options)
         .then(
           next => {
             if (live && mine === generation.current) {
@@ -182,7 +186,7 @@ export function ComputerUsePage() {
                 replaced
                   ? replaced.error
                   : connected.length
-                    ? connected.map(link => link.profile).join(', ')
+                    ? connected.map(link => link.name || link.profile).join(', ')
                     : status.enabled
                       ? (linkError ?? 'Connecting…')
                       : 'Not connected.'
@@ -195,7 +199,8 @@ export function ComputerUsePage() {
                   <span className="grid gap-1">
                     {status.inUse.map(use => (
                       <span key={use.conn}>
-                        {use.profile} · agent connection {use.conn.slice(0, 6)} · last action {ago(use.lastActivity)}
+                        {use.name || use.profile} · agent connection {use.conn.slice(0, 6)} · last action{' '}
+                        {ago(use.lastActivity)}
                       </span>
                     ))}
                   </span>

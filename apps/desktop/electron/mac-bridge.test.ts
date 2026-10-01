@@ -21,6 +21,7 @@ import {
   MAC_BRIDGE_PATH,
   type MacBridgeAccount,
   macBridgeAgentName,
+  macBridgeProfileNames,
   notSetUpText,
   probeMacBridgeAvailable,
   reaperArgs,
@@ -29,7 +30,8 @@ import {
   REPLACED_TEXT,
   resolveMacBridgeTargets,
   serveArgs,
-  SILENCE_MS
+  SILENCE_MS,
+  UNAVAILABLE_TTL_MS
 } from './mac-bridge'
 
 class FakeProc extends EventEmitter {
@@ -285,6 +287,34 @@ describe('the bridge', () => {
     one.emit('close') // a gateway-requested close is not echoed back
     two.kill() // a child that exits on its own is reported
     expect(ws.sent.filter(frame => frame.t === 'close')).toEqual([{ t: 'close', c: 'c2' }])
+  })
+
+  it('status names each connection and agent connection by display name, with the profile id kept', async () => {
+    let lookups = 0
+
+    const mb = bridge(undefined, {
+      profileNames: async () => {
+        lookups += 1
+
+        return { alice: 'Alice’s agent' }
+      }
+    })
+
+    expect((await mb.status()).connections).toEqual([])
+    expect(lookups).toBe(0) // nothing listed, nothing looked up
+
+    await mb.setEnabled(true)
+    FakeWs.all[0].open()
+    FakeWs.all[0].frame({ t: 'open', c: 'c1' })
+    const status = await mb.status()
+    expect(status.connections).toEqual([{ profile: 'alice', name: 'Alice’s agent', state: 'connected', error: null }])
+    expect(status.inUse.map(use => [use.profile, use.name, use.conn])).toEqual([['alice', 'Alice’s agent', 'c1']])
+
+    // A failing lookup leaves the ids.
+    const plain = bridge(undefined, { profileNames: async () => Promise.reject(new Error('offline')) })
+    await plain.setEnabled(true)
+    FakeWs.all.at(-1)!.open()
+    expect((await plain.status()).connections.map(link => [link.profile, link.name])).toEqual([['alice', undefined]])
   })
 
   it('reconnects with backoff and kills the connection’s children when the socket drops', async () => {
@@ -1237,6 +1267,38 @@ describe('pilot fix round 2 (M7: shown only for agents that have it)', () => {
     ).toBeNull()
   })
 
+  it('profile names for the page: the roster display names (#308), the own agent’s name, ids otherwise', async () => {
+    const withRoster = facade(async () => null)
+
+    ;(withRoster.eva as any).profileMetadata = async () => ({
+      'agent-one': {},
+      helper: { display_name: ' Helper Bot ' },
+      blank: { display_name: '  ' }
+    })
+    expect(await macBridgeProfileNames({ managed: true, eva: withRoster.eva })).toEqual({
+      'agent-one': 'Jane’s agent',
+      helper: 'Helper Bot'
+    })
+
+    // An explicit roster display name wins over the enrollment's name.
+    const explicit = facade(async () => null)
+
+    ;(explicit.eva as any).profileMetadata = async () => ({ 'agent-one': { display_name: 'Jane (desk)' } })
+    expect(await macBridgeProfileNames({ managed: true, eva: explicit.eva })).toEqual({ 'agent-one': 'Jane (desk)' })
+
+    // A failed roster read still names the own agent; no session or delegated support names nothing.
+    const failing = facade(async () => null)
+
+    ;(failing.eva as any).profileMetadata = async () => Promise.reject(new Error('offline'))
+    expect(await macBridgeProfileNames({ managed: true, eva: failing.eva })).toEqual({ 'agent-one': 'Jane’s agent' })
+
+    for (const status of [{ desktopSessionActive: false }, { delegatedSupportActive: true }]) {
+      expect(await macBridgeProfileNames({ managed: true, eva: facade(async () => null, { status }).eva })).toEqual({})
+    }
+
+    expect(await macBridgeProfileNames({ managed: false })).toEqual({})
+  })
+
   it('turning on asks first: not available → no daemon, no lookup, no dial, and the saved switch stays on', async () => {
     availableAnswer = false
     let lookups = 0
@@ -1304,6 +1366,7 @@ describe('pilot fix round 2 (M7: shown only for agents that have it)', () => {
     expect(lookups).toBe(2) // the tick that learned it asked nothing else
     expect(FakeWs.all[0].closed).toBe(true)
 
+    // A "not set up" answer is asked again every 60 s (here at +60 s and +120 s), still with no lookup.
     for (let i = 0; i < 5; i += 1) {
       clock += 30_000
       fire(30_000)
@@ -1311,7 +1374,7 @@ describe('pilot fix round 2 (M7: shown only for agents that have it)', () => {
     }
 
     expect(lookups).toBe(2)
-    expect(probes).toBe(2)
+    expect(probes).toBe(4)
     expect(FakeWs.all).toHaveLength(1)
     const status = await mb.status()
     expect(status).toMatchObject({ available: false, enabled: true, connections: [] })
@@ -1385,7 +1448,7 @@ describe('pilot fix round 2 (M7: shown only for agents that have it)', () => {
     expect(FakeWs.all).toHaveLength(1)
   })
 
-  it('the answer is cached: re-asked on sign-in, an account switch, retarget and after 10 min, not per status', async () => {
+  it('the answer is cached: re-asked on sign-in, an account switch, retarget, after 60 s (a no) or 10 min (a yes), not per status', async () => {
     const mb = bridge()
     expect((await mb.status()).available).toBe(true)
     expect(probes).toBe(1)
@@ -1410,7 +1473,8 @@ describe('pilot fix round 2 (M7: shown only for agents that have it)', () => {
     expect((await mb.status()).available).toBe(false)
     expect(probes).toBe(4)
 
-    clock += AVAILABLE_TTL_MS - 1
+    // A no is reused for 60 s only.
+    clock += UNAVAILABLE_TTL_MS - 1
     await mb.status()
     expect(probes).toBe(4)
     clock += 1
@@ -1419,6 +1483,36 @@ describe('pilot fix round 2 (M7: shown only for agents that have it)', () => {
     await settle()
     expect(probes).toBe(5)
     expect((await mb.status()).available).toBe(true)
+
+    // A yes is reused for 10 min.
+    clock += AVAILABLE_TTL_MS - 1
+    await mb.status()
+    expect(probes).toBe(5)
+    clock += 1
+    await mb.status()
+    await settle()
+    expect(probes).toBe(6)
+  })
+
+  it('opening the page asks again: it waits for a fresh answer after a no, and refreshes a yes in the background', async () => {
+    availableAnswer = false
+    const mb = bridge()
+    expect((await mb.status()).available).toBe(false)
+    expect(probes).toBe(1)
+
+    // The plugin was installed seconds later; the cached no is not shown when the page opens.
+    availableAnswer = true
+    expect((await mb.status({ reprobe: true })).available).toBe(true)
+    expect(probes).toBe(2)
+
+    // An ordinary poll reuses the fresh yes; opening the page again asks without waiting.
+    await mb.status()
+    expect(probes).toBe(2)
+    availableAnswer = false
+    expect((await mb.status({ reprobe: true })).available).toBe(true)
+    await settle()
+    expect(probes).toBe(3)
+    expect((await mb.status()).available).toBe(false)
   })
 
   it('an answer that lands after another account signed in is not kept for them', async () => {
@@ -1586,6 +1680,18 @@ describe('review-bot round (r3)', () => {
     expect(channels).toEqual([])
     registerMacBridgeIpc(ipc, bridge(), 'darwin') // positive control
     expect(channels).toContain('hermes:macBridge:status')
+  })
+
+  it('the status IPC forwards only a boolean reprobe flag', async () => {
+    const handlers = new Map<string, (...args: any[]) => any>()
+    const calls: unknown[] = []
+    const fake = { status: async (options: unknown) => void calls.push(options) } as any
+    registerMacBridgeIpc({ handle: (channel, listener) => void handlers.set(channel, listener) }, fake, 'darwin')
+    const handler = handlers.get('hermes:macBridge:status')!
+    await handler({}, { reprobe: true })
+    await handler({})
+    await handler({}, { reprobe: 'yes' })
+    expect(calls).toEqual([{ reprobe: true }, { reprobe: false }, { reprobe: false }])
   })
 
   it('B5: an installer that fails to spawn is logged, never an unhandled error event', async () => {

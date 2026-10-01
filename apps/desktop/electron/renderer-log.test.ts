@@ -46,6 +46,12 @@ describe('formatRendererConsoleLine', () => {
     expect(formatRendererConsoleLine('main', 1, skipped, 1, 's')).toContain(skipped)
     expect(formatRendererConsoleLine('main', 1, 'gateway-reconnect without the bracket prefix', 1, 's')).toBeNull()
   })
+
+  it('persists the liveness force-close line at info level', () => {
+    const forceClose = '[gateway-liveness] force-close reason=no-in-flight-work failures=1 working=0'
+
+    expect(formatRendererConsoleLine('main', 1, forceClose, 1, 's')).toContain(forceClose)
+  })
 })
 
 describe('attachRendererConsoleCapture', () => {

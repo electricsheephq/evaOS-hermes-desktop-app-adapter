@@ -10,11 +10,17 @@ const secondaryGateways: Array<{
 }> = []
 
 let connectGate: Promise<void> | null = null
+// Mirrors JsonRpcGatewayClient.connect(), which refuses anything but a ws:// or wss:// URL.
+let refuseNonWebSocketUrls = false
 
 vi.mock('@/hermes', () => ({
   HermesGateway: class {
     connectionState = 'closed'
-    connect = vi.fn(async () => {
+    connect = vi.fn(async (url?: string) => {
+      if (refuseNonWebSocketUrls && !/^wss?:\/\//.test(String(url))) {
+        throw new Error(`gateway connect() requires a ws:// or wss:// URL string, got ${JSON.stringify(url)}`)
+      }
+
       if (this.connectionState === 'connecting') {
         return
       }
@@ -64,10 +70,11 @@ const {
   setPrimaryGatewayConnection
 } = await import('./gateway')
 
-function installDesktop(getConnection: ReturnType<typeof vi.fn>): void {
+function installDesktop(getConnection: ReturnType<typeof vi.fn>, extra: Record<string, unknown> = {}): void {
   ;(window as unknown as { hermesDesktop: unknown }).hermesDesktop = {
     getConnection,
-    touchBackend: vi.fn(async () => undefined)
+    touchBackend: vi.fn(async () => undefined),
+    ...extra
   }
 }
 
@@ -81,6 +88,7 @@ function makePrimary() {
 beforeEach(async () => {
   secondaryGateways.length = 0
   connectGate = null
+  refuseNonWebSocketUrls = false
   configureGatewayRegistry({ onEvent: vi.fn() })
   closeSecondaryGateways()
 })
@@ -109,6 +117,143 @@ describe('requestGatewayForProfile', () => {
     expect(secondaryGateways[0].request).toHaveBeenCalledWith('profiles.list', { include_sessions: true })
     expect(secondaryGateways[0].close).toHaveBeenCalledOnce()
     expect($gateway.get()).toBe(primary)
+  })
+
+  it('background polls on a down local profile leave redialing to the ladder; a user action still dials (#121865)', async () => {
+    vi.useFakeTimers()
+
+    try {
+      setPrimaryGateway(makePrimary() as never, 'default')
+
+      // The target profile's backend never comes up.
+      const getConnection = vi.fn(async (profile: null | string) => {
+        if (profile === 'jody') {
+          throw new Error('Failed to connect to Hermes gateway')
+        }
+
+        return { port: 4242, token: 'primary-token' }
+      })
+
+      installDesktop(getConnection)
+      await ensureGatewayForProfile('default')
+
+      const jodyDials = () => getConnection.mock.calls.filter(([profile]) => profile === 'jody').length
+
+      // session.control.read against a cross-profile session, polled 20 times in one second.
+      for (let index = 0; index < 20; index += 1) {
+        await requestGatewayForProfile('jody', 'session.control.read', {}).catch(() => undefined)
+        await vi.advanceTimersByTimeAsync(50)
+      }
+
+      // Every attempt is two dials into main: the shared-primary probe, then the secondary.
+      // Before, all 20 polls attempted (40 dials). Now attempts wait out a window that doubles
+      // from 300ms, so one second holds three of them: t=0, t=300, t=900.
+      const backgroundDials = jodyDials()
+      expect(backgroundDials).toBe(6)
+
+      // Inside the same cooldown, a user action is not held back.
+      await requestGatewayForProfile('jody', 'session.activate', {}, undefined, undefined, {
+        spawnPriority: 'foreground'
+      }).catch(() => undefined)
+      expect(jodyDials()).toBeGreaterThan(backgroundDials)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('a managed background poll whose mint fails never dials a cached ticket and waits out the backoff (#410)', async () => {
+    vi.useFakeTimers()
+
+    try {
+      refuseNonWebSocketUrls = true
+      setPrimaryGateway(makePrimary() as never, 'default')
+
+      // The managed descriptor carries no ticket; every dial must mint its own.
+      const getConnection = vi.fn(async (profile: null | string) =>
+        profile === 'jody'
+          ? {
+              authMode: 'token',
+              baseUrl: 'eva-managed://customer-one',
+              mode: 'remote',
+              profile,
+              source: 'electric-sheep',
+              token: '',
+              wsUrl: 'eva-managed://relay-ticket-per-dial/api/ws'
+            }
+          : { port: 4242, token: 'primary-token' }
+      )
+
+      const getGatewayWsUrl = vi.fn(async (_profile?: null | string) => ({ error: 'relay unavailable', ok: false as const }))
+      installDesktop(getConnection, { getGatewayWsUrl })
+      await ensureGatewayForProfile('default')
+
+      for (let index = 0; index < 20; index += 1) {
+        await requestGatewayForProfile('jody', 'session.control.read', {}).catch(() => undefined)
+        await vi.advanceTimersByTimeAsync(50)
+      }
+
+      const dialed = secondaryGateways.flatMap(gateway => gateway.connect.mock.calls.map(([url]) => String(url)))
+      const jodyMints = getGatewayWsUrl.mock.calls.filter(([profile]) => profile === 'jody').length
+
+      // No dial ever carried a ticket, so the relay never saw a reused one.
+      expect(dialed.some(url => url.includes('ticket='))).toBe(false)
+      expect(secondaryGateways.every(gateway => gateway.connectionState !== 'open')).toBe(true)
+      // The failed mint counts as a dial failure: polls inside the backoff window
+      // fail fast instead of minting again (t=0, t=300, t=900).
+      expect(jodyMints).toBe(3)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('a served request clears dial history, so the next outage starts back at the shortest window (#121865)', async () => {
+    vi.useFakeTimers()
+
+    try {
+      setPrimaryGateway(makePrimary() as never, 'default')
+
+      let jodyUp = false
+
+      const getConnection = vi.fn(async (profile: null | string) => {
+        if (profile === 'jody') {
+          if (!jodyUp) {
+            throw new Error('Failed to connect to Hermes gateway')
+          }
+
+          return { port: 5151, profile, token: 'secondary-token' }
+        }
+
+        return { port: 4242, token: 'primary-token' }
+      })
+
+      installDesktop(getConnection)
+      await ensureGatewayForProfile('default')
+
+      const poll = () => requestGatewayForProfile('jody', 'session.control.read', {}).catch(() => undefined)
+      const jodyDials = () => getConnection.mock.calls.filter(([profile]) => profile === 'jody').length
+
+      // Three failed attempts in the first second widen the window to 1200ms.
+      for (let index = 0; index < 20; index += 1) {
+        await poll()
+        await vi.advanceTimersByTimeAsync(50)
+      }
+
+      // The backend recovers and serves a request once the widened window has passed.
+      jodyUp = true
+      await vi.advanceTimersByTimeAsync(2_000)
+      await expect(requestGatewayForProfile('jody', 'session.control.read', {})).resolves.toBeDefined()
+
+      // A fresh outage: one failure opens a 300ms window again, so a poll 300ms later dials.
+      // Had the old streak survived, the window would be 2400ms and that poll would be held.
+      jodyUp = false
+      const before = jodyDials()
+      await poll()
+      await vi.advanceTimersByTimeAsync(300)
+      await poll()
+      expect(jodyDials() - before).toBe(4)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('dials the profile with foreground priority when a Settings-scoped caller asks for it (#111651)', async () => {

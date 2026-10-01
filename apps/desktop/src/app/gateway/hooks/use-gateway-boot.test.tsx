@@ -2621,6 +2621,72 @@ describe('useGatewayBoot remote reconnect loop (real hook, fake socket)', () => 
     expect(desktop.getConnection).toHaveBeenCalledTimes(1)
   })
 
+  it('RETRY CONTRACT: a managed boot whose per-dial ticket mint fails retries instead of failing terminally (#410)', async () => {
+    const desktop = fakeDesktop()
+    const managedConn = { ...remotePrimaryConn, wsUrl: 'eva-managed://relay-ticket-per-dial/api/ws' }
+    desktop.getConnection = vi.fn(async () => managedConn)
+    let mintFails = true
+    desktop.getGatewayWsUrl = vi.fn(async () => {
+      if (mintFails) {
+        throw new Error('relay mint failed: network is down')
+      }
+
+      return primaryConn.wsUrl
+    })
+    desktop.getBootProgress = vi.fn(async () => ({
+      error: null,
+      fakeMode: false,
+      message: 'Hermes is ready',
+      phase: 'backend.ready',
+      progress: 100,
+      retryable: false,
+      running: true,
+      timestamp: 1
+    }))
+    ;(window as unknown as { hermesDesktop: unknown }).hermesDesktop = { ...desktop, eva: {} }
+
+    render(<Harness />)
+    await flushAsync()
+
+    // The placeholder is never dialed, and the failed mint is not terminal.
+    expect(desktop.getConnection).toHaveBeenCalledTimes(1)
+    expect(FakeWebSocket.instances).toHaveLength(0)
+    expect($desktopBoot.get().error).toBeNull()
+
+    mintFails = false
+    await advanceBackoff()
+
+    expect(desktop.getConnection).toHaveBeenCalledTimes(2)
+    expect($gatewayState.get()).toBe('open')
+    expect($desktopBoot.get().error).toBeNull()
+  })
+
+  it('RETRY CONTRACT: a managed per-dial ticket mint that keeps failing stays bounded and ends in the recovery overlay', async () => {
+    const desktop = fakeDesktop()
+    desktop.getConnection = vi.fn(async () => ({
+      ...remotePrimaryConn,
+      wsUrl: 'eva-managed://relay-ticket-per-dial/api/ws'
+    }))
+    desktop.getGatewayWsUrl = vi.fn(async () => {
+      throw new Error('relay mint failed: network is down')
+    })
+    ;(window as unknown as { hermesDesktop: unknown }).hermesDesktop = { ...desktop, eva: {} }
+
+    render(<Harness />)
+    await flushAsync()
+
+    for (let i = 0; i < 7; i += 1) {
+      await advanceBackoff()
+    }
+
+    expect(desktop.getConnection).toHaveBeenCalledTimes(6)
+    expect(FakeWebSocket.instances).toHaveLength(0)
+    expect($desktopBoot.get().error).toBeTruthy()
+
+    await advanceBackoff()
+    expect(desktop.getConnection).toHaveBeenCalledTimes(6)
+  })
+
   it('RETRY CONTRACT: a post-connect failure stays terminal even when its socket closes before boot catches it — a closed socket after a good dial is not a dial failure', async () => {
     const desktop = fakeDesktop()
     desktop.getConnection = vi.fn(async () => remotePrimaryConn)
