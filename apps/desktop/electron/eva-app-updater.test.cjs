@@ -441,6 +441,83 @@ test('a successful check reports one summary; a failed check reports none', asyn
   assert.equal((await noisy.check()).updateAvailable, true)
 })
 
+test('a Network Service restart moves electron-updater to a fresh net session before the next check', async () => {
+  let generation = 0
+  const sessions = []
+  const updater = new FakeUpdater()
+  updater.httpExecutor = { cachedSession: 'electron-updater' }
+  const { service } = fixture({
+    autoUpdater: updater,
+    getNetworkGeneration: () => generation,
+    netSessionFor: value => {
+      sessions.push(value)
+      return `electron-updater-ns${value}`
+    }
+  })
+
+  await service.check()
+  assert.equal(updater.httpExecutor.cachedSession, 'electron-updater') // no restart yet: untouched
+
+  generation = 1
+  assert.equal((await service.check()).updateAvailable, true)
+  assert.equal(updater.httpExecutor.cachedSession, 'electron-updater-ns1')
+  await service.check()
+  assert.deepEqual(sessions, [1]) // one fresh session per restart, not per check
+})
+
+test('a Network Service restart during a download leaves that download on its session', async () => {
+  let generation = 0
+  let releaseDownload
+  const updater = new FakeUpdater()
+  updater.httpExecutor = { cachedSession: 'electron-updater' }
+  updater.downloadUpdate = function () {
+    this.downloadCalls += 1
+    return new Promise(resolve => {
+      releaseDownload = () => {
+        this.emit('update-downloaded', { version: '2026.7.20-es.9' })
+        resolve(['/tmp/evaos-agent.zip'])
+      }
+    })
+  }
+  const { scheduled, service } = fixture({
+    autoUpdater: updater,
+    getNetworkGeneration: () => generation,
+    netSessionFor: value => `electron-updater-ns${value}`
+  })
+
+  const applying = service.apply()
+  for (let i = 0; i < 20 && !releaseDownload; i += 1) await new Promise(resolve => setImmediate(resolve))
+  generation = 1
+  await service.check() // a check while the download runs
+  assert.equal(updater.httpExecutor.cachedSession, 'electron-updater')
+  releaseDownload()
+  await waitForScheduled(scheduled, 1)
+  scheduled[0]()
+  assert.equal((await applying).ok, true)
+
+  await service.check() // the next check after it moves over
+  assert.equal(updater.httpExecutor.cachedSession, 'electron-updater-ns1')
+})
+
+test('without electron-updater\'s session field, a failed check after a restart asks for a relaunch', async () => {
+  let generation = 0
+  const updater = new FakeUpdater()
+  updater.checkForUpdates = async () => {
+    throw new Error('net::ERR_FAILED')
+  }
+  const { service } = fixture({
+    autoUpdater: updater,
+    getNetworkGeneration: () => generation,
+    netSessionFor: value => `electron-updater-ns${value}`
+  })
+
+  assert.equal((await service.check()).message, 'evaOS Agent could not check for updates. Try again.')
+  generation = 1
+  const status = await service.check()
+  assert.equal(status.error, 'check-failed')
+  assert.equal(status.message, 'Restart evaOS Agent to check for updates.')
+})
+
 test('a check without update info does not invent an available target', async () => {
   const updater = new FakeUpdater()
   updater.checkForUpdates = async function () {

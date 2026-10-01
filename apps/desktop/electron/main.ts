@@ -2079,8 +2079,16 @@ function rememberLog(chunk) {
   scheduleDesktopLogFlush()
 }
 
+// Bumped on each Network Service restart: the managed updater moves to a fresh
+// net session, since the old one answers net::ERR_FAILED until relaunch.
+let networkServiceGeneration = 0
+
 app.on('child-process-gone', (_event, details) => {
   const field = (value: unknown) => String(value ?? '?').replace(/\s+/g, ' ')
+
+  if (details?.serviceName === 'network.mojom.NetworkService') {
+    networkServiceGeneration += 1
+  }
 
   rememberLog(
     `[child-process-gone] type=${field(details?.type)} reason=${field(details?.reason)} ` +
@@ -3449,7 +3457,9 @@ function getEvaAppUpdater() {
       autoUpdater,
       emitProgress: emitUpdateProgress,
       getLowestAgentContract: () => evaAgentContracts.lowest(),
+      getNetworkGeneration: () => networkServiceGeneration,
       isPackaged: IS_PACKAGED,
+      netSessionFor: generation => session.fromPartition(`electron-updater-ns${generation}`, { cache: false }),
       onChecked: ({ current, latest, available, held }) => {
         rememberLog(
           `[updates] managed check ok: current=${current} latest=${latest ?? 'unknown'} available=${available} held=${held ?? 'none'}`

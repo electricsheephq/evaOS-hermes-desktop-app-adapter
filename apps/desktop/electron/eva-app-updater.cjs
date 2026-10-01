@@ -6,6 +6,7 @@ const EVA_APP_UPDATE_CHANNEL = 'latest'
 const EVA_APP_UPDATE_BRANCH = 'managed-beta'
 const SAFE_CHECK_FAILURE_MESSAGE = 'evaOS Agent could not check for updates. Try again.'
 const SAFE_APPLY_FAILURE_MESSAGE = 'evaOS Agent could not install the update. Try again.'
+const RESTART_TO_CHECK_MESSAGE = 'Restart evaOS Agent to check for updates.'
 // latest-mac.yml `vendor` key written at build time from the renderer's
 // REQUIRED_BACKEND_CONTRACT (scripts/backend-contract.mjs).
 const EVA_MIN_BACKEND_CONTRACT_KEY = 'evaosMinBackendContract'
@@ -146,6 +147,10 @@ function safeCheckFailure(now = Date.now) {
   }
 }
 
+function restartToCheckFailure(now = Date.now) {
+  return { ...safeCheckFailure(now), message: RESTART_TO_CHECK_MESSAGE }
+}
+
 function safeApplyFailure() {
   return {
     ok: false,
@@ -161,7 +166,11 @@ function createEvaAppUpdater(options) {
     autoUpdater,
     emitProgress = () => undefined,
     getLowestAgentContract = () => null,
+    // How many times the Network Service has restarted, and a fresh net
+    // session for that count (main.ts). Optional: without them nothing swaps.
+    getNetworkGeneration = () => 0,
     isPackaged = app?.isPackaged,
+    netSessionFor = null,
     now = Date.now,
     onChecked = () => undefined,
     onError = () => undefined,
@@ -187,6 +196,9 @@ function createEvaAppUpdater(options) {
   let checkPromise = null
   let applyPromise = null
   let applying = false
+  let downloading = false
+  let netGeneration = 0
+  let netSessionStale = false
 
   function supported() {
     return Boolean(isPackaged) && platform === 'darwin' && arch === 'arm64'
@@ -221,6 +233,28 @@ function createEvaAppUpdater(options) {
       contractHold = agentContractHold(info, getLowestAgentContract())
       return contractHold === null
     }
+  }
+
+  // After the Network Service restarts, Chromium net requests on an existing
+  // session fail with net::ERR_FAILED until relaunch (electron/electron#35093),
+  // and electron-updater keeps its session in httpExecutor.cachedSession. Each
+  // restart gets a fresh partition, never in the middle of a download. When
+  // the private field is missing, a failed check asks for a restart instead.
+  function refreshNetSession() {
+    const generation = Number(getNetworkGeneration()) || 0
+    if (generation === netGeneration || downloading) return
+    const executor = autoUpdater.httpExecutor
+    if (typeof netSessionFor === 'function' && executor && 'cachedSession' in executor) {
+      try {
+        executor.cachedSession = netSessionFor(generation)
+        netGeneration = generation
+        netSessionStale = false
+        return
+      } catch (error) {
+        reportError('session', error)
+      }
+    }
+    netSessionStale = true
   }
 
   function reportError(stage, error) {
@@ -307,6 +341,7 @@ function createEvaAppUpdater(options) {
     checkPromise = (async () => {
       try {
         configure()
+        refreshNetSession()
         lastStatus = null
         contractHold = null
         const result = await autoUpdater.checkForUpdates()
@@ -322,7 +357,7 @@ function createEvaAppUpdater(options) {
         return lastStatus
       } catch (error) {
         reportError('check', error)
-        return safeCheckFailure(now)
+        return netSessionStale ? restartToCheckFailure(now) : safeCheckFailure(now)
       } finally {
         checkPromise = null
       }
@@ -348,6 +383,7 @@ function createEvaAppUpdater(options) {
       applying = true
       try {
         configure()
+        refreshNetSession()
         const status = lastStatus?.updateAvailable ? lastStatus : await check()
         if (!status?.updateAvailable) {
           return {
@@ -371,7 +407,12 @@ function createEvaAppUpdater(options) {
 
         downloadedVersion = null
         emitProgress({ stage: 'fetch', message: 'Downloading the signed update…', percent: 0 })
-        await autoUpdater.downloadUpdate()
+        downloading = true
+        try {
+          await autoUpdater.downloadUpdate()
+        } finally {
+          downloading = false
+        }
 
         if (!downloadedVersion) {
           throw new Error('The update downloaded without a verified release identity.')
