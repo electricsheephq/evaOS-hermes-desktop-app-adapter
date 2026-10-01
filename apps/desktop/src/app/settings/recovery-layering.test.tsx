@@ -25,8 +25,12 @@ const idleOnboarding: DesktopOnboardingState = {
   requested: false
 }
 
-const active = { delegatedSupportActive: true, supportCustomerLabel: 'Customer', supportAgentLabel: 'Agent',
-  supportExpiresAt: new Date(Date.now() + 60_000).toISOString() } as NonNullable<Parameters<typeof $evaManagedStatus.set>[0]>
+const active = {
+  delegatedSupportActive: true,
+  supportCustomerLabel: 'Customer',
+  supportAgentLabel: 'Agent',
+  supportExpiresAt: new Date(Date.now() + 60_000).toISOString()
+} as NonNullable<Parameters<typeof $evaManagedStatus.set>[0]>
 
 function resolvedZIndex(element: Element): number {
   const style = getComputedStyle(element)
@@ -35,9 +39,11 @@ function resolvedZIndex(element: Element): number {
 
   while (value.startsWith('var(')) {
     const name = value.match(/^var\((--[^,)]+)/)?.[1]
+
     if (!name || seen.has(name)) {
       throw new Error(`Could not resolve z-index ${style.zIndex}`)
     }
+
     seen.add(name)
     value = style.getPropertyValue(name).trim()
   }

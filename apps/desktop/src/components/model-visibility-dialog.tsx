@@ -96,7 +96,11 @@ export function ModelVisibilityDialog({
   const q = normalize(search)
 
   const matches = (provider: ModelOptionProvider, model: string) =>
-    !q || foldIncludes(`${model} ${managedProviderDisplayValue(provider.slug, provider.name, managedEva)} ${provider.slug} ${displayModelName(model)}`, q)
+    !q ||
+    foldIncludes(
+      `${model} ${managedProviderDisplayValue(provider.slug, provider.name, managedEva)} ${provider.slug} ${displayModelName(model)}`,
+      q
+    )
 
   // Typing an id no provider lists offers to add it — same gesture as the
   // pickers, minus the switch — and the new row lands visible. Only once the
@@ -158,7 +162,8 @@ export function ModelVisibilityDialog({
                       type="button"
                     >
                       <span className="min-w-0 truncate">
-                        <HighlightMatches foldSeparators
+                        <HighlightMatches
+                          foldSeparators
                           query={search}
                           text={managedProviderDisplayValue(provider.slug, provider.name, managedEva)}
                         />

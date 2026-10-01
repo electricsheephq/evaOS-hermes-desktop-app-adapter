@@ -125,6 +125,7 @@ describe('useComposerVoice session ownership', () => {
 
   it('keeps its own first created session active without letting a late callback claim a later switch', async () => {
     let createdCallback: ((runtimeSessionId: string) => void) | undefined
+
     const onSubmit = vi.fn<ChatBarProps['onSubmit']>(async (_text, options) => {
       createdCallback = options?.onRuntimeSessionCreated
       createdCallback?.('runtime-created')
@@ -132,6 +133,7 @@ describe('useComposerVoice session ownership', () => {
 
       return true
     })
+
     const hook = renderVoice(null, onSubmit)
 
     act(() => hook.result.current.startConversation())

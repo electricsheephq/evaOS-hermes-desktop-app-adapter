@@ -280,12 +280,19 @@ export function TitlebarControls({ leftTools = [], tools = [], onOpenSettings }:
   const supportIndicator =
     !statusbarVisible && supportSession ? (
       <Button
-        className={cn('max-w-96 truncate text-xs', isOverlayView(view) && `${titlebarToolClusterClass} left-(--titlebar-controls-left) top-(--titlebar-controls-top)`)}
+        className={cn(
+          'max-w-96 truncate text-xs',
+          isOverlayView(view) &&
+            `${titlebarToolClusterClass} left-(--titlebar-controls-left) top-(--titlebar-controls-top)`
+        )}
         data-support-session="titlebar"
         onClick={() => navigate('/settings?tab=gateway')}
-        size="inline" type="button" variant="text"
+        size="inline"
+        type="button"
+        variant="text"
       >
-        {t.delegatedSupport.indicator(supportSession.customer, formatSupportRemaining(supportSession.expiresAt))} · {t.delegatedSupport.assignedAgent(supportSession.agent)}
+        {t.delegatedSupport.indicator(supportSession.customer, formatSupportRemaining(supportSession.expiresAt))} ·{' '}
+        {t.delegatedSupport.assignedAgent(supportSession.agent)}
       </Button>
     ) : null
 

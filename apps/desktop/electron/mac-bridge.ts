@@ -311,10 +311,7 @@ export async function macBridgeProfileNames(input: {
  * error, a timeout, a 5xx, a 401/403, a failed re-enrollment) → null, and the caller keeps its last answer.
  * `retry: false`: a 401/403/404 here never reaches the facade's re-enrollment (`clearRuntimeEnrollment`).
  */
-export async function probeMacBridgeAvailable(input: {
-  managed: boolean
-  eva?: EvaFacade
-}): Promise<boolean | null> {
+export async function probeMacBridgeAvailable(input: { managed: boolean; eva?: EvaFacade }): Promise<boolean | null> {
   if (!input.managed) {
     return true // a remote (dev) connection: the one gateway it points at, as before
   }
