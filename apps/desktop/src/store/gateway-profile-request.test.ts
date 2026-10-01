@@ -10,11 +10,17 @@ const secondaryGateways: Array<{
 }> = []
 
 let connectGate: Promise<void> | null = null
+// Mirrors JsonRpcGatewayClient.connect(), which refuses anything but a ws:// or wss:// URL.
+let refuseNonWebSocketUrls = false
 
 vi.mock('@/hermes', () => ({
   HermesGateway: class {
     connectionState = 'closed'
-    connect = vi.fn(async () => {
+    connect = vi.fn(async (url?: string) => {
+      if (refuseNonWebSocketUrls && !/^wss?:\/\//.test(String(url))) {
+        throw new Error(`gateway connect() requires a ws:// or wss:// URL string, got ${JSON.stringify(url)}`)
+      }
+
       if (this.connectionState === 'connecting') {
         return
       }
@@ -64,10 +70,11 @@ const {
   setPrimaryGatewayConnection
 } = await import('./gateway')
 
-function installDesktop(getConnection: ReturnType<typeof vi.fn>): void {
+function installDesktop(getConnection: ReturnType<typeof vi.fn>, extra: Record<string, unknown> = {}): void {
   ;(window as unknown as { hermesDesktop: unknown }).hermesDesktop = {
     getConnection,
-    touchBackend: vi.fn(async () => undefined)
+    touchBackend: vi.fn(async () => undefined),
+    ...extra
   }
 }
 
@@ -81,6 +88,7 @@ function makePrimary() {
 beforeEach(async () => {
   secondaryGateways.length = 0
   connectGate = null
+  refuseNonWebSocketUrls = false
   configureGatewayRegistry({ onEvent: vi.fn() })
   closeSecondaryGateways()
 })
@@ -148,6 +156,51 @@ describe('requestGatewayForProfile', () => {
         spawnPriority: 'foreground'
       }).catch(() => undefined)
       expect(jodyDials()).toBeGreaterThan(backgroundDials)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('a managed background poll whose mint fails never dials a cached ticket and waits out the backoff (#410)', async () => {
+    vi.useFakeTimers()
+
+    try {
+      refuseNonWebSocketUrls = true
+      setPrimaryGateway(makePrimary() as never, 'default')
+
+      // The managed descriptor carries no ticket; every dial must mint its own.
+      const getConnection = vi.fn(async (profile: null | string) =>
+        profile === 'jody'
+          ? {
+              authMode: 'token',
+              baseUrl: 'eva-managed://customer-one',
+              mode: 'remote',
+              profile,
+              source: 'electric-sheep',
+              token: '',
+              wsUrl: 'eva-managed://relay-ticket-per-dial/api/ws'
+            }
+          : { port: 4242, token: 'primary-token' }
+      )
+
+      const getGatewayWsUrl = vi.fn(async (_profile?: null | string) => ({ error: 'relay unavailable', ok: false as const }))
+      installDesktop(getConnection, { getGatewayWsUrl })
+      await ensureGatewayForProfile('default')
+
+      for (let index = 0; index < 20; index += 1) {
+        await requestGatewayForProfile('jody', 'session.control.read', {}).catch(() => undefined)
+        await vi.advanceTimersByTimeAsync(50)
+      }
+
+      const dialed = secondaryGateways.flatMap(gateway => gateway.connect.mock.calls.map(([url]) => String(url)))
+      const jodyMints = getGatewayWsUrl.mock.calls.filter(([profile]) => profile === 'jody').length
+
+      // No dial ever carried a ticket, so the relay never saw a reused one.
+      expect(dialed.some(url => url.includes('ticket='))).toBe(false)
+      expect(secondaryGateways.every(gateway => gateway.connectionState !== 'open')).toBe(true)
+      // The failed mint counts as a dial failure: polls inside the backoff window
+      // fail fast instead of minting again (t=0, t=300, t=900).
+      expect(jodyMints).toBe(3)
     } finally {
       vi.useRealTimers()
     }

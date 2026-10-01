@@ -207,6 +207,10 @@ test('managed.signin-assignment-chat', async t => {
   assert.equal(connection.baseUrl, 'eva-managed://customer-one')
   assert.equal(connection.token, '')
   assert.equal(connection.profile, 'main')
+  // The descriptor carries no ticket (#410); the chat dial mints its own.
+  assert.deepEqual(minted, [])
+  assert.doesNotMatch(connection.wsUrl, /ticket=/)
+  await runtime.freshWsUrl({ profile: 'main' })
   assert.deepEqual(minted.map(({ path, profile }) => ({ path, profile })), [
     { path: '/api/ws', profile: 'main' }
   ])

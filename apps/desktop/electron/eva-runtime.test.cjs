@@ -1528,6 +1528,8 @@ test('support expiry is enforced by the main-process timer without renderer poll
   assert.ok(scheduled)
   assert.ok(scheduled.delay > 0)
   await runtime.resolveBackend({ profile: 'support' })
+  // The dial mints its own ticket (#410), which opens the relay.
+  await runtime.freshWsUrl({ profile: 'support' })
 
   clock = supportExpiresAt + 1
   scheduled.callback()
@@ -2788,6 +2790,7 @@ test('sign-out severs local support access even when the remote end call fails',
 
   await runtime.claimSupportRequest('request-123')
   await runtime.resolveBackend({ profile: 'support' })
+  await runtime.freshWsUrl({ profile: 'support' })
   assert.deepEqual(await runtime.signOut(), { ok: true })
 
   const persisted = JSON.parse(fs.readFileSync(statePath, 'utf8'))
@@ -3621,13 +3624,83 @@ test('closing the runtime drops the cached relay before a later reconnect', asyn
     }
   })
 
-  const first = await runtime.resolveBackend()
+  await runtime.resolveBackend()
+  const first = await runtime.freshWsUrl()
   await runtime.close()
-  const second = await runtime.resolveBackend()
+  await runtime.resolveBackend()
+  const second = await runtime.freshWsUrl()
 
   assert.equal(relays, 2)
   assert.deepEqual(closed, [1])
-  assert.notEqual(first.wsUrl, second.wsUrl)
+  assert.notEqual(first, second)
+})
+
+test('concurrent managed dials share one descriptor but each mints its own single-use ticket (#410)', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-ticket-per-dial-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeActiveEnrollment(statePath)
+
+  let minted = 0
+  const runtime = makeManagedRuntime(statePath, {
+    createWsRelay: () => ({
+      mintTicket: async request => `ws://127.0.0.1:12345${request.path}?ticket=t${++minted}`,
+      disconnectAll: () => undefined,
+      close: async () => undefined
+    })
+  })
+  t.after(async () => runtime.close())
+
+  // Two windows waking together resolve the same backend...
+  const [first, second] = await Promise.all([
+    runtime.resolveBackend({ profile: 'main' }),
+    runtime.resolveBackend({ profile: 'main' })
+  ])
+  // ...and the cached descriptor holds no ticket a second dial could reuse,
+  // nor anything a WebSocket can dial.
+  assert.equal(minted, 0)
+  for (const descriptor of [first, second]) {
+    assert.doesNotMatch(descriptor.wsUrl, /ticket=/)
+    assert.doesNotMatch(descriptor.wsUrl, /^wss?:/)
+  }
+
+  const [firstUrl, secondUrl] = await Promise.all([
+    runtime.freshWsUrl({ profile: 'main' }),
+    runtime.freshWsUrl({ profile: 'main' })
+  ])
+  assert.equal(minted, 2)
+  assert.notEqual(firstUrl, secondUrl)
+})
+
+test('a failed managed mint rejects the dial instead of reusing a cached ticket (#410)', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eva-runtime-mint-failure-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const statePath = path.join(directory, 'eva-enrollment.json')
+  writeActiveEnrollment(statePath)
+
+  const failure = new Error('relay unavailable')
+  let failMint = false
+  const runtime = makeManagedRuntime(statePath, {
+    createWsRelay: () => ({
+      mintTicket: async () => {
+        if (failMint) throw failure
+        return 'ws://127.0.0.1:12345/api/ws?ticket=only-once'
+      },
+      disconnectAll: () => undefined,
+      close: async () => undefined
+    })
+  })
+  t.after(async () => runtime.close())
+
+  const descriptor = await runtime.resolveBackend()
+  assert.equal(await runtime.freshWsUrl(), 'ws://127.0.0.1:12345/api/ws?ticket=only-once')
+
+  failMint = true
+  await assert.rejects(runtime.freshWsUrl(), error => error === failure)
+  // Resolving again does not smuggle the spent ticket back into the descriptor.
+  const again = await runtime.resolveBackend()
+  assert.equal(again.wsUrl, descriptor.wsUrl)
+  assert.doesNotMatch(again.wsUrl, /only-once/)
 })
 
 test('managed media keeps Range and runtime credentials in the main-process fetch seam', async t => {
@@ -3839,6 +3912,10 @@ test('managed connections and endpoint tickets preserve the selected profile and
   const connection = await runtime.resolveBackend({ profile: 'main' })
   assert.equal(connection.profile, 'main')
   assert.equal(connection.token, '')
+  // The cached descriptor never carries a ticket (#410); the dial mints one.
+  assert.equal(minted.length, 0)
+  assert.doesNotMatch(connection.wsUrl, /ticket=/)
+  await runtime.freshWsUrl({ profile: 'main' })
   const { profileBinder: firstProfileBinder, ...firstTicket } = minted[0]
   assert.equal(typeof firstProfileBinder, 'function')
   assert.equal(firstProfileBinder('default'), 'main')
@@ -6068,6 +6145,7 @@ test("a replacement sign-in ends the old account's work before its own enrollmen
   // The retained credential is still readable: a reconnect opens a relay with
   // it, and a forced refresh starts with it.
   await runtime.resolveBackend()
+  await runtime.freshWsUrl()
   assert.deepEqual([...liveUpstreams], ['runtime-token'])
   const staleRefresh = runtime.refresh()
   const staleRejected = assert.rejects(staleRefresh, error => error instanceof EvaBrokerError && error.code === 'stale-auth')

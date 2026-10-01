@@ -34,6 +34,8 @@ const RUNTIME_ENROLLMENT_RETRY_DELAYS_MS = Object.freeze([2_000, 5_000, 10_000, 
 // one persistent, actionable state. Recovery is an operator action — Retry,
 // Switch support target, or a fresh sign-in — or a later successful
 // `runtime_launch`, all of which clear the latch.
+// Placeholder wsUrl for the managed descriptor: deliberately not ws://, so it can never be dialed.
+const MANAGED_WS_URL_MINT_PER_DIAL = 'eva-managed://relay-ticket-per-dial/api/ws'
 const MISSING_AGENT_BINDING_CODE = 'missing_hermes_agent_binding'
 const MISSING_AGENT_BINDING_MESSAGE =
   'No personal agent for this account — use Switch support target to open a customer agent.'
@@ -1775,7 +1777,6 @@ function createEvaManagedRuntime(options) {
       profile = supportProfileFor(runtime, requestedProfile)
       await options.waitForHermes(runtime.baseUrl, runtime.token)
     }
-    const profileBinder = supportProfileBinder(runtime)
     const connection = {
       authMode: 'token',
       // Keep the renderer's connection key opaque while delegated support is
@@ -1787,12 +1788,12 @@ function createEvaManagedRuntime(options) {
       mode: 'remote',
       source: 'electric-sheep',
       token: '',
-      wsUrl: await getWsRelay().mintTicket({
-        generation: runtimeSessionGeneration,
-        path: '/api/ws',
-        profile,
-        ...(profileBinder ? { profileBinder } : {})
-      })
+      // #410: relay tickets are single-use, and this descriptor is cached and
+      // handed to every concurrent dial. It never carries a ticket: each dial
+      // mints its own through freshWsUrl, and a failed mint fails that dial
+      // (connect() refuses a non-ws URL) instead of falling back to a shared
+      // ticket the relay answers with 401.
+      wsUrl: MANAGED_WS_URL_MINT_PER_DIAL
     }
     return profile ? { ...connection, profile } : connection
   }
