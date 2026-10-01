@@ -923,6 +923,53 @@ test('an upstream reset after the WebSocket handshake closes the relay without c
   assert.equal(result.socket.destroyed, true)
 })
 
+test('an upgraded pair logs one bounded close line with side, path, age and code', async t => {
+  let upstreamSocket = null
+  class HandshakingUpstream extends Duplex {
+    _read() {}
+
+    _write(_chunk, _encoding, callback) {
+      if (!this.answered) {
+        this.answered = true
+        this.push(
+          'HTTP/1.1 101 Switching Protocols\r\n' +
+            'Upgrade: websocket\r\n' +
+            'Connection: Upgrade\r\n' +
+            'Sec-WebSocket-Accept: test\r\n\r\n'
+        )
+      }
+      callback()
+    }
+  }
+
+  const events = []
+  let clock = 1_000
+  const relay = createEvaWsRelay({
+    connectUpstream: async () => {
+      upstreamSocket = new HandshakingUpstream()
+      return upstreamSocket
+    },
+    getUpstream: async () => ({ baseUrl: BASE_URL, token: 'secret-runtime-token' }),
+    now: () => clock,
+    onEvent: event => events.push(event)
+  })
+  t.after(async () => relay.close())
+
+  const result = await upgrade(await relay.mintTicket({ path: '/api/ws' }))
+  assert.match(result.response, /^HTTP\/1\.1 101/)
+  clock += 2_500
+  const reset = Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' })
+  upstreamSocket.destroy(reset)
+  await waitForClose(result.socket)
+  for (let i = 0; i < 100 && !events.some(event => event.startsWith('pair_closed')); i += 1) {
+    await new Promise(resolve => setTimeout(resolve, 5))
+  }
+
+  const closes = events.filter(event => event.startsWith('pair_closed'))
+  assert.deepEqual(closes, ['pair_closed side=upstream path=/api/ws ageMs=2500 code=ECONNRESET'])
+  assert.doesNotMatch(events.join(' '), /ticket|secret|127\.0\.0\.1/)
+})
+
 test('relay emits only coarse handshake events', async t => {
   const events = []
   const upstream = fakeUpstream(403)

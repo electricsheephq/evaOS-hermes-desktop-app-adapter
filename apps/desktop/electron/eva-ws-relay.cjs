@@ -944,14 +944,34 @@ function createEvaWsRelay(options) {
       // normal transport failures; leaving the upstream without an error
       // listener would turn one into an uncaught exception in Electron's main
       // process and terminate Eva.
-      const closeUpgradedPair = () => {
+      // One bounded line per upgraded pair: which side went first, the
+      // endpoint path (never its query), how long the pair lived, and a coarse
+      // code. No URL, ticket or token.
+      const pairOpenedAt = now()
+      let pairCloseLogged = false
+      const logPairClose = (side, code) => {
+        if (pairCloseLogged) return
+        pairCloseLogged = true
+        const ageMs = Math.max(0, now() - pairOpenedAt)
+        onEvent(`pair_closed side=${side} path=${grant.endpoint.pathname} ageMs=${ageMs} code=${code}`)
+      }
+      const closeCode = (hadError, error) =>
+        String(error?.code || error?.name || (hadError ? 'error' : 'clean')).replace(/[^A-Za-z0-9_.-]/g, '_').slice(0, 48)
+      const closeUpgradedPair = error => {
+        logPairClose('upstream', closeCode(true, error))
         onEvent('upstream_disconnected')
         safeDestroy(clientSocket)
         safeDestroy(upstreamSocket)
       }
       upstreamSocket.on('error', closeUpgradedPair)
-      upstreamSocket.once('close', () => safeDestroy(clientSocket))
-      clientSocket.once('close', () => safeDestroy(upstreamSocket))
+      upstreamSocket.once('close', hadError => {
+        logPairClose('upstream', closeCode(hadError))
+        safeDestroy(clientSocket)
+      })
+      clientSocket.once('close', hadError => {
+        logPairClose('client', closeCode(hadError))
+        safeDestroy(upstreamSocket)
+      })
 
       clientSocket.write(responseHead)
       if (responseTail.length) clientSocket.write(responseTail)
@@ -962,6 +982,7 @@ function createEvaWsRelay(options) {
           if (rejected) return
           rejected = true
           onEvent(event)
+          logPairClose('relay', 'policy')
           if (!clientSocket.destroyed) clientSocket.end(policyCloseFrame(reason))
           safeDestroy(upstreamSocket)
         }

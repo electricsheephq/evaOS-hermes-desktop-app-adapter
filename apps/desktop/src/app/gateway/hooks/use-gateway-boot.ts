@@ -671,6 +671,10 @@ export function useGatewayBoot({
           return
         }
 
+        // Persisted (renderer-log prefix): the renderer side of a relay pair_closed line.
+        console.info(
+          `[gateway-liveness] force-close reason=${decision.reason} failures=${livenessProbeFailures} working=${$workingSessionIds.get().length}`
+        )
         livenessProbeFailures = 0
         gateway.close()
       }
