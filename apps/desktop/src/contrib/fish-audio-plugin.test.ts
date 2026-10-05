@@ -39,4 +39,35 @@ describe('bundled Fish Audio plugin', () => {
     answer({ ok: true, key: true, version: '1.0.1' })
     await vi.waitFor(() => expect(fromFish(SIDEBAR_NAV_AREA)).toHaveLength(1))
   })
+
+  it('hides its sidebar row at once on an agent switch, until the new agent answers', async () => {
+    const session = await import('@/store/session')
+
+    let answer: (value: unknown) => void = () => {}
+    let first = true
+    rest.mockImplementation((_id: string, path: string) => {
+      if (path !== '/available') {
+        return Promise.resolve({ ok: false })
+      }
+
+      if (first) {
+        first = false
+
+        return Promise.resolve({ ok: true, key: true, version: '1.0.2' })
+      }
+
+      return new Promise(resolve => (answer = resolve))
+    })
+    discoverBundledPlugins()
+    await setPluginEnabled('fish-audio', true)
+    await vi.waitFor(() => expect(fromFish(SIDEBAR_NAV_AREA)).toHaveLength(1))
+
+    // An agent without the gateway half must not inherit the previous agent's Voices row.
+    session.setConnection({ connectionId: 'agent-b', mode: 'remote' } as never)
+    expect(fromFish(SIDEBAR_NAV_AREA)).toHaveLength(0)
+
+    answer({ ok: true, key: true, version: '1.0.2' })
+    await vi.waitFor(() => expect(fromFish(SIDEBAR_NAV_AREA)).toHaveLength(1))
+    session.setConnection(null)
+  })
 })

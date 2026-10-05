@@ -11,8 +11,9 @@ running the plugin's gateway half get the **Voices** page:
 ## Availability
 
 The plugin is on by default, but it shows nothing until the selected agent's gateway answers
-`/api/plugins/fish-audio/available`. Agents without the gateway plugin get no sidebar row, chip or palette entries. It
-re-probes when the agent changes and every 60 s. The Voices route itself is always registered, so a restored
+`/api/plugins/fish-audio/available`. Agents without the gateway plugin get no sidebar row, chip or palette entries. When
+the agent changes, the previous agent's entries go away at once and return only if the new agent answers; it also
+re-probes every 60 s. The Voices route itself is always registered, so a restored
 `/fish-audio` tab never falls through to the session route.
 
 On evaOS, the gateway half is the managed `fish-audio` plugin that PCS installs alongside the `evaos-fishaudio` voice
@@ -24,9 +25,9 @@ provider (PCS 0.1.166). **Use** writes the voice to the profile layer, where the
 
 | | |
 |---|---|
-| Release | v1.0.1 (`c87455dd4fb2a476a3b8963b3b67e2fe78a4867d`) |
+| Release | v1.0.2 (`0a35f94497277d4ec51ecd39ee3dae18ac41480b`) |
 | File | `desktop/plugin.js` |
-| sha256 | `93d6af97ffd2f1d98045f48bf955a66760ac65aa6cf3f04667331c334f563e2f` |
+| sha256 | `e2d172ae248a677f4aba7b8af9aad31463689f0325a72adf193eb96ff7f3f347` |
 | License | Apache-2.0 (`LICENSE`) |
 
 It imports only `@hermes/plugin-sdk`, `react` and `react/jsx-runtime`. Every SDK name it imports is exported by this
