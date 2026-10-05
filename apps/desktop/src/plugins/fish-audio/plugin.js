@@ -63,6 +63,12 @@ function rememberPreview(key, value) {
 import { atom as atom2, host } from "@hermes/plugin-sdk";
 var $available = atom2(null);
 var $account = atom2(null);
+var $availableError = atom2(null);
+var agentEpoch = 0;
+var currentAgentEpoch = () => agentEpoch;
+var endAgentOperations = () => {
+  agentEpoch++;
+};
 var $tab = atom2("library");
 var ApiError = class extends Error {
   constructor(kind, message) {
@@ -111,6 +117,7 @@ var agentKey = (pin) => `${pin.connectionId ?? "local"}::${pin.profile}`;
 
 // src/desktop/page.tsx
 import {
+  atom as atom3,
   Badge,
   Button as Button3,
   Codicon as Codicon3,
@@ -120,6 +127,7 @@ import {
   DialogHeader,
   DialogTitle,
   EmptyState,
+  ErrorState as ErrorState2,
   host as host3,
   Input as Input2,
   SearchField,
@@ -162,6 +170,7 @@ var S = {
   getKey: "Get an API key",
   openPlugins: "Open Plugins",
   checkAgain: "Check again",
+  unreachable: (profile) => `Couldn't reach Fish Audio on ${agentName(profile)}`,
   // Library
   search: "Search voices",
   language: "Language",
@@ -291,10 +300,12 @@ var AgentChanged = class extends Error {
 var readChunk = async (slice) => bytesToBase64(new Uint8Array(await slice.arrayBuffer()));
 async function cloneVoice(files, meta, pin, deps, onProgress) {
   const read = deps.readChunk ?? readChunk;
+  const epoch2 = deps.epoch?.();
+  const still = () => samePin(deps.current(), pin) && deps.epoch?.() === epoch2;
   const send = (path, body, timeoutMs) => {
-    if (!samePin(deps.current(), pin)) throw new AgentChanged();
+    if (!still()) throw new AgentChanged();
     return deps.rest(path, { method: "POST", body, timeoutMs }).then((res) => {
-      if (!samePin(deps.current(), pin)) throw new AgentChanged();
+      if (!still()) throw new AgentChanged();
       if (res && res.ok === false) throw new ApiError(res.kind ?? "error", res.message ?? "Something went wrong");
       return res;
     });
@@ -311,7 +322,7 @@ async function cloneVoice(files, meta, pin, deps, onProgress) {
       for (let offset = 0; offset < file.size; offset += start.chunk_bytes) {
         const data = await read(file.slice(offset, offset + start.chunk_bytes));
         await send("/clone/chunk", { upload_id: start.upload_id, offset, data }, 12e4);
-        if (!samePin(deps.current(), pin)) throw new AgentChanged();
+        if (!still()) throw new AgentChanged();
         sent += Math.min(start.chunk_bytes, file.size - offset);
         onProgress?.(index + 1, sent, total);
       }
@@ -324,7 +335,7 @@ async function cloneVoice(files, meta, pin, deps, onProgress) {
     );
     return done.voice;
   } catch (error) {
-    if (!finishing && samePin(deps.current(), pin)) {
+    if (!finishing && still()) {
       for (const item of uploaded) {
         void deps.rest("/clone/abort", { method: "POST", body: { upload_id: item.upload_id } }).catch(() => void 0);
       }
@@ -371,7 +382,7 @@ function CloneCard({ pin }) {
         files,
         { consent, description: description.trim(), title: title.trim() },
         pin,
-        { current: currentPin, rest: (path, opts) => pluginCtx().rest(path, opts) },
+        { current: currentPin, epoch: currentAgentEpoch, rest: (path, opts) => pluginCtx().rest(path, opts) },
         (n, sent, total) => setStatus(S.uploading(n, files.length, Math.round(sent / Math.max(1, total) * 100)))
       );
       if (!samePin(currentPin(), pin)) return;
@@ -562,6 +573,7 @@ function readFor(pin, path) {
 var renews = (plan) => plan.cancel_at_period_end === false && ["active", "trialing"].includes(plan.subscription_status ?? "");
 function VoicesPage() {
   const available = useValue2($available);
+  const availableError = useValue2($availableError);
   const profile = useValue2(host3.state.profile);
   const connectionId = useValue2(host3.state.connectionId);
   const pin = { connectionId, profile };
@@ -569,7 +581,7 @@ function VoicesPage() {
     return /* @__PURE__ */ jsx3(Frame, { profile, children: /* @__PURE__ */ jsx3("p", { style: { ...muted, fontSize: 13, lineHeight: 1.5, maxWidth: 560, padding: pad }, children: S.notSetUp(profile) }) });
   }
   if (available === null) {
-    return /* @__PURE__ */ jsx3(Frame, { profile, children: /* @__PURE__ */ jsx3(Rows, {}) });
+    return /* @__PURE__ */ jsx3(Frame, { profile, children: availableError ? /* @__PURE__ */ jsx3("div", { style: { padding: pad }, children: /* @__PURE__ */ jsx3(ErrorState2, { description: errorText(availableError), title: S.unreachable(profile), children: /* @__PURE__ */ jsx3(Button3, { onClick: () => void refreshAvailability(), size: "xs", variant: "secondary", children: S.checkAgain }) }) }) : /* @__PURE__ */ jsx3(Rows, {}) });
   }
   if (!available.key) {
     return /* @__PURE__ */ jsx3(Frame, { profile, children: /* @__PURE__ */ jsx3(Onboarding, { profile }) });
@@ -631,13 +643,25 @@ function useDebounced(value, ms) {
   }, [value, ms]);
   return settled;
 }
+var favouritesKey = (pin) => `favourites:${agentKey(pin)}`;
+var $favouritesRevision = atom3(0);
+function writeFavourites(pin, list) {
+  pluginCtx().storage.set(favouritesKey(pin), list);
+  $favouritesRevision.set($favouritesRevision.get() + 1);
+}
+function forgetFavourite(pin, id) {
+  const list = pluginCtx().storage.get(favouritesKey(pin), []);
+  if (list.some((f) => f.id === id)) writeFavourites(pin, list.filter((f) => f.id !== id));
+}
 function useFavourites(pin) {
-  const storageKey = `favourites:${agentKey(pin)}`;
-  const [list, setList] = useState2(() => pluginCtx().storage.get(storageKey, []));
+  useValue2($favouritesRevision);
+  const list = pluginCtx().storage.get(favouritesKey(pin), []);
   const toggle = (voice) => {
-    const next = list.some((f) => f.id === voice.id) ? list.filter((f) => f.id !== voice.id) : [...list, { author: voice.author, id: voice.id, languages: voice.languages, title: voice.title }];
-    pluginCtx().storage.set(storageKey, next);
-    setList(next);
+    const current = pluginCtx().storage.get(favouritesKey(pin), []);
+    writeFavourites(
+      pin,
+      current.some((f) => f.id === voice.id) ? current.filter((f) => f.id !== voice.id) : [...current, { author: voice.author, id: voice.id, languages: voice.languages, title: voice.title }]
+    );
   };
   return { has: (id) => list.some((f) => f.id === id), list, toggle };
 }
@@ -695,6 +719,7 @@ function Pager({ page, more, setPage }) {
   ] });
 }
 var inFlightPreviews = /* @__PURE__ */ new Set();
+var $usePending = atom3({});
 async function previewVoice(pin, voiceId) {
   if (!samePin(currentPin(), pin)) return host3.notify({ kind: "error", message: S.agentChangedNothingSent });
   const key = `preview:${agentKey(pin)}:${voiceId}`;
@@ -718,6 +743,7 @@ function VoiceList({ voices, pin, favourites, onDelete }) {
   const playing = useValue2($playing);
   const [busy, setBusy] = useState2(null);
   const [used, setUsed] = useState2(null);
+  const pendingUse = useValue2($usePending)[agentKey(pin)];
   const run = async (id, action) => {
     if (!samePin(currentPin(), pin)) return host3.notify({ kind: "error", message: S.agentChangedNothingSent });
     setBusy(id);
@@ -729,13 +755,23 @@ function VoiceList({ voices, pin, favourites, onDelete }) {
       if (samePin(currentPin(), pin)) setBusy(null);
     }
   };
-  const use = (voice) => run(`use:${voice.id}`, async () => {
-    const res = await post("/use", { voice: voice.id });
-    if (!samePin(currentPin(), pin)) return;
-    setUsed(voice.id);
-    const note = res.message && res.message !== "Saved." ? ` ${res.message.replace(/^Saved\.\s*/, "")}` : "";
-    host3.notify({ kind: "success", message: S.usedVoice(voice.title, pin.profile) + note });
-  });
+  const use = async (voice) => {
+    const agent = agentKey(pin);
+    if ($usePending.get()[agent]) return;
+    $usePending.set({ ...$usePending.get(), [agent]: voice.id });
+    try {
+      await run(`use:${voice.id}`, async () => {
+        const res = await post("/use", { voice: voice.id });
+        if (!samePin(currentPin(), pin)) return;
+        setUsed(voice.id);
+        const note = res.message && res.message !== "Saved." ? ` ${res.message.replace(/^Saved\.\s*/, "")}` : "";
+        host3.notify({ kind: "success", message: S.usedVoice(voice.title, pin.profile) + note });
+      });
+    } finally {
+      const { [agent]: mine, ...rest } = $usePending.get();
+      if (mine === voice.id) $usePending.set(rest);
+    }
+  };
   return /* @__PURE__ */ jsx3("div", { style: { border: "1px solid var(--ui-stroke-tertiary)", borderRadius: 6 }, children: voices.map((voice, i) => {
     const key = `preview:${agentKey(pin)}:${voice.id}`;
     const meta = [voice.author, (voice.languages ?? []).join(", "), voice.task_count ? S.uses(voice.task_count) : ""].filter(Boolean).join(" \xB7 ");
@@ -775,8 +811,8 @@ function VoiceList({ voices, pin, favourites, onDelete }) {
             /* @__PURE__ */ jsx3(
               Button3,
               {
-                disabled: used === voice.id,
-                loading: busy === `use:${voice.id}`,
+                disabled: used === voice.id || pendingUse !== void 0 && pendingUse !== voice.id,
+                loading: pendingUse === voice.id,
                 onClick: () => void use(voice),
                 size: "xs",
                 variant: used === voice.id ? "ghost" : "default",
@@ -852,6 +888,7 @@ function DeleteDialog({ pin, voice, onClose, onDeleted }) {
     setBusy(true);
     try {
       await call(`/voices/${encodeURIComponent(voice.id)}`, { method: "DELETE", timeoutMs: 6e4 });
+      forgetFavourite(pin, voice.id);
       if (!samePin(currentPin(), pin)) return;
       host3.notify({ kind: "success", message: S.deleted(voice.title) });
       onDeleted();
@@ -966,6 +1003,7 @@ function registerAvailabilityGate(ctx) {
   let forcePending = false;
   $available.set(null);
   $account.set(null);
+  $availableError.set(null);
   const show = (available) => {
     if (disposed) return;
     if (available && !removers) {
@@ -994,11 +1032,15 @@ function registerAvailabilityGate(ctx) {
     }
   };
   const probe = (force = false) => {
-    if (force) forcePending = true;
+    if (force) {
+      forcePending = true;
+      $availableError.set(null);
+    }
     const mine = ++generation;
     return ctx.rest("/available").then(
       (res) => {
         if (mine !== generation || disposed) return;
+        $availableError.set(null);
         $available.set({ key: res?.key === true, version: String(res?.version ?? "") });
         show(true);
         if (res?.key !== true) {
@@ -1018,7 +1060,12 @@ function registerAvailabilityGate(ctx) {
         );
       },
       (error) => {
-        if (mine !== generation || disposed || !isNotFoundError(error)) return;
+        if (mine !== generation || disposed) return;
+        if (!isNotFoundError(error)) {
+          if ($available.get() === null) $availableError.set(error);
+          return;
+        }
+        $availableError.set(null);
         $available.set(false);
         $account.set(null);
         show(false);
@@ -1029,6 +1076,7 @@ function registerAvailabilityGate(ctx) {
   ctx.setInterval(() => void probe(), PROBE_INTERVAL_MS);
   const onAgentChange = () => {
     if (disposed) return;
+    endAgentOperations();
     $account.set(null);
     $available.set(null);
     show(false);
@@ -1055,6 +1103,7 @@ var plugin = {
     });
     setRefresher(registerAvailabilityGate(ctx).probe);
     ctx.onDispose(releasePlayback);
+    ctx.onDispose(endAgentOperations);
   }
 };
 var plugin_default = plugin;
