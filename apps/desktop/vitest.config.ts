@@ -31,7 +31,12 @@ const electronNative: TestProjectConfiguration = {
     include: ['electron/**/*.test.ts', 'scripts/**.test.{ts,mjs}', 'e2e/**/*.unit.test.ts'],
     // These are node:test suites retained by the explicit Node runner in
     // test:managed, not Vitest suites.
-    exclude: ['scripts/notarize.test.mjs', 'scripts/sign-mac.test.mjs', 'scripts/verify-managed-update-release.test.mjs']
+    exclude: [
+      'scripts/notarize.test.mjs',
+      'scripts/select-desktop-latest-release.test.mjs',
+      'scripts/sign-mac.test.mjs',
+      'scripts/verify-managed-update-release.test.mjs'
+    ]
   }
 }
 
