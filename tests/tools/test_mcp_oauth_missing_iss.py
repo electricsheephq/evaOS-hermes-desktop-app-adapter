@@ -60,6 +60,9 @@ def _redirect_passes_sdk_check(provider: _Provider) -> bool:
 @pytest.mark.parametrize("issuer, iss, expected", [
     ("https://api.figma.com", None, True),        # the advertised-but-omitted case Figma ships
     ("https://api.figma.com", "https://evil.example", False),  # a wrong iss is still rejected
+    ("https://mcp.cloudflare.com", None, True),  # the advertised-but-omitted case Cloudflare ships
+    ("https://mcp.cloudflare.com", "https://mcp.cloudflare.com", True),  # a matching iss passes
+    ("https://mcp.cloudflare.com", "https://evil.example", False),  # a wrong iss is still rejected
     ("https://auth.example.com", None, False),   # every other server keeps the strict RFC 9207 rule
 ])
 def test_missing_iss_is_tolerated_for_figma_only(issuer, iss, expected):
