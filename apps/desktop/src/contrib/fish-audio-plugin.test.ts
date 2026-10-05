@@ -1,6 +1,8 @@
 import { ROUTES_AREA, SIDEBAR_NAV_AREA } from '@hermes/plugin-sdk'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+import type * as Hermes from '@/hermes'
+
 import { discoverBundledPlugins } from './plugins'
 import { $pluginDecisions, $pluginRecords, setPluginEnabled } from './plugins-store'
 import { registry } from './registry'
@@ -8,7 +10,7 @@ import { registry } from './registry'
 const rest = vi.hoisted(() => vi.fn())
 
 vi.mock('./runtime-loader', () => ({ watchRuntimePlugins: vi.fn() }))
-vi.mock('@/hermes', async importOriginal => ({ ...(await importOriginal<typeof import('@/hermes')>()), pluginRest: rest }))
+vi.mock('@/hermes', async importOriginal => ({ ...(await importOriginal<typeof Hermes>()), pluginRest: rest }))
 
 const fromFish = (area: string) => registry.getArea(area).filter(item => item.source === 'plugin:fish-audio')
 
