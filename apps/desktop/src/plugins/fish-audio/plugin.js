@@ -10,11 +10,60 @@ import {
   useValue as useValue3
 } from "@hermes/plugin-sdk";
 
+// src/desktop/audio.ts
+import { atom } from "@hermes/plugin-sdk";
+var $playing = atom(null);
+var element = null;
+var objectUrl = null;
+function base64ToBlob(data, mime) {
+  const binary = atob(data);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return new Blob([bytes], { type: mime });
+}
+function bytesToBase64(bytes) {
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += 32768) binary += String.fromCharCode(...bytes.subarray(i, i + 32768));
+  return btoa(binary);
+}
+function play(key, data, mime) {
+  stop();
+  objectUrl = URL.createObjectURL(base64ToBlob(data, mime));
+  const audio = new Audio(objectUrl);
+  element = audio;
+  audio.onended = () => stop(key);
+  $playing.set(key);
+  void audio.play().catch(() => stop(key));
+}
+var epoch = 0;
+var playbackEpoch = () => epoch;
+function releasePlayback() {
+  epoch++;
+  stop();
+}
+function stop(key) {
+  if (key !== void 0 && $playing.get() !== key) return;
+  element?.pause();
+  element = null;
+  if (objectUrl) URL.revokeObjectURL(objectUrl);
+  objectUrl = null;
+  if ($playing.get() !== null) $playing.set(null);
+}
+var previews = /* @__PURE__ */ new Map();
+function cachedPreview(key) {
+  return previews.get(key);
+}
+function rememberPreview(key, value) {
+  previews.delete(key);
+  previews.set(key, value);
+  while (previews.size > 24) previews.delete(previews.keys().next().value);
+}
+
 // src/desktop/api.ts
-import { atom, host } from "@hermes/plugin-sdk";
-var $available = atom(null);
-var $account = atom(null);
-var $tab = atom("library");
+import { atom as atom2, host } from "@hermes/plugin-sdk";
+var $available = atom2(null);
+var $account = atom2(null);
+var $tab = atom2("library");
 var ApiError = class extends Error {
   constructor(kind, message) {
     super(message);
@@ -85,49 +134,6 @@ import {
   useValue as useValue2
 } from "@hermes/plugin-sdk";
 import { useEffect, useState as useState2 } from "react";
-
-// src/desktop/audio.ts
-import { atom as atom2 } from "@hermes/plugin-sdk";
-var $playing = atom2(null);
-var element = null;
-var objectUrl = null;
-function base64ToBlob(data, mime) {
-  const binary = atob(data);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  return new Blob([bytes], { type: mime });
-}
-function bytesToBase64(bytes) {
-  let binary = "";
-  for (let i = 0; i < bytes.length; i += 32768) binary += String.fromCharCode(...bytes.subarray(i, i + 32768));
-  return btoa(binary);
-}
-function play(key, data, mime) {
-  stop();
-  objectUrl = URL.createObjectURL(base64ToBlob(data, mime));
-  const audio = new Audio(objectUrl);
-  element = audio;
-  audio.onended = () => stop(key);
-  $playing.set(key);
-  void audio.play().catch(() => stop(key));
-}
-function stop(key) {
-  if (key !== void 0 && $playing.get() !== key) return;
-  element?.pause();
-  element = null;
-  if (objectUrl) URL.revokeObjectURL(objectUrl);
-  objectUrl = null;
-  if ($playing.get() !== null) $playing.set(null);
-}
-var previews = /* @__PURE__ */ new Map();
-function cachedPreview(key) {
-  return previews.get(key);
-}
-function rememberPreview(key, value) {
-  previews.delete(key);
-  previews.set(key, value);
-  while (previews.size > 24) previews.delete(previews.keys().next().value);
-}
 
 // src/desktop/create.tsx
 import { Button as Button2, Checkbox, Codicon as Codicon2, host as host2, Input, Textarea, useQueryClient, useValue } from "@hermes/plugin-sdk";
@@ -609,7 +615,7 @@ function Body({ pin }) {
       value: tab
     }
   );
-  useEffect(() => () => stop(), []);
+  useEffect(() => () => releasePlayback(), []);
   return /* @__PURE__ */ jsxs3(Frame, { profile: pin.profile, tabs, children: [
     tab === "library" && /* @__PURE__ */ jsx3(Library, { pin }),
     tab === "mine" && /* @__PURE__ */ jsx3(MyVoices, { pin }),
@@ -697,11 +703,12 @@ async function previewVoice(pin, voiceId) {
   if (cached) return play(key, cached.audio, cached.mime);
   if (inFlightPreviews.has(key)) return;
   inFlightPreviews.add(key);
+  const epoch2 = playbackEpoch();
   try {
     const res = await post("/preview", { voice: voiceId });
     if (!samePin(currentPin(), pin)) return;
     rememberPreview(key, res);
-    play(key, res.audio, res.mime);
+    if (playbackEpoch() === epoch2) play(key, res.audio, res.mime);
     void refreshAvailability();
   } finally {
     inFlightPreviews.delete(key);
@@ -1047,6 +1054,7 @@ var plugin = {
       render: () => /* @__PURE__ */ jsx4(VoicesPage, {})
     });
     setRefresher(registerAvailabilityGate(ctx).probe);
+    ctx.onDispose(releasePlayback);
   }
 };
 var plugin_default = plugin;
