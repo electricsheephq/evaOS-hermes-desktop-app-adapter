@@ -19,6 +19,11 @@ jobs:
       startsWith(github.event.release.tag_name, 'evaos-runtime-')
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 26
+
       - name: Keep runtime releases prerelease and Desktop updater latest
         env:
           GH_TOKEN: ${{ github.token }}
@@ -37,24 +42,9 @@ jobs:
           fi
 
           desktop_release="$(
-            gh api "repos/${REPOSITORY}/releases?per_page=100" --jq '
-              map(
-                select(
-                  .draft == false and
-                  .prerelease == false and
-                  (.tag_name | test("^v[0-9].*-es\\.[0-9]+$")) and
-                  any(.assets[]; .name == "latest-mac.yml") and
-                  any(.assets[]; .name | endswith(".dmg")) and
-                  any(.assets[]; .name | endswith(".zip")) and
-                  ([.assets[].name | select(endswith(".blockmap"))] | length) >= 2
-                )
-              )
-              | sort_by(.published_at)
-              | last
-              | [.id, .tag_name]
-              | @tsv
-            '
-          )"
+            gh api "repos/${REPOSITORY}/releases?per_page=100" |
+              node apps/desktop/scripts/select-desktop-latest-release.mjs
+          )" || desktop_release=""
 
           if [[ -z "${desktop_release}" || "${desktop_release}" == $'\t' ]]; then
             echo "::error::No complete stable Desktop updater release is available."
