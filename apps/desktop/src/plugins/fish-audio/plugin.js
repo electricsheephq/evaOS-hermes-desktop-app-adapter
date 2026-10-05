@@ -7,7 +7,7 @@ import {
   ROUTES_AREA,
   SIDEBAR_NAV_AREA,
   STATUSBAR_AREAS,
-  useValue as useValue3
+  useValue as useValue4
 } from "@hermes/plugin-sdk";
 
 // src/desktop/audio.ts
@@ -117,7 +117,7 @@ var agentKey = (pin) => `${pin.connectionId ?? "local"}::${pin.profile}`;
 
 // src/desktop/page.tsx
 import {
-  atom as atom3,
+  atom as atom4,
   Badge,
   Button as Button3,
   Codicon as Codicon3,
@@ -139,15 +139,43 @@ import {
   SegmentedControl,
   useQuery,
   useQueryClient as useQueryClient2,
-  useValue as useValue2
+  useValue as useValue3
 } from "@hermes/plugin-sdk";
 import { useEffect, useState as useState2 } from "react";
 
 // src/desktop/create.tsx
-import { Button as Button2, Checkbox, Codicon as Codicon2, host as host2, Input, Textarea, useQueryClient, useValue } from "@hermes/plugin-sdk";
+import { Button as Button2, Checkbox, Codicon as Codicon2, host as host2, Input, Textarea, useQueryClient, useValue as useValue2 } from "@hermes/plugin-sdk";
 import { useRef, useState } from "react";
 
+// src/desktop/favourites.ts
+import { atom as atom3 } from "@hermes/plugin-sdk";
+var favouritesKey = (pin) => `favourites:${agentKey(pin)}`;
+var $favouritesRevision = atom3(0);
+function readFavourites(pin) {
+  return pluginCtx().storage.get(favouritesKey(pin), []);
+}
+function writeFavourites(pin, list) {
+  pluginCtx().storage.set(favouritesKey(pin), list);
+  $favouritesRevision.set($favouritesRevision.get() + 1);
+}
+function forgetFavourite(pin, id) {
+  const list = readFavourites(pin);
+  if (list.some((f) => f.id === id)) writeFavourites(pin, list.filter((f) => f.id !== id));
+}
+function keepCreated(pin, voice) {
+  const available = $available.get();
+  if (!available || available.account !== false) return false;
+  const list = readFavourites(pin);
+  if (!list.some((f) => f.id === voice.id)) writeFavourites(pin, [...list, { id: voice.id, title: voice.title }]);
+  return true;
+}
+
 // src/desktop/strings.ts
+import { useValue } from "@hermes/plugin-sdk";
+function useAccountText(normal, operator) {
+  const available = useValue($available);
+  return available && available.account === false ? operator : normal;
+}
 var agentName = (profile) => profile && profile !== "default" ? profile : "this agent";
 var LINKS = {
   keys: "https://fish.audio/app/api-keys",
@@ -163,6 +191,11 @@ var S = {
   notSetUp: (profile) => `Fish Audio isn't set up on ${agentName(profile)}'s machine yet. Install the plugin there, enable it, and restart the gateway.`,
   tabs: { library: "Library", mine: "My voices", create: "Create", account: "Account" },
   // Onboarding (no key)
+  operatorOnboardTitle: "Voice isn't set up for this agent yet",
+  operatorOnboardBody: "Ask the operator of this agent to finish the Fish Audio setup.",
+  operatorBilledNote: "Preview plays a short sample.",
+  operatorCloneBilled: "Cloning creates a new voice for this agent.",
+  operatorDesignBilled: "Each design creates new candidate voices.",
   onboardTitle: "Connect your Fish Audio account",
   onboardBody: (profile) => `Voices need a Fish Audio API key on ${agentName(profile)}. New accounts can start on the free s2.1-pro-free model.`,
   onboardStep1: "Create a free API key on fish.audio",
@@ -214,6 +247,7 @@ var S = {
   uploading: (n, total, percent) => `Uploading ${n} of ${total} \xB7 ${percent}%`,
   cloning: "Creating the voice\u2026",
   cloned: (title) => `Created ${title}. Find it in My voices.`,
+  operatorCloned: (title) => `Created ${title}. Find it in the Library under Favourites.`,
   tooMany: "Choose up to 3 files.",
   tooLarge: (name) => `${name} is larger than 10 MB.`,
   agentChangedNothingSent: "The selected agent changed, so nothing was sent.",
@@ -228,6 +262,7 @@ var S = {
   saveAs: "Name",
   save: "Save voice",
   saved: (title) => `Saved ${title}. Find it in My voices.`,
+  operatorSaved: (title) => `Saved ${title}. Find it in the Library under Favourites.`,
   // Account
   apiCredit: "API credit",
   lowCredit: "Low balance \u2014 top up to keep voice replies working.",
@@ -354,6 +389,7 @@ function CreateTab({ pin }) {
   ] });
 }
 function CloneCard({ pin }) {
+  const billedNote = useAccountText(S.cloneBilled, S.operatorCloneBilled);
   const client = useQueryClient();
   const input = useRef(null);
   const [files, setFiles] = useState([]);
@@ -386,7 +422,7 @@ function CloneCard({ pin }) {
         (n, sent, total) => setStatus(S.uploading(n, files.length, Math.round(sent / Math.max(1, total) * 100)))
       );
       if (!samePin(currentPin(), pin)) return;
-      setStatus(S.cloned(voice.title));
+      setStatus(keepCreated(pin, voice) ? S.operatorCloned(voice.title) : S.cloned(voice.title));
       setFiles([]);
       setTitle("");
       setDescription("");
@@ -435,7 +471,7 @@ function CloneCard({ pin }) {
         ),
         /* @__PURE__ */ jsx2("span", { children: S.consent })
       ] }),
-      /* @__PURE__ */ jsx2(BilledNote, { text: S.cloneBilled }),
+      /* @__PURE__ */ jsx2(BilledNote, { text: billedNote }),
       /* @__PURE__ */ jsxs2("div", { style: { alignItems: "center", display: "flex", gap: 10 }, children: [
         /* @__PURE__ */ jsx2(Button2, { disabled: !ready, loading: busy, onClick: () => void submit(), children: S.clone }),
         status && /* @__PURE__ */ jsx2("span", { role: "status", style: { ...muted, fontSize: 12 }, children: status })
@@ -444,8 +480,11 @@ function CloneCard({ pin }) {
   ] });
 }
 function DesignCard({ pin }) {
+  const billedNote = useAccountText(S.designBilled, S.operatorDesignBilled);
+  const available = useValue2($available);
+  const savedText = available && available.account === false ? S.operatorSaved : S.saved;
   const client = useQueryClient();
-  const playing = useValue($playing);
+  const playing = useValue2($playing);
   const [instruction, setInstruction] = useState("");
   const [candidates, setCandidates] = useState([]);
   const [names, setNames] = useState({});
@@ -482,7 +521,7 @@ function DesignCard({ pin }) {
       const res = await post("/design/save", { design_token: candidate.design_token, title }, 12e4);
       if (!samePin(currentPin(), pin)) return;
       setSaved({ ...saved, [candidate.design_token]: res.voice.title });
-      host2.notify({ kind: "success", message: S.saved(res.voice.title) });
+      host2.notify({ kind: "success", message: keepCreated(pin, res.voice) ? S.operatorSaved(res.voice.title) : S.saved(res.voice.title) });
       void client.invalidateQueries({ queryKey: ["fish-audio", agentKey(pin), "mine"] });
     } catch (error) {
       if (samePin(currentPin(), pin)) host2.notify({ kind: "error", message: errorText(error) });
@@ -507,7 +546,7 @@ function DesignCard({ pin }) {
           value: instruction
         }
       ),
-      /* @__PURE__ */ jsx2(BilledNote, { text: S.designBilled }),
+      /* @__PURE__ */ jsx2(BilledNote, { text: billedNote }),
       /* @__PURE__ */ jsx2("div", { children: /* @__PURE__ */ jsx2(Button2, { disabled: !instruction.trim() || busy !== null, loading: busy === "design", onClick: () => void design(), children: busy === "design" ? S.designing : S.design }) }),
       candidates.map((candidate, i) => {
         const key = `design:${candidate.design_token}`;
@@ -529,7 +568,7 @@ function DesignCard({ pin }) {
                   ]
                 }
               ),
-              saved[candidate.design_token] ? /* @__PURE__ */ jsx2("span", { style: { ...muted, fontSize: 12 }, children: S.saved(saved[candidate.design_token]) }) : /* @__PURE__ */ jsxs2(Fragment, { children: [
+              saved[candidate.design_token] ? /* @__PURE__ */ jsx2("span", { style: { ...muted, fontSize: 12 }, children: savedText(saved[candidate.design_token]) }) : /* @__PURE__ */ jsxs2(Fragment, { children: [
                 /* @__PURE__ */ jsx2("div", { style: { flex: 1, minWidth: 140 }, children: /* @__PURE__ */ jsx2(
                   Input,
                   {
@@ -560,7 +599,7 @@ function DesignCard({ pin }) {
 }
 
 // src/desktop/page.tsx
-import { jsx as jsx3, jsxs as jsxs3 } from "react/jsx-runtime";
+import { Fragment as Fragment2, jsx as jsx3, jsxs as jsxs3 } from "react/jsx-runtime";
 var pad = "0 24px";
 function readFor(pin, path) {
   const changed = () => new ApiError("agent_changed", S.agentChangedNothingSent);
@@ -572,10 +611,10 @@ function readFor(pin, path) {
 }
 var renews = (plan) => plan.cancel_at_period_end === false && ["active", "trialing"].includes(plan.subscription_status ?? "");
 function VoicesPage() {
-  const available = useValue2($available);
-  const availableError = useValue2($availableError);
-  const profile = useValue2(host3.state.profile);
-  const connectionId = useValue2(host3.state.connectionId);
+  const available = useValue3($available);
+  const availableError = useValue3($availableError);
+  const profile = useValue3(host3.state.profile);
+  const connectionId = useValue3(host3.state.connectionId);
   const pin = { connectionId, profile };
   if (available === false) {
     return /* @__PURE__ */ jsx3(Frame, { profile, children: /* @__PURE__ */ jsx3("p", { style: { ...muted, fontSize: 13, lineHeight: 1.5, maxWidth: 560, padding: pad }, children: S.notSetUp(profile) }) });
@@ -584,7 +623,7 @@ function VoicesPage() {
     return /* @__PURE__ */ jsx3(Frame, { profile, children: availableError ? /* @__PURE__ */ jsx3("div", { style: { padding: pad }, children: /* @__PURE__ */ jsx3(ErrorState2, { description: errorText(availableError), title: S.unreachable(profile), children: /* @__PURE__ */ jsx3(Button3, { onClick: () => void refreshAvailability(), size: "xs", variant: "secondary", children: S.checkAgain }) }) }) : /* @__PURE__ */ jsx3(Rows, {}) });
   }
   if (!available.key) {
-    return /* @__PURE__ */ jsx3(Frame, { profile, children: /* @__PURE__ */ jsx3(Onboarding, { profile }) });
+    return /* @__PURE__ */ jsx3(Frame, { profile, children: /* @__PURE__ */ jsx3(Onboarding, { profile, operator: available.account === false }) });
   }
   return /* @__PURE__ */ jsx3(Body, { pin }, agentKey(pin));
 }
@@ -601,29 +640,38 @@ function Frame({ children, profile, tabs }) {
     /* @__PURE__ */ jsx3("div", { style: { flex: 1, minHeight: 0, overflowY: "auto", paddingBottom: 24 }, children })
   ] });
 }
-function Onboarding({ profile }) {
+function Onboarding({ profile, operator }) {
   const open = (url) => void pluginCtx().os.openExternal(url);
   return /* @__PURE__ */ jsx3("div", { style: { padding: pad }, children: /* @__PURE__ */ jsxs3("div", { style: { ...card, maxWidth: 560 }, children: [
-    /* @__PURE__ */ jsx3("h2", { style: { fontSize: 15, fontWeight: 600, margin: "0 0 6px" }, children: S.onboardTitle }),
-    /* @__PURE__ */ jsx3("p", { style: { ...muted, fontSize: 13, lineHeight: 1.5, margin: "0 0 12px" }, children: S.onboardBody(profile) }),
-    /* @__PURE__ */ jsxs3("ol", { style: { fontSize: 13, lineHeight: 1.8, listStyle: "decimal", margin: "0 0 14px", paddingLeft: 20 }, children: [
+    /* @__PURE__ */ jsx3("h2", { style: { fontSize: 15, fontWeight: 600, margin: "0 0 6px" }, children: operator ? S.operatorOnboardTitle : S.onboardTitle }),
+    /* @__PURE__ */ jsx3("p", { style: { ...muted, fontSize: 13, lineHeight: 1.5, margin: "0 0 12px" }, children: operator ? S.operatorOnboardBody : S.onboardBody(profile) }),
+    !operator && /* @__PURE__ */ jsxs3("ol", { style: { fontSize: 13, lineHeight: 1.8, listStyle: "decimal", margin: "0 0 14px", paddingLeft: 20 }, children: [
       /* @__PURE__ */ jsx3("li", { children: S.onboardStep1 }),
       /* @__PURE__ */ jsx3("li", { children: S.onboardStep2 })
     ] }),
     /* @__PURE__ */ jsxs3("div", { style: { display: "flex", gap: 8 }, children: [
-      /* @__PURE__ */ jsx3(Button3, { onClick: () => open(LINKS.keys), children: S.getKey }),
-      /* @__PURE__ */ jsx3(Button3, { onClick: () => host3.navigate("/capabilities?tab=plugins"), variant: "secondary", children: S.openPlugins }),
+      !operator && /* @__PURE__ */ jsxs3(Fragment2, { children: [
+        /* @__PURE__ */ jsx3(Button3, { onClick: () => open(LINKS.keys), children: S.getKey }),
+        /* @__PURE__ */ jsx3(Button3, { onClick: () => host3.navigate("/capabilities?tab=plugins"), variant: "secondary", children: S.openPlugins })
+      ] }),
       /* @__PURE__ */ jsx3(Button3, { onClick: () => void refreshAvailability(), variant: "ghost", children: S.checkAgain })
     ] })
   ] }) });
 }
 function Body({ pin }) {
-  const tab = useValue2($tab);
+  const selected = useValue3($tab);
+  const available = useValue3($available);
+  const operator = available && available.account === false;
+  const hidden = operator && (selected === "account" || selected === "mine");
+  const tab = hidden ? "library" : selected;
+  useEffect(() => {
+    if (hidden) $tab.set("library");
+  }, [hidden]);
   const tabs = /* @__PURE__ */ jsx3(
     SegmentedControl,
     {
       onChange: (id) => $tab.set(id),
-      options: ["library", "mine", "create", "account"].map((id) => ({ id, label: S.tabs[id] })),
+      options: ["library", "mine", "create", "account"].filter((id) => !operator || id !== "account" && id !== "mine").map((id) => ({ id, label: S.tabs[id] })),
       value: tab
     }
   );
@@ -643,21 +691,11 @@ function useDebounced(value, ms) {
   }, [value, ms]);
   return settled;
 }
-var favouritesKey = (pin) => `favourites:${agentKey(pin)}`;
-var $favouritesRevision = atom3(0);
-function writeFavourites(pin, list) {
-  pluginCtx().storage.set(favouritesKey(pin), list);
-  $favouritesRevision.set($favouritesRevision.get() + 1);
-}
-function forgetFavourite(pin, id) {
-  const list = pluginCtx().storage.get(favouritesKey(pin), []);
-  if (list.some((f) => f.id === id)) writeFavourites(pin, list.filter((f) => f.id !== id));
-}
 function useFavourites(pin) {
-  useValue2($favouritesRevision);
-  const list = pluginCtx().storage.get(favouritesKey(pin), []);
+  useValue3($favouritesRevision);
+  const list = readFavourites(pin);
   const toggle = (voice) => {
-    const current = pluginCtx().storage.get(favouritesKey(pin), []);
+    const current = readFavourites(pin);
     writeFavourites(
       pin,
       current.some((f) => f.id === voice.id) ? current.filter((f) => f.id !== voice.id) : [...current, { author: voice.author, id: voice.id, languages: voice.languages, title: voice.title }]
@@ -666,6 +704,7 @@ function useFavourites(pin) {
   return { has: (id) => list.some((f) => f.id === id), list, toggle };
 }
 function Library({ pin }) {
+  const billedNote = useAccountText(S.billedNote, S.operatorBilledNote);
   const [text, setText] = useState2("");
   const [language, setLanguage] = useState2("any");
   const [page, setPage] = useState2(1);
@@ -697,7 +736,7 @@ function Library({ pin }) {
         S.favouritesOnly
       ] })
     ] }),
-    /* @__PURE__ */ jsx3(BilledNote, { text: S.billedNote }),
+    /* @__PURE__ */ jsx3(BilledNote, { text: billedNote }),
     !favouritesOnly && voices.error ? /* @__PURE__ */ jsx3(LoadError, { error: voices.error, onRetry: () => void voices.refetch() }) : !list ? /* @__PURE__ */ jsx3(Rows, {}) : list.length === 0 ? favouritesOnly ? /* @__PURE__ */ jsx3(EmptyState, { description: S.noFavouritesHint, title: S.noFavourites }) : /* @__PURE__ */ jsx3(EmptyState, { title: S.noVoices }) : /* @__PURE__ */ jsx3(VoiceList, { favourites, pin, voices: list }),
     !favouritesOnly && /* @__PURE__ */ jsx3(Pager, { more, page, setPage })
   ] });
@@ -719,7 +758,7 @@ function Pager({ page, more, setPage }) {
   ] });
 }
 var inFlightPreviews = /* @__PURE__ */ new Set();
-var $usePending = atom3({});
+var $usePending = atom4({});
 async function previewVoice(pin, voiceId) {
   if (!samePin(currentPin(), pin)) return host3.notify({ kind: "error", message: S.agentChangedNothingSent });
   const key = `preview:${agentKey(pin)}:${voiceId}`;
@@ -740,10 +779,11 @@ async function previewVoice(pin, voiceId) {
   }
 }
 function VoiceList({ voices, pin, favourites, onDelete }) {
-  const playing = useValue2($playing);
+  const billedNote = useAccountText(S.billedNote, S.operatorBilledNote);
+  const playing = useValue3($playing);
   const [busy, setBusy] = useState2(null);
   const [used, setUsed] = useState2(null);
-  const pendingUse = useValue2($usePending)[agentKey(pin)];
+  const pendingUse = useValue3($usePending)[agentKey(pin)];
   const run = async (id, action) => {
     if (!samePin(currentPin(), pin)) return host3.notify({ kind: "error", message: S.agentChangedNothingSent });
     setBusy(id);
@@ -800,7 +840,7 @@ function VoiceList({ voices, pin, favourites, onDelete }) {
                 loading: busy === `play:${voice.id}`,
                 onClick: () => void run(`play:${voice.id}`, () => previewVoice(pin, voice.id)),
                 size: "xs",
-                title: S.billedNote,
+                title: billedNote,
                 variant: "secondary",
                 children: [
                   /* @__PURE__ */ jsx3(Codicon3, { name: playing === key ? "debug-stop" : "play" }),
@@ -861,6 +901,7 @@ function Avatar({ title }) {
   );
 }
 function MyVoices({ pin }) {
+  const billedNote = useAccountText(S.billedNote, S.operatorBilledNote);
   const client = useQueryClient2();
   const [page, setPage] = useState2(1);
   const queryKey = ["fish-audio", agentKey(pin), "mine"];
@@ -872,7 +913,7 @@ function MyVoices({ pin }) {
   });
   const [target, setTarget] = useState2(null);
   return /* @__PURE__ */ jsxs3("div", { style: { display: "grid", gap: 12, padding: pad }, children: [
-    /* @__PURE__ */ jsx3(BilledNote, { text: S.billedNote }),
+    /* @__PURE__ */ jsx3(BilledNote, { text: billedNote }),
     voices.error ? /* @__PURE__ */ jsx3(LoadError, { error: voices.error, onRetry: () => void voices.refetch() }) : !voices.data ? /* @__PURE__ */ jsx3(Rows, { n: 3 }) : voices.data.items.length === 0 ? /* @__PURE__ */ jsx3(EmptyState, { description: S.mineEmptyHint, title: S.mineEmpty }) : /* @__PURE__ */ jsx3(VoiceList, { onDelete: setTarget, pin, voices: voices.data.items }),
     /* @__PURE__ */ jsx3(Pager, { more: hasMore(voices.data?.items.length, page, voices.data?.total), page, setPage }),
     /* @__PURE__ */ jsx3(DeleteDialog, { pin, onClose: () => setTarget(null), onDeleted: () => void client.invalidateQueries({ queryKey }), voice: target })
@@ -969,7 +1010,7 @@ function openTab(tab) {
   host4.navigate(PAGE_PATH);
 }
 function CreditChip() {
-  const account = useValue3($account);
+  const account = useValue4($account);
   if (!account) return null;
   return /* @__PURE__ */ jsx4(
     "button",
@@ -997,6 +1038,9 @@ function CreditChip() {
 }
 function registerAvailabilityGate(ctx) {
   let removers = null;
+  let accountRemovers = null;
+  let retries = 0;
+  let cancelRetry;
   let disposed = false;
   let generation = 0;
   let accountAt = 0;
@@ -1004,7 +1048,7 @@ function registerAvailabilityGate(ctx) {
   $available.set(null);
   $account.set(null);
   $availableError.set(null);
-  const show = (available) => {
+  const show = (available, account = false) => {
     if (disposed) return;
     if (available && !removers) {
       removers = [
@@ -1014,21 +1058,28 @@ function registerAvailabilityGate(ctx) {
           order: 46,
           data: { codicon: "unmute", label: S.navLabel, path: PAGE_PATH }
         }),
-        ctx.register({ id: "credit", area: STATUSBAR_AREAS.right, order: 70, render: () => /* @__PURE__ */ jsx4(CreditChip, {}) }),
         ctx.register({
           id: "palette-voices",
           area: PALETTE_AREA,
           data: { id: "fish-audio.voices", keywords: ["fish", "voice", "tts"], label: S.paletteVoices, run: () => openTab("library") }
-        }),
+        })
+      ];
+    } else if (!available && removers) {
+      removers.forEach((remove) => remove());
+      removers = null;
+    }
+    if (available && account && !accountRemovers) {
+      accountRemovers = [
+        ctx.register({ id: "credit", area: STATUSBAR_AREAS.right, order: 70, render: () => /* @__PURE__ */ jsx4(CreditChip, {}) }),
         ctx.register({
           id: "palette-account",
           area: PALETTE_AREA,
           data: { id: "fish-audio.account", keywords: ["fish", "credit", "balance"], label: S.paletteAccount, run: () => openTab("account") }
         })
       ];
-    } else if (!available && removers) {
-      removers.forEach((remove) => remove());
-      removers = null;
+    } else if ((!available || !account) && accountRemovers) {
+      accountRemovers.forEach((remove) => remove());
+      accountRemovers = null;
     }
   };
   const probe = (force = false) => {
@@ -1040,10 +1091,11 @@ function registerAvailabilityGate(ctx) {
     return ctx.rest("/available").then(
       (res) => {
         if (mine !== generation || disposed) return;
+        cancelRetry?.();
         $availableError.set(null);
-        $available.set({ key: res?.key === true, version: String(res?.version ?? "") });
-        show(true);
-        if (res?.key !== true) {
+        $available.set({ key: res?.key === true, version: String(res?.version ?? ""), account: res?.account !== false });
+        show(true, res?.account !== false);
+        if (res?.key !== true || res?.account === false) {
           $account.set(null);
           return;
         }
@@ -1062,9 +1114,20 @@ function registerAvailabilityGate(ctx) {
       (error) => {
         if (mine !== generation || disposed) return;
         if (!isNotFoundError(error)) {
-          if ($available.get() === null) $availableError.set(error);
+          if ($available.get() === null) {
+            $availableError.set(error);
+            if (!cancelRetry && retries < 3) {
+              const epoch2 = currentAgentEpoch();
+              cancelRetry = ctx.setTimeout(() => {
+                if (disposed || epoch2 !== currentAgentEpoch()) return;
+                cancelRetry = void 0;
+                if ($available.get() === null) void probe();
+              }, [5e3, 15e3, 3e4][retries++]);
+            }
+          }
           return;
         }
+        cancelRetry?.();
         $availableError.set(null);
         $available.set(false);
         $account.set(null);
@@ -1077,6 +1140,9 @@ function registerAvailabilityGate(ctx) {
   const onAgentChange = () => {
     if (disposed) return;
     endAgentOperations();
+    cancelRetry?.();
+    cancelRetry = void 0;
+    retries = 0;
     $account.set(null);
     $available.set(null);
     show(false);
@@ -1085,6 +1151,7 @@ function registerAvailabilityGate(ctx) {
   const stops = [host4.state.profile.listen(onAgentChange), host4.state.connectionId.listen(onAgentChange)];
   ctx.onDispose(() => {
     disposed = true;
+    cancelRetry?.();
     stops.forEach((stop2) => stop2());
   });
   return { probe };
