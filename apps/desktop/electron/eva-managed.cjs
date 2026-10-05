@@ -130,6 +130,7 @@ const EVA_ACCOUNT_SCOPED_RENDERER_STORAGE_PREFIXES = Object.freeze([
   'hermes.desktop.sessionOrder.manual.remote.',
   'hermes.desktop.sessionOrder.remote.',
   'hermes.desktop.workspace-cwd.remote.',
+  'hermes.plugin.fish-audio.',
   'hermes.plugin.hermes-bots.',
   'hermes.transcript-tail.'
 ])

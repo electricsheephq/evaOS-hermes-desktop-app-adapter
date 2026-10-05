@@ -623,6 +623,7 @@ test('account reset clears renderer account state while preserving global prefer
     ['hermes.transcript-tail.v2:index', '["session-secret"]'],
     ['hermes.desktop.inflightTurnJournal.v2:session-secret', '{"prompt":"private"}'],
     ['hermes:composer-drafts:v3', '{"session-secret":"draft"}'],
+    ['hermes.plugin.fish-audio.favourites:eva-managed-runtime::default', '[{"id":"private-voice","title":"Private"}]'],
     [
       'hermes.plugin.hermes-bots.group-chats',
       '{"room-private":{"log":["private"],"members":[{"name":"private"}],"sessions":{"private":"session"}}}'
@@ -674,6 +675,7 @@ test('account reset clears renderer account state while preserving global prefer
   assert.equal(values.has('hermes.desktop.inflightTurnJournal.v2:session-secret'), false)
   assert.equal(values.has('hermes:composer-drafts:v3'), false)
   assert.equal(values.has('hermes.plugin.hermes-bots.group-chats'), false)
+  assert.equal(values.has('hermes.plugin.fish-audio.favourites:eva-managed-runtime::default'), false)
   assert.equal(values.has('hermes.desktop.layoutTree.v2'), false)
   assert.equal(values.has('hermes.desktop.userPlacedPanes.v1'), false)
   assert.equal(values.get('hermes.desktop.layoutPresets.v2'), globalLayoutPresets)
