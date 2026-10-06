@@ -1197,11 +1197,11 @@ class TestProjectVenvDirOutOfTree:
         (checkout / ".venv").mkdir()
         assert hermes_constants.project_venv_dir(checkout) == checkout / ".venv"
 
+@pytest.mark.linux_only
 class TestSocketSafeTmpdir:
     """Budget selection for the AF_UNIX-safe socket temp root."""
 
     def _linux(self, monkeypatch, candidate):
-        monkeypatch.setattr(hermes_constants.sys, "platform", "linux")
         monkeypatch.setattr("tempfile.gettempdir", lambda: candidate)
 
     def test_default_budget_keeps_short_candidate(self, monkeypatch):
@@ -1228,3 +1228,14 @@ class TestSocketSafeTmpdir:
         candidate = "/home/bob/hermes/cache/scratch"
         self._linux(monkeypatch, candidate)
         assert hermes_constants.socket_safe_tmpdir(max_len=30) == candidate
+
+
+@pytest.mark.macos_only
+def test_socket_safe_tmpdir_accepts_cloud_layout_budget(monkeypatch):
+    """Cloud callers can tighten the budget even on macOS's fixed fallback path."""
+    name = "hermes_" + "a" * 33 + "_ab12cd34"
+    budget = 103 - 1 - len(f"agent-browser-{name}/{name}.sock".encode())
+    monkeypatch.setattr("tempfile.gettempdir", lambda: "/" + "s" * 41)
+    root = hermes_constants.socket_safe_tmpdir(max_len=budget)
+    assert root == "/tmp"
+    assert len(f"{root}/agent-browser-{name}/default.sock".encode()) <= 103

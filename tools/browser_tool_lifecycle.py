@@ -390,7 +390,7 @@ def _reap_orphaned_browser_sessions():
     # every ``agent-browser-*`` dir lives either under the default-budget root or in the /tmp
     # fallback long names overflow into — both must be scanned (``max_len=0`` forces the
     # fallback root; the set de-dupes when they coincide).
-    roots = {_bt._socket_safe_tmpdir(), _bt._socket_safe_tmpdir(max_len=0)}
+    roots = {_session._session_socket_root(""), _session._session_socket_root(None)}
     socket_dirs = []
     # The shared real-profile attach daemon is named, not ``<prefix>_<hex>``; list it explicitly.
     for root in roots:
