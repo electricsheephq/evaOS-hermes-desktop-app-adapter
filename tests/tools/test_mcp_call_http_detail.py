@@ -69,15 +69,16 @@ def test_mcp_rejection_text_preserves_diagnostics_without_credentials(mcp_call):
               '"secret\\q":"SYNTH_INVALID_ESCAPE", "password":"SYNTH_LONG')
     # The bounded read ends on an escape, before the sensitive value's closing quote.
     body = prefix + "x" * (65535 - len(prefix)) + '\\"tail"}'
-    # Parsed JSON: any value type under a sensitive key, at any depth.
+    # Parsed JSON: any value type under a sensitive key, at any depth, and an upstream error carried as a string.
     nested = json.dumps({"message": "route missing", "credential": {"value": "SYNTH_NESTED"},
                          "session_id": 987654321, "items": [{"api_key": "SYNTH_LIST"}],
                          "private_key": "SYNTH_PK", "auth": "SYNTH_AUTH", "key": "SYNTH_KEY",
-                         "jwt": "SYNTH_JWT"})
+                         "jwt": "SYNTH_JWT", "detail": 'upstream: {"api_key": "SYNTH_EMBEDDED"}'})
     # Unparseable JSON: a sensitive key owning an object hides everything after it.
     broken = '{"message": "route missing", "credential": {"value": "SYNTH_BROKEN"} BROKEN'
     # Not JSON: an echoed request target, quoted form values, form-encoded and header-style echoes.
     plain = ("route missing: Cannot POST /mcp/SYNTH_PATH_0123456789?credential=SYNTH_QUERY (SYNTH_PATH_0123456789) "
+             "via https://SYNTH_USER:SYNTH_PASS@provider.example:8443/mcp/SYNTH_PATH_0123456789 "
              "client_secret=\"SYNTH_DQ two\" password='SYNTH_SQ two' "
              "error=invalid_grant&access_token=SYNTH_FORM&client_secret=SYNTH_FORM2 "
              "Authorization: Bearer SYNTH_BEARER X-Api-Key: SYNTH_HEADER Cookie: session=SYNTH_C1; refresh=SYNTH_C2")

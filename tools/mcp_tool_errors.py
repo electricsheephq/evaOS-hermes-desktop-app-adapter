@@ -99,12 +99,15 @@ _REJECTION_SECRET_KEY = re.compile(
 
 
 def _redact_json_value(value):
-    """Every value under a sensitive key, whatever its type (string, number, object, list), becomes [REDACTED]."""
+    """Every value under a sensitive key, whatever its type (string, number, object, list), becomes [REDACTED];
+    other strings get the free-text passes, since upstream errors travel as strings (``"upstream: {...}"``)."""
     if isinstance(value, dict):
         return {key: "[REDACTED]" if isinstance(key, str) and _REJECTION_SECRET_KEY.search(key)
                 else _redact_json_value(item) for key, item in value.items()}
     if isinstance(value, list):
         return [_redact_json_value(item) for item in value]
+    if isinstance(value, str):
+        return _redact_rejection_body(value)
     return value
 
 
@@ -157,10 +160,12 @@ def _redact_rejection_body(text: str) -> str:
 
 
 def _redact_request_target(text: str, url: str) -> str:
-    """The recorded URL keeps only the origin, so the path and query must not come back in an echo
-    (``Cannot POST /mcp/<secret>``): the whole path, the query, and every long segment are redacted."""
+    """The recorded URL keeps only the origin, so the userinfo, path and query must not come back in an echo
+    (``Cannot POST /mcp/<secret>``): those, and every long segment, are redacted."""
     parsed = urlparse(url)
     parts = {parsed.path, parsed.query}
+    if "@" in parsed.netloc:  # userinfo echoed in an absolute URI
+        parts |= {parsed.netloc.rsplit("@", 1)[0], parsed.password or ""}
     parts |= {seg for seg in re.split(r"[/?&=]", f"{parsed.path}?{parsed.query}") if len(seg) >= 16}
     parts |= {unquote(part) for part in parts}
     for part in sorted((part for part in parts if len(part) > 1), key=len, reverse=True):
