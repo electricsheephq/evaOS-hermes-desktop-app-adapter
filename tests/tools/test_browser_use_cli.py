@@ -884,6 +884,19 @@ def goto_url(url):
         assert namespace["workspace"] is None
 
 
+    def test_leading_future_imports_and_cloud_admin_calls_keep_their_place(self, tmp_path, monkeypatch):
+        """A `from __future__` block must stay first, and the harness only skips daemon bootstrap when the code
+        STARTS with a cloud-admin call — neither may sit behind a preamble."""
+        cli = _fake_cli(tmp_path, "cat\n")
+        monkeypatch.setattr(bu_cli, "_find_cli", lambda: [cli])
+        future = '"""doc"""\nfrom __future__ import annotations\nprint("x")'
+        sent = json.loads(bu_cli.browser_exec(future))["output"]
+        assert sent.startswith('"""doc"""\nfrom __future__ import annotations\n' + bu_cli._RUNTIME_PREAMBLE)
+        compile(sent, "<browser_exec>", "exec")
+        for admin in ('start_remote_daemon("r7k2")', 'stop_remote_daemon("r7k2")'):
+            assert json.loads(bu_cli.browser_exec(admin))["output"] == admin
+
+
 class TestProviderPickerIntegration:
     """The `hermes tools` Browser Automation picker row (browser_backend
     marker) must enter/leave CLI mode cleanly and highlight correctly."""

@@ -4,6 +4,7 @@ When browser.backend is "browser-use", the model gets ``browser_exec`` tool
 instead of default browser tools
 """
 
+import ast
 import contextlib
 import importlib
 import json
@@ -103,6 +104,35 @@ def _hermes_ensure_own_tab():
 _hermes_ensure_own_tab()
 del _hermes_ensure_own_tab
 """
+
+
+# The harness skips daemon bootstrap only when stdin STARTS with one of these calls (run.py ``cloud_admin``).
+_CLOUD_ADMIN_CALLS = ("start_remote_daemon(", "stop_remote_daemon(")
+
+
+def _with_preambles(code: str, own_tab: bool) -> str:
+    """Prepend the runtime (and, for shared browsers, own-tab) preamble to the model's code. A leading cloud-admin
+    call gets neither: it drives no page, and any prefix would hide it from the harness's leading-call check. A
+    leading ``from __future__`` block stays first, as Python requires."""
+    if code.lstrip().startswith(_CLOUD_ADMIN_CALLS):
+        return code
+    preamble = _RUNTIME_PREAMBLE + (_OWN_TAB_PREAMBLE if own_tab else "")
+    split = 0
+    try:
+        body = ast.parse(code).body
+    except SyntaxError:  # the harness reports it; nothing to keep in front
+        body = []
+    for index, node in enumerate(body):
+        if isinstance(node, ast.ImportFrom) and node.module == "__future__":
+            split = node.end_lineno
+        elif not (index == 0 and isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant)
+                  and isinstance(node.value.value, str)):  # a leading docstring may precede the block
+            break
+    lines = code.splitlines(keepends=True)
+    head = "".join(lines[:split])
+    if head and not head.endswith("\n"):
+        head += "\n"
+    return head + preamble + "".join(lines[split:])
 
 _DEFAULT_TIMEOUT_S = 300
 _MIN_TIMEOUT_S = 5
@@ -738,9 +768,7 @@ def browser_exec(code: str, session: str = "", timeout_s: int = _DEFAULT_TIMEOUT
     # SHARED browser (/browser connect CDP override): pin each named session to its own tab (see
     # _OWN_TAB_PREAMBLE). Private per-name browsers skip this — nothing to collide with.
     private_browser = env.pop(_PRIVATE_BROWSER_SENTINEL, None)  # always pop: never exported to the CLI
-    if session and not private_browser:
-        code = _OWN_TAB_PREAMBLE + code
-    code = _RUNTIME_PREAMBLE + code
+    code = _with_preambles(code, own_tab=bool(session and not private_browser))
 
     workspace = _workspace_dir(task_id)
     if workspace:
