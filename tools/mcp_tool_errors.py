@@ -12,7 +12,7 @@ import logging
 import os
 import re
 from typing import Any, List, Optional
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 from tools.mcp_tool_common import _sanitize_error, _core
 
 logger = logging.getLogger("tools.mcp_tool")
@@ -119,8 +119,12 @@ def _redact_rejection_body(text: str) -> str:
             text = json.dumps(redacted, ensure_ascii=False, separators=(",", ":"))
         return _sanitize_error(text)
 
-    # Not parseable (plain text, form-encoded, or JSON cut by the read bound). Generic token shapes first, so a
-    # "Bearer <token>" is gone before the key passes below see its header.
+    # Not parseable (plain text, form-encoded, or JSON cut by the read bound).
+    key_name = r'(?<![\w.-])([\w.-]*(?:' + _REJECTION_SECRET_KEY.pattern + r')[\w.-]*)'
+    # A JSON-escaped quoted form value (key=\"...\" inside a string) goes whole before the generic shapes split
+    # it at the quote; an escaped quote can never be a JSON delimiter, so this cannot swallow structure.
+    text = re.sub(key_name + r'(\s*=\s*)\\"(?:[^"\\]|\\(?!"))*\\"', r'\1\2[REDACTED]', text, flags=re.IGNORECASE)
+    # Generic token shapes next, so a "Bearer <token>" is gone before the key passes below see its header.
     text = _sanitize_error(text)
 
     def _redact(match):
@@ -144,12 +148,24 @@ def _redact_rejection_body(text: str) -> str:
     # JSON-style "key": "string" (also one left unterminated by the read bound) and "key": scalar.
     text = re.sub(r'("(?:\\.|[^"\\])*")(\s*:\s*)"(?:\\.|[^"\\])*(?:"|\\?\Z)', _redact, text)
     text = re.sub(r'("(?:\\.|[^"\\])*")(\s*:\s*)(?=[-\w.])[^\s,}\]]+', _redact, text)
-    key_name = r'(?<![\w.-])([\w.-]*(?:' + _REJECTION_SECRET_KEY.pattern + r')[\w.-]*)'
     # Key: value header echoes (cookie lists, Digest parameters): fail closed through the end of the excerpt.
     text = re.sub(key_name + r'(\s*:\s*)\S.*\Z', r'\1\2[REDACTED]', text, flags=re.IGNORECASE | re.DOTALL)
-    # key=value form fields; an auth scheme word takes its token with it.
-    return re.sub(key_name + r'(\s*=\s*)(?:(?:bearer|basic|token|digest)\s+)?[^\s&,;"]+',
+    # key=value form fields, last: every sensitive JSON value is already gone, so a quoted value (also one cut by
+    # the read bound) is taken whole; an auth scheme word takes its token with it.
+    return re.sub(key_name + r"""(\s*=\s*)(?:(?:bearer|basic|token|digest)\s+)?(?:"[^"]*(?:"|\Z)|'[^']*(?:'|\Z)|[^\s&,;"]+)""",
                   r'\1\2[REDACTED]', text, flags=re.IGNORECASE)
+
+
+def _redact_request_target(text: str, url: str) -> str:
+    """The recorded URL keeps only the origin, so the path and query must not come back in an echo
+    (``Cannot POST /mcp/<secret>``): the whole path, the query, and every long segment are redacted."""
+    parsed = urlparse(url)
+    parts = {parsed.path, parsed.query}
+    parts |= {seg for seg in re.split(r"[/?&=]", f"{parsed.path}?{parsed.query}") if len(seg) >= 16}
+    parts |= {unquote(part) for part in parts}
+    for part in sorted((part for part in parts if len(part) > 1), key=len, reverse=True):
+        text = text.replace(part, "[REDACTED]")
+    return text
 
 
 def _make_http_rejection_recorder(sink: dict):
@@ -168,7 +184,8 @@ def _make_http_rejection_recorder(sink: dict):
             try:
                 raw = await response.aread()  # buffered: the SDK's own aread() afterwards sees the same bytes
                 # Redact BEFORE excerpt truncation, including values cut by the 64 KiB read bound.
-                body = _redact_rejection_body(" ".join(raw[:65536].decode("utf-8", "replace").split()))
+                body = _redact_rejection_body(_redact_request_target(
+                    " ".join(raw[:65536].decode("utf-8", "replace").split()), str(response.request.url)))
             except Exception:  # the failure itself is still reported, just without the body
                 body = ""
         try:

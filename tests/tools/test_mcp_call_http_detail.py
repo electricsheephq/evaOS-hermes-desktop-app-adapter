@@ -63,7 +63,7 @@ def test_mcp_rejection_text_preserves_diagnostics_without_credentials(mcp_call):
     server, call = mcp_call
     origin = "https://provider.example:8443"
     url = origin.replace("https://", "https://SYNTH_USER:SYNTH_PASS@") + (
-        "/mcp/SYNTH_PATH?credential=SYNTH_QUERY#SYNTH_FRAGMENT")
+        "/mcp/SYNTH_PATH_0123456789?credential=SYNTH_QUERY#SYNTH_FRAGMENT")
     prefix = ('{"message":"route missing", "api_key":"SYNTH_PLAIN", '
               '"access_\\u0074oken":"SYNTH_ESCAPED\\\"tail", '
               '"secret\\q":"SYNTH_INVALID_ESCAPE", "password":"SYNTH_LONG')
@@ -76,8 +76,10 @@ def test_mcp_rejection_text_preserves_diagnostics_without_credentials(mcp_call):
                          "jwt": "SYNTH_JWT"})
     # Unparseable JSON: a sensitive key owning an object hides everything after it.
     broken = '{"message": "route missing", "credential": {"value": "SYNTH_BROKEN"} BROKEN'
-    # Not JSON: form-encoded and header-style echoes.
-    plain = ("route missing: error=invalid_grant&access_token=SYNTH_FORM&client_secret=SYNTH_FORM2 "
+    # Not JSON: an echoed request target, quoted form values, form-encoded and header-style echoes.
+    plain = ("route missing: Cannot POST /mcp/SYNTH_PATH_0123456789?credential=SYNTH_QUERY (SYNTH_PATH_0123456789) "
+             "client_secret=\"SYNTH_DQ two\" password='SYNTH_SQ two' "
+             "error=invalid_grant&access_token=SYNTH_FORM&client_secret=SYNTH_FORM2 "
              "Authorization: Bearer SYNTH_BEARER X-Api-Key: SYNTH_HEADER Cookie: session=SYNTH_C1; refresh=SYNTH_C2")
     for status, fallback, body in ((400, False, body), (503, True, body), (401, False, nested), (403, True, plain),
                                   (422, False, broken)):
