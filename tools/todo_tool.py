@@ -282,7 +282,8 @@ TODO_TOOL_NAMES = frozenset((TODO_SCHEMA["name"], *TODO_LEGACY_ALIASES))
 
 def is_todo_tool_name(name: Any) -> bool:
     """True for the Todo tool's current name or a legacy alias (an already-unwrapped dispatch name)."""
-    return name in TODO_TOOL_NAMES
+    # Transcript entries are untyped: an unhashable name (list/dict) must read as "not Todo", not raise.
+    return isinstance(name, str) and name in TODO_TOOL_NAMES
 
 
 def is_todo_tool_call(tool_call: Any) -> bool:
