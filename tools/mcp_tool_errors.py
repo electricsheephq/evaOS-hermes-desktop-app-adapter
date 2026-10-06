@@ -98,7 +98,31 @@ _REJECTION_SECRET_KEY = re.compile(
     r"client[_-]?secret|session[_-]?id|cookie", re.IGNORECASE)
 
 
+def _redact_json_value(value):
+    """Every value under a sensitive key, whatever its type (string, number, object, list), becomes [REDACTED]."""
+    if isinstance(value, dict):
+        return {key: "[REDACTED]" if isinstance(key, str) and _REJECTION_SECRET_KEY.search(key)
+                else _redact_json_value(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_redact_json_value(item) for item in value]
+    return value
+
+
 def _redact_rejection_body(text: str) -> str:
+    try:
+        parsed = json.loads(text)
+    except ValueError:
+        parsed = None
+    if isinstance(parsed, (dict, list)):
+        redacted = _redact_json_value(parsed)
+        if redacted != parsed:  # re-serialise only when a value was replaced; otherwise keep the server's words
+            text = json.dumps(redacted, ensure_ascii=False, separators=(",", ":"))
+        return _sanitize_error(text)
+
+    # Not parseable (plain text, form-encoded, or JSON cut by the read bound). Generic token shapes first, so a
+    # "Bearer <token>" is gone before the key passes below see its header.
+    text = _sanitize_error(text)
+
     def _redact(match):
         try:
             key = json.loads(match[1])
@@ -108,8 +132,13 @@ def _redact_rejection_body(text: str) -> str:
             return f'{match[1]}{match[2]}"[REDACTED]"'
         return match[0]
 
+    # JSON-style "key": "string" (also one left unterminated by the read bound) and "key": scalar.
     text = re.sub(r'("(?:\\.|[^"\\])*")(\s*:\s*)"(?:\\.|[^"\\])*(?:"|\\?\Z)', _redact, text)
-    return _sanitize_error(text)
+    text = re.sub(r'("(?:\\.|[^"\\])*")(\s*:\s*)(?=[-\w.])[^\s,}\]]+', _redact, text)
+    # key=value and Key: value (form bodies, header echoes); an auth scheme word takes its token with it.
+    return re.sub(r'(?<![\w.-])([\w.-]*(?:' + _REJECTION_SECRET_KEY.pattern + r')[\w.-]*)(\s*[=:]\s*)'
+                  r'(?:(?:bearer|basic|token|digest)\s+)?[^\s&,;"]+',
+                  r'\1\2[REDACTED]', text, flags=re.IGNORECASE)
 
 
 def _make_http_rejection_recorder(sink: dict):

@@ -69,14 +69,20 @@ def test_mcp_rejection_text_preserves_diagnostics_without_credentials(mcp_call):
               '"secret\\q":"SYNTH_INVALID_ESCAPE", "password":"SYNTH_LONG')
     # The bounded read ends on an escape, before the sensitive value's closing quote.
     body = prefix + "x" * (65535 - len(prefix)) + '\\"tail"}'
-    for status, fallback in ((400, False), (503, True)):
+    # Parsed JSON: any value type under a sensitive key, at any depth.
+    nested = json.dumps({"message": "route missing", "credential": {"value": "SYNTH_NESTED"},
+                         "session_id": 987654321, "items": [{"api_key": "SYNTH_LIST"}]})
+    # Not JSON: form-encoded and header-style echoes.
+    plain = ("route missing: error=invalid_grant&access_token=SYNTH_FORM&client_secret=SYNTH_FORM2 "
+             "Authorization: Bearer SYNTH_BEARER X-Api-Key: SYNTH_HEADER")
+    for status, fallback, body in ((400, False, body), (503, True, body), (401, False, nested), (403, True, plain)):
         error = json.loads(call({"status": status, "url": url, "body": body,
                                  "url_fallback": fallback}))["error"]
         assert f"HTTP {status} from POST {origin}:" in error
         assert "route missing" in error
         assert "[REDACTED]" in error
         assert "/mcp/" not in error
-        assert "SYNTH_" not in error
+        assert "SYNTH_" not in error and "987654321" not in error
         assert server._http_rejection["url"] == origin
 
 
