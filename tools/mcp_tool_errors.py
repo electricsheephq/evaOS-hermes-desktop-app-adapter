@@ -6,11 +6,13 @@ import asyncio
 import contextlib
 import errno
 import importlib
+import itertools
+import json
 import logging
 import os
 import re
 from typing import Any, List, Optional
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 from tools.mcp_tool_common import _sanitize_error, _core
 
 logger = logging.getLogger("tools.mcp_tool")
@@ -90,6 +92,85 @@ def _is_streamable_http_rejection(exc: BaseException) -> bool:
 
 
 _HTTP_REJECTION_BODY_CHARS = 300
+_HTTP_REJECTION_SEQ = itertools.count(1)
+_REJECTION_SECRET_KEY = re.compile(
+    r"token|secret|password|passwd|api[_-]?key|apikey|authorization|auth(?![a-z])|credential|private[_-]?key|"
+    r"access[_-]?key|(?<![a-z])key(?![a-z])|jwt|signature|session[_-]?id|cookie", re.IGNORECASE)
+
+
+def _redact_json_value(value):
+    """Every value under a sensitive key, whatever its type (string, number, object, list), becomes [REDACTED];
+    other strings get the free-text passes, since upstream errors travel as strings (``"upstream: {...}"``)."""
+    if isinstance(value, dict):
+        return {key: "[REDACTED]" if isinstance(key, str) and _REJECTION_SECRET_KEY.search(key)
+                else _redact_json_value(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_redact_json_value(item) for item in value]
+    if isinstance(value, str):
+        return _redact_rejection_body(value)
+    return value
+
+
+def _redact_rejection_body(text: str) -> str:
+    try:
+        parsed = json.loads(text)
+    except ValueError:
+        parsed = None
+    if isinstance(parsed, (dict, list)):
+        redacted = _redact_json_value(parsed)
+        if redacted != parsed:  # re-serialise only when a value was replaced; otherwise keep the server's words
+            text = json.dumps(redacted, ensure_ascii=False, separators=(",", ":"))
+        return _sanitize_error(text)
+
+    # Not parseable (plain text, form-encoded, or JSON cut by the read bound).
+    key_name = r'(?<![\w.-])([\w.-]*(?:' + _REJECTION_SECRET_KEY.pattern + r')[\w.-]*)'
+    # A JSON-escaped quoted form value (key=\"...\" inside a string) goes whole before the generic shapes split
+    # it at the quote; an escaped quote can never be a JSON delimiter, so this cannot swallow structure.
+    text = re.sub(key_name + r'(\s*=\s*)\\"(?:[^"\\]|\\(?!"))*\\"', r'\1\2[REDACTED]', text, flags=re.IGNORECASE)
+    # Generic token shapes next, so a "Bearer <token>" is gone before the key passes below see its header.
+    text = _sanitize_error(text)
+
+    def _redact(match):
+        try:
+            key = json.loads(match[1])
+        except ValueError:  # an invalid escape must not cost the whole body
+            key = match[1][1:-1]
+        if _REJECTION_SECRET_KEY.search(key):
+            return f'{match[1]}{match[2]}"[REDACTED]"'
+        return match[0]
+
+    # Fail closed: a sensitive key that owns an object or list in unparseable JSON hides everything after it.
+    for match in re.finditer(r'("(?:\\.|[^"\\])*")(\s*:\s*)[\[{]', text):
+        try:
+            key = json.loads(match[1])
+        except ValueError:
+            key = match[1][1:-1]
+        if _REJECTION_SECRET_KEY.search(key):
+            text = text[:match.end(2)] + '"[REDACTED]"'
+            break
+    # JSON-style "key": "string" (also one left unterminated by the read bound) and "key": scalar.
+    text = re.sub(r'("(?:\\.|[^"\\])*")(\s*:\s*)"(?:\\.|[^"\\])*(?:"|\\?\Z)', _redact, text)
+    text = re.sub(r'("(?:\\.|[^"\\])*")(\s*:\s*)(?=[-\w.])[^\s,}\]]+', _redact, text)
+    # Key: value header echoes (cookie lists, Digest parameters): fail closed through the end of the excerpt.
+    text = re.sub(key_name + r'(\s*:\s*)\S.*\Z', r'\1\2[REDACTED]', text, flags=re.IGNORECASE | re.DOTALL)
+    # key=value form fields, last: every sensitive JSON value is already gone, so a quoted value (also one cut by
+    # the read bound) is taken whole; an auth scheme word takes its token with it.
+    return re.sub(key_name + r"""(\s*=\s*)(?:(?:bearer|basic|token|digest)\s+)?(?:"[^"]*(?:"|\Z)|'[^']*(?:'|\Z)|[^\s&,;"]+)""",
+                  r'\1\2[REDACTED]', text, flags=re.IGNORECASE)
+
+
+def _redact_request_target(text: str, url: str) -> str:
+    """The recorded URL keeps only the origin, so the userinfo, path and query must not come back in an echo
+    (``Cannot POST /mcp/<secret>``): those, and every long segment, are redacted."""
+    parsed = urlparse(url)
+    parts = {parsed.path, parsed.query}
+    if "@" in parsed.netloc:  # userinfo echoed in an absolute URI
+        parts |= {parsed.netloc.rsplit("@", 1)[0], parsed.password or ""}
+    parts |= {seg for seg in re.split(r"[/?&=]", f"{parsed.path}?{parsed.query}") if len(seg) >= 16}
+    parts |= {unquote(part) for part in parts}
+    for part in sorted((part for part in parts if len(part) > 1), key=len, reverse=True):
+        text = text.replace(part, "[REDACTED]")
+    return text
 
 
 def _make_http_rejection_recorder(sink: dict):
@@ -107,13 +188,58 @@ def _make_http_rejection_recorder(sink: dict):
         if response.headers.get("content-type", "").split(";")[0].strip().lower() != "text/event-stream":
             try:
                 raw = await response.aread()  # buffered: the SDK's own aread() afterwards sees the same bytes
-                body = " ".join(raw[:_HTTP_REJECTION_BODY_CHARS * 4].decode("utf-8", "replace").split())
+                # Redact BEFORE excerpt truncation, including values cut by the 64 KiB read bound.
+                body = _redact_rejection_body(_redact_request_target(
+                    " ".join(raw[:65536].decode("utf-8", "replace").split()), str(response.request.url)))
             except Exception:  # the failure itself is still reported, just without the body
                 body = ""
-        sink.update(status=response.status_code, method=response.request.method,
-                    url=str(response.request.url), body=body[:_HTTP_REJECTION_BODY_CHARS])
+        try:
+            url = str(response.request.url.copy_with(
+                path="", query=None, fragment=None, username="", password=""))
+        except Exception:
+            parsed = urlparse(str(response.request.url))
+            url = f"{parsed.scheme}://{parsed.netloc.rsplit('@', 1)[-1]}"
+        sink.update(seq=next(_HTTP_REJECTION_SEQ), status=response.status_code, method=response.request.method,
+                    url=url, body=body[:_HTTP_REJECTION_BODY_CHARS])
 
     return _record
+
+
+@contextlib.asynccontextmanager
+async def _capture_http_rejection(server):
+    # Unlocked reconnect discovery may be attributed within the same failure window;
+    # _retry_once discards retry exceptions, so the first exception and its detail stay paired.
+    sink = getattr(server, "_http_rejection", None)
+    mark = sink.get("seq") if isinstance(sink, dict) else None
+    try:
+        yield
+    except Exception as exc:
+        if isinstance(sink, dict) and sink.get("seq") is not None and sink.get("seq") != mark:
+            try:
+                setattr(exc, "_mcp_http_rejection", dict(sink))
+            except Exception:
+                pass
+        raise
+
+
+def _http_rejection_detail(root: BaseException, rejection: dict) -> str:
+    """`` (HTTP <status> from <method> <url>: <body head>)`` when *root* is the SDK's opaque
+    ``-32603 Server returned an error response`` and the recorder saw the rejection, else ``""``.
+
+    Takes the ALREADY-UNWRAPPED root so a caller that has one does not unwrap twice. Split out of
+    ``_describe_http_failure`` so the tool-CALL path can append the same detail to its own message
+    without inheriting the connect path's base text (which drops ``_exc_str``'s repr fallback for
+    empty-message exceptions, issue #19417)."""
+    opaque = (getattr(getattr(root, "error", None), "code", None) == -32603
+              and "server returned an error response" in str(root).lower())
+    status = rejection.get("status")
+    if not (opaque and status is not None):
+        return ""
+    detail = f"HTTP {status} from {rejection.get('method', '')} {rejection.get('url', '')}"
+    body = rejection.get("body")
+    if body:
+        detail += f": {body}"
+    return f" ({detail})"
 
 
 def _describe_http_failure(exc: BaseException, rejection: dict) -> str:
@@ -121,15 +247,7 @@ def _describe_http_failure(exc: BaseException, rejection: dict) -> str:
     ``-32603 Server returned an error response`` and the recorder saw the rejection, the HTTP status,
     request URL and body head are appended so the message names what the server actually said."""
     root = _unwrap_exception_group(exc)
-    text = str(root)
-    opaque = (getattr(getattr(root, "error", None), "code", None) == -32603
-              and "server returned an error response" in text.lower())
-    if not (opaque and rejection):
-        return text
-    detail = f"HTTP {rejection['status']} from {rejection['method']} {rejection['url']}"
-    if rejection["body"]:
-        detail += f": {rejection['body']}"
-    return f"{text} ({detail})"
+    return f"{str(root)}{_http_rejection_detail(root, rejection)}"
 
 
 def _unwrap_exception_group(exc: BaseException) -> BaseException:
