@@ -35,6 +35,36 @@ _PRIVATE_BROWSER_SENTINEL = "_HERMES_BU_PRIVATE_BROWSER"
 # the same human-control lease fence as the built-in browser tools. Popped before launching the CLI.
 _BOT_DESKTOP_BROWSER_SENTINEL = "_HERMES_BU_BOT_DESKTOP_BROWSER"
 
+# Prepended to EVERY browser_exec call: raises the harness's 5 s default CDP response timeout to 30 s (cloud
+# navigations routinely exceed 5 s; screenshots already get 60 s) and binds `workspace` for the model's code.
+# Helpers such as goto_url call the module's ORIGINAL cdp, not the harness's traced exec-global wrapper, so the
+# default is patched on that function object.
+_RUNTIME_PREAMBLE_SOURCE = """\
+def _hermes_prepare_runtime():
+    try:
+        import browser_harness.helpers as _helpers
+        _cdp = _helpers.cdp
+        _args = _cdp.__code__.co_varnames[:_cdp.__code__.co_argcount]
+        _defaults = _cdp.__defaults__
+        if not _defaults or len(_defaults) > len(_args):
+            return
+        _index = _args.index("_response_timeout") - (len(_args) - len(_defaults))
+        if _index < 0:
+            return
+        _timeout = _defaults[_index]
+        if _timeout == _helpers.DEFAULT_IPC_RESPONSE_TIMEOUT_SECONDS and _timeout < 30.0:
+            _cdp.__defaults__ = _defaults[:_index] + (30.0,) + _defaults[_index + 1:]
+    except Exception:
+        pass
+_hermes_prepare_runtime()
+del _hermes_prepare_runtime
+import os as _hermes_os
+workspace = _hermes_os.environ.get("BH_AGENT_WORKSPACE")
+del _hermes_os
+"""
+# One line, so the model's traceback line numbers shift by one, not by the preamble's length.
+_RUNTIME_PREAMBLE = f"exec({_RUNTIME_PREAMBLE_SOURCE!r})\n"
+
 # Prepended to the model's code for named sessions on SHARED browsers (a /browser connect CDP override): the
 # harness daemon attaches to the first existing page at startup, so two fresh named daemons can land on the
 # SAME tab. Steering each onto a tab it created prevents clobbering. Runs once per daemon (marker keyed by
@@ -710,6 +740,7 @@ def browser_exec(code: str, session: str = "", timeout_s: int = _DEFAULT_TIMEOUT
     private_browser = env.pop(_PRIVATE_BROWSER_SENTINEL, None)  # always pop: never exported to the CLI
     if session and not private_browser:
         code = _OWN_TAB_PREAMBLE + code
+    code = _RUNTIME_PREAMBLE + code
 
     workspace = _workspace_dir(task_id)
     if workspace:
@@ -778,7 +809,8 @@ _HEADER_BASE = (
     "comment describing the step for the user in plain language, max 60 chars "
     "(e.g. `# Searching Amazon for paper towels`) — the UI shows it as the step label.\n\n"
     "STATE: the browser session and workspace persist across calls; Python variables do NOT (fresh "
-    "interpreter each call). The workspace dir is $BH_AGENT_WORKSPACE (also `workspace` in every result); "
+    "interpreter each call). The workspace path is available in `code` as the variable `workspace` "
+    "(and as $BH_AGENT_WORKSPACE), and in every result as `workspace`; "
     "functions defined in agent_helpers.py there are auto-imported into every call. For multi-item tasks "
     "('all N products / every entry'), append each batch to a JSON/CSV file in the workspace, then read it "
     "back and aggregate in code — dedupe/count/sort with Python, not in your head — and verify the "

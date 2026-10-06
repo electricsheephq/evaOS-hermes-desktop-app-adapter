@@ -11,6 +11,8 @@ Covers the three seams the integration relies on:
 * ``browser_exec`` execution — code is piped on stdin, ``session`` becomes
   ``BU_NAME``, bad session names and a missing CLI produce actionable errors.
 """
+import functools
+import importlib
 import json
 import os
 import stat
@@ -70,6 +72,30 @@ def _fake_cli(tmp_path, body):
     script.write_text("#!/bin/sh\n" + body, encoding="utf-8")
     script.chmod(script.stat().st_mode | stat.S_IXUSR)
     return str(script)
+
+
+@pytest.fixture
+def fake_browser_harness(tmp_path, monkeypatch):
+    """Import a real temporary helpers module without leaking harness module state."""
+    saved = {name: module for name, module in sys.modules.items()
+             if name == "browser_harness" or name.startswith("browser_harness.")}
+    for name in saved:
+        monkeypatch.delitem(sys.modules, name)
+    package = tmp_path / "browser_harness"
+    package.mkdir()
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    monkeypatch.syspath_prepend(str(tmp_path))
+
+    def load(source):
+        (package / "helpers.py").write_text(source, encoding="utf-8")
+        sys.modules.pop("browser_harness.helpers", None)
+        importlib.invalidate_caches()
+        return importlib.import_module("browser_harness.helpers")
+
+    yield load
+    for name in list(sys.modules):
+        if name == "browser_harness" or name.startswith("browser_harness."):
+            del sys.modules[name]
 
 
 class TestModeDetection:
@@ -752,7 +778,10 @@ class TestOwnTabPreamble:
         # fake CLI echoes stdin back so we can inspect what code was sent
         cli = _fake_cli(tmp_path, "cat\n")
         monkeypatch.setattr(bu_cli, "_find_cli", lambda: [cli])
-        return json.loads(bu_cli.browser_exec("print('payload')", session=session))
+        result = json.loads(bu_cli.browser_exec("print('payload')", session=session))
+        assert result["output"].startswith(bu_cli._RUNTIME_PREAMBLE)
+        assert result["output"].endswith("print('payload')")
+        return result
 
     def test_named_shared_browser_gets_preamble(self, tmp_path, monkeypatch):
         result = self._run(tmp_path, monkeypatch, session="r7k2", shared_cdp="http://127.0.0.1:9222")
@@ -797,6 +826,62 @@ class TestOwnTabPreamble:
         ast.parse(bu_cli._OWN_TAB_PREAMBLE)
         # and composes with model code
         ast.parse(bu_cli._OWN_TAB_PREAMBLE + "print('x')")
+
+
+class TestRuntimePreamble:
+    """Every browser_exec call gets the runtime preamble (see the route tests in TestOwnTabPreamble)."""
+
+    def test_original_cdp_and_module_helpers_get_timeout(self, fake_browser_harness, monkeypatch, capsys):
+        helpers = fake_browser_harness('''
+DEFAULT_IPC_RESPONSE_TIMEOUT_SECONDS = 5.0
+IPC_CONNECT_TIMEOUT_SECONDS = 5.0
+SCREENSHOT_IPC_RESPONSE_TIMEOUT_SECONDS = 60.0
+calls = []
+def _send(req, response_timeout=DEFAULT_IPC_RESPONSE_TIMEOUT_SECONDS):
+    calls.append((req, response_timeout))
+    return {"result": {}}
+def cdp(method, session_id=None, _response_timeout=DEFAULT_IPC_RESPONSE_TIMEOUT_SECONDS, **params):
+    return _send({"method": method, "params": params, "session_id": session_id},
+                 response_timeout=_response_timeout).get("result", {})
+def goto_url(url):
+    return cdp("Page.navigate", url=url)
+''')
+        original = helpers.cdp
+
+        @functools.wraps(original)
+        def traced(*args, **kwargs):
+            return original(*args, **kwargs)
+
+        namespace = {"cdp": traced, "goto_url": helpers.goto_url}
+        monkeypatch.setenv("BH_AGENT_WORKSPACE", "/tmp/browser-workspace")
+        exec(bu_cli._RUNTIME_PREAMBLE, namespace)
+        assert helpers.cdp is original
+        assert original.__defaults__ == (None, 30.0)
+        exec("goto_url('https://example.com')", namespace)
+        assert helpers.calls == [({"method": "Page.navigate", "params": {"url": "https://example.com"},
+                                  "session_id": None}, 30.0)]
+        assert namespace["workspace"] == "/tmp/browser-workspace"
+        assert {name for name in namespace if not name.startswith("_")} == {"cdp", "goto_url", "workspace"}
+        assert "_hermes_prepare_runtime" not in namespace
+        assert namespace["cdp"] is traced
+        assert traced.__defaults__ is None
+        assert helpers._send.__defaults__ == (5.0,)
+        assert helpers.IPC_CONNECT_TIMEOUT_SECONDS == 5.0
+        assert helpers.SCREENSHOT_IPC_RESPONSE_TIMEOUT_SECONDS == 60.0
+        defaults = original.__defaults__
+        monkeypatch.delenv("BH_AGENT_WORKSPACE")
+        exec(bu_cli._RUNTIME_PREAMBLE, namespace)
+        assert original.__defaults__ is defaults
+        assert namespace["workspace"] is None
+        assert capsys.readouterr() == ("", "")
+
+        # A harness whose cdp has another shape is left alone; workspace is still bound.
+        other = fake_browser_harness("DEFAULT_IPC_RESPONSE_TIMEOUT_SECONDS = 5.0\n"
+                                     "def cdp(method, session_id=None, **params): pass\n")
+        namespace = {}
+        exec(bu_cli._RUNTIME_PREAMBLE, namespace)
+        assert other.cdp.__defaults__ == (None,)
+        assert namespace["workspace"] is None
 
 
 class TestProviderPickerIntegration:
@@ -1089,12 +1174,13 @@ class TestBrowserExec:
         assert "error" in result
 
     def test_code_piped_on_stdin(self, tmp_path, monkeypatch):
-        cli = _fake_cli(tmp_path, 'code=$(cat)\necho "got:$code"\n')
+        cli = _fake_cli(tmp_path, 'code=$(cat)\nprintf "got:%s\\n" "$code"\n')
         monkeypatch.setattr(bu_cli, "_find_cli", lambda: [cli])
         result = json.loads(bu_cli.browser_exec('print("hi")'))
         assert result["success"] is True
         assert result["exit_code"] == 0
-        assert 'got:print("hi")' in result["output"]
+        assert result["output"].startswith("got:" + bu_cli._RUNTIME_PREAMBLE)
+        assert result["output"].endswith('print("hi")\n')
         assert "session" not in result
 
     def test_session_sets_bu_name(self, tmp_path, monkeypatch):
@@ -1422,6 +1508,8 @@ class TestLightpandaPreamble:
         assert result["success"] is True
         assert "_hermes_ensure_own_tab" not in result["output"]
         assert "print('payload')" in result["output"]
+        assert result["output"].startswith(bu_cli._RUNTIME_PREAMBLE)
+        assert result["output"].endswith("print('payload')")
 
 
 class TestLightpandaHeader:
