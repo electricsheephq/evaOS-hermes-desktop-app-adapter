@@ -1196,3 +1196,46 @@ class TestProjectVenvDirOutOfTree:
         assert hermes_constants.project_venv_dir(other) is None
         (checkout / ".venv").mkdir()
         assert hermes_constants.project_venv_dir(checkout) == checkout / ".venv"
+
+@pytest.mark.linux_only
+class TestSocketSafeTmpdir:
+    """Budget selection for the AF_UNIX-safe socket temp root."""
+
+    def _linux(self, monkeypatch, candidate):
+        monkeypatch.setattr("tempfile.gettempdir", lambda: candidate)
+
+    def test_default_budget_keeps_short_candidate(self, monkeypatch):
+        candidate = "/home/bob/hermes/cache/scratch"  # 29 chars < SOCKET_TMPDIR_MAX_LEN
+        self._linux(monkeypatch, candidate)
+        assert hermes_constants.socket_safe_tmpdir() == candidate
+
+    def test_default_budget_falls_back_when_candidate_too_long(self, monkeypatch):
+        candidate = "/home/mauricio/.hermes/cache/scratch"  # 36 chars: still within the default budget
+        self._linux(monkeypatch, candidate)
+        assert hermes_constants.socket_safe_tmpdir() == candidate
+
+    def test_default_budget_falls_back_on_deep_scratch(self, monkeypatch):
+        candidate = "/home/mauricio/.hermes/deeper/profile/cache/scratch"  # 51 chars > 50
+        self._linux(monkeypatch, candidate)
+        assert hermes_constants.socket_safe_tmpdir() == "/tmp"
+
+    def test_tighter_max_len_falls_back_earlier(self, monkeypatch):
+        candidate = "/home/bob/hermes/cache/scratch"  # fits the default budget...
+        self._linux(monkeypatch, candidate)
+        assert hermes_constants.socket_safe_tmpdir(max_len=25) == "/tmp"  # ...not a tighter one
+
+    def test_tighter_max_len_keeps_fitting_candidate(self, monkeypatch):
+        candidate = "/home/bob/hermes/cache/scratch"
+        self._linux(monkeypatch, candidate)
+        assert hermes_constants.socket_safe_tmpdir(max_len=30) == candidate
+
+
+@pytest.mark.macos_only
+def test_socket_safe_tmpdir_accepts_cloud_layout_budget(monkeypatch):
+    """Cloud callers can tighten the budget even on macOS's fixed fallback path."""
+    name = "hermes_" + "a" * 33 + "_ab12cd34"
+    budget = 103 - 1 - len(f"agent-browser-{name}/{name}.sock".encode())
+    monkeypatch.setattr("tempfile.gettempdir", lambda: "/" + "s" * 41)
+    root = hermes_constants.socket_safe_tmpdir(max_len=budget)
+    assert root == "/tmp"
+    assert len(f"{root}/agent-browser-{name}/default.sock".encode()) <= 103

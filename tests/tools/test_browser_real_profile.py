@@ -289,6 +289,7 @@ class TestRealProfileCdpLaunch:
              patch.object(bt.subprocess, "Popen", side_effect=fake_popen), \
              patch.object(bt_real_profile, "_agent_browser_get_cdp",
                           side_effect=["http://127.0.0.1:5000", "http://127.0.0.1:41000"]), \
+             patch.object(bt, "_socket_safe_tmpdir", return_value=str(tmp_path)), \
              patch.object(bt_real_profile, "_cdp_http_ready", return_value=True), \
              patch.object(bt_real_profile, "_cdp_on_data_dir", return_value=False), \
              patch.object(bt_real_profile, "_agent_browser_close_session",
