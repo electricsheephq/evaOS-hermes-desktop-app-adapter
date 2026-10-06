@@ -24,7 +24,9 @@ from tools.mcp_tool_content import (
     _MCP_HARD_RESULT_CAP_CHARS, _cache_mcp_audio_block, _cache_mcp_image_block,
     _render_mcp_dropped_block_notice, _render_mcp_resource_block, _strip_reserved_meta_keys,
     _truncate_mcp_text_result)
-from tools.mcp_tool_errors import _is_auth_error, _is_session_expired_error
+from tools.mcp_tool_errors import (
+    _capture_http_rejection, _http_rejection_detail, _is_auth_error, _is_session_expired_error,
+    _unwrap_exception_group)
 
 logger = logging.getLogger("tools.mcp_tool")
 _MISSING = object()
@@ -444,7 +446,11 @@ def _dispatch(server_name: str, server: Any, op: str, call, tool_timeout: float,
             if recovered is not None:
                 return recovered
         on_final_failure(exc)
-        return tool_error(_sanitize_error(f"MCP call failed: {type(exc).__name__}: {_exc_str(exc)}"))
+        snapshot = getattr(exc, "_mcp_http_rejection", None)
+        detail = (_http_rejection_detail(_unwrap_exception_group(exc), snapshot)
+                  if isinstance(snapshot, dict) and snapshot else "")
+        return tool_error(_sanitize_error(
+            f"MCP call failed: {type(exc).__name__}: {_exc_str(exc)}{detail}"))
 
 
 @asynccontextmanager
@@ -673,7 +679,8 @@ def _make_tool_handler(server_name: str, tool_name: str, tool_timeout: float):
         read_only = _tool_is_read_only(server_name, tool_name)
 
         async def _call():
-            async with server._rpc_lock, _track_inflight_rpc(server, server_name, op, retry_safe=read_only):
+            async with (server._rpc_lock, _track_inflight_rpc(server, server_name, op, retry_safe=read_only),
+                        _capture_http_rejection(server)):
                 server._pending_call_context = contextvars.copy_context()  # for the elicitation callback
                 try:
                     result = await _call_tool_racing_stdio_death(server, server_name, tool_name, args)
@@ -712,7 +719,7 @@ def _make_utility_handler(op: str, log_label: str, rpc, render, required: Option
                 return tool_error(f"Missing required parameter '{required}'")
 
             async def _call():
-                async with server._rpc_lock:
+                async with server._rpc_lock, _capture_http_rejection(server):
                     result = await rpc(server.session, args, server_name)
                 return json.dumps(render(result, server_name), ensure_ascii=False)
             return _dispatch(

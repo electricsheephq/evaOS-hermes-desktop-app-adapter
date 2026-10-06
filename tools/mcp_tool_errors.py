@@ -6,6 +6,8 @@ import asyncio
 import contextlib
 import errno
 import importlib
+import itertools
+import json
 import logging
 import os
 import re
@@ -90,6 +92,24 @@ def _is_streamable_http_rejection(exc: BaseException) -> bool:
 
 
 _HTTP_REJECTION_BODY_CHARS = 300
+_HTTP_REJECTION_SEQ = itertools.count(1)
+_REJECTION_SECRET_KEY = re.compile(
+    r"token|secret|password|passwd|api[_-]?key|apikey|authorization|credential|"
+    r"client[_-]?secret|session[_-]?id|cookie", re.IGNORECASE)
+
+
+def _redact_rejection_body(text: str) -> str:
+    def _redact(match):
+        try:
+            key = json.loads(match[1])
+        except ValueError:  # an invalid escape must not cost the whole body
+            key = match[1][1:-1]
+        if _REJECTION_SECRET_KEY.search(key):
+            return f'{match[1]}{match[2]}"[REDACTED]"'
+        return match[0]
+
+    text = re.sub(r'("(?:\\.|[^"\\])*")(\s*:\s*)"(?:\\.|[^"\\])*"', _redact, text)
+    return _sanitize_error(text)
 
 
 def _make_http_rejection_recorder(sink: dict):
@@ -107,13 +127,56 @@ def _make_http_rejection_recorder(sink: dict):
         if response.headers.get("content-type", "").split(";")[0].strip().lower() != "text/event-stream":
             try:
                 raw = await response.aread()  # buffered: the SDK's own aread() afterwards sees the same bytes
-                body = " ".join(raw[:_HTTP_REJECTION_BODY_CHARS * 4].decode("utf-8", "replace").split())
+                # Redact BEFORE truncating (a secret cut mid-value would escape the pattern); the 64 KiB
+                # bound only caps the work on a huge error page.
+                body = _redact_rejection_body(" ".join(raw[:65536].decode("utf-8", "replace").split()))
             except Exception:  # the failure itself is still reported, just without the body
                 body = ""
-        sink.update(status=response.status_code, method=response.request.method,
-                    url=str(response.request.url), body=body[:_HTTP_REJECTION_BODY_CHARS])
+        try:
+            url = str(response.request.url.copy_with(query=None, fragment=None))
+        except Exception:
+            url = str(response.request.url).split("?", 1)[0].split("#", 1)[0]
+        sink.update(seq=next(_HTTP_REJECTION_SEQ), status=response.status_code, method=response.request.method,
+                    url=url, body=body[:_HTTP_REJECTION_BODY_CHARS])
 
     return _record
+
+
+@contextlib.asynccontextmanager
+async def _capture_http_rejection(server):
+    # Unlocked reconnect discovery may be attributed within the same failure window;
+    # _retry_once discards retry exceptions, so the first exception and its detail stay paired.
+    sink = getattr(server, "_http_rejection", None)
+    mark = sink.get("seq") if isinstance(sink, dict) else None
+    try:
+        yield
+    except Exception as exc:
+        if isinstance(sink, dict) and sink.get("seq") is not None and sink.get("seq") != mark:
+            try:
+                setattr(exc, "_mcp_http_rejection", dict(sink))
+            except Exception:
+                pass
+        raise
+
+
+def _http_rejection_detail(root: BaseException, rejection: dict) -> str:
+    """`` (HTTP <status> from <method> <url>: <body head>)`` when *root* is the SDK's opaque
+    ``-32603 Server returned an error response`` and the recorder saw the rejection, else ``""``.
+
+    Takes the ALREADY-UNWRAPPED root so a caller that has one does not unwrap twice. Split out of
+    ``_describe_http_failure`` so the tool-CALL path can append the same detail to its own message
+    without inheriting the connect path's base text (which drops ``_exc_str``'s repr fallback for
+    empty-message exceptions, issue #19417)."""
+    opaque = (getattr(getattr(root, "error", None), "code", None) == -32603
+              and "server returned an error response" in str(root).lower())
+    status = rejection.get("status")
+    if not (opaque and status is not None):
+        return ""
+    detail = f"HTTP {status} from {rejection.get('method', '')} {rejection.get('url', '')}"
+    body = rejection.get("body")
+    if body:
+        detail += f": {body}"
+    return f" ({detail})"
 
 
 def _describe_http_failure(exc: BaseException, rejection: dict) -> str:
@@ -121,15 +184,7 @@ def _describe_http_failure(exc: BaseException, rejection: dict) -> str:
     ``-32603 Server returned an error response`` and the recorder saw the rejection, the HTTP status,
     request URL and body head are appended so the message names what the server actually said."""
     root = _unwrap_exception_group(exc)
-    text = str(root)
-    opaque = (getattr(getattr(root, "error", None), "code", None) == -32603
-              and "server returned an error response" in text.lower())
-    if not (opaque and rejection):
-        return text
-    detail = f"HTTP {rejection['status']} from {rejection['method']} {rejection['url']}"
-    if rejection["body"]:
-        detail += f": {rejection['body']}"
-    return f"{text} ({detail})"
+    return f"{str(root)}{_http_rejection_detail(root, rejection)}"
 
 
 def _unwrap_exception_group(exc: BaseException) -> BaseException:
