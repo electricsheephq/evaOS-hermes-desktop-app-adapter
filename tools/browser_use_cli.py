@@ -4,6 +4,7 @@ When browser.backend is "browser-use", the model gets ``browser_exec`` tool
 instead of default browser tools
 """
 
+import ast
 import contextlib
 import importlib
 import json
@@ -34,6 +35,36 @@ _PRIVATE_BROWSER_SENTINEL = "_HERMES_BU_PRIVATE_BROWSER"
 # Internal route provenance: this exec resolved to a browser on the Bot Desktop display and must use
 # the same human-control lease fence as the built-in browser tools. Popped before launching the CLI.
 _BOT_DESKTOP_BROWSER_SENTINEL = "_HERMES_BU_BOT_DESKTOP_BROWSER"
+
+# Prepended to EVERY browser_exec call: raises the harness's 5 s default CDP response timeout to 30 s (cloud
+# navigations routinely exceed 5 s; screenshots already get 60 s) and binds `workspace` for the model's code.
+# Helpers such as goto_url call the module's ORIGINAL cdp, not the harness's traced exec-global wrapper, so the
+# default is patched on that function object.
+_RUNTIME_PREAMBLE_SOURCE = """\
+def _hermes_prepare_runtime():
+    try:
+        import browser_harness.helpers as _helpers
+        _cdp = _helpers.cdp
+        _args = _cdp.__code__.co_varnames[:_cdp.__code__.co_argcount]
+        _defaults = _cdp.__defaults__
+        if not _defaults or len(_defaults) > len(_args):
+            return
+        _index = _args.index("_response_timeout") - (len(_args) - len(_defaults))
+        if _index < 0:
+            return
+        _timeout = _defaults[_index]
+        if _timeout == _helpers.DEFAULT_IPC_RESPONSE_TIMEOUT_SECONDS and _timeout < 30.0:
+            _cdp.__defaults__ = _defaults[:_index] + (30.0,) + _defaults[_index + 1:]
+    except Exception:
+        pass
+_hermes_prepare_runtime()
+del _hermes_prepare_runtime
+import os as _hermes_os
+workspace = _hermes_os.environ.get("BH_AGENT_WORKSPACE")
+del _hermes_os
+"""
+# One line, so the model's traceback line numbers shift by one, not by the preamble's length.
+_RUNTIME_PREAMBLE = f"exec({_RUNTIME_PREAMBLE_SOURCE!r})\n"
 
 # Prepended to the model's code for named sessions on SHARED browsers (a /browser connect CDP override): the
 # harness daemon attaches to the first existing page at startup, so two fresh named daemons can land on the
@@ -73,6 +104,39 @@ def _hermes_ensure_own_tab():
 _hermes_ensure_own_tab()
 del _hermes_ensure_own_tab
 """
+
+
+# The harness skips daemon bootstrap only when stdin STARTS with one of these calls (run.py ``cloud_admin``).
+_CLOUD_ADMIN_CALLS = ("start_remote_daemon(", "stop_remote_daemon(")
+
+
+def _with_preambles(code: str, own_tab: bool) -> str:
+    """Prepend the runtime (and, for shared browsers, own-tab) preamble to the model's code. A leading cloud-admin
+    call gets neither: it drives no page, and any prefix would hide it from the harness's leading-call check. A
+    leading ``from __future__`` block stays first, as Python requires."""
+    if code.lstrip().startswith(_CLOUD_ADMIN_CALLS):
+        return code
+    preamble = _RUNTIME_PREAMBLE + (_OWN_TAB_PREAMBLE if own_tab else "")
+    try:
+        body = ast.parse(code).body
+    except SyntaxError:  # the harness reports it; nothing to keep in front
+        body = []
+    end = None  # (line, column) just past a leading docstring and/or `from __future__` block
+    for index, node in enumerate(body):
+        future = isinstance(node, ast.ImportFrom) and node.module == "__future__"
+        docstring = (index == 0 and isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant)
+                     and isinstance(node.value.value, str))
+        if not (future or docstring):
+            break
+        end = (node.end_lineno, node.end_col_offset)
+    if end is None:
+        return preamble + code
+    lines = code.splitlines(keepends=True)
+    last = lines[end[0] - 1].encode()  # ast columns are UTF-8 byte offsets
+    # Split at the column, so a statement sharing the line (`...; goto_url(x)`) runs after the preamble.
+    rest = last[end[1]:].decode().lstrip(" \t").removeprefix(";").lstrip(" \t")
+    head = "".join(lines[:end[0] - 1]) + last[:end[1]].decode() + "\n"
+    return head + preamble + (rest if rest.strip() else "") + "".join(lines[end[0]:])
 
 _DEFAULT_TIMEOUT_S = 300
 _MIN_TIMEOUT_S = 5
@@ -708,8 +772,7 @@ def browser_exec(code: str, session: str = "", timeout_s: int = _DEFAULT_TIMEOUT
     # SHARED browser (/browser connect CDP override): pin each named session to its own tab (see
     # _OWN_TAB_PREAMBLE). Private per-name browsers skip this — nothing to collide with.
     private_browser = env.pop(_PRIVATE_BROWSER_SENTINEL, None)  # always pop: never exported to the CLI
-    if session and not private_browser:
-        code = _OWN_TAB_PREAMBLE + code
+    code = _with_preambles(code, own_tab=bool(session and not private_browser))
 
     workspace = _workspace_dir(task_id)
     if workspace:
@@ -778,7 +841,8 @@ _HEADER_BASE = (
     "comment describing the step for the user in plain language, max 60 chars "
     "(e.g. `# Searching Amazon for paper towels`) — the UI shows it as the step label.\n\n"
     "STATE: the browser session and workspace persist across calls; Python variables do NOT (fresh "
-    "interpreter each call). The workspace dir is $BH_AGENT_WORKSPACE (also `workspace` in every result); "
+    "interpreter each call). The workspace path is available in `code` as the variable `workspace` "
+    "(and as $BH_AGENT_WORKSPACE), and in every result as `workspace`; "
     "functions defined in agent_helpers.py there are auto-imported into every call. For multi-item tasks "
     "('all N products / every entry'), append each batch to a JSON/CSV file in the workspace, then read it "
     "back and aggregate in code — dedupe/count/sort with Python, not in your head — and verify the "
