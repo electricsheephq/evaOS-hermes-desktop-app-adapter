@@ -94,8 +94,8 @@ def _is_streamable_http_rejection(exc: BaseException) -> bool:
 _HTTP_REJECTION_BODY_CHARS = 300
 _HTTP_REJECTION_SEQ = itertools.count(1)
 _REJECTION_SECRET_KEY = re.compile(
-    r"token|secret|password|passwd|api[_-]?key|apikey|authorization|credential|"
-    r"client[_-]?secret|session[_-]?id|cookie", re.IGNORECASE)
+    r"token|secret|password|passwd|api[_-]?key|apikey|authorization|auth(?![a-z])|credential|private[_-]?key|"
+    r"access[_-]?key|signature|session[_-]?id|cookie", re.IGNORECASE)
 
 
 def _redact_json_value(value):
@@ -132,6 +132,15 @@ def _redact_rejection_body(text: str) -> str:
             return f'{match[1]}{match[2]}"[REDACTED]"'
         return match[0]
 
+    # Fail closed: a sensitive key that owns an object or list in unparseable JSON hides everything after it.
+    for match in re.finditer(r'("(?:\\.|[^"\\])*")(\s*:\s*)[\[{]', text):
+        try:
+            key = json.loads(match[1])
+        except ValueError:
+            key = match[1][1:-1]
+        if _REJECTION_SECRET_KEY.search(key):
+            text = text[:match.end(2)] + '"[REDACTED]"'
+            break
     # JSON-style "key": "string" (also one left unterminated by the read bound) and "key": scalar.
     text = re.sub(r'("(?:\\.|[^"\\])*")(\s*:\s*)"(?:\\.|[^"\\])*(?:"|\\?\Z)', _redact, text)
     text = re.sub(r'("(?:\\.|[^"\\])*")(\s*:\s*)(?=[-\w.])[^\s,}\]]+', _redact, text)
