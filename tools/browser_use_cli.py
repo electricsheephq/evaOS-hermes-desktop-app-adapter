@@ -117,22 +117,26 @@ def _with_preambles(code: str, own_tab: bool) -> str:
     if code.lstrip().startswith(_CLOUD_ADMIN_CALLS):
         return code
     preamble = _RUNTIME_PREAMBLE + (_OWN_TAB_PREAMBLE if own_tab else "")
-    split = 0
     try:
         body = ast.parse(code).body
     except SyntaxError:  # the harness reports it; nothing to keep in front
         body = []
+    end = None  # (line, column) just past a leading docstring and/or `from __future__` block
     for index, node in enumerate(body):
-        if isinstance(node, ast.ImportFrom) and node.module == "__future__":
-            split = node.end_lineno
-        elif not (index == 0 and isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant)
-                  and isinstance(node.value.value, str)):  # a leading docstring may precede the block
+        future = isinstance(node, ast.ImportFrom) and node.module == "__future__"
+        docstring = (index == 0 and isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant)
+                     and isinstance(node.value.value, str))
+        if not (future or docstring):
             break
+        end = (node.end_lineno, node.end_col_offset)
+    if end is None:
+        return preamble + code
     lines = code.splitlines(keepends=True)
-    head = "".join(lines[:split])
-    if head and not head.endswith("\n"):
-        head += "\n"
-    return head + preamble + "".join(lines[split:])
+    last = lines[end[0] - 1].encode()  # ast columns are UTF-8 byte offsets
+    # Split at the column, so a statement sharing the line (`...; goto_url(x)`) runs after the preamble.
+    rest = last[end[1]:].decode().lstrip(" \t").removeprefix(";").lstrip(" \t")
+    head = "".join(lines[:end[0] - 1]) + last[:end[1]].decode() + "\n"
+    return head + preamble + (rest if rest.strip() else "") + "".join(lines[end[0]:])
 
 _DEFAULT_TIMEOUT_S = 300
 _MIN_TIMEOUT_S = 5

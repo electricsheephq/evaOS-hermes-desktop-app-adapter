@@ -893,6 +893,13 @@ def goto_url(url):
         sent = json.loads(bu_cli.browser_exec(future))["output"]
         assert sent.startswith('"""doc"""\nfrom __future__ import annotations\n' + bu_cli._RUNTIME_PREAMBLE)
         compile(sent, "<browser_exec>", "exec")
+        # A module docstring stays the docstring, and a statement sharing the future import's line runs after
+        # the preamble (so `workspace` exists by then).
+        for code in ('"""job docs"""\nassert __doc__ == "job docs"',
+                     'from __future__ import annotations; seen = workspace'):
+            namespace = {}
+            exec(compile(json.loads(bu_cli.browser_exec(code))["output"], "<browser_exec>", "exec"), namespace)
+        assert "seen" in namespace
         for admin in ('start_remote_daemon("r7k2")', 'stop_remote_daemon("r7k2")'):
             assert json.loads(bu_cli.browser_exec(admin))["output"] == admin
 
