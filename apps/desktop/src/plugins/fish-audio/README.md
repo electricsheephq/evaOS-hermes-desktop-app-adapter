@@ -25,9 +25,9 @@ provider (PCS 0.1.166). **Use** writes the voice to the profile layer, where the
 
 | | |
 |---|---|
-| Release | v1.0.4 (`715df3da7eaf0d9a237ea20af9eaa0e2de9365dc`) |
+| Release | v1.3.0 (`6606908528f53ce698bbf74396bc33c0b616eaee`) |
 | File | `desktop/plugin.js` |
-| sha256 | `631c85ed4ac3256fb74a5385bafcbdeaba2a44749166acef24774c522ab6775e` |
+| sha256 | `f837e2165314eaa9eee34fea2dda7f0d1328fdeb0042ae767b91beef3259de74` |
 | License | Apache-2.0 (`LICENSE`) |
 
 It imports only `@hermes/plugin-sdk`, `react` and `react/jsx-runtime`. Every SDK name it imports is exported by this
