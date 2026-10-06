@@ -95,7 +95,7 @@ _HTTP_REJECTION_BODY_CHARS = 300
 _HTTP_REJECTION_SEQ = itertools.count(1)
 _REJECTION_SECRET_KEY = re.compile(
     r"token|secret|password|passwd|api[_-]?key|apikey|authorization|auth(?![a-z])|credential|private[_-]?key|"
-    r"access[_-]?key|signature|session[_-]?id|cookie", re.IGNORECASE)
+    r"access[_-]?key|(?<![a-z])key(?![a-z])|jwt|signature|session[_-]?id|cookie", re.IGNORECASE)
 
 
 def _redact_json_value(value):
@@ -144,9 +144,11 @@ def _redact_rejection_body(text: str) -> str:
     # JSON-style "key": "string" (also one left unterminated by the read bound) and "key": scalar.
     text = re.sub(r'("(?:\\.|[^"\\])*")(\s*:\s*)"(?:\\.|[^"\\])*(?:"|\\?\Z)', _redact, text)
     text = re.sub(r'("(?:\\.|[^"\\])*")(\s*:\s*)(?=[-\w.])[^\s,}\]]+', _redact, text)
-    # key=value and Key: value (form bodies, header echoes); an auth scheme word takes its token with it.
-    return re.sub(r'(?<![\w.-])([\w.-]*(?:' + _REJECTION_SECRET_KEY.pattern + r')[\w.-]*)(\s*[=:]\s*)'
-                  r'(?:(?:bearer|basic|token|digest)\s+)?[^\s&,;"]+',
+    key_name = r'(?<![\w.-])([\w.-]*(?:' + _REJECTION_SECRET_KEY.pattern + r')[\w.-]*)'
+    # Key: value header echoes (cookie lists, Digest parameters): fail closed through the end of the excerpt.
+    text = re.sub(key_name + r'(\s*:\s*)\S.*\Z', r'\1\2[REDACTED]', text, flags=re.IGNORECASE | re.DOTALL)
+    # key=value form fields; an auth scheme word takes its token with it.
+    return re.sub(key_name + r'(\s*=\s*)(?:(?:bearer|basic|token|digest)\s+)?[^\s&,;"]+',
                   r'\1\2[REDACTED]', text, flags=re.IGNORECASE)
 
 
