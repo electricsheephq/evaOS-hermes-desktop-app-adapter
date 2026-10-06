@@ -108,7 +108,7 @@ def _redact_rejection_body(text: str) -> str:
             return f'{match[1]}{match[2]}"[REDACTED]"'
         return match[0]
 
-    text = re.sub(r'("(?:\\.|[^"\\])*")(\s*:\s*)"(?:\\.|[^"\\])*"', _redact, text)
+    text = re.sub(r'("(?:\\.|[^"\\])*")(\s*:\s*)"(?:\\.|[^"\\])*(?:"|\\?\Z)', _redact, text)
     return _sanitize_error(text)
 
 
@@ -127,15 +127,16 @@ def _make_http_rejection_recorder(sink: dict):
         if response.headers.get("content-type", "").split(";")[0].strip().lower() != "text/event-stream":
             try:
                 raw = await response.aread()  # buffered: the SDK's own aread() afterwards sees the same bytes
-                # Redact BEFORE truncating (a secret cut mid-value would escape the pattern); the 64 KiB
-                # bound only caps the work on a huge error page.
+                # Redact BEFORE excerpt truncation, including values cut by the 64 KiB read bound.
                 body = _redact_rejection_body(" ".join(raw[:65536].decode("utf-8", "replace").split()))
             except Exception:  # the failure itself is still reported, just without the body
                 body = ""
         try:
-            url = str(response.request.url.copy_with(query=None, fragment=None))
+            url = str(response.request.url.copy_with(
+                path="", query=None, fragment=None, username="", password=""))
         except Exception:
-            url = str(response.request.url).split("?", 1)[0].split("#", 1)[0]
+            parsed = urlparse(str(response.request.url))
+            url = f"{parsed.scheme}://{parsed.netloc.rsplit('@', 1)[-1]}"
         sink.update(seq=next(_HTTP_REJECTION_SEQ), status=response.status_code, method=response.request.method,
                     url=url, body=body[:_HTTP_REJECTION_BODY_CHARS])
 

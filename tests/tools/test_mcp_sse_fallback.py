@@ -113,7 +113,7 @@ def test_opaque_sdk_rejection_is_reported_with_the_servers_status_and_body(monke
     recorded = asyncio.run(_real_client_roundtrip(400, "text/plain; charset=utf-8"))
     assert isinstance(recorded["seq"], int)
     assert {key: value for key, value in recorded.items() if key != "seq"} == {
-        "status": 400, "method": "POST", "url": "http://127.0.0.1:1/mcp", "body": body}
+        "status": 400, "method": "POST", "url": "http://127.0.0.1:1", "body": body}
 
     def _connect_sees(rejection):
         task, _calls = _task(monkeypatch, ExceptionGroup("g", [_SdkInternalError()]),
@@ -126,7 +126,7 @@ def test_opaque_sdk_rejection_is_reported_with_the_servers_status_and_body(monke
 
     with caplog.at_level("WARNING", logger="tools.mcp_tool"):
         message = _connect_sees(recorded)
-    detail = "Server returned an error response (HTTP 400 from POST http://127.0.0.1:1/mcp: " + body + ")"
+    detail = "Server returned an error response (HTTP 400 from POST http://127.0.0.1:1: " + body + ")"
     assert detail in message and "SSE: no sse" in message
     assert any(detail in rec.getMessage() for rec in caplog.records), caplog.text
 
