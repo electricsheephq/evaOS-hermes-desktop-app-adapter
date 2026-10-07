@@ -878,13 +878,17 @@ def _redact_phone(m):
     return phone[:keep] + "****" + phone[-keep:]
 
 
-# Browserbase's own live-view URL only: /debug/<session>/devtools/page/<page> plus simple query params
-# (``t=<viewer token>``, ``debug=true``). Anything glued on after it (``;``, ``,`` …) is outside the span.
+# Browserbase's own live-view URL only: /debug/<session>/devtools/page/<page>, then optionally its viewer token
+# ``?t=<compact JWT/JWE, up to 5 dot-separated parts>`` and ``debug=true`` — nothing else. The lookahead refuses
+# a span that would end inside a longer token (a sentence-ending ``.`` is fine), so anything glued on (``&x=…``, ``.sk-…``) falls outside the span
+# and is redacted normally; at worst the whole viewer token is masked again (fails safe).
 _LIVE_VIEW_URL_RE = re.compile(
     r"(?<![A-Za-z0-9+.-])https://(?i:www\.browserbase\.com)"
     r"/devtools-fullscreen/inspector\.html\?wss=connect\.browserbase\.com/debug/"
     r"[A-Za-z0-9-]+/devtools/page/[A-Za-z0-9-]+"
-    r"(?:[?&][A-Za-z0-9_]+=[A-Za-z0-9._-]*)*"
+    r"(?:\?t=[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]*){0,4})?"
+    r"(?:[?&]debug=true)?"
+    r"(?![A-Za-z0-9_~%+=&-]|\.[A-Za-z0-9_~%+=&-])"
 )
 
 
@@ -938,6 +942,8 @@ def redact_sensitive_text(text: str, *, force: bool = False, code_file: bool = F
     if not text:
         return text
     if preserve_live_view_urls:
+        # Vault values are a hard egress boundary even inside a preserved span: scrub them first.
+        text = redact_registered_vault_values(text)
         parts = []
         cursor = 0
         for match in _LIVE_VIEW_URL_RE.finditer(text):

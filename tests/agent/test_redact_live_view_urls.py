@@ -90,3 +90,26 @@ def test_secret_glued_to_live_view_url_is_still_masked(glue):
     out = redact.redact_sensitive_text(URL + glue + secret, preserve_live_view_urls=True)
     assert URL in out
     assert secret not in out
+
+
+SECRET = "sk-ant-api03-" + "x" * 90
+
+
+# ``-`` / ``_`` glue is left out: the baseline redactor (no opt-in) also misses a prefix secret glued that way.
+@pytest.mark.parametrize("suffix", [".", "&x=", "&password=", "&debug=true&x=", "?x=", ".x&y="])
+@pytest.mark.parametrize("forced", [False, True])
+def test_secret_appended_inside_url_shape_is_still_masked(suffix, forced):
+    text = URL + suffix + SECRET
+    if forced:
+        out = redact.redact_for_egress(text, preserve_live_view_urls=True)
+    else:
+        out = redact.redact_sensitive_text(text, preserve_live_view_urls=True)
+    assert SECRET not in out
+
+
+def test_vault_value_inside_preserved_span_is_scrubbed(monkeypatch):
+    vault = "syntheticVaultPassword00991"
+    monkeypatch.setattr(redact, "redact_registered_vault_values", lambda t: t.replace(vault, "[vault]"))
+    for text in (URL.replace("FAKEPAGE", vault), URL + "&x=" + vault):
+        assert vault not in redact.redact_sensitive_text(text, preserve_live_view_urls=True)
+        assert vault not in redact.redact_for_egress(text, preserve_live_view_urls=True)
