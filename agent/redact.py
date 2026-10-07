@@ -878,14 +878,28 @@ def _redact_phone(m):
     return phone[:keep] + "****" + phone[-keep:]
 
 
+# Browserbase's own live-view URL only: /debug/<session>/devtools/page/<page> plus simple query params
+# (``t=<viewer token>``, ``debug=true``). Anything glued on after it (``;``, ``,`` …) is outside the span.
+_LIVE_VIEW_URL_RE = re.compile(
+    r"(?<![A-Za-z0-9+.-])https://(?i:www\.browserbase\.com)"
+    r"/devtools-fullscreen/inspector\.html\?wss=connect\.browserbase\.com/debug/"
+    r"[A-Za-z0-9-]+/devtools/page/[A-Za-z0-9-]+"
+    r"(?:[?&][A-Za-z0-9_]+=[A-Za-z0-9._-]*)*"
+)
+
+
 def redact_sensitive_text(text: str, *, force: bool = False, code_file: bool = False,
                           file_read: bool = False, secret_file: bool = False,
-                          redact_url_credentials: bool = False) -> str:
+                          redact_url_credentials: bool = False,
+                          preserve_live_view_urls: bool = False) -> str:
     """Apply all redaction patterns to a block of text.
 
     Safe on any string. Enabled by default (``security.redact_secrets: false``
     disables); ``force=True`` is for safety boundaries that must never return
     raw secrets regardless.
+
+    ``preserve_live_view_urls=True``: preserve strict Browserbase viewer URL spans
+    for assistant handoffs; all surrounding text still uses the same masking policy.
 
     ``redact_url_credentials=True``: also redact credential-named query params
     and ``user:pass@`` userinfo — off by default because OAuth-callback /
@@ -923,6 +937,24 @@ def redact_sensitive_text(text: str, *, force: bool = False, code_file: bool = F
     text = text if isinstance(text, str) else str(text)
     if not text:
         return text
+    if preserve_live_view_urls:
+        parts = []
+        cursor = 0
+        for match in _LIVE_VIEW_URL_RE.finditer(text):
+            end = match.start() + len(match.group().rstrip(".,;:!?"))
+            parts.append(redact_sensitive_text(
+                text[cursor:match.start()], force=force, code_file=code_file,
+                file_read=file_read, secret_file=secret_file,
+                redact_url_credentials=redact_url_credentials,
+            ))
+            parts.append(text[match.start():end])
+            cursor = end
+        if parts:
+            parts.append(redact_sensitive_text(
+                text[cursor:], force=force, code_file=code_file, file_read=file_read,
+                secret_file=secret_file, redact_url_credentials=redact_url_credentials,
+            ))
+            return "".join(parts)
     # Vault secrets are a hard model-egress boundary: scrubbed regardless of the redact_secrets preference.
     text = redact_registered_vault_values(text)
     if not (force or _redact_enabled()):
@@ -1149,17 +1181,25 @@ REDACTION_UNAVAILABLE = "[redaction-unavailable]"
 _BEARER_RESIDUE_RE = re.compile(r"\bBearer\s+(?:\[[^\]]+\]|[A-Za-z0-9._~+/-]{20,}=*)", re.IGNORECASE)
 
 
-def redact_for_egress(text: str) -> str:
+def redact_for_egress(text: str, *, preserve_live_view_urls: bool = False) -> str:
     """The one scrub for text leaving the process for a remote reader (chat platforms, A2A peers,
     telemetry). ``redact_sensitive_text(force=True)`` — the only secret-pattern list — plus a bearer
     sweep, because a ``Bearer <opaque>`` value with no vendor prefix carries no shape the prefix
     matcher can key on. Fails CLOSED: if the redactor raises, the raw text is never returned."""
     text = str(text or "")
     try:
-        text = redact_sensitive_text(text, force=True)
+        text = redact_sensitive_text(text, force=True, preserve_live_view_urls=preserve_live_view_urls)
     except Exception:
         return REDACTION_UNAVAILABLE
     if "earer" in text:
+        if preserve_live_view_urls:
+            parts, cursor = [], 0
+            for match in _LIVE_VIEW_URL_RE.finditer(text):
+                parts.append(_BEARER_RESIDUE_RE.sub("Bearer [redacted]", text[cursor:match.start()]))
+                parts.append(match.group())
+                cursor = match.end()
+            parts.append(_BEARER_RESIDUE_RE.sub("Bearer [redacted]", text[cursor:]))
+            return "".join(parts)
         text = _BEARER_RESIDUE_RE.sub("Bearer [redacted]", text)
     return text
 
