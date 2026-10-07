@@ -152,7 +152,10 @@ class TestPerJobToolsetPluginMerge:
     @pytest.fixture
     def plugin_keys(self, monkeypatch):
         keys = {"fixture_plugin", "other_plugin"}
-        monkeypatch.setattr("hermes_cli.tools_config._get_plugin_toolset_keys", lambda: keys)
+        monkeypatch.setattr("hermes_cli.plugins.discover_plugins", lambda: None)
+        monkeypatch.setattr(
+            "hermes_cli.plugins.get_plugin_toolsets", lambda: [(key, key, "") for key in keys],
+        )
         return keys
 
     @pytest.mark.parametrize("no_mcp", [False, True])
@@ -164,7 +167,7 @@ class TestPerJobToolsetPluginMerge:
             def fail_lookup():
                 raise RuntimeError("fixture discovery failure")
 
-            monkeypatch.setattr("hermes_cli.tools_config._get_plugin_toolset_keys", fail_lookup)
+            monkeypatch.setattr("hermes_cli.plugins.discover_plugins", fail_lookup)
         per_job = ["terminal", "file"] + (["no_mcp"] if no_mcp else [])
         cfg = {"mcp_servers": {"fixture_mcp": {"enabled": True}}}
         result = _resolve_cron_enabled_toolsets({"enabled_toolsets": per_job}, cfg)
@@ -176,7 +179,7 @@ class TestPerJobToolsetPluginMerge:
             expected |= plugin_keys
         assert set(result) == expected
         assert result[:2] == ["terminal", "file"]
-        warnings = [r for r in caplog.records if r.name == "cron.scheduler" and r.levelname == "WARNING"]
+        warnings = [r for r in caplog.records if r.name == "cron.scheduler_toolsets" and r.levelname == "WARNING"]
         assert len(warnings) == int(discovery_failure)
         if discovery_failure:
             assert "plugin toolset lookup failed" in warnings[0].message
@@ -191,6 +194,72 @@ class TestPerJobToolsetPluginMerge:
         )
         assert result == native + ["fixture_plugin", "fixture_mcp"]
         assert "other_plugin" not in result
+
+    @pytest.mark.parametrize("selection", ["uninstalled_plugin", "unknown_toolset"])
+    def test_stale_or_unknown_plugin_selection_does_not_widen(self, plugin_keys, selection):
+        cfg = {
+            "known_plugin_toolsets": {"telegram": ["uninstalled_plugin"]},
+            "mcp_servers": {"fixture_mcp": {"enabled": True}},
+        }
+        per_job = ["terminal", selection]
+
+        assert _resolve_cron_enabled_toolsets({"enabled_toolsets": per_job}, cfg) == (
+            per_job + ["fixture_mcp"]
+        )
+
+    def test_real_plugin_discovery_respects_profile_and_stale_selection(self, tmp_path, monkeypatch):
+        from agent.secret_scope import set_multiplex_active
+        from cron.scheduler_provider import _profile_cron_scope
+        from hermes_cli.config_effective import load_user_config_effective
+        from hermes_cli.plugins import get_plugin_toolsets
+
+        home_a = tmp_path / "home-a"
+        home_b = tmp_path / "home-b"
+        plugin = home_a / "plugins" / "cron-fixture"
+        plugin.mkdir(parents=True)
+        home_b.mkdir()
+        (plugin / "plugin.yaml").write_text("name: cron-fixture\nversion: '0.1.0'\n")
+        (plugin / "__init__.py").write_text(
+            "def register(ctx):\n"
+            "    ctx.register_tool(\n"
+            "        name='cron_fixture_probe', toolset='cron_fixture_tools',\n"
+            "        schema={'name': 'cron_fixture_probe', 'description': 'Fixture',\n"
+            "                'parameters': {'type': 'object', 'properties': {}}},\n"
+            "        handler=lambda args, **kwargs: 'ok',\n"
+            "    )\n"
+        )
+        (home_a / "config.yaml").write_text(
+            "plugins:\n  enabled: [cron-fixture]\n"
+            "known_plugin_toolsets:\n  telegram: [retired_cron_fixture]\n"
+        )
+        (home_b / "config.yaml").write_text("plugins:\n  enabled: []\n")
+        empty_bundled = tmp_path / "empty-bundled"
+        empty_bundled.mkdir()
+        monkeypatch.setenv("HERMES_BUNDLED_PLUGINS", str(empty_bundled))
+        monkeypatch.setenv("HERMES_ENABLE_PROJECT_PLUGINS", "0")
+        monkeypatch.setenv("HERMES_HOME", str(home_a))
+        set_multiplex_active(True)
+
+        core_results = []
+        stale_results = []
+        for home in (home_a, home_b, home_a):
+            with _profile_cron_scope(home):
+                cfg = load_user_config_effective()
+                core_results.append(_resolve_cron_enabled_toolsets(
+                    {"enabled_toolsets": ["terminal", "file"]}, cfg,
+                ))
+                if home == home_a:
+                    assert "cron_fixture_tools" in {key for key, _, _ in get_plugin_toolsets()}
+                    stale_results.append(_resolve_cron_enabled_toolsets(
+                        {"enabled_toolsets": ["terminal", "retired_cron_fixture"]}, cfg,
+                    ))
+
+        assert core_results == [
+            ["terminal", "file", "cron_fixture_tools"],
+            ["terminal", "file"],
+            ["terminal", "file", "cron_fixture_tools"],
+        ]
+        assert stale_results == [["terminal", "retired_cron_fixture"]] * 2
 
     @pytest.mark.parametrize("saved", [[], ["default_off_plugin"], "['default_off_plugin']"])
     def test_platform_plugin_enablement_preserves_exclusions(self, plugin_keys, monkeypatch, saved):
