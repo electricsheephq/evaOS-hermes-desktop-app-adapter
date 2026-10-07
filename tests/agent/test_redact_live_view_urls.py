@@ -140,3 +140,18 @@ def test_assignment_context_spanning_a_live_view_url_is_still_masked():
     for out in (redact.redact_sensitive_text(text, preserve_live_view_urls=True),
                 redact.redact_for_egress(text, preserve_live_view_urls=True)):
         assert "opaqueSyntheticSecret" not in out
+
+
+def test_vault_value_in_token_header_or_across_segments_is_scrubbed(monkeypatch):
+    vaults = ("VaultSecretX9", "VaultPart.SecondPart")
+    monkeypatch.setattr(redact, "redact_registered_vault_values",
+                        lambda t: t.replace(vaults[0], "[vault]").replace(vaults[1], "[vault]"))
+    head, rest = JWE.split(".", 1)
+    cases = (
+        (vaults[0], head + vaults[0] + "." + rest),                                      # inside the header
+        (vaults[1], head + "." + vaults[1] + "." + "C" * 40 + "." + "E" * 21),           # across two segments
+    )
+    for vault, token in cases:
+        text = URL.replace(JWE, token)
+        assert vault not in redact.redact_sensitive_text(text, preserve_live_view_urls=True)
+        assert vault not in redact.redact_for_egress(text, preserve_live_view_urls=True)

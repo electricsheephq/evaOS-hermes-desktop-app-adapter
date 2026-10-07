@@ -970,7 +970,8 @@ def redact_sensitive_text(text: str, *, force: bool = False, code_file: bool = F
     if not text:
         return text
     if preserve_live_view_urls:
-        text, tokens = _hold_live_view_tokens(text)
+        # Vault values are a hard egress boundary, inside a viewer token too: scrub them before holding tokens.
+        text, tokens = _hold_live_view_tokens(redact_registered_vault_values(text))
         if tokens:
             out = redact_sensitive_text(text, force=force, code_file=code_file, file_read=file_read,
                                         secret_file=secret_file, redact_url_credentials=redact_url_credentials)
@@ -1210,7 +1211,7 @@ def redact_for_egress(text: str, *, preserve_live_view_urls: bool = False) -> st
     tokens: dict = {}
     try:
         if preserve_live_view_urls:
-            text, tokens = _hold_live_view_tokens(text)
+            text, tokens = _hold_live_view_tokens(redact_registered_vault_values(text))
         text = redact_sensitive_text(text, force=True)
     except Exception:
         return REDACTION_UNAVAILABLE
