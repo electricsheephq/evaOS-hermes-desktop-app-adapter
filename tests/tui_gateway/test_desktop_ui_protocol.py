@@ -269,6 +269,92 @@ def test_non_desktop_session_cannot_reuse_a_protocol_two_callback(monkeypatch):
     }
 
 
+@pytest.fixture(params=["activate", "resume-persisted", "resume-unpersisted"])
+def reattach_created_session(monkeypatch, tmp_path, request):
+    """Exercise both live resume branches and activate without building an agent."""
+    monkeypatch.setattr(server, "_schedule_agent_build", lambda _sid: None)
+    monkeypatch.setattr(server, "_schedule_session_cap_enforcement", lambda: None)
+    monkeypatch.delenv("HERMES_DESKTOP", raising=False)
+    monkeypatch.delenv("HERMES_DESKTOP_TERMINAL", raising=False)
+    monkeypatch.setattr(
+        server, "_live_session_payload",
+        lambda sid, _session, **_kwargs: {"session_id": sid},
+    )
+    created_sids = []
+
+    def reattach(source, params, marker=3):
+        created = server._methods["session.create"](
+            1, {"source": source, "desktop_ui_protocol": 3}
+        )
+        assert "error" not in created
+        sid = created["result"]["session_id"]
+        created_sids.append(sid)
+        session = server._sessions[sid]
+        assert session["source"] == source
+        assert session["desktop_ui_protocol"] == (3 if source == "desktop" else 0)
+        if request.param == "activate":
+            target, method = sid, "session.activate"
+        else:
+            target, method = session["session_key"], "session.resume"
+            row = {"id": target, "cwd": str(tmp_path)} if request.param == "resume-persisted" else None
+            db = types.SimpleNamespace(
+                get_session=lambda _key: row,
+                get_session_by_title=lambda _title: None,
+            )
+            monkeypatch.setattr(server, "_profile_session_db", lambda _home: (db, False))
+        declared = {} if marker is None else {"desktop_ui_protocol": marker}
+        result = server._methods[method](
+            2, {"session_id": target, **declared, **params}
+        )
+        assert "error" not in result
+        assert result["result"]["session_id"] == sid
+        return sid, session
+
+    yield reattach
+    for sid in created_sids:
+        server._sessions.pop(sid, None)
+
+
+@pytest.mark.parametrize("params", [{}, {"source": ""}])
+def test_reattach_without_source_preserves_desktop(reattach_created_session, params):
+    sid, session = reattach_created_session("desktop", params)
+
+    assert session["source"] == "desktop"
+    assert session["desktop_ui_protocol"] == 3
+    assert server._desktop_ui_emitter_protocol_error(sid, "preview.open") is None
+
+
+@pytest.mark.parametrize("params", [{}, {"source": ""}])
+def test_reattach_without_source_or_marker_does_not_keep_desktop(reattach_created_session, params):
+    # A TUI attached to a shared session (hermes chat --attach, dashboard chat) sends neither field.
+    sid, session = reattach_created_session("desktop", params, marker=None)
+
+    assert session["source"] == "tui"
+    assert session["desktop_ui_protocol"] == 0
+    error = server._desktop_ui_emitter_protocol_error(sid, "preview.open")
+    assert json.loads(error)["code"] == "desktop_ui_unavailable"
+
+
+def test_reattach_explicit_tui_downgrades_desktop(reattach_created_session):
+    sid, session = reattach_created_session("desktop", {"source": "tui"})
+
+    assert session["source"] == "tui"
+    assert session["desktop_ui_protocol"] == 0
+    error = server._desktop_ui_emitter_protocol_error(sid, "preview.open")
+    assert json.loads(error)["code"] == "desktop_ui_unavailable"
+
+
+@pytest.mark.parametrize("params", [{}, {"source": ""}])
+def test_reattach_without_source_never_upgrades_tui(monkeypatch, reattach_created_session, params):
+    monkeypatch.setenv("HERMES_DESKTOP", "1")
+    sid, session = reattach_created_session("tui", params)
+
+    assert session["source"] == "tui"
+    assert session["desktop_ui_protocol"] == 0
+    error = server._desktop_ui_emitter_protocol_error(sid, "preview.open")
+    assert json.loads(error)["code"] == "desktop_ui_unavailable"
+
+
 def test_create_and_activate_store_and_rebind_protocol(monkeypatch):
     monkeypatch.setattr(server, "_schedule_agent_build", lambda _sid: None)
     monkeypatch.setattr(server, "_schedule_session_cap_enforcement", lambda: None)
