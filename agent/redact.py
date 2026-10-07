@@ -4,6 +4,8 @@ Short tokens (< 18 chars) are fully masked; longer ones keep the first 6 and
 last 4 characters for debuggability.
 """
 
+import base64
+import json
 import logging
 import os
 import re
@@ -888,10 +890,23 @@ _LIVE_VIEW_URL_RE = re.compile(
     r"/devtools-fullscreen/inspector\.html\?wss=connect\.browserbase\.com/debug/"
     r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
     r"/devtools/page/[0-9A-F]{16,40}"
-    r"(?:\?t=(?P<token>eyJ[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]*){0,4}))?"
+    r"(?:\?t=(?P<token>eyJ[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]*){4}))?"
     r"(?:[?&]debug=true)?"
     r"(?![A-Za-z0-9_~%+=&-]|\.[A-Za-z0-9_~%+=&-])"
 )
+
+
+def _is_viewer_jwe(token) -> bool:
+    """Browserbase viewer tokens are compact JWEs: five segments and a JSON header naming ``alg`` and ``enc``.
+    A signed JWT (JWS) has no ``enc``, so a copied JWT placed in the ``?t=`` slot never qualifies."""
+    parts = (token or "").split(".")
+    if len(parts) != 5 or not all(parts[i] for i in (0, 2, 3, 4)):
+        return False
+    try:
+        header = json.loads(base64.urlsafe_b64decode(parts[0] + "=" * (-len(parts[0]) % 4)))
+    except ValueError:
+        return False
+    return isinstance(header, dict) and isinstance(header.get("alg"), str) and isinstance(header.get("enc"), str)
 
 
 def _hold_live_view_tokens(text: str) -> tuple[str, dict]:
@@ -902,8 +917,10 @@ def _hold_live_view_tokens(text: str) -> tuple[str, dict]:
 
     def swap(match):
         token = match.group("token")
-        # every segment after the header must be inert to the normal redactor, so nothing else rides in the token
-        if not token or any(redact_sensitive_text(part, force=True) != part for part in token.split(".")[1:]):
+        # only an encrypted (JWE) viewer token qualifies, and every segment after its header must be inert to the
+        # normal redactor, so nothing else rides in the token
+        if not _is_viewer_jwe(token) or any(
+                redact_sensitive_text(part, force=True) != part for part in token.split(".")[1:]):
             return match.group(0)
         key = f"LIVEVIEWHELD{len(tokens)}X{secrets.token_hex(4).upper()}END"
         tokens[key] = token

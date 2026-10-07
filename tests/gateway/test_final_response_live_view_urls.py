@@ -7,7 +7,8 @@ from gateway.config import Platform
 from gateway.run import _prepare_gateway_status_message, _sanitize_gateway_final_response
 
 
-JWE = ".".join(("eyJ" + "A" * 57, "B" * 60, "C" * 40, "D" * 100, "E" * 21))
+# header is base64url {"alg":"A256KW","enc":"A256GCM"}, the shape Browserbase issues
+JWE = ".".join(("eyJhbGciOiJBMjU2S1ciLCJlbmMiOiJBMjU2R0NNIn0", "B" * 54, "C" * 16, "D" * 146, "E" * 22))
 JWT = "eyJ" + "F" * 40 + "." + "G" * 40 + "." + "H" * 40
 URL = (
     "https://www.browserbase.com/devtools-fullscreen/inspector.html"

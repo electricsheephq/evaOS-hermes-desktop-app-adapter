@@ -8,7 +8,8 @@ from agent import redact
 from agent.chat_completion_helpers import _assistant_content_for_storage
 
 
-JWE = ".".join(("eyJ" + "A" * 57, "B" * 60, "C" * 40, "D" * 100, "E" * 21))
+# header is base64url {"alg":"A256KW","enc":"A256GCM"}, the shape Browserbase issues
+JWE = ".".join(("eyJhbGciOiJBMjU2S1ciLCJlbmMiOiJBMjU2R0NNIn0", "B" * 54, "C" * 16, "D" * 146, "E" * 22))
 JWT = "eyJ" + "F" * 40 + "." + "G" * 40 + "." + "H" * 40
 URL = (
     "https://www.browserbase.com/devtools-fullscreen/inspector.html"
@@ -155,3 +156,16 @@ def test_vault_value_in_token_header_or_across_segments_is_scrubbed(monkeypatch)
         text = URL.replace(JWE, token)
         assert vault not in redact.redact_sensitive_text(text, preserve_live_view_urls=True)
         assert vault not in redact.redact_for_egress(text, preserve_live_view_urls=True)
+
+
+# a signed JWT (no ``enc``), a JWT with extra segments, or a JWE-shaped token without a JWE header never qualifies
+@pytest.mark.parametrize("token", [
+    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9." + "S" * 40 + "." + "T" * 43,
+    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9." + "S" * 40 + "." + "T" * 43 + ".U.V",
+    "eyJ" + "A" * 40 + "." + "B" * 54 + "." + "C" * 16 + "." + "D" * 146 + "." + "E" * 22,
+])
+def test_only_encrypted_viewer_tokens_are_preserved(token):
+    text = URL.replace(JWE, token)
+    for out in (redact.redact_sensitive_text(text, preserve_live_view_urls=True),
+                redact.redact_for_egress(text, preserve_live_view_urls=True)):
+        assert token not in out
