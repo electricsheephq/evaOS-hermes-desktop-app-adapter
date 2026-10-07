@@ -163,6 +163,10 @@ def test_vault_value_in_token_header_or_across_segments_is_scrubbed(monkeypatch)
     "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9." + "S" * 40 + "." + "T" * 43,
     "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9." + "S" * 40 + "." + "T" * 43 + ".U.V",
     "eyJ" + "A" * 40 + "." + "B" * 54 + "." + "C" * 16 + "." + "D" * 146 + "." + "E" * 22,
+    # a signed JWT whose header also names enc, pretty-printed claims (payload not eyJ), padded to five segments
+    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCIsImVuYyI6IkEyNTZHQ00ifQ.ewogInN1YiI6ICJ4Igp9." + "T" * 43 + ".U.V",
+    # forged JWE header carrying a JWS payload segment
+    "eyJhbGciOiJBMjU2S1ciLCJlbmMiOiJBMjU2R0NNIn0.eyJzdWIiOiJ4In0." + "C" * 16 + "." + "D" * 146 + "." + "E" * 22,
     __import__("base64").urlsafe_b64encode(b'{"alg":"A","enc":"B","x":' + b"[" * 3000 + b"]" * 3000 + b"}").decode().rstrip("=")
     + "." + "B" * 54 + "." + "C" * 16 + "." + "D" * 146 + "." + "E" * 22,
 ])
