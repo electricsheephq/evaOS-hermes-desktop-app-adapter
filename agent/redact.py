@@ -4,9 +4,12 @@ Short tokens (< 18 chars) are fully masked; longer ones keep the first 6 and
 last 4 characters for debuggability.
 """
 
+import base64
+import json
 import logging
 import os
 import re
+import secrets
 import shlex
 import threading
 from urllib.parse import unquote_plus
@@ -878,14 +881,80 @@ def _redact_phone(m):
     return phone[:keep] + "****" + phone[-keep:]
 
 
+# Browserbase's own live-view URL only: /debug/<session uuid>/devtools/page/<hex page id>, then optionally its viewer token
+# ``?t=<compact JWT/JWE, up to 5 dot-separated parts>`` and ``debug=true`` — nothing else. The lookahead refuses
+# a span that would end inside a longer token (a sentence-ending ``.`` is fine), so anything glued on (``&x=…``, ``.sk-…``) falls outside the span
+# and is redacted normally; at worst the whole viewer token is masked again (fails safe).
+_LIVE_VIEW_URL_RE = re.compile(
+    r"(?<![A-Za-z0-9+.-])https://(?i:www\.browserbase\.com)"
+    r"/devtools-fullscreen/inspector\.html\?wss=connect\.browserbase\.com/debug/"
+    r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+    r"/devtools/page/[0-9A-F]{16,40}"
+    r"(?:\?t=(?P<token>eyJ[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]*){4}))?"
+    r"(?:[?&]debug=true)?"
+    r"(?![A-Za-z0-9_~%+=&-]|\.[A-Za-z0-9_~%+=&-])"
+)
+
+
+def _is_viewer_jwe(token) -> bool:
+    """Browserbase viewer tokens are compact JWEs with header alg ``A256KW`` and enc ``A256GCM``. That pair fixes the
+    wrapped-key, IV and tag segments at 54, 16 and 22 characters. A signed JWT (JWS) or another issuer's encrypted
+    token (e.g. ``dir``/``A256CBC-HS512`` session JWTs) never qualifies, and no segment after the header may be a JSON
+    (``eyJ``) payload, so a JWS cannot ride under a forged header either."""
+    parts = (token or "").split(".")
+    if len(parts) != 5 or not parts[0] or not parts[3] or len(parts[0]) > 512:
+        return False
+    if (len(parts[1]), len(parts[2]), len(parts[4])) != (54, 16, 22):
+        return False
+    if any(part.startswith("eyJ") for part in parts[1:]):
+        return False
+    try:
+        header = json.loads(base64.urlsafe_b64decode(parts[0] + "=" * (-len(parts[0]) % 4)))
+    except (ValueError, RecursionError):
+        return False
+    return isinstance(header, dict) and header.get("alg") == "A256KW" and header.get("enc") == "A256GCM"
+
+
+def _hold_live_view_tokens(text: str) -> tuple[str, dict]:
+    """Swap each live-view viewer token (only the ``?t=`` value of a strict viewer URL) for an inert placeholder,
+    so the WHOLE text — with its assignment/JSON context intact — goes through normal redaction. Only the token is
+    exempt; if any pass masks the text around a placeholder, the placeholder is gone and the token stays masked."""
+    tokens: dict = {}
+
+    def swap(match):
+        token = match.group("token")
+        # only an encrypted (JWE) viewer token qualifies, and every segment after its header must be inert to the
+        # normal redactor, so nothing else rides in the token
+        if not _is_viewer_jwe(token) or any(
+                redact_sensitive_text(part, force=True) != part for part in token.split(".")[1:]):
+            return match.group(0)
+        key = f"LIVEVIEWHELD{len(tokens)}X{secrets.token_hex(4).upper()}END"
+        tokens[key] = token
+        start, end = match.span("token")
+        base = match.start()
+        return match.group(0)[: start - base] + key + match.group(0)[end - base:]
+
+    return _LIVE_VIEW_URL_RE.sub(swap, text), tokens
+
+
+def _restore_live_view_tokens(text: str, tokens: dict) -> str:
+    for key, token in tokens.items():
+        text = text.replace(key, token)
+    return text
+
+
 def redact_sensitive_text(text: str, *, force: bool = False, code_file: bool = False,
                           file_read: bool = False, secret_file: bool = False,
-                          redact_url_credentials: bool = False) -> str:
+                          redact_url_credentials: bool = False,
+                          preserve_live_view_urls: bool = False) -> str:
     """Apply all redaction patterns to a block of text.
 
     Safe on any string. Enabled by default (``security.redact_secrets: false``
     disables); ``force=True`` is for safety boundaries that must never return
     raw secrets regardless.
+
+    ``preserve_live_view_urls=True``: preserve strict Browserbase viewer URL spans
+    for assistant handoffs; all surrounding text still uses the same masking policy.
 
     ``redact_url_credentials=True``: also redact credential-named query params
     and ``user:pass@`` userinfo — off by default because OAuth-callback /
@@ -923,6 +992,13 @@ def redact_sensitive_text(text: str, *, force: bool = False, code_file: bool = F
     text = text if isinstance(text, str) else str(text)
     if not text:
         return text
+    if preserve_live_view_urls:
+        # Vault values are a hard egress boundary, inside a viewer token too: scrub them before holding tokens.
+        text, tokens = _hold_live_view_tokens(redact_registered_vault_values(text))
+        if tokens:
+            out = redact_sensitive_text(text, force=force, code_file=code_file, file_read=file_read,
+                                        secret_file=secret_file, redact_url_credentials=redact_url_credentials)
+            return _restore_live_view_tokens(out, tokens)
     # Vault secrets are a hard model-egress boundary: scrubbed regardless of the redact_secrets preference.
     text = redact_registered_vault_values(text)
     if not (force or _redact_enabled()):
@@ -1149,19 +1225,22 @@ REDACTION_UNAVAILABLE = "[redaction-unavailable]"
 _BEARER_RESIDUE_RE = re.compile(r"\bBearer\s+(?:\[[^\]]+\]|[A-Za-z0-9._~+/-]{20,}=*)", re.IGNORECASE)
 
 
-def redact_for_egress(text: str) -> str:
+def redact_for_egress(text: str, *, preserve_live_view_urls: bool = False) -> str:
     """The one scrub for text leaving the process for a remote reader (chat platforms, A2A peers,
     telemetry). ``redact_sensitive_text(force=True)`` — the only secret-pattern list — plus a bearer
     sweep, because a ``Bearer <opaque>`` value with no vendor prefix carries no shape the prefix
     matcher can key on. Fails CLOSED: if the redactor raises, the raw text is never returned."""
     text = str(text or "")
+    tokens: dict = {}
     try:
+        if preserve_live_view_urls:
+            text, tokens = _hold_live_view_tokens(redact_registered_vault_values(text))
         text = redact_sensitive_text(text, force=True)
     except Exception:
         return REDACTION_UNAVAILABLE
     if "earer" in text:
         text = _BEARER_RESIDUE_RE.sub("Bearer [redacted]", text)
-    return text
+    return _restore_live_view_tokens(text, tokens) if tokens else text
 
 
 def redact_terminal_output(output: str, command: str | None = None, *, force: bool = False) -> str:

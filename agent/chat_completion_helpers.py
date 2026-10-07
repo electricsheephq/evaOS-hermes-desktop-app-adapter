@@ -1551,7 +1551,7 @@ def _assistant_content_for_storage(agent, assistant_message):
         content = agent._strip_think_blocks(content).strip()
         if content:
             from agent.redact import redact_sensitive_text
-            content = redact_sensitive_text(content)
+            content = redact_sensitive_text(content, preserve_live_view_urls=True)
     return content
 
 
