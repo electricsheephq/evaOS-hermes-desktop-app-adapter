@@ -224,6 +224,14 @@ def select_checkout_fills(classified: List[ClassifiedLoginControl], secret: Dict
 # neither a DOM reflow nor a second inspection in between can redirect the password into another field.
 INSPECTION_STAMP_ATTR = "data-hermes-vault-slot"
 
+# Traverse only this document's light DOM and open shadow roots, never iframe documents.
+_DEEP_QUERY_JS = (
+    "function __hvDeepAll(selector) { const matches = []; "
+    "function walk(root) { for (const el of root.querySelectorAll(\"*\")) { "
+    "if (el.matches(selector)) matches.push(el); if (el.shadowRoot) walk(el.shadowRoot); } } "
+    "walk(document); return matches; } "
+)
+
 
 def build_otp_fills(otp_controls: List[ClassifiedLoginControl], code: str) -> List[Dict[str, Any]]:
     """One fill per box. Default: the single best-scoring code field takes the whole code.
@@ -245,10 +253,27 @@ def build_inspection_js(nonce: str) -> str:
     return _LOGIN_CONTROL_INSPECTION_JS_TEMPLATE.replace("__NONCE__", json.dumps(nonce))
 
 
-_LOGIN_CONTROL_INSPECTION_JS_TEMPLATE = """(() => {
+_LOGIN_CONTROL_INSPECTION_JS_TEMPLATE = """(() => {""" + _DEEP_QUERY_JS + """
   const nonce = __NONCE__;
-  const elements = Array.from(document.querySelectorAll("input, select"));
-  const forms = Array.from(document.forms);
+  const elements = __hvDeepAll("input, select");
+  const forms = __hvDeepAll("form");
+  // OTP grouping key: own form, else the nearest form around a shadow host, else one group per shadow root.
+  // Light-DOM controls without a form stay ungrouped (null), as before.
+  const shadowRoots = [];
+  const formGroup = (element) => {
+    if (element.form) return forms.indexOf(element.form);
+    for (let node = element; ;) {
+      const root = node.getRootNode();
+      if (!root || !root.host) break;
+      const owner = root.host.closest("form");
+      if (owner) return forms.indexOf(owner);
+      node = root.host;
+    }
+    const root = element.getRootNode();
+    if (!root || !root.host) return -1;
+    if (!shadowRoots.includes(root)) shadowRoots.push(root);
+    return forms.length + shadowRoots.indexOf(root);
+  };
   elements.forEach((element, index) => element.setAttribute("data-hermes-vault-slot", nonce + ":" + index));
   const out = elements.flatMap((element, index) => {
     if (element.disabled || element.readOnly) return [];
@@ -258,9 +283,13 @@ _LOGIN_CONTROL_INSPECTION_JS_TEMPLATE = """(() => {
     const labels = element.labels ? Array.from(element.labels, (l) => l.textContent || "") : [];
     const ariaText = (element.getAttribute("aria-labelledby") || "")
       .split(/\\s+/).filter(Boolean)
-      .map((id) => { const n = document.getElementById(id); return n ? (n.textContent || "") : ""; })
+      .map((id) => {
+        const root = (element.getRootNode && element.getRootNode().getElementById ? element.getRootNode() : document);
+        const n = root.getElementById(id) || document.getElementById(id);
+        return n ? (n.textContent || "") : "";
+      })
       .join(" ");
-    const resolvedFormIndex = element.form ? forms.indexOf(element.form) : -1;
+    const resolvedFormIndex = formGroup(element);
     return [{
       autocomplete: element.autocomplete || "",
       formIndex: resolvedFormIndex >= 0 ? resolvedFormIndex : null,
@@ -305,29 +334,35 @@ _FILL_JS_TEMPLATE = """(() => {
   if (window.location.origin !== expectedOrigin) {
     return JSON.stringify({ refused: "origin_changed", found: window.location.origin });
   }
+""" + _DEEP_QUERY_JS + """
   const fills = __FILLS__;
   const nonce = __NONCE__;
   let filled = 0;
   const norm = (t) => String(t || "").trim().toLowerCase();
   for (const f of fills) {
-    const el = document.querySelector('[data-hermes-vault-slot="' + nonce + ':' + f.index + '"]');
+    const el = __hvDeepAll('[data-hermes-vault-slot="' + nonce + ':' + f.index + '"]')[0];
     if (!el || (f.token === "current-password" && el.type !== "password")) continue;
     try {
       if (el.tagName === "SELECT") {
         const want = norm(f.value);
         const opt = Array.from(el.options).find((o) => [o.value, o.textContent].some((t) => norm(t) === want || norm(t) === want.replace(/^0/, "")));
-        if (opt) { el.value = opt.value; el.dispatchEvent(new Event("change", { bubbles: true })); filled += 1; }
+        if (opt) {
+          el.value = opt.value;
+          el.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+          el.dispatchEvent(new Event("change", { bubbles: true }));
+          filled += 1;
+        }
         continue;
       }
       el.focus();
       const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value");
       // one-time-code split into single-character boxes: f.value is the slice for THIS box (see build_otp_fills)
       if (setter && setter.set) { setter.set.call(el, f.value); } else { el.value = f.value; }
-      el.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
+      el.dispatchEvent(new InputEvent("input", { bubbles: true, composed: true, inputType: "insertText" }));
       el.dispatchEvent(new Event("change", { bubbles: true }));
       if (el.value.length > 0) filled += 1;
     } catch (e) { /* skip */ }
   }
-  document.querySelectorAll("[data-hermes-vault-slot]").forEach((n) => n.removeAttribute("data-hermes-vault-slot"));
+  __hvDeepAll("[data-hermes-vault-slot]").forEach((n) => n.removeAttribute("data-hermes-vault-slot"));
   return JSON.stringify({ filled });
 })()"""
