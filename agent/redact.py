@@ -878,15 +878,16 @@ def _redact_phone(m):
     return phone[:keep] + "****" + phone[-keep:]
 
 
-# Browserbase's own live-view URL only: /debug/<session>/devtools/page/<page>, then optionally its viewer token
+# Browserbase's own live-view URL only: /debug/<session uuid>/devtools/page/<hex page id>, then optionally its viewer token
 # ``?t=<compact JWT/JWE, up to 5 dot-separated parts>`` and ``debug=true`` — nothing else. The lookahead refuses
 # a span that would end inside a longer token (a sentence-ending ``.`` is fine), so anything glued on (``&x=…``, ``.sk-…``) falls outside the span
 # and is redacted normally; at worst the whole viewer token is masked again (fails safe).
 _LIVE_VIEW_URL_RE = re.compile(
     r"(?<![A-Za-z0-9+.-])https://(?i:www\.browserbase\.com)"
     r"/devtools-fullscreen/inspector\.html\?wss=connect\.browserbase\.com/debug/"
-    r"[A-Za-z0-9-]+/devtools/page/[A-Za-z0-9-]+"
-    r"(?:\?t=[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]*){0,4})?"
+    r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+    r"/devtools/page/[0-9A-F]{16,40}"
+    r"(?:\?t=eyJ[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]*){0,4})?"
     r"(?:[?&]debug=true)?"
     r"(?![A-Za-z0-9_~%+=&-]|\.[A-Za-z0-9_~%+=&-])"
 )
@@ -895,7 +896,7 @@ _LIVE_VIEW_URL_RE = re.compile(
 def redact_sensitive_text(text: str, *, force: bool = False, code_file: bool = False,
                           file_read: bool = False, secret_file: bool = False,
                           redact_url_credentials: bool = False,
-                          preserve_live_view_urls: bool = False) -> str:
+                          preserve_live_view_urls: bool = False, _keep_jwt: bool = False) -> str:
     """Apply all redaction patterns to a block of text.
 
     Safe on any string. Enabled by default (``security.redact_secrets: false``
@@ -953,7 +954,11 @@ def redact_sensitive_text(text: str, *, force: bool = False, code_file: bool = F
                 file_read=file_read, secret_file=secret_file,
                 redact_url_credentials=redact_url_credentials,
             ))
-            parts.append(text[match.start():end])
+            # Only the viewer-token JWT mask is skipped inside the span; every other pattern still runs on it.
+            parts.append(redact_sensitive_text(
+                text[match.start():end], force=force, code_file=code_file, file_read=file_read,
+                secret_file=secret_file, redact_url_credentials=redact_url_credentials, _keep_jwt=True,
+            ))
             cursor = end
         if parts:
             parts.append(redact_sensitive_text(
@@ -1004,7 +1009,7 @@ def redact_sensitive_text(text: str, *, force: bool = False, code_file: bool = F
     if "://" in text:
         text = _redact_url_credentials(text, code_file)
 
-    if "eyJ" in text:
+    if "eyJ" in text and not _keep_jwt:
         text = _JWT_RE.sub(lambda m: _mask_token(m.group(0)), text)
 
     if redact_url_credentials:  # opt-in; known credential shapes in URLs are caught above

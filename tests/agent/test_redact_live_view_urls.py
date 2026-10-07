@@ -13,7 +13,7 @@ JWT = "eyJ" + "F" * 40 + "." + "G" * 40 + "." + "H" * 40
 URL = (
     "https://www.browserbase.com/devtools-fullscreen/inspector.html"
     "?wss=connect.browserbase.com/debug/00000000-0000-4000-8000-000000000000"
-    "/devtools/page/FAKEPAGE?t=" + JWE + "&debug=true"
+    "/devtools/page/DA534967A0C5A3A3BA4B6FD253E65FCF?t=" + JWE + "&debug=true"
 )
 
 
@@ -31,7 +31,7 @@ def store(text):
     f"Open {URL} then use {JWT}",
     f"[Open live view]({URL}) then use {JWT}",
     f"Open {URL}. Then use {JWT}",
-    f"Open {URL} and {URL.replace('FAKEPAGE', 'OTHERPAGE')} then use {JWT}",
+    f"Open {URL} and {URL.replace('DA534967A0C5A3A3BA4B6FD253E65FCF', '0123456789ABCDEF0123456789ABCDEF')} then use {JWT}",
 ])
 def test_assistant_storage_preserves_handoffs_and_masks_other_jwts(text):
     expected = text.replace(JWT, redact.redact_sensitive_text(JWT, force=True))
@@ -110,6 +110,24 @@ def test_secret_appended_inside_url_shape_is_still_masked(suffix, forced):
 def test_vault_value_inside_preserved_span_is_scrubbed(monkeypatch):
     vault = "syntheticVaultPassword00991"
     monkeypatch.setattr(redact, "redact_registered_vault_values", lambda t: t.replace(vault, "[vault]"))
-    for text in (URL.replace("FAKEPAGE", vault), URL + "&x=" + vault):
+    for text in (URL.replace("DA534967A0C5A3A3BA4B6FD253E65FCF", vault), URL + "&x=" + vault):
         assert vault not in redact.redact_sensitive_text(text, preserve_live_view_urls=True)
         assert vault not in redact.redact_for_egress(text, preserve_live_view_urls=True)
+
+
+P = URL.split("?t=")[0]
+
+
+@pytest.mark.parametrize("text", [
+    URL.replace("DA534967A0C5A3A3BA4B6FD253E65FCF", SECRET),
+    URL.replace("00000000-0000-4000-8000-000000000000", SECRET),
+    P + "?t=" + SECRET,
+    P + "?t=" + JWT + "." + SECRET,
+    P + "?t=" + SECRET[:20] + "\r" + SECRET[20:],
+    P + "?t=" + SECRET[:20] + "\n" + SECRET[20:],
+    P + "?t=" + SECRET[:20] + "\u200b" + SECRET[20:],
+])
+def test_secret_in_any_url_field_is_still_masked(text):
+    assert SECRET not in redact.redact_sensitive_text(text, preserve_live_view_urls=True)
+    assert SECRET not in redact.redact_for_egress(text, preserve_live_view_urls=True)
+    assert SECRET[20:] not in redact.redact_for_egress(text, preserve_live_view_urls=True) or SECRET[:20] not in redact.redact_for_egress(text, preserve_live_view_urls=True)

@@ -12,7 +12,7 @@ JWT = "eyJ" + "F" * 40 + "." + "G" * 40 + "." + "H" * 40
 URL = (
     "https://www.browserbase.com/devtools-fullscreen/inspector.html"
     "?wss=connect.browserbase.com/debug/00000000-0000-4000-8000-000000000000"
-    "/devtools/page/FAKEPAGE?t=" + JWE + "&debug=true"
+    "/devtools/page/DA534967A0C5A3A3BA4B6FD253E65FCF?t=" + JWE + "&debug=true"
 )
 
 
