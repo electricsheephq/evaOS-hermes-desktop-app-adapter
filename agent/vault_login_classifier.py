@@ -237,6 +237,9 @@ _DEEP_QUERY_JS = """
     walk(document);
     return matches;
   }
+  function __hvAnyActionable(selector) {
+    return __hvDeepAll(selector).some((el) => !el.disabled && el.getClientRects().length > 0);
+  }
 """
 
 
@@ -263,7 +266,7 @@ def build_inspection_js(nonce: str) -> str:
 _LOGIN_CONTROL_INSPECTION_JS_TEMPLATE = """(() => {""" + _DEEP_QUERY_JS + """
   const nonce = __NONCE__;
   const elements = __hvDeepAll("input, select");
-  const forms = Array.from(document.forms);
+  const forms = __hvDeepAll("form");
   elements.forEach((element, index) => element.setAttribute("data-hermes-vault-slot", nonce + ":" + index));
   const out = elements.flatMap((element, index) => {
     if (element.disabled || element.readOnly) return [];
@@ -336,14 +339,19 @@ _FILL_JS_TEMPLATE = """(() => {
       if (el.tagName === "SELECT") {
         const want = norm(f.value);
         const opt = Array.from(el.options).find((o) => [o.value, o.textContent].some((t) => norm(t) === want || norm(t) === want.replace(/^0/, "")));
-        if (opt) { el.value = opt.value; el.dispatchEvent(new Event("change", { bubbles: true })); filled += 1; }
+        if (opt) {
+          el.value = opt.value;
+          el.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+          el.dispatchEvent(new Event("change", { bubbles: true }));
+          filled += 1;
+        }
         continue;
       }
       el.focus();
       const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value");
       // one-time-code split into single-character boxes: f.value is the slice for THIS box (see build_otp_fills)
       if (setter && setter.set) { setter.set.call(el, f.value); } else { el.value = f.value; }
-      el.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
+      el.dispatchEvent(new InputEvent("input", { bubbles: true, composed: true, inputType: "insertText" }));
       el.dispatchEvent(new Event("change", { bubbles: true }));
       if (el.value.length > 0) filled += 1;
     } catch (e) { /* skip */ }
