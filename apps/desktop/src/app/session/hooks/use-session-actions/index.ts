@@ -1345,7 +1345,6 @@ export function useSessionActions({
               activated = await requestForSession<SessionResumeResult>('session.activate', {
                 session_id: cachedRuntimeId,
                 cols: 96,
-                source: 'desktop',
                 omit_messages: true
               })
             } catch (error) {
