@@ -148,6 +148,111 @@ class TestPerJobToolsetMcpMerge:
         ) == ["nonexistent_ts"]
 
 
+class TestPerJobToolsetPluginMerge:
+    @pytest.fixture
+    def plugin_keys(self, monkeypatch):
+        from hermes_cli import tools_config
+
+        keys = {"fixture_plugin", "other_plugin", "default_off_plugin", "known_plugin"}
+        monkeypatch.setattr("hermes_cli.plugins.discover_plugins", lambda: None)
+        monkeypatch.setattr(
+            "hermes_cli.plugins.get_plugin_toolsets", lambda: [(key, key, "") for key in keys],
+        )
+        monkeypatch.setattr(
+            tools_config, "_DEFAULT_OFF_TOOLSETS", tools_config._DEFAULT_OFF_TOOLSETS | {"default_off_plugin"},
+        )
+        return keys
+
+    ON = ["fixture_plugin", "other_plugin"]  # cron-enabled: not default-off, not deselected for cron
+
+    @pytest.mark.parametrize("per_job,saved,lookup_fails,expected", [
+        # a native-only list gains the cron-enabled plugins (and MCP, unless no_mcp) ...
+        (["terminal", "file"], [], False, ["terminal", "file", "fixture_mcp"] + ON),
+        (["terminal", "file", "no_mcp"], [], False, ["terminal", "file"] + ON),
+        # ... honouring the saved cron selection: a default-off plugin only when selected (list or list-literal)
+        (["terminal", "file"], ["default_off_plugin"], False, ["terminal", "file", "fixture_mcp", "default_off_plugin"] + ON),
+        (["terminal", "file"], "['default_off_plugin']", False, ["terminal", "file", "fixture_mcp", "default_off_plugin"] + ON),
+        # a failed lookup keeps exactly the pre-fix MCP-merged list
+        (["terminal", "file"], [], True, ["terminal", "file", "fixture_mcp"]),
+        (["terminal", "file", "no_mcp"], [], True, ["terminal", "file"]),
+        # an explicit, stale (uninstalled) or unknown plugin name never widens
+        (["terminal", "file", "fixture_plugin"], [], False, ["terminal", "file", "fixture_plugin", "fixture_mcp"]),
+        (["terminal", "uninstalled_plugin"], [], False, ["terminal", "uninstalled_plugin", "fixture_mcp"]),
+        (["terminal", "unknown_toolset"], [], False, ["terminal", "unknown_toolset", "fixture_mcp"]),
+    ])
+    def test_per_job_list_gains_cron_plugins_only_without_a_plugin_selection(
+        self, plugin_keys, monkeypatch, caplog, per_job, saved, lookup_fails, expected,
+    ):
+        if lookup_fails:
+            def fail_lookup():
+                raise RuntimeError("fixture discovery failure")
+
+            monkeypatch.setattr("hermes_cli.plugins.discover_plugins", fail_lookup)
+        cfg = {
+            "platform_toolsets": {"cron": saved},
+            "known_plugin_toolsets": {"telegram": ["uninstalled_plugin"], "cron": ["known_plugin"]},
+            "mcp_servers": {"fixture_mcp": {"enabled": True}},
+        }
+
+        assert _resolve_cron_enabled_toolsets({"enabled_toolsets": per_job}, cfg) == expected
+        warnings = [r for r in caplog.records if r.name == "cron.scheduler_toolsets" and r.levelname == "WARNING"]
+        assert len(warnings) == int(lookup_fails)
+
+    def test_real_plugin_discovery_respects_profile_and_stale_selection(self, tmp_path, monkeypatch):
+        from agent.secret_scope import set_multiplex_active
+        from cron.scheduler_provider import _profile_cron_scope
+        from hermes_cli.config_effective import load_user_config_effective
+        from hermes_cli.plugins import get_plugin_toolsets
+
+        home_a = tmp_path / "home-a"
+        home_b = tmp_path / "home-b"
+        plugin = home_a / "plugins" / "cron-fixture"
+        plugin.mkdir(parents=True)
+        home_b.mkdir()
+        (plugin / "plugin.yaml").write_text("name: cron-fixture\nversion: '0.1.0'\n")
+        (plugin / "__init__.py").write_text(
+            "def register(ctx):\n"
+            "    ctx.register_tool(\n"
+            "        name='cron_fixture_probe', toolset='cron_fixture_tools',\n"
+            "        schema={'name': 'cron_fixture_probe', 'description': 'Fixture',\n"
+            "                'parameters': {'type': 'object', 'properties': {}}},\n"
+            "        handler=lambda args, **kwargs: 'ok',\n"
+            "    )\n"
+        )
+        (home_a / "config.yaml").write_text(
+            "plugins:\n  enabled: [cron-fixture]\n"
+            "known_plugin_toolsets:\n  telegram: [retired_cron_fixture]\n"
+        )
+        (home_b / "config.yaml").write_text("plugins:\n  enabled: []\n")
+        empty_bundled = tmp_path / "empty-bundled"
+        empty_bundled.mkdir()
+        monkeypatch.setenv("HERMES_BUNDLED_PLUGINS", str(empty_bundled))
+        monkeypatch.setenv("HERMES_ENABLE_PROJECT_PLUGINS", "0")
+        monkeypatch.setenv("HERMES_HOME", str(home_a))
+        set_multiplex_active(True)
+
+        core_results = []
+        stale_results = []
+        for home in (home_a, home_b, home_a):
+            with _profile_cron_scope(home):
+                cfg = load_user_config_effective()
+                core_results.append(_resolve_cron_enabled_toolsets(
+                    {"enabled_toolsets": ["terminal", "file"]}, cfg,
+                ))
+                if home == home_a:
+                    assert "cron_fixture_tools" in {key for key, _, _ in get_plugin_toolsets()}
+                    stale_results.append(_resolve_cron_enabled_toolsets(
+                        {"enabled_toolsets": ["terminal", "retired_cron_fixture"]}, cfg,
+                    ))
+
+        assert core_results == [
+            ["terminal", "file", "cron_fixture_tools"],
+            ["terminal", "file"],
+            ["terminal", "file", "cron_fixture_tools"],
+        ]
+        assert stale_results == [["terminal", "retired_cron_fixture"]] * 2
+
+
 class TestResolveOrigin:
 
 
