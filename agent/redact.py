@@ -900,11 +900,11 @@ def _is_viewer_jwe(token) -> bool:
     """Browserbase viewer tokens are compact JWEs: five segments and a JSON header naming ``alg`` and ``enc``.
     A signed JWT (JWS) has no ``enc``, so a copied JWT placed in the ``?t=`` slot never qualifies."""
     parts = (token or "").split(".")
-    if len(parts) != 5 or not all(parts[i] for i in (0, 2, 3, 4)):
+    if len(parts) != 5 or not all(parts[i] for i in (0, 2, 3, 4)) or len(parts[0]) > 512:
         return False
     try:
         header = json.loads(base64.urlsafe_b64decode(parts[0] + "=" * (-len(parts[0]) % 4)))
-    except ValueError:
+    except (ValueError, RecursionError):
         return False
     return isinstance(header, dict) and isinstance(header.get("alg"), str) and isinstance(header.get("enc"), str)
 

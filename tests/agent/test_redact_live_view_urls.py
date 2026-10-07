@@ -163,6 +163,8 @@ def test_vault_value_in_token_header_or_across_segments_is_scrubbed(monkeypatch)
     "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9." + "S" * 40 + "." + "T" * 43,
     "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9." + "S" * 40 + "." + "T" * 43 + ".U.V",
     "eyJ" + "A" * 40 + "." + "B" * 54 + "." + "C" * 16 + "." + "D" * 146 + "." + "E" * 22,
+    __import__("base64").urlsafe_b64encode(b'{"alg":"A","enc":"B","x":' + b"[" * 3000 + b"]" * 3000 + b"}").decode().rstrip("=")
+    + "." + "B" * 54 + "." + "C" * 16 + "." + "D" * 146 + "." + "E" * 22,
 ])
 def test_only_encrypted_viewer_tokens_are_preserved(token):
     text = URL.replace(JWE, token)
