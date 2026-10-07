@@ -31,6 +31,8 @@ import secrets
 import logging
 from typing import Any, Dict, Optional
 
+from agent.vault_login_classifier import _DEEP_QUERY_JS
+
 logger = logging.getLogger(__name__)
 
 
@@ -193,9 +195,9 @@ def _current_page_origin(task_id: str) -> Optional[str]:
 
 # Per kind: a JS probe that is truthy on a tab holding the form this kind fills.
 _TAB_PROBES = {
-    "login": "!!document.querySelector('input[type=password]')",
-    "payment": "!!document.querySelector('input[autocomplete^=cc-], [name*=card i], [placeholder*=card i], [name*=cvc i], [name*=cvv i]')",
-    "address": "!!document.querySelector('input[autocomplete^=address-], [autocomplete=postal-code], [name*=address i], [name*=zip i], [name*=postal i]')",
+    "login": "(() => {" + _DEEP_QUERY_JS + "return __hvDeepAll('input[type=password]').length > 0; })()",
+    "payment": "(() => {" + _DEEP_QUERY_JS + "return __hvDeepAll('input[autocomplete^=cc-], [name*=card i], [placeholder*=card i], [name*=cvc i], [name*=cvv i]').length > 0; })()",
+    "address": "(() => {" + _DEEP_QUERY_JS + "return __hvDeepAll('input[autocomplete^=address-], [autocomplete=postal-code], [name*=address i], [name*=zip i], [name*=postal i]').length > 0; })()",
 }
 
 
@@ -328,8 +330,8 @@ def browser_vault_save_login(label: str = "", task_id: Optional[str] = None) -> 
                       ensure_ascii=False)
 
 
-_TAB_PROBES["otp"] = ("!!document.querySelector('input[autocomplete=one-time-code], input[name*=otp i], input[name*=code i], "
-                      "input[id*=otp i], input[id*=code i], input[name*=totp i], input[aria-label*=code i]')")
+_TAB_PROBES["otp"] = ("(() => {" + _DEEP_QUERY_JS + "return __hvDeepAll('input[autocomplete=one-time-code], input[name*=otp i], input[name*=code i], "
+                      "input[id*=otp i], input[id*=code i], input[name*=totp i], input[aria-label*=code i]').length > 0; })()")
 
 
 def browser_vault_enter_code(handle: str = "", task_id: Optional[str] = None) -> str:

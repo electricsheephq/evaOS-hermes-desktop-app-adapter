@@ -29,6 +29,7 @@ from agent.vault_login_classifier import (  # noqa: E402
     ClassifiedLoginControl,
     LoginControl,
     build_fill_js,
+    build_inspection_js,
     classify_login_control,
     select_password_fill,
 )
@@ -248,6 +249,21 @@ class TestClassifier:
         assert "window.location.origin" in js
         assert "origin_changed" in js
         assert js.index("origin_changed") < js.index("querySelectorAll")
+        for write in ('el.focus()', 'el.value =', 'setter.set.call', 'el.dispatchEvent', 'removeAttribute('):
+            assert js.index("origin_changed") < js.index(write)
+
+    def test_inspection_and_fill_share_deep_queries_and_root_local_labels(self):
+        from agent.vault_login_classifier import _DEEP_QUERY_JS
+
+        inspection = build_inspection_js("fixture-nonce")
+        fill = build_fill_js([{"index": 1, "value": "fixture-value"}],
+                             "https://portal.example.test", "fixture-nonce")
+        assert _DEEP_QUERY_JS in inspection and _DEEP_QUERY_JS in fill
+        assert '__hvDeepAll("input, select")' in inspection
+        assert 'element.getRootNode().getElementById' in inspection
+        assert 'root.getElementById(id) || document.getElementById(id)' in inspection
+        assert "__hvDeepAll('[data-hermes-vault-slot=\"' + nonce + ':' + f.index" in fill
+        assert '__hvDeepAll("[data-hermes-vault-slot]").forEach' in fill
 
 
 # ---------------------------------------------------------------------------
@@ -255,6 +271,16 @@ class TestClassifier:
 # ---------------------------------------------------------------------------
 
 class TestBrowserVaultTools:
+    def test_all_tab_probes_are_self_contained_deep_query_expressions(self):
+        from agent.vault_login_classifier import _DEEP_QUERY_JS
+        from tools.browser_vault_tool import _TAB_PROBES
+
+        for kind in ("login", "payment", "address", "otp"):
+            probe = _TAB_PROBES[kind]
+            assert probe.startswith("(() => {") and probe.endswith("})()"), kind
+            assert _DEEP_QUERY_JS in probe, kind
+            assert "return __hvDeepAll(" in probe and ").length > 0;" in probe, kind
+
     def test_check_fn_follows_the_browser_not_the_item_count(self, tmp_path):
         """The vault tools ride with the browser toolset: an empty vault must still expose
         browser_vault_save_login (that is how the first login gets saved), and no browser means no tools."""

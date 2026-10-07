@@ -224,6 +224,21 @@ def select_checkout_fills(classified: List[ClassifiedLoginControl], secret: Dict
 # neither a DOM reflow nor a second inspection in between can redirect the password into another field.
 INSPECTION_STAMP_ATTR = "data-hermes-vault-slot"
 
+# Traverse only this document's light DOM and open shadow roots, never iframe documents.
+_DEEP_QUERY_JS = """
+  function __hvDeepAll(selector) {
+    const matches = [];
+    function walk(root) {
+      for (const el of root.querySelectorAll("*")) {
+        if (el.matches(selector)) matches.push(el);
+        if (el.shadowRoot) walk(el.shadowRoot);
+      }
+    }
+    walk(document);
+    return matches;
+  }
+"""
+
 
 def build_otp_fills(otp_controls: List[ClassifiedLoginControl], code: str) -> List[Dict[str, Any]]:
     """One fill per box. Default: the single best-scoring code field takes the whole code.
@@ -245,9 +260,9 @@ def build_inspection_js(nonce: str) -> str:
     return _LOGIN_CONTROL_INSPECTION_JS_TEMPLATE.replace("__NONCE__", json.dumps(nonce))
 
 
-_LOGIN_CONTROL_INSPECTION_JS_TEMPLATE = """(() => {
+_LOGIN_CONTROL_INSPECTION_JS_TEMPLATE = """(() => {""" + _DEEP_QUERY_JS + """
   const nonce = __NONCE__;
-  const elements = Array.from(document.querySelectorAll("input, select"));
+  const elements = __hvDeepAll("input, select");
   const forms = Array.from(document.forms);
   elements.forEach((element, index) => element.setAttribute("data-hermes-vault-slot", nonce + ":" + index));
   const out = elements.flatMap((element, index) => {
@@ -258,7 +273,11 @@ _LOGIN_CONTROL_INSPECTION_JS_TEMPLATE = """(() => {
     const labels = element.labels ? Array.from(element.labels, (l) => l.textContent || "") : [];
     const ariaText = (element.getAttribute("aria-labelledby") || "")
       .split(/\\s+/).filter(Boolean)
-      .map((id) => { const n = document.getElementById(id); return n ? (n.textContent || "") : ""; })
+      .map((id) => {
+        const root = (element.getRootNode && element.getRootNode().getElementById ? element.getRootNode() : document);
+        const n = root.getElementById(id) || document.getElementById(id);
+        return n ? (n.textContent || "") : "";
+      })
       .join(" ");
     const resolvedFormIndex = element.form ? forms.indexOf(element.form) : -1;
     return [{
@@ -305,12 +324,13 @@ _FILL_JS_TEMPLATE = """(() => {
   if (window.location.origin !== expectedOrigin) {
     return JSON.stringify({ refused: "origin_changed", found: window.location.origin });
   }
+""" + _DEEP_QUERY_JS + """
   const fills = __FILLS__;
   const nonce = __NONCE__;
   let filled = 0;
   const norm = (t) => String(t || "").trim().toLowerCase();
   for (const f of fills) {
-    const el = document.querySelector('[data-hermes-vault-slot="' + nonce + ':' + f.index + '"]');
+    const el = __hvDeepAll('[data-hermes-vault-slot="' + nonce + ':' + f.index + '"]')[0];
     if (!el || (f.token === "current-password" && el.type !== "password")) continue;
     try {
       if (el.tagName === "SELECT") {
@@ -328,6 +348,6 @@ _FILL_JS_TEMPLATE = """(() => {
       if (el.value.length > 0) filled += 1;
     } catch (e) { /* skip */ }
   }
-  document.querySelectorAll("[data-hermes-vault-slot]").forEach((n) => n.removeAttribute("data-hermes-vault-slot"));
+  __hvDeepAll("[data-hermes-vault-slot]").forEach((n) => n.removeAttribute("data-hermes-vault-slot"));
   return JSON.stringify({ filled });
 })()"""
