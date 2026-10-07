@@ -2070,15 +2070,19 @@ def _bind_session_attachment(
     """Atomically bind caller source, protocol and viewer ownership.
 
     Stored session metadata is historical context, never attachment authority.
+    An omitted source from a client that declares a Desktop UI protocol keeps the
+    live attachment's source (Desktop re-attach paths omit it); any other caller,
+    such as a TUI attached to a shared session, falls back to the launch platform.
     A reconnect records the exact source/protocol pair alongside its transport;
     disconnect can therefore restore a surviving viewer without inheriting the
     departing client's capability level.
     """
-    resolved_source = _resolve_session_source(source)
-    protocol = _negotiate_desktop_ui_protocol(
-        resolved_source, requested_desktop_ui_protocol)
     lock = session.setdefault("history_lock", threading.Lock())
     with lock:
+        kept = session.get("source") if requested_desktop_ui_protocol is not None else None
+        resolved_source = _resolve_session_source(source or kept)
+        protocol = _negotiate_desktop_ui_protocol(
+            resolved_source, requested_desktop_ui_protocol)
         session["source"] = resolved_source
         session["desktop_ui_protocol"] = protocol
         # A late RPC from an already-closed socket is not a returning viewer: leave the detached

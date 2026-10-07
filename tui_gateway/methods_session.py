@@ -645,7 +645,7 @@ def _resume_live_unpersisted(ctx: _Resume, live_sid: str, live: dict) -> dict:
             return refusal
         _bind_session_attachment(
             live,
-            _resolve_session_source(_str_param(ctx.params, "source") or None),
+            _str_param(ctx.params, "source") or None,
             ctx.requested_desktop_ui_protocol,
             transport=current_transport(),
         )
@@ -767,7 +767,7 @@ def _resume_reuse_live_locked(ctx: _Resume, sid: str, session: dict) -> dict:
         return refusal
     _bind_session_attachment(
         session,
-        _resolve_session_source(_str_param(ctx.params, "source") or None),
+        _str_param(ctx.params, "source") or None,
         ctx.requested_desktop_ui_protocol,
         transport=current_transport() or _stdio_transport,
     )
@@ -1050,7 +1050,7 @@ def _(rid, params: dict, session: dict) -> dict:
             return refusal
         _bind_session_attachment(
             session,
-            _resolve_session_source(_str_param(params, "source") or None),
+            _str_param(params, "source") or None,
             params.get("desktop_ui_protocol"),
             transport=current_transport() or _stdio_transport,
         )
