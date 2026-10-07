@@ -225,19 +225,12 @@ def select_checkout_fills(classified: List[ClassifiedLoginControl], secret: Dict
 INSPECTION_STAMP_ATTR = "data-hermes-vault-slot"
 
 # Traverse only this document's light DOM and open shadow roots, never iframe documents.
-_DEEP_QUERY_JS = """
-  function __hvDeepAll(selector) {
-    const matches = [];
-    function walk(root) {
-      for (const el of root.querySelectorAll("*")) {
-        if (el.matches(selector)) matches.push(el);
-        if (el.shadowRoot) walk(el.shadowRoot);
-      }
-    }
-    walk(document);
-    return matches;
-  }
-"""
+_DEEP_QUERY_JS = (
+    "function __hvDeepAll(selector) { const matches = []; "
+    "function walk(root) { for (const el of root.querySelectorAll(\"*\")) { "
+    "if (el.matches(selector)) matches.push(el); if (el.shadowRoot) walk(el.shadowRoot); } } "
+    "walk(document); return matches; } "
+)
 
 
 def build_otp_fills(otp_controls: List[ClassifiedLoginControl], code: str) -> List[Dict[str, Any]]:
@@ -264,6 +257,23 @@ _LOGIN_CONTROL_INSPECTION_JS_TEMPLATE = """(() => {""" + _DEEP_QUERY_JS + """
   const nonce = __NONCE__;
   const elements = __hvDeepAll("input, select");
   const forms = __hvDeepAll("form");
+  // OTP grouping key: own form, else the nearest form around a shadow host, else one group per shadow root.
+  // Light-DOM controls without a form stay ungrouped (null), as before.
+  const shadowRoots = [];
+  const formGroup = (element) => {
+    if (element.form) return forms.indexOf(element.form);
+    for (let node = element; ;) {
+      const root = node.getRootNode();
+      if (!root || !root.host) break;
+      const owner = root.host.closest("form");
+      if (owner) return forms.indexOf(owner);
+      node = root.host;
+    }
+    const root = element.getRootNode();
+    if (!root || !root.host) return -1;
+    if (!shadowRoots.includes(root)) shadowRoots.push(root);
+    return forms.length + shadowRoots.indexOf(root);
+  };
   elements.forEach((element, index) => element.setAttribute("data-hermes-vault-slot", nonce + ":" + index));
   const out = elements.flatMap((element, index) => {
     if (element.disabled || element.readOnly) return [];
@@ -279,7 +289,7 @@ _LOGIN_CONTROL_INSPECTION_JS_TEMPLATE = """(() => {""" + _DEEP_QUERY_JS + """
         return n ? (n.textContent || "") : "";
       })
       .join(" ");
-    const resolvedFormIndex = element.form ? forms.indexOf(element.form) : -1;
+    const resolvedFormIndex = formGroup(element);
     return [{
       autocomplete: element.autocomplete || "",
       formIndex: resolvedFormIndex >= 0 ? resolvedFormIndex : null,
