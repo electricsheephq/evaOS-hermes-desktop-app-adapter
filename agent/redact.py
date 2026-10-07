@@ -7,6 +7,7 @@ last 4 characters for debuggability.
 import logging
 import os
 import re
+import secrets
 import shlex
 import threading
 from urllib.parse import unquote_plus
@@ -887,16 +888,42 @@ _LIVE_VIEW_URL_RE = re.compile(
     r"/devtools-fullscreen/inspector\.html\?wss=connect\.browserbase\.com/debug/"
     r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
     r"/devtools/page/[0-9A-F]{16,40}"
-    r"(?:\?t=eyJ[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]*){0,4})?"
+    r"(?:\?t=(?P<token>eyJ[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]*){0,4}))?"
     r"(?:[?&]debug=true)?"
     r"(?![A-Za-z0-9_~%+=&-]|\.[A-Za-z0-9_~%+=&-])"
 )
 
 
+def _hold_live_view_tokens(text: str) -> tuple[str, dict]:
+    """Swap each live-view viewer token (only the ``?t=`` value of a strict viewer URL) for an inert placeholder,
+    so the WHOLE text — with its assignment/JSON context intact — goes through normal redaction. Only the token is
+    exempt; if any pass masks the text around a placeholder, the placeholder is gone and the token stays masked."""
+    tokens: dict = {}
+
+    def swap(match):
+        token = match.group("token")
+        # every segment after the header must be inert to the normal redactor, so nothing else rides in the token
+        if not token or any(redact_sensitive_text(part, force=True) != part for part in token.split(".")[1:]):
+            return match.group(0)
+        key = f"LIVEVIEWHELD{len(tokens)}X{secrets.token_hex(4).upper()}END"
+        tokens[key] = token
+        start, end = match.span("token")
+        base = match.start()
+        return match.group(0)[: start - base] + key + match.group(0)[end - base:]
+
+    return _LIVE_VIEW_URL_RE.sub(swap, text), tokens
+
+
+def _restore_live_view_tokens(text: str, tokens: dict) -> str:
+    for key, token in tokens.items():
+        text = text.replace(key, token)
+    return text
+
+
 def redact_sensitive_text(text: str, *, force: bool = False, code_file: bool = False,
                           file_read: bool = False, secret_file: bool = False,
                           redact_url_credentials: bool = False,
-                          preserve_live_view_urls: bool = False, _keep_jwt: bool = False) -> str:
+                          preserve_live_view_urls: bool = False) -> str:
     """Apply all redaction patterns to a block of text.
 
     Safe on any string. Enabled by default (``security.redact_secrets: false``
@@ -943,29 +970,11 @@ def redact_sensitive_text(text: str, *, force: bool = False, code_file: bool = F
     if not text:
         return text
     if preserve_live_view_urls:
-        # Vault values are a hard egress boundary even inside a preserved span: scrub them first.
-        text = redact_registered_vault_values(text)
-        parts = []
-        cursor = 0
-        for match in _LIVE_VIEW_URL_RE.finditer(text):
-            end = match.start() + len(match.group().rstrip(".,;:!?"))
-            parts.append(redact_sensitive_text(
-                text[cursor:match.start()], force=force, code_file=code_file,
-                file_read=file_read, secret_file=secret_file,
-                redact_url_credentials=redact_url_credentials,
-            ))
-            # Only the viewer-token JWT mask is skipped inside the span; every other pattern still runs on it.
-            parts.append(redact_sensitive_text(
-                text[match.start():end], force=force, code_file=code_file, file_read=file_read,
-                secret_file=secret_file, redact_url_credentials=redact_url_credentials, _keep_jwt=True,
-            ))
-            cursor = end
-        if parts:
-            parts.append(redact_sensitive_text(
-                text[cursor:], force=force, code_file=code_file, file_read=file_read,
-                secret_file=secret_file, redact_url_credentials=redact_url_credentials,
-            ))
-            return "".join(parts)
+        text, tokens = _hold_live_view_tokens(text)
+        if tokens:
+            out = redact_sensitive_text(text, force=force, code_file=code_file, file_read=file_read,
+                                        secret_file=secret_file, redact_url_credentials=redact_url_credentials)
+            return _restore_live_view_tokens(out, tokens)
     # Vault secrets are a hard model-egress boundary: scrubbed regardless of the redact_secrets preference.
     text = redact_registered_vault_values(text)
     if not (force or _redact_enabled()):
@@ -1009,7 +1018,7 @@ def redact_sensitive_text(text: str, *, force: bool = False, code_file: bool = F
     if "://" in text:
         text = _redact_url_credentials(text, code_file)
 
-    if "eyJ" in text and not _keep_jwt:
+    if "eyJ" in text:
         text = _JWT_RE.sub(lambda m: _mask_token(m.group(0)), text)
 
     if redact_url_credentials:  # opt-in; known credential shapes in URLs are caught above
@@ -1198,21 +1207,16 @@ def redact_for_egress(text: str, *, preserve_live_view_urls: bool = False) -> st
     sweep, because a ``Bearer <opaque>`` value with no vendor prefix carries no shape the prefix
     matcher can key on. Fails CLOSED: if the redactor raises, the raw text is never returned."""
     text = str(text or "")
+    tokens: dict = {}
     try:
-        text = redact_sensitive_text(text, force=True, preserve_live_view_urls=preserve_live_view_urls)
+        if preserve_live_view_urls:
+            text, tokens = _hold_live_view_tokens(text)
+        text = redact_sensitive_text(text, force=True)
     except Exception:
         return REDACTION_UNAVAILABLE
     if "earer" in text:
-        if preserve_live_view_urls:
-            parts, cursor = [], 0
-            for match in _LIVE_VIEW_URL_RE.finditer(text):
-                parts.append(_BEARER_RESIDUE_RE.sub("Bearer [redacted]", text[cursor:match.start()]))
-                parts.append(match.group())
-                cursor = match.end()
-            parts.append(_BEARER_RESIDUE_RE.sub("Bearer [redacted]", text[cursor:]))
-            return "".join(parts)
         text = _BEARER_RESIDUE_RE.sub("Bearer [redacted]", text)
-    return text
+    return _restore_live_view_tokens(text, tokens) if tokens else text
 
 
 def redact_terminal_output(output: str, command: str | None = None, *, force: bool = False) -> str:

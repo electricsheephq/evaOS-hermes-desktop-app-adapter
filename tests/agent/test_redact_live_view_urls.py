@@ -131,3 +131,12 @@ def test_secret_in_any_url_field_is_still_masked(text):
     assert SECRET not in redact.redact_sensitive_text(text, preserve_live_view_urls=True)
     assert SECRET not in redact.redact_for_egress(text, preserve_live_view_urls=True)
     assert SECRET[20:] not in redact.redact_for_egress(text, preserve_live_view_urls=True) or SECRET[:20] not in redact.redact_for_egress(text, preserve_live_view_urls=True)
+
+
+def test_assignment_context_spanning_a_live_view_url_is_still_masked():
+    import json
+
+    text = json.dumps({"password": "opaqueSyntheticSecret " + URL})
+    for out in (redact.redact_sensitive_text(text, preserve_live_view_urls=True),
+                redact.redact_for_egress(text, preserve_live_view_urls=True)):
+        assert "opaqueSyntheticSecret" not in out

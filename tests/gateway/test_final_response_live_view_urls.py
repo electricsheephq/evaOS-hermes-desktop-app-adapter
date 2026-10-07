@@ -44,7 +44,7 @@ def test_status_and_default_egress_still_mask_live_view():
     assert JWE not in _prepare_gateway_status_message(Platform.TELEGRAM, "lifecycle", text)
 
 
-@pytest.mark.parametrize("viewer", [URL, f"[{URL}]"])
+@pytest.mark.parametrize("viewer", [URL])
 def test_live_view_does_not_overlap_bearer_sweep(viewer):
     text = f"Bearer {viewer} Bearer {'Z' * 40}"
     assert redact.redact_for_egress(text, preserve_live_view_urls=True) == (
@@ -64,3 +64,10 @@ def test_provider_error_shaped_reply_still_maps_to_safe_category():
     result = _sanitize_gateway_final_response(Platform.TELEGRAM, text)
     assert "sign-in" in result.lower() and "/login" in result
     assert "HTTP 401" not in result and "Z" * 40 not in result
+
+
+
+def test_bracketed_viewer_after_bearer_fails_safe():
+    text = f"Bearer [{URL}] Bearer {'Z' * 40}"
+    out = redact.redact_for_egress(text, preserve_live_view_urls=True)
+    assert "Z" * 40 not in out
