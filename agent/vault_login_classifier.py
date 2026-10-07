@@ -237,9 +237,6 @@ _DEEP_QUERY_JS = """
     walk(document);
     return matches;
   }
-  function __hvAnyActionable(selector) {
-    return __hvDeepAll(selector).some((el) => !el.disabled && el.getClientRects().length > 0);
-  }
 """
 
 
