@@ -485,13 +485,14 @@ def _merge_mcp_into_per_job_toolsets(per_job: list[str], cfg: dict) -> list[str]
 
 
 def _resolve_cron_enabled_toolsets(job: dict, cfg: dict) -> list[str]:
-    """Toolset list for a cron job. Precedence: per-job ``enabled_toolsets`` (+ MCP merge) >
+    """Toolset list for a cron job. Precedence: per-job ``enabled_toolsets`` (+ MCP/plugin merge) >
     ``cron`` platform config (``_get_platform_tools``, which strips _DEFAULT_OFF_TOOLSETS so fresh
-    installs run without ``moa``). A lookup failure fails CLOSED: the run errors out.
+    installs run without ``moa``). A platform lookup failure fails CLOSED: the run errors out.
 
     1. Per-job ``enabled_toolsets`` (set via ``cronjob`` tool on create/update). Keeps the agent's
-    job-scoped toolset override intact — #6130. Enabled MCP servers are layered on per
-    ``_merge_mcp_into_per_job_toolsets`` so a native-toolset allowlist does not silently strip MCP tools. 2.
+    job-scoped toolset override intact — #6130. Enabled MCP servers and cron-enabled plugin
+    toolsets are merged unless the job explicitly selects that category. Plugin lookup failures
+    warn and keep only the MCP-merged list. 2.
     Mirrors gateway behavior (``_get_platform_tools(cfg, platform_key)``) so users can gate cron toolsets
     globally without recreating every job. 3. Never ``None``: AIAgent reads ``None`` as "every
     toolset", so an unreadable ``platform_toolsets.cron`` restriction would hand an unattended job
@@ -500,7 +501,27 @@ def _resolve_cron_enabled_toolsets(job: dict, cfg: dict) -> list[str]:
     """
     per_job = job.get("enabled_toolsets")
     if per_job:
-        return _merge_mcp_into_per_job_toolsets(list(per_job), cfg or {})
+        cfg = cfg or {}
+        result = _merge_mcp_into_per_job_toolsets(list(per_job), cfg)
+        try:
+            from hermes_cli.tools_config import (
+                _coerce_platform_toolsets_value,
+                _enabled_plugin_toolsets,
+                _get_plugin_toolset_keys,
+            )
+
+            plugin_keys = _get_plugin_toolset_keys()
+            if set(per_job) & plugin_keys:
+                return result
+            platform_toolsets = cfg.get("platform_toolsets") or {}
+            saved = _coerce_platform_toolsets_value(platform_toolsets.get("cron"), "cron")
+            enabled_plugins = _enabled_plugin_toolsets(
+                cfg, "cron", saved if isinstance(saved, list) else [], plugin_keys,
+            )
+            return result + sorted(enabled_plugins - set(result))
+        except Exception:
+            logger.warning("Cron plugin toolset lookup failed; keeping the MCP-merged per-job list")
+            return result
     try:
         from hermes_cli.tools_config import _get_platform_tools  # lazy: avoid heavy import at cron module load
         return sorted(_get_platform_tools(cfg or {}, "cron"))
