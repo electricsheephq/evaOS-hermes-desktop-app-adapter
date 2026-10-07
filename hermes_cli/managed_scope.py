@@ -355,7 +355,8 @@ def _flatten_keys(d: dict, prefix: str = "") -> set:
     keys: set = set()
     for k, v in d.items():
         dotted = f"{prefix}.{k}" if prefix else str(k)
-        if isinstance(v, dict) and v:
+        # Mappings only group pins; an empty mapping pins no leaves.
+        if isinstance(v, dict):
             keys |= _flatten_keys(v, dotted)
         else:
             keys.add(dotted)
