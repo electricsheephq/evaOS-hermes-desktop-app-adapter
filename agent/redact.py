@@ -896,22 +896,15 @@ _LIVE_VIEW_URL_RE = re.compile(
 )
 
 
-# RFC 7518 §4.1 / §5.1: JWE key-management and content-encryption algorithms. A JWS signs with HS*/RS*/ES*/PS*/EdDSA,
-# which are not in these sets, so no signed token can pass as a viewer token whatever else its header carries.
-_JWE_KEY_ALGS = frozenset({
-    "dir", "RSA1_5", "RSA-OAEP", "RSA-OAEP-256", "A128KW", "A192KW", "A256KW", "ECDH-ES", "ECDH-ES+A128KW",
-    "ECDH-ES+A192KW", "ECDH-ES+A256KW", "A128GCMKW", "A192GCMKW", "A256GCMKW", "PBES2-HS256+A128KW",
-    "PBES2-HS384+A192KW", "PBES2-HS512+A256KW",
-})
-_JWE_CONTENT_ENCS = frozenset({"A128CBC-HS256", "A192CBC-HS384", "A256CBC-HS512", "A128GCM", "A192GCM", "A256GCM"})
-
-
 def _is_viewer_jwe(token) -> bool:
-    """Browserbase viewer tokens are compact JWEs: five segments and a JSON header naming a JWE ``alg`` and ``enc``.
-    A signed JWT (JWS) has no ``enc``, and its JSON payload segment starts with ``eyJ`` where every JWE segment
-    after the header is opaque, so a copied JWT placed in the ``?t=`` slot never qualifies, even under a forged header."""
+    """Browserbase viewer tokens are compact JWEs with header alg ``A256KW`` and enc ``A256GCM``. That pair fixes the
+    wrapped-key, IV and tag segments at 54, 16 and 22 characters. A signed JWT (JWS) or another issuer's encrypted
+    token (e.g. ``dir``/``A256CBC-HS512`` session JWTs) never qualifies, and no segment after the header may be a JSON
+    (``eyJ``) payload, so a JWS cannot ride under a forged header either."""
     parts = (token or "").split(".")
-    if len(parts) != 5 or not all(parts[i] for i in (0, 2, 3, 4)) or len(parts[0]) > 512:
+    if len(parts) != 5 or not parts[0] or not parts[3] or len(parts[0]) > 512:
+        return False
+    if (len(parts[1]), len(parts[2]), len(parts[4])) != (54, 16, 22):
         return False
     if any(part.startswith("eyJ") for part in parts[1:]):
         return False
@@ -919,8 +912,7 @@ def _is_viewer_jwe(token) -> bool:
         header = json.loads(base64.urlsafe_b64decode(parts[0] + "=" * (-len(parts[0]) % 4)))
     except (ValueError, RecursionError):
         return False
-    return (isinstance(header, dict) and header.get("alg") in _JWE_KEY_ALGS
-            and header.get("enc") in _JWE_CONTENT_ENCS)
+    return isinstance(header, dict) and header.get("alg") == "A256KW" and header.get("enc") == "A256GCM"
 
 
 def _hold_live_view_tokens(text: str) -> tuple[str, dict]:
