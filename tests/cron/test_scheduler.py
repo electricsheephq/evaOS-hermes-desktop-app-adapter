@@ -151,61 +151,52 @@ class TestPerJobToolsetMcpMerge:
 class TestPerJobToolsetPluginMerge:
     @pytest.fixture
     def plugin_keys(self, monkeypatch):
-        keys = {"fixture_plugin", "other_plugin"}
+        from hermes_cli import tools_config
+
+        keys = {"fixture_plugin", "other_plugin", "default_off_plugin", "known_plugin"}
         monkeypatch.setattr("hermes_cli.plugins.discover_plugins", lambda: None)
         monkeypatch.setattr(
             "hermes_cli.plugins.get_plugin_toolsets", lambda: [(key, key, "") for key in keys],
         )
+        monkeypatch.setattr(
+            tools_config, "_DEFAULT_OFF_TOOLSETS", tools_config._DEFAULT_OFF_TOOLSETS | {"default_off_plugin"},
+        )
         return keys
 
-    @pytest.mark.parametrize("no_mcp", [False, True])
-    @pytest.mark.parametrize("discovery_failure", [False, True])
-    def test_native_allowlist_keeps_plugins_and_mcp_on_lookup_failure(
-        self, plugin_keys, monkeypatch, caplog, no_mcp, discovery_failure,
+    ON = ["fixture_plugin", "other_plugin"]  # cron-enabled: not default-off, not deselected for cron
+
+    @pytest.mark.parametrize("per_job,saved,lookup_fails,expected", [
+        # a native-only list gains the cron-enabled plugins (and MCP, unless no_mcp) ...
+        (["terminal", "file"], [], False, ["terminal", "file", "fixture_mcp"] + ON),
+        (["terminal", "file", "no_mcp"], [], False, ["terminal", "file"] + ON),
+        # ... honouring the saved cron selection: a default-off plugin only when selected (list or list-literal)
+        (["terminal", "file"], ["default_off_plugin"], False, ["terminal", "file", "fixture_mcp", "default_off_plugin"] + ON),
+        (["terminal", "file"], "['default_off_plugin']", False, ["terminal", "file", "fixture_mcp", "default_off_plugin"] + ON),
+        # a failed lookup keeps exactly the pre-fix MCP-merged list
+        (["terminal", "file"], [], True, ["terminal", "file", "fixture_mcp"]),
+        (["terminal", "file", "no_mcp"], [], True, ["terminal", "file"]),
+        # an explicit, stale (uninstalled) or unknown plugin name never widens
+        (["terminal", "file", "fixture_plugin"], [], False, ["terminal", "file", "fixture_plugin", "fixture_mcp"]),
+        (["terminal", "uninstalled_plugin"], [], False, ["terminal", "uninstalled_plugin", "fixture_mcp"]),
+        (["terminal", "unknown_toolset"], [], False, ["terminal", "unknown_toolset", "fixture_mcp"]),
+    ])
+    def test_per_job_list_gains_cron_plugins_only_without_a_plugin_selection(
+        self, plugin_keys, monkeypatch, caplog, per_job, saved, lookup_fails, expected,
     ):
-        if discovery_failure:
+        if lookup_fails:
             def fail_lookup():
                 raise RuntimeError("fixture discovery failure")
 
             monkeypatch.setattr("hermes_cli.plugins.discover_plugins", fail_lookup)
-        per_job = ["terminal", "file"] + (["no_mcp"] if no_mcp else [])
-        cfg = {"mcp_servers": {"fixture_mcp": {"enabled": True}}}
-        result = _resolve_cron_enabled_toolsets({"enabled_toolsets": per_job}, cfg)
-
-        expected = {"terminal", "file"}
-        if not no_mcp:
-            expected.add("fixture_mcp")
-        if not discovery_failure:
-            expected |= plugin_keys
-        assert set(result) == expected
-        assert result[:2] == ["terminal", "file"]
-        warnings = [r for r in caplog.records if r.name == "cron.scheduler_toolsets" and r.levelname == "WARNING"]
-        assert len(warnings) == int(discovery_failure)
-        if discovery_failure:
-            assert "plugin toolset lookup failed" in warnings[0].message
-
-    def test_explicit_plugin_allowlist_adds_no_other_plugins(self, plugin_keys):
-        cfg = {"mcp_servers": {"fixture_mcp": {"enabled": True}}}
-        native = ["terminal", "file"]
-        assert plugin_keys <= set(_resolve_cron_enabled_toolsets({"enabled_toolsets": native}, cfg))
-
-        result = _resolve_cron_enabled_toolsets(
-            {"enabled_toolsets": native + ["fixture_plugin"]}, cfg,
-        )
-        assert result == native + ["fixture_plugin", "fixture_mcp"]
-        assert "other_plugin" not in result
-
-    @pytest.mark.parametrize("selection", ["uninstalled_plugin", "unknown_toolset"])
-    def test_stale_or_unknown_plugin_selection_does_not_widen(self, plugin_keys, selection):
         cfg = {
-            "known_plugin_toolsets": {"telegram": ["uninstalled_plugin"]},
+            "platform_toolsets": {"cron": saved},
+            "known_plugin_toolsets": {"telegram": ["uninstalled_plugin"], "cron": ["known_plugin"]},
             "mcp_servers": {"fixture_mcp": {"enabled": True}},
         }
-        per_job = ["terminal", selection]
 
-        assert _resolve_cron_enabled_toolsets({"enabled_toolsets": per_job}, cfg) == (
-            per_job + ["fixture_mcp"]
-        )
+        assert _resolve_cron_enabled_toolsets({"enabled_toolsets": per_job}, cfg) == expected
+        warnings = [r for r in caplog.records if r.name == "cron.scheduler_toolsets" and r.levelname == "WARNING"]
+        assert len(warnings) == int(lookup_fails)
 
     def test_real_plugin_discovery_respects_profile_and_stale_selection(self, tmp_path, monkeypatch):
         from agent.secret_scope import set_multiplex_active
@@ -260,27 +251,6 @@ class TestPerJobToolsetPluginMerge:
             ["terminal", "file", "cron_fixture_tools"],
         ]
         assert stale_results == [["terminal", "retired_cron_fixture"]] * 2
-
-    @pytest.mark.parametrize("saved", [[], ["default_off_plugin"], "['default_off_plugin']"])
-    def test_platform_plugin_enablement_preserves_exclusions(self, plugin_keys, monkeypatch, saved):
-        from hermes_cli import tools_config
-
-        plugin_keys.update({"default_off_plugin", "known_plugin"})
-        monkeypatch.setattr(
-            tools_config, "_DEFAULT_OFF_TOOLSETS", tools_config._DEFAULT_OFF_TOOLSETS | {"default_off_plugin"},
-        )
-        cfg = {
-            "platform_toolsets": {"cron": saved},
-            "known_plugin_toolsets": {"cron": ["known_plugin"]},
-            "mcp_servers": {},
-        }
-        result = _resolve_cron_enabled_toolsets({"enabled_toolsets": ["terminal", "file"]}, cfg)
-
-        expected_plugins = {"fixture_plugin", "other_plugin"}
-        if saved:
-            expected_plugins.add("default_off_plugin")
-        assert set(result) == {"terminal", "file"} | expected_plugins
-        assert "known_plugin" not in result
 
 
 class TestResolveOrigin:
