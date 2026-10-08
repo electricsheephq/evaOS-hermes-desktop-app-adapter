@@ -2325,7 +2325,8 @@ def handle_max_iterations(agent, messages: list, api_call_count: int) -> str:
 def cleanup_task_resources(agent, task_id: str) -> None:
     """Per-turn VM + browser cleanup for a task. Skips ``cleanup_vm`` for persistent
     terminal envs (``_cleanup_inactive_envs`` reaps them after ``terminal.lifetime_seconds``)
-    and ``cleanup_browser`` in headed mode (the inactivity reaper handles idle sessions)."""
+    and ``cleanup_browser`` in headed mode or during a live-view hold (the inactivity
+    reaper handles idle sessions)."""
     def _headed() -> bool:
         try:
             from tools.browser_tool_cloud import _is_headed_mode
@@ -2333,9 +2334,20 @@ def cleanup_task_resources(agent, task_id: str) -> None:
         except Exception:
             return bool(os.environ.get("AGENT_BROWSER_HEADED"))
 
+    def _skip_browser(tid: str) -> bool:
+        from tools.browser_tool_lifecycle import live_view_hold_active, live_view_hold_remaining
+
+        skip = _headed() or live_view_hold_active(tid)
+        if skip:
+            remaining = live_view_hold_remaining(tid)
+            if remaining > 0:
+                logger.info("Skipping per-turn browser cleanup for task %s: live-view hold %.0fs remaining",
+                            tid, remaining)
+        return skip
+
     for label, skip, skip_what, cleanup in (
         ("VM", is_persistent_env, "cleanup_vm for persistent env", lambda: _ra().cleanup_vm(task_id)),
-        ("browser", lambda _tid: _headed(), "cleanup_browser for headed session", lambda: _ra().cleanup_browser(task_id)),
+        ("browser", _skip_browser, "cleanup_browser for headed or held session", lambda: _ra().cleanup_browser(task_id)),
     ):
         try:
             if skip(task_id):

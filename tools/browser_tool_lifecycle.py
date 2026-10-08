@@ -95,6 +95,7 @@ def _emergency_cleanup_all_sessions():
             with _bt._cleanup_lock:
                 _bt._active_sessions.clear()
                 _bt._session_last_activity.clear()
+                _bt._live_view_hold_until.clear()
                 _bt._session_owner_homes.clear()
                 _bt._cleanup_failures.clear()
                 _bt._recording_sessions.clear()
@@ -140,6 +141,7 @@ def _forget_session_tracking(task_id: str, *, activity: bool = True, session: bo
             _bt._active_sessions.pop(task_id, None)
         if activity:
             _bt._session_last_activity.pop(task_id, None)
+        _bt._live_view_hold_until.pop(task_id, None)
         _bt._session_owner_homes.pop(task_id, None)
         _bt._cleanup_failures.pop(task_id, None)
 
@@ -165,28 +167,37 @@ def _cleanup_inactive_browser_sessions():
                 # A human took the bot's screen (login, 2FA) — the agent is idle BECAUSE they are working.
                 _update_session_activity(task_id)
                 continue
-        elapsed = int(current_time - _bt._session_last_activity.get(task_id, current_time))
-        _bt.logger.info("Cleaning up inactive session for task: %s (inactive for %ss)", task_id, elapsed)
-        try:
-            with _session_owner_scope(task_id):
-                cleanup_browser(task_id)
-            _forget_session_tracking(task_id)
-        except Exception as e:
-            with _bt._cleanup_lock:
-                failures = _bt._cleanup_failures[task_id] = _bt._cleanup_failures.get(task_id, 0) + 1
-            if failures < _bt.MAX_INACTIVITY_CLEANUP_FAILURES:
-                _bt.logger.warning("Error cleaning up inactive session %s (attempt %d/%d): %s",
-                               task_id, failures, _bt.MAX_INACTIVITY_CLEANUP_FAILURES, e)
+        with _bt._cleanup_lock:  # recheck: activity or a live-view hold may have arrived since the snapshot
+            last = _bt._session_last_activity.get(task_id)
+            if last is None or time.time() - last <= _bt.BROWSER_SESSION_INACTIVITY_TIMEOUT:
                 continue
-            _bt.logger.error("Browser cleanup failed %d times for inactive session %s; "
-                         "force-reaping: %s", failures, task_id, e)
+            _bt._reaping_sessions.add(task_id)  # live view refuses this key until teardown ends (atomic with the recheck)
+        try:
+            elapsed = int(current_time - _bt._session_last_activity.get(task_id, current_time))
+            _bt.logger.info("Cleaning up inactive session for task: %s (inactive for %ss)", task_id, elapsed)
             try:
                 with _session_owner_scope(task_id):
-                    _force_reap_browser_session(task_id)
-            except Exception as reap_exc:
-                _bt.logger.error("Force-reap of browser session %s failed: %s", task_id, reap_exc)
-            finally:
-                _forget_session_tracking(task_id, activity=False)
+                    cleanup_browser(task_id)
+                _forget_session_tracking(task_id)
+            except Exception as e:
+                with _bt._cleanup_lock:
+                    failures = _bt._cleanup_failures[task_id] = _bt._cleanup_failures.get(task_id, 0) + 1
+                if failures < _bt.MAX_INACTIVITY_CLEANUP_FAILURES:
+                    _bt.logger.warning("Error cleaning up inactive session %s (attempt %d/%d): %s",
+                                   task_id, failures, _bt.MAX_INACTIVITY_CLEANUP_FAILURES, e)
+                    continue
+                _bt.logger.error("Browser cleanup failed %d times for inactive session %s; "
+                             "force-reaping: %s", failures, task_id, e)
+                try:
+                    with _session_owner_scope(task_id):
+                        _force_reap_browser_session(task_id)
+                except Exception as reap_exc:
+                    _bt.logger.error("Force-reap of browser session %s failed: %s", task_id, reap_exc)
+                finally:
+                    _forget_session_tracking(task_id, activity=False)
+        finally:
+            with _bt._cleanup_lock:
+                _bt._reaping_sessions.discard(task_id)
 
 
 def _human_holds_shared_browser(task_id: str) -> bool:
@@ -593,6 +604,31 @@ def _drop_last_active_binding(task_id: str) -> None:
         _bt._last_active_session_key.pop(bare_task_id, None)
 
 
+def live_view_hold_remaining(task_id: str) -> float:
+    """Seconds held across the exact keys a task cleanup would reap."""
+    if task_id is None:
+        task_id = "default"
+    with _bt._cleanup_lock:
+        session_keys = [task_id]
+        sidecar_key = f"{task_id}{_bt._LOCAL_SUFFIX}"
+        if not _bt._is_local_sidecar_key(task_id) and sidecar_key in _bt._active_sessions:
+            session_keys.append(sidecar_key)
+        now = time.time()
+        remaining = 0.0
+        for key in session_keys:
+            until = _bt._live_view_hold_until.get(key, 0.0)
+            if until > now:
+                remaining = max(remaining, until - now)
+            else:
+                _bt._live_view_hold_until.pop(key, None)
+        return remaining
+
+
+def live_view_hold_active(task_id: str) -> bool:
+    """Whether task cleanup would close a browser with an unexpired live-view hold."""
+    return live_view_hold_remaining(task_id) > 0.0
+
+
 def cleanup_browser(task_id: Optional[str] = None) -> None:
     """Clean up browser session(s) for a task: a bare task id reaps BOTH the primary
     session and any hybrid local sidecar; a ``::local`` key reaps only that one."""
@@ -670,6 +706,7 @@ def _force_reap_browser_session(task_id: str) -> None:
     with _bt._cleanup_lock:
         session_info = _bt._active_sessions.get(task_id)
         _bt._session_last_activity.pop(task_id, None)
+        _bt._live_view_hold_until.pop(task_id, None)
         _bt._recording_sessions.discard(task_id)
     if session_info:
         _release_session_resources(task_id, session_info)
@@ -698,6 +735,8 @@ def _cleanup_single_browser_session(task_id: str) -> None:
 
     if not session_info:
         _bt.logger.debug("No active session found for task_id: %s", task_id)
+        with _bt._cleanup_lock:  # drop only a stale hold; activity/owner tracking may belong to a session being created
+            _bt._live_view_hold_until.pop(task_id, None)
         return
 
     _bt.logger.debug("Found session for task %s: bb_session_id=%s", task_id, session_info.get("bb_session_id", "unknown"))

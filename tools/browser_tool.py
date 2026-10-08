@@ -403,6 +403,8 @@ BROWSER_ORPHAN_REAP_INTERVAL = 300  # seconds
 BROWSER_ORPHAN_GRACE_SECONDS = max(3600, BROWSER_SESSION_INACTIVITY_TIMEOUT * 20)
 
 _session_last_activity: Dict[str, float] = {}
+_live_view_hold_until: Dict[str, float] = {}
+_reaping_sessions: set = set()  # keys the janitor is tearing down; live view must not hand them out
 # Owner Hermes home per session: the janitor is one process-global thread, so each
 # teardown must re-enter the OWNING profile's scope (copy_context at spawn would
 # pin the first profile's secrets onto every other profile's teardown).
@@ -453,7 +455,7 @@ _browser_session_backend = _BrowserSessionBackend
 
 _cleanup_thread = None
 _cleanup_running = False
-_cleanup_lock = threading.Lock()  # protects _session_last_activity AND _active_sessions
+_cleanup_lock = threading.Lock()  # protects session tracking, activity and live-view holds
 
 from tools import browser_tool_lifecycle as _lifecycle
 
