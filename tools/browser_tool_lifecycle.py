@@ -167,6 +167,10 @@ def _cleanup_inactive_browser_sessions():
                 # A human took the bot's screen (login, 2FA) — the agent is idle BECAUSE they are working.
                 _update_session_activity(task_id)
                 continue
+        with _bt._cleanup_lock:  # recheck: activity or a live-view hold may have arrived since the snapshot
+            last = _bt._session_last_activity.get(task_id)
+            if last is None or time.time() - last <= _bt.BROWSER_SESSION_INACTIVITY_TIMEOUT:
+                continue
         elapsed = int(current_time - _bt._session_last_activity.get(task_id, current_time))
         _bt.logger.info("Cleaning up inactive session for task: %s (inactive for %ss)", task_id, elapsed)
         try:
