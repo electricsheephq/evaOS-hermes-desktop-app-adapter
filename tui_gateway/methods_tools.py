@@ -310,6 +310,13 @@ def _refresh_live_sessions(home=None, *, preserve_prefix: bool = False, note: st
         agent = sess["agent"]
         try:
             with _session_profile_runtime_scope(sess):
+                if preserve_prefix and _session_uses_compute_host(sess):
+                    continue  # The compute host owns that conversation's tool snapshot.
+                if preserve_prefix and (
+                    "tool_search" not in _tools_mod("tools.mcp_tool_agent").agent_tool_names(agent)
+                    or _tools_mod("tools.tool_search").load_config().enabled == "off"
+                ):
+                    continue  # Eager schemas (or adding a bridge mid-session) invalidate the cached prefix.
                 # evaOS: the session's CURRENT source (activate can rebind desktop<->tui) decides the
                 # client-surface toolsets, with its negotiated desktop_ui_protocol.
                 enabled = _load_enabled_toolsets(
@@ -951,6 +958,20 @@ def _(rid, params: dict) -> dict:
     base = (parts[0] if parts else "").lower()
     arg = parts[1] if len(parts) > 1 else ""
     sid = params.get("session_id", "")
+    if _resolve_name(base) == "reload-mcp":
+        mode = arg.strip().lower()
+        if mode not in {"", "now", "always"}:
+            return _ok(rid, {"output": "Usage: /reload-mcp [now|always]"})
+        with _session_profile_runtime_scope(session):
+            if mode == "always":
+                from cli import save_config_value
+                if not save_config_value("approvals.mcp_reload_confirm", False):
+                    return _err(rid, 5015, "Failed to save MCP reload confirmation preference")
+            response = _methods["reload.mcp"](rid, {"session_id": sid, "confirm": bool(mode)})
+        if "error" in response:
+            return response
+        result = response["result"]
+        return _ok(rid, {"output": result.get("message") or "MCP tools reloaded."})
     live_output = _live_slash_command_output(sid, session, base, arg)
     if live_output is not None:
         return _ok(rid, {"output": live_output or "(no output)"})
