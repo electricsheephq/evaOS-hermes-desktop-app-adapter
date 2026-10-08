@@ -1,168 +1,157 @@
-"""Regression for adapter#450: a task browser's live view survives turn/agent cleanup."""
+"""Regression for adapter#450: registry-created live views survive task teardown."""
 
 import json
-import logging
+import time
 from types import SimpleNamespace
-from unittest.mock import Mock
 
 import pytest
+import requests
 
-from agent.chat_completion_helpers import cleanup_task_resources
-from agent.client_lifecycle import ClientLifecycleMixin
-from tools import browser_live_view as live_view
+from hermes_constants import get_hermes_home
+from run_agent import AIAgent
+from tools import browser_live_view  # noqa: F401 — register the real handler
 from tools import browser_tool as bt
 from tools import browser_tool_lifecycle as lifecycle
 from tools import browser_tool_session as sessions
+from tools.registry import registry
 
 
 @pytest.fixture
 def task_browser(monkeypatch):
-    task_id = "task-hold"
-    info = {"bb_session_id": "provider-session-1", "session_name": ""}
-    provider = Mock()
-    provider.get_live_view_url.return_value = "https://watch.example/session"
-    for name, value in (
-        ("_active_sessions", {task_id: info}),
-        ("_session_last_activity", {task_id: 1000.0}),
-        ("_live_view_hold_until", {}),
-        ("_last_active_session_key", {task_id: task_id}),
-        ("_session_owner_homes", {}),
-        ("_cleanup_failures", {}),
-        ("_suspect_browser_sessions", {}),
-        ("_recording_sessions", set()),
-    ):
-        # The new state is absent on base; the behavioral probes must still run there.
-        monkeypatch.setattr(bt, name, value, raising=False)
-    monkeypatch.setattr(live_view.time, "time", lambda: 1000.0)
-    monkeypatch.setattr("tools.browser_use_cli._served_profile_tag", lambda: "")
-    monkeypatch.setattr("tools.browser_tool_cloud._get_cloud_provider", lambda: provider)
-    monkeypatch.setattr("tools.browser_tool_cloud._is_headed_mode", lambda: False)
-    monkeypatch.setattr("tools.browser_tool_cdp._get_cdp_override", lambda: "")
-    monkeypatch.setattr("tools.browser_tool_cdp._stop_cdp_supervisor", lambda _tid: None)
-    monkeypatch.setattr("tools.browser_tool_cdp._ensure_cdp_supervisor", lambda _tid: None)
-    monkeypatch.setattr(bt, "_is_camofox_mode", lambda: False)
-    monkeypatch.setattr(bt, "_maybe_stop_recording", lambda _tid: None)
-    monkeypatch.setattr(lifecycle, "_start_browser_cleanup_thread", lambda: None)
-    monkeypatch.setattr(sessions, "_run_browser_command", Mock(return_value={"success": True}))
-    monkeypatch.setattr("agent.chat_completion_helpers.is_persistent_env", lambda _tid: False)
-    vm_cleanup = Mock()
-    computer_release = Mock()
-    monkeypatch.setattr("run_agent.cleanup_vm", vm_cleanup)
-    monkeypatch.setattr("tools.process_registry.process_registry.list_sessions", lambda: [])
-    monkeypatch.setattr("tools.computer_use.tool.release_computer_use_session", computer_release)
-    agent = SimpleNamespace(verbose_logging=True, _process_owner_task_ids=())
-    return SimpleNamespace(
-        task_id=task_id, info=info, provider=provider, agent=agent,
-        vm_cleanup=vm_cleanup, computer_release=computer_release,
+    # The repository's autouse fixture supplies a fresh HERMES_HOME per case.
+    home = get_hermes_home()
+    (home / "config.yaml").write_text(
+        "browser:\n  cloud_provider: browserbase\n  headed: false\n"
+        "  auto_local_for_private_urls: false\n  record_sessions: false\n"
     )
+    # Synthetic credentials also let the real janitor re-enter its owner's scope.
+    (home / ".env").write_text(
+        "BROWSERBASE_API_KEY=test-only-key\nBROWSERBASE_PROJECT_ID=test-only-project\n"
+    )
+    monkeypatch.setenv("BROWSERBASE_API_KEY", "test-only-key")
+    monkeypatch.setenv("BROWSERBASE_PROJECT_ID", "test-only-project")
+    clock = [time.time()]
+    monkeypatch.setattr(lifecycle.time, "time", lambda: clock[0])
+    created, debugged, released, commands = [], [], [], []
+    url = "https://93.184.216.34/"  # Public IP literal: URL safety needs no DNS.
+
+    def http_request(_client, method, url, **kwargs):
+        endpoint = url
+        root = "https://api.browserbase.com/v1/sessions"
+        if method.upper() == "POST" and endpoint == root:
+            session_id = f"provider-session-{len(created) + 1}"
+            created.append(session_id)
+            # The fake command runner needs no CDP transport or supervisor socket.
+            payload = {"id": session_id, "connectUrl": ""}
+        elif method.upper() == "GET" and endpoint.endswith("/debug"):
+            session_id = endpoint.removeprefix(root + "/").removesuffix("/debug")
+            assert endpoint == f"{root}/{session_id}/debug" and session_id in created
+            debugged.append(session_id)
+            payload = {"liveViewUrl": f"https://watch.example/{session_id}"}
+        elif method.upper() == "POST" and endpoint.startswith(root + "/"):
+            session_id = endpoint.removeprefix(root + "/")
+            assert session_id in created
+            assert kwargs["json"]["status"] == "REQUEST_RELEASE"
+            released.append(session_id)
+            payload = {}
+        else:
+            raise AssertionError(f"Unexpected HTTP request: {method} {endpoint}")
+        response = requests.Response()
+        response.status_code = 200
+        response._content = json.dumps(payload).encode()
+        return response
+
+    def command_runner(task_id, command, args=None, **kwargs):
+        # Keep the session lookup performed by the real driver; fake only execution.
+        info = (
+            bt._active_sessions[task_id]
+            if command == "close"
+            else sessions._get_session_info(task_id)
+        )
+        commands.append((command, info["bb_session_id"]))
+        data = {
+            "open": {
+                "url": args[0] if command == "open" else url,
+                "title": "Test page",
+            },
+            "snapshot": {"snapshot": '- heading "Test page"', "refs": {}},
+            "eval": url,
+            "close": {},
+        }
+        assert command in data
+        return {"success": True, "data": data[command]}
+
+    monkeypatch.setattr(requests.sessions.Session, "request", http_request)
+    monkeypatch.setattr(sessions, "_run_browser_command", command_runner)
+    agent = object.__new__(AIAgent)  # Real cleanup methods, without model/client setup.
+    agent.verbose_logging = True
+    agent._process_owner_task_ids = ()
+    task_id = "task-hold"
+
+    def dispatch(name, args=None):
+        result = json.loads(registry.dispatch(name, args or {}, task_id=task_id))
+        assert result.get("success") is True, result
+        return result
+
+    try:
+        dispatch("browser_navigate", {"url": url})
+        # Exercise the real startup, then stop the worker before advancing test time.
+        lifecycle._stop_browser_cleanup_thread()
+        assert len(created) == 1
+        yield SimpleNamespace(
+            agent=agent,
+            task_id=task_id,
+            dispatch=dispatch,
+            url=url,
+            clock=clock,
+            created=created,
+            debugged=debugged,
+            released=released,
+            commands=commands,
+        )
+    finally:
+        lifecycle._stop_browser_cleanup_thread()
+        lifecycle.cleanup_all_browsers()
 
 
-def _hold(browser):
-    result = json.loads(live_view.browser_live_view(task_id=browser.task_id))
-    assert result["success"] is True
-    return result
-
-
-def test_live_view_survives_turn_cleanup_and_reuses_provider_session(task_browser, caplog):
+def test_live_view_survives_turn_and_agent_cleanup_and_reuses_session(task_browser):
     browser = task_browser
-    result = _hold(browser)
-    with caplog.at_level(logging.INFO):
-        cleanup_task_resources(browser.agent, browser.task_id)
+    browser.dispatch("browser_live_view")
+    assert browser.debugged == browser.created
 
-    browser.provider.close_session.assert_not_called()
-    assert bt._active_sessions[browser.task_id] is browser.info
-    assert bt._last_active_session_key[browser.task_id] == browser.task_id
-    assert sessions._get_session_info(browser.task_id)["bb_session_id"] == browser.info["bb_session_id"]
-    browser.provider.create_session.assert_not_called()
-    browser.vm_cleanup.assert_called_once_with(browser.task_id)
-    skip_logs = [record.getMessage() for record in caplog.records if "live-view hold" in record.getMessage()]
-    assert len(skip_logs) == 1
-    assert browser.task_id in skip_logs[0]
-    assert str(result["min_hold_seconds"]) in skip_logs[0]
-    assert result["live_view_url"] not in caplog.text
+    for cleanup in (
+        browser.agent._cleanup_task_resources,
+        browser.agent._close_task_resources,
+    ):
+        cleanup(browser.task_id)
+        assert browser.released == []
+        before = len(browser.commands)
+        browser.dispatch("browser_snapshot")
+        browser.dispatch("browser_navigate", {"url": browser.url})
+        assert browser.created == browser.debugged  # No second provider session.
+        assert all(sid == browser.created[0] for _, sid in browser.commands[before:])
+        assert all(command != "close" for command, _ in browser.commands)
 
 
-def test_expired_live_view_is_reaped_after_inactivity(task_browser, monkeypatch):
+@pytest.mark.parametrize(
+    "live_view", [False, True], ids=["no-live-view", "expired-hold"]
+)
+def test_unheld_or_expired_idle_session_is_released(task_browser, live_view):
     browser = task_browser
-    _hold(browser)
-    until = bt._session_last_activity[browser.task_id]
-    monkeypatch.setattr(lifecycle.time, "time", lambda: until + bt.BROWSER_SESSION_INACTIVITY_TIMEOUT + 1)
-
-    lifecycle._cleanup_inactive_browser_sessions()
-
-    browser.provider.close_session.assert_called_once_with(browser.info["bb_session_id"])
-    assert browser.task_id not in bt._active_sessions
-    assert browser.task_id not in bt._live_view_hold_until
-
-
-def test_turn_cleanup_without_live_view_still_closes(task_browser):
-    browser = task_browser
-    cleanup_task_resources(browser.agent, browser.task_id)
-
-    browser.provider.close_session.assert_called_once_with(browser.info["bb_session_id"])
-    assert browser.task_id not in bt._active_sessions
-    assert browser.task_id not in bt._last_active_session_key
-
-
-def test_failed_live_view_leaves_no_hold_and_turn_cleanup_closes(task_browser):
-    browser = task_browser
-    browser.provider.get_live_view_url.side_effect = RuntimeError("provider unavailable")
-    result = json.loads(live_view.browser_live_view(task_id=browser.task_id))
-
-    assert result["code"] == "browser_live_view_failed"
-    assert browser.task_id not in bt._live_view_hold_until
-    assert bt._session_last_activity[browser.task_id] == 1000.0
-    cleanup_task_resources(browser.agent, browser.task_id)
-    browser.provider.close_session.assert_called_once_with(browser.info["bb_session_id"])
-
-
-def test_live_view_survives_agent_close_and_other_cleanup_runs(task_browser):
-    browser = task_browser
-    _hold(browser)
-    ClientLifecycleMixin._close_task_resources(browser.agent, browser.task_id)
-
-    browser.provider.close_session.assert_not_called()
-    assert bt._active_sessions[browser.task_id] is browser.info
-    assert bt._last_active_session_key[browser.task_id] == browser.task_id
-    browser.vm_cleanup.assert_called_once_with(browser.task_id)
-    browser.computer_release.assert_called_once_with(browser.task_id)
-
-
-def test_cleanup_all_closes_even_with_live_view_hold(task_browser):
-    browser = task_browser
-    _hold(browser)
-    lifecycle.cleanup_all_browsers()
-
-    browser.provider.close_session.assert_called_once_with(browser.info["bb_session_id"])
-    assert browser.task_id not in bt._active_sessions
-    assert browser.task_id not in bt._live_view_hold_until
-
-
-@pytest.mark.parametrize("failure", [RuntimeError("provider unavailable"), "http://watch.example/session", ""])
-def test_failed_extension_restores_previous_hold(task_browser, monkeypatch, failure):
-    browser = task_browser
-    _hold(browser)
-    previous_hold = bt._live_view_hold_until[browser.task_id]
-    monkeypatch.setattr(live_view.time, "time", lambda: 1100.0)
-    if isinstance(failure, Exception):
-        browser.provider.get_live_view_url.side_effect = failure
+    if live_view:
+        result = browser.dispatch("browser_live_view")
+        browser.agent._cleanup_task_resources(browser.task_id)
+        assert browser.released == []
+        browser.clock[0] += (
+            result["min_hold_seconds"] + bt.BROWSER_SESSION_INACTIVITY_TIMEOUT + 1
+        )
+        lifecycle._cleanup_inactive_browser_sessions()
     else:
-        browser.provider.get_live_view_url.return_value = failure
+        browser.agent._cleanup_task_resources(browser.task_id)
 
-    result = json.loads(live_view.browser_live_view(task_id=browser.task_id))
-
-    assert "error" in result
-    assert bt._live_view_hold_until[browser.task_id] == previous_hold
-    assert bt._session_last_activity[browser.task_id] == previous_hold
-
-
-@pytest.mark.parametrize("sidecar_present,until,active", [(True, 1001.0, True), (True, 1000.0, False), (False, 1001.0, False)])
-def test_hold_predicate_matches_cleanup_sidecar_keys(task_browser, sidecar_present, until, active):
-    key = f"{task_browser.task_id}::local"
-    bt._live_view_hold_until[key] = until
-    if sidecar_present:
-        bt._active_sessions[key] = {"bb_session_id": None}
-
-    assert lifecycle.live_view_hold_active(task_browser.task_id) is active
-    # Direct sidecar cleanup does not depend on its presence in the session map.
-    assert lifecycle.live_view_hold_active(key) is (until > 1000.0)
+    assert browser.released == browser.created
+    # Teardown evicts the provider identity: the next real dispatch must create anew.
+    browser.dispatch("browser_navigate", {"url": browser.url})
+    assert len(browser.created) == 2
+    assert browser.created[1] != browser.released[0]
+    assert browser.commands[-1][1] == browser.created[1]

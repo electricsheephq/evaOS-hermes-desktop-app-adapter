@@ -27,12 +27,7 @@ class _FakeBrowserbase:
 
 
 @pytest.fixture
-def clean_live_view_holds(monkeypatch):
-    monkeypatch.setattr(browser_tool, "_live_view_hold_until", {})
-
-
-@pytest.fixture
-def existing_named_session(monkeypatch, clean_live_view_holds):
+def existing_named_session(monkeypatch):
     monkeypatch.setattr(
         browser_tool,
         "_active_sessions",
@@ -58,7 +53,6 @@ def test_named_session_returns_link_without_logging_it(
     assert provider.seen == ["provider-session-1"]
     assert result["live_view_url"] not in caplog.text
     assert browser_tool._session_last_activity["bu-named-research"] == 1_900.0
-    assert browser_tool._live_view_hold_until["bu-named-research"] == 1_900.0
 
     monkeypatch.setattr(browser_lifecycle.time, "time", lambda: 1_300.0)
     monkeypatch.setattr(
@@ -113,7 +107,6 @@ def test_provider_error_codes_are_typed(
     assert result["retryable"] is retryable
     assert "https://" not in result["error"]
     assert browser_tool._session_last_activity["bu-named-research"] == 123.0
-    assert "bu-named-research" not in browser_tool._live_view_hold_until
 
 
 def test_provider_failure_removes_temporary_hold_when_activity_was_absent(
@@ -140,7 +133,6 @@ def test_provider_failure_removes_temporary_hold_when_activity_was_absent(
 
     assert result["code"] == "browser_unavailable"
     assert "bu-named-research" not in browser_tool._session_last_activity
-    assert "bu-named-research" not in browser_tool._live_view_hold_until
 
 
 def test_missing_provider_session_is_evicted(monkeypatch, existing_named_session):
