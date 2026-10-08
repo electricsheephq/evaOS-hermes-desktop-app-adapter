@@ -75,23 +75,31 @@ def browser_live_view(session: str = "", task_id: Optional[str] = None) -> str:
             )
         had_previous_activity = key in browser_tool._session_last_activity
         previous_activity = browser_tool._session_last_activity.get(key)
+        previous_hold = browser_tool._live_view_hold_until.get(key)
         held_until = max(
             browser_tool._session_last_activity.get(key, 0.0),
+            previous_hold or 0.0,
             time.time() + LIVE_VIEW_HOLD_SECONDS,
         )
         browser_tool._session_last_activity[key] = held_until
+        browser_tool._live_view_hold_until[key] = held_until
 
     def restore_activity() -> None:
         with browser_tool._cleanup_lock:
             current = browser_tool._active_sessions.get(key)
             current_activity = browser_tool._session_last_activity.get(key)
-            if current_activity != held_until:
-                return
-            if (
+            same_session = (
                 isinstance(current, dict)
                 and str(current.get("bb_session_id") or "") == provider_session_id
-                and had_previous_activity
-            ):
+            )
+            if browser_tool._live_view_hold_until.get(key) == held_until:
+                if same_session and previous_hold is not None:
+                    browser_tool._live_view_hold_until[key] = previous_hold
+                else:
+                    browser_tool._live_view_hold_until.pop(key, None)
+            if current_activity != held_until:
+                return
+            if same_session and had_previous_activity:
                 browser_tool._session_last_activity[key] = previous_activity
             else:
                 browser_tool._session_last_activity.pop(key, None)
