@@ -272,9 +272,17 @@ async def _lifespan(app: "FastAPI"):
 
     start_background_bootstrap()
 
+    # Only headless serve owns this watcher; dashboard discovery stays demand-driven.
+    mcp_reconcile_stop = None
+    if env_var_enabled("HERMES_SERVE_HEADLESS"):
+        from tui_gateway.mcp_reconcile import start_serve_mcp_reconcile
+        mcp_reconcile_stop = start_serve_mcp_reconcile()
+
     try:
         yield
     finally:
+        if mcp_reconcile_stop is not None:
+            mcp_reconcile_stop.set()
         hosted_room_start_cancel.set()
         _hosted_groups.stop_hosted_room_service(timeout=5.0)
         hosted_room_start_thread.join(timeout=1.0)

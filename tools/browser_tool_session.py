@@ -455,6 +455,7 @@ def _discard_timed_out_browser_session(task_id: str, session_info: Dict[str, Any
         else:
             _bt._active_sessions.pop(task_id, None)
             _bt._session_last_activity.pop(task_id, None)
+            _bt._live_view_hold_until.pop(task_id, None)
 
         bare_task_id = _bt._bare_task_id_for_session_key(task_id)
         if _bt._last_active_session_key.get(bare_task_id) == task_id:

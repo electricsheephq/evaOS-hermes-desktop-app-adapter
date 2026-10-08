@@ -117,7 +117,10 @@ def _scope_key(task_id, tag):
 def _held(record):
     from tools import browser_tool
     with browser_tool._cleanup_lock:
-        expiry = browser_tool._session_last_activity.get(record[7], 0)
+        # The live-view hold map survives later activity updates (#450); the
+        # future-dated activity stamp is the older form of the same hold.
+        expiry = max(browser_tool._session_last_activity.get(record[7], 0),
+                     getattr(browser_tool, "_live_view_hold_until", {}).get(record[7], 0))
         return expiry if expiry > time.time() else 0
 
 

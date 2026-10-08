@@ -333,11 +333,6 @@ def _mirror_fast(sid, session, agent, arg) -> None:
         _emit("session.info", sid, _session_info(agent, session))
 
 
-def _mirror_reload_mcp(sid, session, agent, arg) -> None:
-    if agent and hasattr(agent, "reload_mcp_tools"):
-        agent.reload_mcp_tools()
-
-
 def _mirror_stop(sid, session, agent, arg) -> None:
     from tools.process_registry import process_registry
     process_registry.kill_all()
@@ -351,7 +346,7 @@ _SLASH_MIRRORS = {
     "compress": lambda sid, session, agent, arg: (
         _compress_live_with_feedback(sid, session, agent, arg, snapshot_kwargs=False) if agent else ""),
     "fast": _mirror_fast,
-    "reload-mcp": _mirror_reload_mcp, "stop": _mirror_stop}
+    "stop": _mirror_stop}
 
 
 def _compute_host_slash(sid: str, session: dict, name: str, command: str) -> tuple[str, str]:

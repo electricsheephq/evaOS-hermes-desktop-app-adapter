@@ -603,7 +603,7 @@ def discover_mcp_tools(allowed_mcp_names: Optional[List[str]] = None) -> List[st
             cookie.release()
 
 
-def reconcile_mcp_servers_with_config() -> Dict[str, List[str]]:
+def reconcile_mcp_servers_with_config(*, wait_for_discovery_lock: bool = True) -> Dict[str, List[str]]:
     """Bring the live server set in step with ``mcp_servers`` as it is on disk NOW: tear down
     servers that were removed from config or set ``enabled: false`` (a parked server keeps
     self-probing forever otherwise — for hours after the user deleted its entry), then connect
@@ -612,7 +612,9 @@ def reconcile_mcp_servers_with_config() -> Dict[str, List[str]]:
     scope (one multiplexed profile's config prunes only its own connections). A lazily registered
     (schema-cache) server loses its cached tools; one still mid-connect cannot be torn down yet and
     is reported under ``"pending"`` so the caller retries. Returns
-    ``{"removed": [...], "added": [...], "pending": [...]}``; a no-op when nothing changed."""
+    ``{"removed": [...], "added": [...], "pending": [...]}``; a no-op when nothing changed.
+    Background callers set ``wait_for_discovery_lock=False`` to defer contended additions
+    to ``pending`` rather than holding their in-process reload lock through the retry wait."""
     with _owner_secret_scope():
         servers = _config._load_mcp_config()
     wanted = {name for name, cfg in servers.items() if mcp_server_enabled(cfg)}
@@ -643,7 +645,20 @@ def reconcile_mcp_servers_with_config() -> Dict[str, List[str]]:
     # waiting when another process holds it) and logs a failed pass, every tick, for nothing.
     added = sorted(name for name in wanted - known if not _connect_cooldown_active(name))
     if added:
-        discover_mcp_tools()
+        if wait_for_discovery_lock:
+            discover_mcp_tools()
+        elif _core._ensure_mcp_sdk():  # same SDK gate discover_mcp_tools applies before connecting
+            cookie = _loop._try_acquire_mcp_discovery_lock()
+            if cookie is None:
+                return {"removed": stale + sorted(_key_name(k) for k in lazy), "added": [],
+                        "pending": sorted((connecting - wanted) | set(added))}
+            try:
+                # Retain the probe's cookie through registration; discover_mcp_tools would
+                # acquire it again and wait on our own lock (or race if we released first).
+                register_mcp_servers(servers)
+            finally:
+                if cookie is not _core._LOCK_UNAVAILABLE:
+                    cookie.release()
     return {"removed": stale + sorted(_key_name(k) for k in lazy), "added": added,
             "pending": sorted(connecting - wanted)}
 

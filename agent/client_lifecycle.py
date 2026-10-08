@@ -120,6 +120,11 @@ class ClientLifecycleMixin:
             from tools.computer_use.tool import release_computer_use_session
             release_computer_use_session(task_id)
 
+        def release_browser() -> None:
+            from tools.browser_tool_lifecycle import live_view_hold_active
+            if not live_view_hold_active(task_id):
+                cleanup_browser(task_id)
+
         def forget_file_state() -> None:
             # File tools key their read stamps / writer claims by the per-turn task_id (cron:
             # ``cron:<job>:<uuid>``, subagents: ``subagent-N-xxxx``), which differs from session_id;
@@ -136,8 +141,8 @@ class ClientLifecycleMixin:
                 cron=getattr(self, "platform", None) == "cron",
             )
 
-        for step in (kill_processes, lambda: cleanup_vm(task_id), reap_harnesses,
-                     lambda: cleanup_browser(task_id), release_computer_use, forget_file_state):
+        for step in (kill_processes, lambda: cleanup_vm(task_id), reap_harnesses, release_browser,
+                     release_computer_use, forget_file_state):
             _quietly(step)
 
     def _client_log_context(self) -> str:

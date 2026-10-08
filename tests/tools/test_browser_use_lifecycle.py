@@ -185,7 +185,7 @@ def test_cron_close_stops_only_scope_started_daemon(harness, name):
     assert not (harness / "interactive.stopped").exists()
 
 
-@pytest.mark.parametrize("scenario", ["recycled-pid", "shared-default", "hold", "failure", "interactive-named"])
+@pytest.mark.parametrize("scenario", ["recycled-pid", "shared-default", "hold", "live-view-hold", "failure", "interactive-named"])
 def test_scope_end_respects_identity_sharing_hold_and_errors(harness, monkeypatch, caplog, scenario):
     name = "" if scenario == "shared-default" else "scheduled"
     pid = start(harness, "interactive-owner" if scenario == "shared-default" else "cron-owner", name)
@@ -199,6 +199,11 @@ def test_scope_end_respects_identity_sharing_hold_and_errors(harness, monkeypatc
     elif scenario == "hold":
         key = browser_use_cli._backend_cache_key("cron-owner", name)
         browser_tool._session_last_activity[key] = time.time() + 900
+    elif scenario == "live-view-hold":
+        # #450: later activity overwrites the stamp; the hold map is what survives.
+        key = browser_use_cli._backend_cache_key("cron-owner", name)
+        monkeypatch.setitem(browser_tool._session_last_activity, key, time.time() - 1)
+        monkeypatch.setitem(browser_tool._live_view_hold_until, key, time.time() + 900)
     elif scenario == "failure":
         monkeypatch.setattr(Path, "read_text", lambda *args, **kwargs: (_ for _ in ()).throw(OSError("unreadable")))
     try:
