@@ -48,6 +48,7 @@ def test_named_session_returns_link_without_logging_it(
 
     assert result["success"] is True
     assert result["live_view_url"] == "https://watch.example/session"
+    assert (result["page_url"], result["page_title"], result["page_count"]) == ("", "", 0)
     assert result["min_hold_seconds"] >= 900
     assert "type into the remote page themselves" in result["instruction"]
     assert provider.seen == ["provider-session-1"]
@@ -231,3 +232,65 @@ def test_schema_explains_human_takeover():
     assert "login, MFA, or payment" in description
     assert "user types into the remote page themselves" in description
     assert "kept open for at least 15 minutes" in description
+
+
+@pytest.mark.parametrize("page,index,matched", [("", 1, None), ("DOCS", 1, True), ("missing", 2, False), ("x" * 200, 2, False)])
+def test_debug_page_selection_through_tool_dispatch(
+    monkeypatch, existing_named_session, caplog, page, index, matched
+):
+    """Regression for adapter#451: dispatch returns the selected page and hold."""
+    from unittest.mock import Mock
+
+    from plugins.browser.browserbase.provider import BrowserbaseBrowserProvider
+
+    pages = [
+        {"url": "about:blank", "title": "", "debuggerFullscreenUrl": "https://watch.example/blank"},
+        {"url": "https://example.com/docs", "title": "Docs", "debuggerFullscreenUrl": "https://watch.example/docs"},
+        {"url": "https://example.com/", "title": "Home", "debuggerFullscreenUrl": "https://watch.example/home"},
+    ]
+    if not page:
+        pages = [pages[0], pages[2]]
+    provider = BrowserbaseBrowserProvider()
+    monkeypatch.setattr(provider, "_get_config", lambda: {
+        "api_key": "fake-key", "project_id": "fake-project", "base_url": "https://api.browserbase.com",
+    })
+    response = Mock(ok=True, status_code=200)
+    response.json.return_value = {"liveViewUrl": pages[0]["debuggerFullscreenUrl"], "pages": pages}
+    get = Mock(return_value=response)
+    monkeypatch.setattr(requests, "get", get)
+    monkeypatch.setattr("tools.browser_tool_cloud._get_cloud_provider", lambda: provider)
+    monkeypatch.setattr(live_view.time, "time", lambda: 1_000.0)
+
+    with caplog.at_level(logging.INFO):
+        result = json.loads(registry.get_entry("browser_live_view").handler(
+            {"session": "research", "page": page}, task_id="task-1"
+        ))
+
+    assert result["live_view_url"] == pages[index]["debuggerFullscreenUrl"]
+    assert result["page_url"] == pages[index]["url"]
+    assert result["page_title"] == pages[index]["title"]
+    assert result["page_count"] == len(pages)
+    assert result["page_url"] in result["instruction"]
+    assert "call again with page" in result["instruction"]
+    if page:
+        assert result["page_matched"] is matched
+        assert ("No page matched" in result["instruction"]) is (not matched)
+    assert browser_tool._session_last_activity["bu-named-research"] == 1_900.0
+    get.assert_called_once()
+    assert result["page_url"] not in caplog.text
+    assert result["live_view_url"] not in caplog.text
+
+
+def test_page_selector_length_is_validated_before_provider_or_hold(monkeypatch, existing_named_session):
+    monkeypatch.setattr("tools.browser_tool_cloud._get_cloud_provider", lambda: pytest.fail("provider lookup"))
+    result = json.loads(live_view.browser_live_view(session="research", page="x" * 201))
+    assert result["code"] == "invalid_browser_page"
+    assert result["retryable"] is False
+    assert browser_tool._session_last_activity["bu-named-research"] == 123.0
+
+
+def test_non_string_page_selector_is_coerced_not_raised(monkeypatch, existing_named_session):
+    monkeypatch.setattr("tools.browser_tool_cloud._get_cloud_provider", lambda: pytest.fail("provider lookup"))
+    result = json.loads(live_view.browser_live_view(session="research", page=10 ** 201))
+    assert result["code"] == "invalid_browser_page"
+    assert browser_tool._session_last_activity["bu-named-research"] == 123.0

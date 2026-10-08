@@ -17,6 +17,31 @@ URL = (
 )
 
 
+def test_selected_page_viewer_token_survives_gateway_delivery(monkeypatch):
+    """Regression for adapter#451; preserve the adapter#448 final-delivery contract."""
+    from unittest.mock import Mock
+
+    from plugins.browser.browserbase.provider import BrowserbaseBrowserProvider
+
+    selected_url = URL.replace("DA534967A0C5A3A3BA4B6FD253E65FCF", "0123456789ABCDEF0123456789ABCDEF")
+    response = Mock(ok=True, status_code=200)
+    response.json.return_value = {"debuggerFullscreenUrl": URL, "pages": [
+        {"url": "about:blank", "debuggerFullscreenUrl": URL},
+        {"url": "https://example.com/", "debuggerFullscreenUrl": selected_url},
+    ]}
+    provider = BrowserbaseBrowserProvider()
+    monkeypatch.setattr(provider, "_get_config", lambda: {
+        "api_key": "fake-key", "project_id": "fake-project", "base_url": "https://api.browserbase.com",
+    })
+    monkeypatch.setattr("requests.get", lambda *args, **kwargs: response)
+    chosen = provider.get_live_view_url("session-1")
+    assert chosen == selected_url
+    text = f"[Open live view]({chosen}). JWT {JWT}"
+    assert _sanitize_gateway_final_response(Platform.TELEGRAM, text) == (
+        f"[Open live view]({selected_url}). JWT {redact.redact_for_egress(JWT)}"
+    )
+
+
 @pytest.mark.parametrize("enabled", [True, False])
 def test_final_reply_preserves_live_view_and_masks_other_secrets(monkeypatch, enabled):
     monkeypatch.setattr(redact, "_REDACT_ENABLED", enabled)
