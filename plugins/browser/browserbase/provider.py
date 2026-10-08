@@ -169,9 +169,10 @@ class BrowserbaseBrowserProvider(CloudBrowserProvider):
         ]
         nonblank = [
             entry for entry in usable
-            if str(entry.get("url") or "").strip().lower() not in {
+            if (page_url := str(entry.get("url") or "").strip().lower()) not in {
                 "", "about:blank", "about:newtab", "chrome://newtab/", "chrome://new-tab-page/",
             }
+            and page_url.split("?", 1)[0].split("#", 1)[0] != "about:blank"
         ]
         selected = (matches or nonblank or [None])[-1]
         url = str(payload.get("liveViewUrl") or payload.get("debuggerFullscreenUrl") or "")

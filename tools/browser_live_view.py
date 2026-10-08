@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import time
 from typing import Any, Dict, Optional
 
@@ -106,7 +107,25 @@ def browser_live_view(session: str = "", task_id: Optional[str] = None, page: st
     try:
         get_live_view = getattr(provider, "get_live_view", None)
         if callable(get_live_view):
-            view = get_live_view(provider_session_id, page=page)
+            try:
+                parameters = inspect.signature(get_live_view).parameters.values()
+                accepts_page = any(
+                    parameter.kind == inspect.Parameter.VAR_KEYWORD
+                    or (
+                        parameter.name == "page"
+                        and parameter.kind in (
+                            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                            inspect.Parameter.KEYWORD_ONLY,
+                        )
+                    )
+                    for parameter in parameters
+                )
+            except Exception:
+                accepts_page = False
+            view = (
+                get_live_view(provider_session_id, page=page)
+                if accepts_page else get_live_view(provider_session_id)
+            )
         else:
             view = {"url": provider.get_live_view_url(provider_session_id)}
         url = str(view.get("url") or "")
@@ -154,7 +173,7 @@ def browser_live_view(session: str = "", task_id: Optional[str] = None, page: st
         instruction += f" The link shows the page at {page_url}; to show another tab, call again with page."
     if page and view.get("page_matched") is False:
         instruction += " No page matched the requested selector; the link shows the default page."
-    elif page and not callable(get_live_view):
+    elif page and "page_matched" not in view:
         instruction += " This provider does not support selecting a page."
     return tool_result(
         success=True,

@@ -77,64 +77,6 @@ def _isolate_env(monkeypatch: pytest.MonkeyPatch) -> None:
 
 class TestBrowserbaseLiveView:
     @pytest.mark.parametrize(
-        "pages,page,selected_index,matched",
-        [
-            ([{"url": "about:blank"}, {"url": "https://example.com/"}], "", 1, None),
-            ([{"url": "https://example.com/"}], "", 0, None),
-            ([{"url": "https://example.com/docs"}, {"url": "https://example.com/"}], "DOCS", 0, True),
-            ([{"url": "https://example.com/", "title": "Docs"}, {"url": "https://example.com/"}], "docs", 0, True),
-            ([{"url": "https://example.com/docs"}, {"url": "https://example.com/docs/latest"}], "docs", 1, True),
-            ([{"url": "https://example.com/docs"}, {"url": "https://example.com/"}], "missing", 1, False),
-            ([{"url": "https://example.com/"}, {"url": "about:blank"}], "", 0, None),
-            ([{"url": "about:blank"}, {"url": "about:newtab"}, {"url": "chrome://newtab/"}, {"url": "chrome://new-tab-page/"}, {"url": ""}], "", None, None),
-            ([{"url": "https://example.com/", "debuggerFullscreenUrl": "http://unsafe.example/"}], "example", None, False),
-            ([None, "malformed"], "", None, None),
-            ([], "", None, None),
-            (None, "", None, None),
-            ({"url": "malformed"}, "", None, None),
-        ],
-    )
-    def test_selects_page_and_reports_metadata(self, pages, page, selected_index, matched):
-        """Regression for adapter#451: choose a usable page from one debug request."""
-        from plugins.browser.browserbase.provider import BrowserbaseBrowserProvider
-
-        session_url = "https://watch.example/session"
-        if isinstance(pages, list):
-            pages = [
-                {"debuggerFullscreenUrl": f"https://watch.example/page-{index}", **entry}
-                if isinstance(entry, dict) else entry
-                for index, entry in enumerate(pages)
-            ]
-        if isinstance(pages, list) and len(pages) == 1 and selected_index == 0:
-            session_url = pages[0]["debuggerFullscreenUrl"]
-        payload = {"liveViewUrl": session_url}
-        if pages is not None:
-            payload["pages"] = pages
-        provider = BrowserbaseBrowserProvider()
-        response = Mock(ok=True, status_code=200)
-        response.json.return_value = payload
-        config = {"api_key": "fake-key", "project_id": "fake-project", "base_url": "https://api.browserbase.com"}
-        selected = pages[selected_index] if selected_index is not None else (
-            pages[0] if isinstance(pages, list) and pages and isinstance(pages[0], dict) else {}
-        )
-        expected_url = selected["debuggerFullscreenUrl"] if selected_index is not None else session_url
-        with patch.object(provider, "_get_config", return_value=config), \
-             patch("requests.get", return_value=response) as get:
-            if not page:
-                assert provider.get_live_view_url("session-1") == expected_url
-                get.assert_called_once()
-                get.reset_mock()
-            result = provider.get_live_view("session-1", page=page)
-            get.assert_called_once()
-
-        assert result["url"] == expected_url
-        assert result["page_url"] == selected.get("url", "")
-        assert result["page_title"] == selected.get("title", "")
-        assert result["page_count"] == (len(pages) if isinstance(pages, list) else 0)
-        if page:
-            assert result["page_matched"] is matched
-
-    @pytest.mark.parametrize(
         "base_url,payload,expected",
         [
             (

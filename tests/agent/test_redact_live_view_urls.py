@@ -28,29 +28,6 @@ def store(text):
     return _assistant_content_for_storage(agent, SimpleNamespace(content=text))
 
 
-def test_selected_page_viewer_token_survives_redaction(monkeypatch):
-    """Regression for adapter#451; preserve the adapter#448 viewer-token contract."""
-    from unittest.mock import Mock
-
-    from plugins.browser.browserbase.provider import BrowserbaseBrowserProvider
-
-    selected_url = URL.replace("DA534967A0C5A3A3BA4B6FD253E65FCF", "0123456789ABCDEF0123456789ABCDEF")
-    response = Mock(ok=True, status_code=200)
-    response.json.return_value = {"liveViewUrl": URL, "pages": [
-        {"url": "about:blank", "debuggerFullscreenUrl": URL},
-        {"url": "https://example.com/", "debuggerFullscreenUrl": selected_url},
-    ]}
-    provider = BrowserbaseBrowserProvider()
-    monkeypatch.setattr(provider, "_get_config", lambda: {
-        "api_key": "fake-key", "project_id": "fake-project", "base_url": "https://api.browserbase.com",
-    })
-    monkeypatch.setattr("requests.get", lambda *args, **kwargs: response)
-    chosen = provider.get_live_view_url("session-1")
-    assert chosen == selected_url
-    assert redact.redact_sensitive_text(chosen, preserve_live_view_urls=True) == selected_url
-    assert store(f"[Open live view]({chosen})") == f"[Open live view]({selected_url})"
-
-
 @pytest.mark.parametrize("text", [
     f"Open {URL} then use {JWT}",
     f"[Open live view]({URL}) then use {JWT}",

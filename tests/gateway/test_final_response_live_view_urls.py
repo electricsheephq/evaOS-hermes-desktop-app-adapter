@@ -17,29 +17,46 @@ URL = (
 )
 
 
-def test_selected_page_viewer_token_survives_gateway_delivery(monkeypatch):
-    """Regression for adapter#451; preserve the adapter#448 final-delivery contract."""
+def test_selected_page_viewer_token_survives_gateway_delivery(monkeypatch, tmp_path):
+    """Regression for #451: selected-page links retain #448's final-delivery contract."""
+    import json
     from unittest.mock import Mock
 
-    from plugins.browser.browserbase.provider import BrowserbaseBrowserProvider
+    import requests
 
+    import tools.browser_live_view  # noqa: F401 -- registers the real tool
+    from plugins.browser.browserbase.provider import BrowserbaseBrowserProvider
+    from tools import browser_tool
+    from tools.registry import registry
+
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("BROWSERBASE_API_KEY", "synthetic-key")
+    monkeypatch.setenv("BROWSERBASE_PROJECT_ID", "synthetic-project")
+    monkeypatch.delenv("BROWSERBASE_BASE_URL", raising=False)
     selected_url = URL.replace("DA534967A0C5A3A3BA4B6FD253E65FCF", "0123456789ABCDEF0123456789ABCDEF")
-    response = Mock(ok=True, status_code=200)
-    response.json.return_value = {"debuggerFullscreenUrl": URL, "pages": [
+    response = requests.Response()
+    response.status_code = 200
+    response._content = json.dumps({"liveViewUrl": URL, "pages": [
         {"url": "about:blank", "debuggerFullscreenUrl": URL},
         {"url": "https://example.com/", "debuggerFullscreenUrl": selected_url},
-    ]}
+    ]}).encode()
+    get = Mock(return_value=response)
+    monkeypatch.setattr(requests, "get", get)
     provider = BrowserbaseBrowserProvider()
-    monkeypatch.setattr(provider, "_get_config", lambda: {
-        "api_key": "fake-key", "project_id": "fake-project", "base_url": "https://api.browserbase.com",
+    monkeypatch.setattr("tools.browser_tool_cloud._get_cloud_provider", lambda: provider)
+    monkeypatch.setattr(browser_tool, "_active_sessions", {
+        "bu-named-research": {"bb_session_id": "provider-session-1"},
     })
-    monkeypatch.setattr("requests.get", lambda *args, **kwargs: response)
-    chosen = provider.get_live_view_url("session-1")
+    monkeypatch.setattr(browser_tool, "_session_last_activity", {})
+    result = json.loads(registry.dispatch("browser_live_view", {"session": "research"}))
+    assert result["success"] is True
+    chosen = result["live_view_url"]
     assert chosen == selected_url
     text = f"[Open live view]({chosen}). JWT {JWT}"
     assert _sanitize_gateway_final_response(Platform.TELEGRAM, text) == (
         f"[Open live view]({selected_url}). JWT {redact.redact_for_egress(JWT)}"
     )
+    get.assert_called_once()
 
 
 @pytest.mark.parametrize("enabled", [True, False])

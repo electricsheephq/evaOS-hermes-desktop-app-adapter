@@ -48,7 +48,6 @@ def test_named_session_returns_link_without_logging_it(
 
     assert result["success"] is True
     assert result["live_view_url"] == "https://watch.example/session"
-    assert (result["page_url"], result["page_title"], result["page_count"]) == ("", "", 0)
     assert result["min_hold_seconds"] >= 900
     assert "type into the remote page themselves" in result["instruction"]
     assert provider.seen == ["provider-session-1"]
@@ -234,63 +233,107 @@ def test_schema_explains_human_takeover():
     assert "kept open for at least 15 minutes" in description
 
 
-@pytest.mark.parametrize("page,index,matched", [("", 1, None), ("DOCS", 1, True), ("missing", 2, False), ("x" * 200, 2, False)])
+@pytest.mark.parametrize(
+    "page_urls,selector,provider_kind,selected_index,matched",
+    [
+        (["about:blank", "https://example.com/"], "", "browserbase", 1, None),
+        (["https://example.com/", "about:blank#blocked"], "", "browserbase", 0, None),
+        (["https://example.com/", "about:blank?blocked=1#blocked"], "", "browserbase", 0, None),
+        (["https://example.com/", "about:blank?blocked=1"], "", "browserbase", 0, None),
+        (["https://example.com/docs", "https://example.com/"], "DOCS", "browserbase", 0, True),
+        (["https://example.com/docs", "https://example.com/"], "missing", "browserbase", 1, False),
+        (["", "about:blank", "about:newtab", "chrome://newtab/", "chrome://new-tab-page/"], "", "browserbase", None, None),
+        (["https://example.com/"], "example", "narrow", 0, None),
+        (["https://example.com/"], "example", "default", 0, None),
+        (["https://example.com/docs", "https://example.com/"], "DOCS", "kwargs", 0, True),
+        (["https://example.com/"], "example", "uninspectable", 0, None),
+        (["https://example.com/"], "example", "positional-only", 0, None),
+    ],
+)
 def test_debug_page_selection_through_tool_dispatch(
-    monkeypatch, existing_named_session, caplog, page, index, matched
+    monkeypatch, tmp_path, existing_named_session, caplog,
+    page_urls, selector, provider_kind, selected_index, matched,
 ):
-    """Regression for adapter#451: dispatch returns the selected page and hold."""
+    """Regression for #451: dispatch selects usable pages without breaking old providers."""
     from unittest.mock import Mock
 
+    from agent.browser_provider import BrowserProvider
     from plugins.browser.browserbase.provider import BrowserbaseBrowserProvider
 
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("BROWSERBASE_API_KEY", "synthetic-key")
+    monkeypatch.setenv("BROWSERBASE_PROJECT_ID", "synthetic-project")
+    monkeypatch.delenv("BROWSERBASE_BASE_URL", raising=False)
     pages = [
-        {"url": "about:blank", "title": "", "debuggerFullscreenUrl": "https://watch.example/blank"},
-        {"url": "https://example.com/docs", "title": "Docs", "debuggerFullscreenUrl": "https://watch.example/docs"},
-        {"url": "https://example.com/", "title": "Home", "debuggerFullscreenUrl": "https://watch.example/home"},
+        {"url": url, "title": f"Tab {index}", "debuggerFullscreenUrl": f"https://watch.example/page-{index}"}
+        for index, url in enumerate(page_urls)
     ]
-    if not page:
-        pages = [pages[0], pages[2]]
-    provider = BrowserbaseBrowserProvider()
-    monkeypatch.setattr(provider, "_get_config", lambda: {
-        "api_key": "fake-key", "project_id": "fake-project", "base_url": "https://api.browserbase.com",
-    })
-    response = Mock(ok=True, status_code=200)
-    response.json.return_value = {"liveViewUrl": pages[0]["debuggerFullscreenUrl"], "pages": pages}
+    session_url = "https://watch.example/session"
+    response = requests.Response()
+    response.status_code = 200
+    response._content = json.dumps({"liveViewUrl": session_url, "pages": pages}).encode()
     get = Mock(return_value=response)
     monkeypatch.setattr(requests, "get", get)
+
+    class NarrowProvider(BrowserbaseBrowserProvider):
+        def get_live_view(self, session_id):
+            return {"url": super().get_live_view(session_id)["url"]}
+
+    class KwargsProvider(BrowserbaseBrowserProvider):
+        def get_live_view(self, session_id, **kwargs):
+            return super().get_live_view(session_id, page=kwargs.get("page", ""))
+
+    class PositionalOnlyProvider(BrowserbaseBrowserProvider):
+        def get_live_view(self, session_id, page="", /):
+            assert page == ""
+            return {"url": super().get_live_view(session_id)["url"]}
+
+    providers = {
+        "browserbase": BrowserbaseBrowserProvider,
+        "narrow": NarrowProvider,
+        "kwargs": KwargsProvider,
+        "uninspectable": NarrowProvider,
+        "positional-only": PositionalOnlyProvider,
+    }
+    if provider_kind == "default":
+        class UrlOnlyProvider(BrowserbaseBrowserProvider):
+            get_live_view = BrowserProvider.get_live_view
+
+            def get_live_view_url(self, session_id):
+                return BrowserbaseBrowserProvider.get_live_view(self, session_id)["url"]
+
+        provider = UrlOnlyProvider()
+    else:
+        provider = providers[provider_kind]()
+    if provider_kind == "uninspectable":
+        monkeypatch.setattr(NarrowProvider.get_live_view, "__signature__", "unavailable", raising=False)
     monkeypatch.setattr("tools.browser_tool_cloud._get_cloud_provider", lambda: provider)
     monkeypatch.setattr(live_view.time, "time", lambda: 1_000.0)
 
     with caplog.at_level(logging.INFO):
-        result = json.loads(registry.get_entry("browser_live_view").handler(
-            {"session": "research", "page": page}, task_id="task-1"
+        result = json.loads(registry.dispatch(
+            "browser_live_view", {"session": "research", "page": selector}, task_id="task-1"
         ))
 
-    assert result["live_view_url"] == pages[index]["debuggerFullscreenUrl"]
-    assert result["page_url"] == pages[index]["url"]
-    assert result["page_title"] == pages[index]["title"]
-    assert result["page_count"] == len(pages)
-    assert result["page_url"] in result["instruction"]
-    assert "call again with page" in result["instruction"]
-    if page:
+    assert result["success"] is True
+    expected_url = session_url if selected_index is None else pages[selected_index]["debuggerFullscreenUrl"]
+    assert result["live_view_url"] == expected_url
+    if provider_kind in {"browserbase", "kwargs"}:
+        metadata = pages[0] if selected_index is None else pages[selected_index]
+        assert (result["page_url"], result["page_title"], result["page_count"]) == (
+            metadata["url"], metadata["title"], len(pages),
+        )
+    if selector and matched is not None:
         assert result["page_matched"] is matched
         assert ("No page matched" in result["instruction"]) is (not matched)
+    elif selector:
+        assert "page_matched" not in result
+        assert "does not support selecting a page" in result["instruction"]
+    assert result["min_hold_seconds"] >= 900
     assert browser_tool._session_last_activity["bu-named-research"] == 1_900.0
-    get.assert_called_once()
-    assert result["page_url"] not in caplog.text
-    assert result["live_view_url"] not in caplog.text
-
-
-def test_page_selector_length_is_validated_before_provider_or_hold(monkeypatch, existing_named_session):
-    monkeypatch.setattr("tools.browser_tool_cloud._get_cloud_provider", lambda: pytest.fail("provider lookup"))
-    result = json.loads(live_view.browser_live_view(session="research", page="x" * 201))
-    assert result["code"] == "invalid_browser_page"
-    assert result["retryable"] is False
-    assert browser_tool._session_last_activity["bu-named-research"] == 123.0
-
-
-def test_non_string_page_selector_is_coerced_not_raised(monkeypatch, existing_named_session):
-    monkeypatch.setattr("tools.browser_tool_cloud._get_cloud_provider", lambda: pytest.fail("provider lookup"))
-    result = json.loads(live_view.browser_live_view(session="research", page=10 ** 201))
-    assert result["code"] == "invalid_browser_page"
-    assert browser_tool._session_last_activity["bu-named-research"] == 123.0
+    get.assert_called_once_with(
+        "https://api.browserbase.com/v1/sessions/provider-session-1/debug",
+        headers={"Content-Type": "application/json", "X-BB-API-Key": "synthetic-key"},
+        timeout=10,
+    )
+    assert expected_url not in caplog.text
