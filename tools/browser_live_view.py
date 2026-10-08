@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import time
 from typing import Any, Dict, Optional
 
@@ -36,8 +37,15 @@ def _existing_session(task_id: Optional[str], session: str) -> Dict[str, Any]:
         return dict(info) if isinstance(info, dict) else {}
 
 
-def browser_live_view(session: str = "", task_id: Optional[str] = None) -> str:
+def browser_live_view(session: str = "", task_id: Optional[str] = None, page: str = "") -> str:
     """Return a secure live-view URL and keep its session open for at least 15 minutes."""
+    page = page if isinstance(page, str) else str(page or "")
+    if len(page) > 200:
+        return tool_error(
+            "Invalid page selector: use at most 200 characters.",
+            code="invalid_browser_page",
+            retryable=False,
+        )
     if session and not _SESSION_RE.match(session):
         return tool_error(
             f"Invalid session name {session!r}: use 1-64 letters, digits, dashes, or underscores.",
@@ -97,7 +105,30 @@ def browser_live_view(session: str = "", task_id: Optional[str] = None) -> str:
                 browser_tool._session_last_activity.pop(key, None)
 
     try:
-        url = str(provider.get_live_view_url(provider_session_id) or "")
+        get_live_view = getattr(provider, "get_live_view", None)
+        if callable(get_live_view):
+            try:
+                parameters = inspect.signature(get_live_view).parameters.values()
+                accepts_page = any(
+                    parameter.kind == inspect.Parameter.VAR_KEYWORD
+                    or (
+                        parameter.name == "page"
+                        and parameter.kind in (
+                            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                            inspect.Parameter.KEYWORD_ONLY,
+                        )
+                    )
+                    for parameter in parameters
+                )
+            except Exception:
+                accepts_page = False
+            view = (
+                get_live_view(provider_session_id, page=page)
+                if accepts_page else get_live_view(provider_session_id)
+            )
+        else:
+            view = {"url": provider.get_live_view_url(provider_session_id)}
+        url = str(view.get("url") or "")
     except Exception as exc:
         restore_activity()
         code = str(getattr(exc, "code", "browser_live_view_failed"))
@@ -134,11 +165,25 @@ def browser_live_view(session: str = "", task_id: Optional[str] = None) -> str:
             code="browser_invalid_response",
             retryable=False,
         )
+    page_url = str(view.get("page_url") or "")
+    page_title = str(view.get("page_title") or "")
+    page_count = view.get("page_count", 0)
+    instruction = "Send this link to the user. They type into the remote page themselves."
+    if page_count > 1:
+        instruction += f" The link shows the page at {page_url}; to show another tab, call again with page."
+    if page and view.get("page_matched") is False:
+        instruction += " No page matched the requested selector; the link shows the default page."
+    elif page and "page_matched" not in view:
+        instruction += " This provider does not support selecting a page."
     return tool_result(
         success=True,
         live_view_url=url,
+        page_url=page_url,
+        page_title=page_title,
+        page_count=page_count,
+        **({"page_matched": view["page_matched"]} if page and "page_matched" in view else {}),
         min_hold_seconds=LIVE_VIEW_HOLD_SECONDS,
-        instruction="Send this link to the user. They type into the remote page themselves.",
+        instruction=instruction,
     )
 
 
@@ -148,7 +193,8 @@ BROWSER_LIVE_VIEW_SCHEMA = {
         "Get a live-view link for an existing Browserbase session without creating a browser. Use when the "
         "user asks to watch, or when a step needs the human to act in the page (login, MFA, or payment). "
         "Send the link and say plainly that the user types into the remote page themselves. The session is "
-        "kept open for at least 15 minutes after the link is issued; call this tool again to extend the hold."
+        "kept open for at least 15 minutes after the link is issued; call this tool again to extend the hold. "
+        "Defaults to the last nonblank tab; use page to select by URL or title."
     ),
     "parameters": {
         "type": "object",
@@ -156,7 +202,12 @@ BROWSER_LIVE_VIEW_SCHEMA = {
             "session": {
                 "type": "string",
                 "description": "Existing named browser session. Reuse the same name passed to the other browser tools; omit for the current task session.",
-            }
+            },
+            "page": {
+                "type": "string",
+                "maxLength": 200,
+                "description": "Optional case-insensitive URL or title substring; selects the last matching tab.",
+            },
         },
     },
 }
@@ -169,6 +220,7 @@ registry.register(
     handler=lambda args, **kw: browser_live_view(
         session=args.get("session", "") or "",
         task_id=kw.get("task_id"),
+        page=str(args.get("page") or ""),
     ),
     check_fn=check_browser_live_view_requirements,
     emoji="📺",
