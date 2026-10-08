@@ -6,6 +6,7 @@ from contextvars import Context
 from pathlib import Path
 import socket
 import sys
+import threading
 import time
 from types import SimpleNamespace
 
@@ -93,6 +94,12 @@ while True:
     with c:
         req = json.loads(c.recv(4096))
         if req["meta"] == "shutdown":
+            requests = _ipc.root / (name + ".shutdown-requests")
+            count = int(requests.read_text(encoding="utf-8")) if requests.exists() else 0
+            requests.write_text(str(count + 1), encoding="utf-8")
+            if (_ipc.root / (name + ".shutdown-error")).exists():
+                c.sendall(b'{"error": "fixture cloud stop failed"}\\n')
+                continue
             (_ipc.root / (name + ".stopped")).write_text(str(os.getpid()), encoding="utf-8")
             c.sendall(b'{"ok": true}\\n')
             break
@@ -131,6 +138,8 @@ else:
     monkeypatch.setattr(run_agent, "cleanup_browser", lambda *args: None)
     monkeypatch.setattr("tools.computer_use.tool.release_computer_use_session", lambda *args: None)
     yield tmp_path
+    for path in tmp_path.glob("*.shutdown-error"):
+        path.unlink()  # fixture-only cloud failure must not prevent fixture teardown
     for path in tmp_path.glob("*.pid"):
         try:
             process = psutil.Process(int(path.read_text(encoding="utf-8")))
@@ -276,3 +285,131 @@ def test_falsy_owner_uses_same_legacy_key_at_capture_and_cleanup(harness, owner)
     pid = start(harness, owner, "legacy")
     close(owner)
     assert (harness / "legacy.stopped").read_text(encoding="utf-8") == str(pid)
+
+
+def forbid_signals(monkeypatch, record):
+    signals = []
+
+    def signal():
+        signals.append(record[0].pid)
+        raise AssertionError("a retryable cloud daemon must never be signalled")
+
+    monkeypatch.setattr(record[0], "terminate", signal)
+    monkeypatch.setattr(record[0], "kill", signal)
+    return signals
+
+
+def test_shutdown_error_retains_authority_and_retries_until_ok(harness, timers, monkeypatch):
+    pid = start(harness, "retry-owner", "retryable")
+    scope = browser_use_lifecycle._scope_key("retry-owner", browser_use_cli._served_profile_tag())
+    signals = forbid_signals(monkeypatch, browser_use_lifecycle._owned[scope][pid])
+    failure = harness / "retryable.shutdown-error"
+    failure.write_text("fail", encoding="utf-8")
+    close("retry-owner")
+    assert not signals
+    assert pid in browser_use_lifecycle._owned[scope]
+    assert psutil.pid_exists(pid)
+    assert len(timers.pending) == 1
+    assert timers.pending[0].interval == pytest.approx(60)
+    # Repeated session-end calls cannot spend the next attempt before its deadline.
+    close("retry-owner")
+    assert (harness / "retryable.shutdown-requests").read_text(encoding="utf-8") == "1"
+    failure.unlink()
+    timers.now += 60
+    Context().run(timers.pending[-1].fire)
+    assert (harness / "retryable.stopped").read_text(encoding="utf-8") == str(pid)
+    assert not signals
+    assert not browser_use_lifecycle._owned
+    assert not browser_use_lifecycle._retries
+
+
+def test_shutdown_error_stops_retrying_after_three_attempts(harness, timers, monkeypatch, caplog):
+    pid = start(harness, "exhaust-owner", "retryable")
+    scope = browser_use_lifecycle._scope_key("exhaust-owner", browser_use_cli._served_profile_tag())
+    signals = forbid_signals(monkeypatch, browser_use_lifecycle._owned[scope][pid])
+    (harness / "retryable.shutdown-error").write_text("fail", encoding="utf-8")
+    close("exhaust-owner")
+    for _ in range(2):
+        assert not signals
+        timer = timers.pending[-1]
+        assert timer.interval == pytest.approx(60)
+        timers.now += 60
+        Context().run(timer.fire)
+    assert (harness / "retryable.shutdown-requests").read_text(encoding="utf-8") == "3"
+    assert "after 3 attempts; leaving daemon alive" in caplog.text
+    assert psutil.pid_exists(pid)
+    assert pid in browser_use_lifecycle._owned[scope]
+    assert not browser_use_lifecycle._retries
+    timers.now += 3600
+    close("exhaust-owner")
+    assert not signals
+    assert (harness / "retryable.shutdown-requests").read_text(encoding="utf-8") == "3"
+    assert not browser_use_lifecycle._retries
+
+
+def test_shutdown_ok_reports_response_and_uses_separate_control_budgets(harness, monkeypatch):
+    budgets = []
+    original = browser_use_cli._run_cli_killing_process_group
+
+    def run(cmd, code, env, timeout):
+        budgets.append(timeout)
+        return original(cmd, code, env, timeout)
+
+    monkeypatch.setattr(browser_use_cli, "_run_cli_killing_process_group", run)
+    pid = start(harness, "ok-owner", "success")
+    scope = browser_use_lifecycle._scope_key("ok-owner", browser_use_cli._served_profile_tag())
+    record = browser_use_lifecycle._owned[scope][pid]
+    assert browser_use_lifecycle._control(record[4], record[5])["shutdown"] == "not-attempted"
+    responses = []
+    control = browser_use_lifecycle._control
+
+    def observed(cmd, env, stop=None):
+        response = control(cmd, env, stop)
+        responses.append(response)
+        return response
+
+    monkeypatch.setattr(browser_use_lifecycle, "_control", observed)
+    close("ok-owner")
+    assert responses == [{"pid": pid, "path": record[3], "shutdown": {"ok": True}}]
+    assert budgets[-2:] == [5, 30]
+    assert (harness / "success.stopped").read_text(encoding="utf-8") == str(pid)
+    assert not browser_use_lifecycle._owned
+
+
+def test_shutdown_wait_allows_another_scope_to_capture(harness, monkeypatch):
+    start(harness, "waiting-owner", "waiting")
+    waiting, release = threading.Event(), threading.Event()
+    control = browser_use_lifecycle._control
+    errors = []
+
+    def blocking_control(cmd, env, stop=None):
+        if stop is not None:
+            waiting.set()
+            assert release.wait(10), "test did not release shutdown"
+        return control(cmd, env, stop)
+
+    def capture():
+        try:
+            start(harness, "concurrent-owner", "concurrent")
+        except Exception as exc:
+            errors.append(exc)
+
+    monkeypatch.setattr(browser_use_lifecycle, "_control", blocking_control)
+    stopping = threading.Thread(target=close, args=("waiting-owner",))
+    capturing = threading.Thread(target=capture)
+    stopping.start()
+    try:
+        assert waiting.wait(3), "shutdown never reached the blocking control"
+        capturing.start()
+        capturing.join(timeout=3)
+        assert not capturing.is_alive(), "capture blocked behind the shutdown lock"
+        assert not errors
+        assert any(record[6] == "concurrent" for records in browser_use_lifecycle._owned.values()
+                   for record in records.values())
+    finally:
+        release.set()
+        stopping.join(timeout=10)
+        if capturing.ident is not None:
+            capturing.join(timeout=10)
+    assert not stopping.is_alive()
+    assert not capturing.is_alive()

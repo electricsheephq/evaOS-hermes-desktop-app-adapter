@@ -33,23 +33,25 @@ try:
     pid = raw.get("pid") if isinstance(raw, dict) else raw
 except (OSError, ValueError):
     pid = None
+shutdown = "not-attempted"
 if os.environ.get("_HERMES_HARNESS_STOP") == str(pid) and _ipc.identify(name, timeout=1) == pid:
     sock, token = _ipc.connect(name, timeout=2)
     try:
         current = json.loads(path.read_text(encoding="utf-8"))
         current_pid = current.get("pid") if isinstance(current, dict) else current
         if current_pid == pid:
-            _ipc.request(sock, token, {"meta": "shutdown"})
+            sock.settimeout(30)
+            shutdown = _ipc.request(sock, token, {"meta": "shutdown"})
     finally:
         sock.close()
-print("hermes-harness:" + json.dumps({"pid": pid, "path": str(path)}))
+print("hermes-harness:" + json.dumps({"pid": pid, "path": str(path), "shutdown": shutdown}))
 '''
 
 
 def _control(cmd, env, stop=None):
     from tools.browser_use_cli import _run_cli_killing_process_group
     result = _run_cli_killing_process_group(
-        cmd, _CONTROL, {**env, "_HERMES_HARNESS_STOP": str(stop or "")}, 5,
+        cmd, _CONTROL, {**env, "_HERMES_HARNESS_STOP": str(stop or "")}, 30 if stop else 5,
     )
     for line in reversed(result.stdout.splitlines()):
         if line.startswith("hermes-harness:"):
@@ -143,13 +145,16 @@ def _retry(task_id, scope, expiry, cron):
 
 
 def _stop(record):
-    process, started, marker, path, cmd, env, name, key, tag = record
+    process, started, marker, path, cmd, env, name, key, tag = record[:9]
     raw = json.loads(Path(path).read_text(encoding="utf-8"))
     pid = raw.get("pid") if isinstance(raw, dict) else raw
     if pid != process.pid or not _matches(process, marker, started, name):
         return
     try:
-        _control(cmd, env, stop=pid)  # harness shutdown releases its own tab/cloud resources
+        result = _control(cmd, env, stop=pid)  # harness shutdown releases its own tab/cloud resources
+        shutdown = result.get("shutdown")
+        if isinstance(shutdown, dict) and "error" in shutdown:
+            return False  # keep the retryable authority for the billable cloud browser
     except Exception as exc:
         logger.warning("Harness IPC shutdown failed (%s)", type(exc).__name__)
     for action in (None, process.terminate, process.kill):
@@ -185,6 +190,7 @@ def cleanup_harnesses(task_ids, *, cron=False):
                         _borrows.pop(fingerprint)
                 records = list(_owned.get(scope, {}).values())
             latest_hold = 0
+            next_retry = 0
             for record in records:
                 if record[8] != tag:
                     continue  # an unscoped teardown cannot acquire another profile's receipt
@@ -193,32 +199,64 @@ def cleanup_harnesses(task_ids, *, cron=False):
                     latest_hold = max(latest_hold, expiry)
                     continue
                 try:
-                    if not cron and record[6] == "default":
-                        continue  # shared interactive defaults relinquish ownership without reaping
                     with _lock:
+                        pid = record[0].pid
+                        if _owned.get(scope, {}).get(pid) is not record:
+                            continue  # another teardown already reserved or transferred it
+                        if not cron and record[6] == "default":
+                            _owned[scope].pop(pid)
+                            continue  # shared interactive defaults persist
+                        if len(record) == 9:
+                            record = (*record, {"attempts": 0, "retry_at": 0, "in_progress": False})
+                            _owned[scope][pid] = record
+                        state = record[9]
                         fingerprint = (record[0].pid, record[1])
                         borrowers = _borrows.get(fingerprint, set())
                         if borrowers:
                             borrower = next(iter(borrowers))
                             borrower_tag = borrower[1] if isinstance(borrower, tuple) else ""
-                            adopted = (*record[:7], _borrow_keys[fingerprint, borrower], borrower_tag)
-                            _owned.setdefault(borrower, {})[record[0].pid] = adopted
-                        else:
-                            _stop(record)
+                            adopted = (*record[:7], _borrow_keys[fingerprint, borrower], borrower_tag, state)
+                            _owned.setdefault(borrower, {})[pid] = adopted
+                            _owned[scope].pop(pid)
+                            continue
+                        if state["attempts"] >= 3:
+                            continue  # exhausted cloud shutdowns stay alive, even on repeated close
+                        if state["retry_at"] > time.time():
+                            next_retry = min(next_retry or state["retry_at"], state["retry_at"])
+                            continue
+                        _owned[scope].pop(pid)
+                        state["in_progress"] = True
+                    # Shutdown can wait on Cloud/IPC; captures and other scopes must stay usable.
+                    if _stop(record) is False:
+                        with _lock:
+                            state["attempts"] += 1
+                            state["in_progress"] = False
+                            _owned.setdefault(scope, {})[pid] = record
+                            if state["attempts"] < 3:
+                                state["retry_at"] = time.time() + 60
+                                next_retry = min(next_retry or state["retry_at"], state["retry_at"])
+                            else:
+                                logger.warning("Harness cloud shutdown failed after 3 attempts; leaving daemon alive")
                 except (psutil.NoSuchProcess, FileNotFoundError):
                     pass  # already gone; never touch a successor
                 except Exception as exc:
                     logger.warning("Harness reap failed (%s)", type(exc).__name__)
-                finally:
-                    with _lock:
-                        _owned.get(scope, {}).pop(record[0].pid, None)
             with _lock:
                 if not _owned.get(scope):
                     _owned.pop(scope, None)
                     timer = _retries.pop(scope, None)
                     if timer:
                         timer.cancel()
-            if latest_hold:
-                _retry(task_id, scope, latest_hold, cron)
+                elif next_retry:
+                    # A pre-existing hold timer must not postpone a cloud retry. Keep its deadline
+                    # fixed across repeated close calls; _retry adds five seconds to the expiry.
+                    timer = _retries.pop(scope, None)
+                    if timer:
+                        timer.cancel()
+            deadline = latest_hold
+            if next_retry:
+                deadline = min(deadline or next_retry - 5, next_retry - 5)
+            if deadline:
+                _retry(task_id, scope, deadline, cron)
         except Exception as exc:
             logger.warning("Harness scope cleanup failed (%s)", type(exc).__name__)
