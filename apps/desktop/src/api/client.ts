@@ -108,6 +108,23 @@ export function subscribeApiRequestProfile(listener: (profile: null | string) =>
   return () => apiProfileListeners.delete(listener)
 }
 
+// The sidebar's concrete scope while a customer-wide support lease pins the
+// gateway to its anchor and a rail pick moved the scope to a sibling (#347);
+// null otherwise. Pushed from the profile store (same no-store-import contract
+// as _apiProfile). Electron grant-checks the sibling like any request profile.
+let _apiSupportScopeProfile: null | string = null
+
+export function setApiSupportScopeProfile(profile: null | string): void {
+  _apiSupportScopeProfile = profile || null
+}
+
+/** Request scope for surfaces that render the sidebar's scope (session search,
+ *  cron, webhooks): the support pick when there is one, else `ambient` — so
+ *  ordinary requests keep their exact shape. */
+export function scopeProfiled(ambient: { profile?: string } = profileScoped()): { profile?: string } {
+  return _apiSupportScopeProfile ? { profile: _apiSupportScopeProfile } : ambient
+}
+
 // An explicit scope (string or object, not `undefined`/`null`) is a user
 // pointing a scope selector (Settings "Applies to", Capabilities, Messaging)
 // at another profile — a visible action whose cold dial may take the pool's

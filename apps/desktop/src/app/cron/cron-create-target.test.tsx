@@ -4,7 +4,13 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createCronJob, instantiateAutomationBlueprint } from '@/hermes'
-import { $activeGatewayProfile, $profiles, setShowAllProfiles } from '@/store/profile'
+import {
+  $activeGatewayProfile,
+  $profiles,
+  adoptActiveGatewayProfile,
+  selectProfile,
+  setShowAllProfiles
+} from '@/store/profile'
 import { stubResizeObserver } from '@/test/jsdom'
 
 import { CronView } from './index'
@@ -95,6 +101,23 @@ describe('CronView create target', () => {
     expect(screen.getByText('Creates on Birch Ops')).toBeTruthy()
     await submitManualJob()
     expect(vi.mocked(createCronJob).mock.calls[0]).toHaveLength(1)
+  })
+
+  it('under a support lease the dialog names the picked sibling the create writes to, not the anchor (#347)', async () => {
+    adoptActiveGatewayProfile('atlas-desk', true)
+
+    try {
+      selectProfile('birch-ops')
+      renderCron()
+
+      fireEvent.click(await screen.findByRole('button', { name: 'New cron' }))
+
+      expect(await screen.findByText('Creates on Birch Ops')).toBeTruthy()
+      expect(screen.queryByText('Creates on Atlas Desk')).toBeNull()
+      expect($activeGatewayProfile.get()).toBe('atlas-desk')
+    } finally {
+      adoptActiveGatewayProfile('default', false)
+    }
   })
 
   it('All-view blueprint create targets the active profile instead of the default alias', async () => {

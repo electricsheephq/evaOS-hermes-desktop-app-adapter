@@ -33,7 +33,7 @@ import { useI18n } from '@/i18n'
 import { AlertTriangle, Globe, Plus, RefreshCw } from '@/lib/icons'
 import { cn } from '@/lib/utils'
 import { notify, notifyError } from '@/store/notifications'
-import { $profileScope } from '@/store/profile'
+import { $profileScope, $supportSiblingProfile } from '@/store/profile'
 import { runGatewayRestart } from '@/store/system-actions'
 
 import { useRefreshHotkey } from '../hooks/use-refresh-hotkey'
@@ -87,7 +87,10 @@ export function WebhooksView({ onClose }: WebhooksViewProps) {
 
   const [query, setQuery] = useState('')
   const [enabling, setEnabling] = useState(false)
-  const [restartNeeded, setRestartNeeded] = useState(false)
+  // The banner belongs to the profile whose enable/restart failed: a support
+  // pick's sibling, else undefined (the ambient gateway). Restart and its
+  // success-clearing target that profile even after the scope moves (#347).
+  const [restartNeeded, setRestartNeeded] = useState<null | { profile?: string }>(null)
   const [restartError, setRestartError] = useState<null | string>(null)
   const [restarting, setRestarting] = useState(false)
   // Master/detail: the subscription whose config fills the right pane.
@@ -149,25 +152,28 @@ export function WebhooksView({ onClose }: WebhooksViewProps) {
 
     // runGatewayRestart never rejects (it toasts its own failure); the boolean
     // is the only signal that the receiver actually came back.
-    const ok = await runGatewayRestart()
+    const owner = restartNeeded?.profile
+    const ok = await runGatewayRestart(owner)
 
     if (ok) {
-      setRestartNeeded(false)
+      setRestartNeeded(null)
       setRestartError(null)
       // Give the receiver a moment to bind before re-reading state.
       window.setTimeout(() => void reload(true), 4000)
     } else {
-      setRestartNeeded(true)
+      setRestartNeeded({ profile: owner })
       setRestartError(w.restartFailed(''))
     }
 
     setRestarting(false)
-  }, [reload, w])
+  }, [reload, restartNeeded, w])
 
   const handleEnable = useCallback(async () => {
     setEnabling(true)
-    setRestartNeeded(false)
+    setRestartNeeded(null)
     setRestartError(null)
+    // enableWebhooks targets this same profile (api/client scopeProfiled).
+    const owner = $supportSiblingProfile.get() ?? undefined
 
     try {
       const result = await enableWebhooks()
@@ -178,7 +184,7 @@ export function WebhooksView({ onClose }: WebhooksViewProps) {
         window.setTimeout(() => void reload(true), 4000)
       } else {
         const detail = result.restart_error ? `: ${result.restart_error}` : '.'
-        setRestartNeeded(true)
+        setRestartNeeded({ profile: owner })
         setRestartError(w.restartFailed(detail))
         notify({ kind: 'error', message: w.restartFailed(detail) })
       }

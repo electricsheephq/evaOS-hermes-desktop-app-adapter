@@ -19,7 +19,8 @@ import {
   getApiRequestProfile,
   hermesApi,
   type ProfileScope,
-  profileScoped
+  profileScoped,
+  scopeProfiled
 } from './client'
 
 const SESSION_LIST_REQUEST_TIMEOUT_MS = 60_000
@@ -432,6 +433,8 @@ export function setSessionUnreadRemote(id: string, unread: boolean, profile?: st
 
 export function searchSessions(query: string): Promise<SessionSearchResponse> {
   return hermesApi<SessionSearchResponse>({
+    // Search the sidebar's scope; ordinarily unscoped, as before (#347).
+    ...scopeProfiled({}),
     path: `/api/sessions/search?q=${encodeURIComponent(query)}`
   })
 }

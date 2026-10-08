@@ -21,10 +21,10 @@ export const $gatewayRestarting = atom(false)
 // non-zero exit so the caller can surface the failure. In no-service installs
 // the child becomes the foreground gateway and never exits, so "still running
 // when the window closes" counts as success.
-async function awaitAction(name: string): Promise<void> {
+async function awaitAction(name: string, profile?: string): Promise<void> {
   for (let attempt = 0; attempt < POLL_ATTEMPTS; attempt += 1) {
     await new Promise(resolve => window.setTimeout(resolve, POLL_INTERVAL_MS))
-    const status = await getActionStatus(name, POLL_TIMEOUT_S)
+    const status = await getActionStatus(name, POLL_TIMEOUT_S, profile)
 
     if (!status.running) {
       if (status.exit_code != null && status.exit_code !== 0) {
@@ -42,11 +42,11 @@ async function awaitAction(name: string): Promise<void> {
 // backends that do not report `gateway_shared_with`) keep the silent restart.
 // Resolves the served list when the user confirmed, `null` when nothing is
 // shared, `false` when they cancelled.
-export async function confirmSharedGatewayRestart(): Promise<false | null | string[]> {
+export async function confirmSharedGatewayRestart(profile?: string): Promise<false | null | string[]> {
   let shared: null | string[] = null
 
   try {
-    shared = sharedGatewayProfiles(await getStatus())
+    shared = sharedGatewayProfiles(await getStatus(profile))
   } catch {
     // Status unavailable: fall back to the plain restart rather than blocking it.
     return null
@@ -72,9 +72,10 @@ export async function confirmSharedGatewayRestart(): Promise<false | null | stri
 // messaging save/toggle toasts — gets identical feedback from a plain
 // `void runGatewayRestart()`, and a failure is the only thing that toasts.
 // Resolves `true` when the restart child completed cleanly (callers that keep
-// a "restart needed" banner clear it on that signal only).
-export async function runGatewayRestart(): Promise<boolean> {
-  const shared = await confirmSharedGatewayRestart()
+// a "restart needed" banner clear it on that signal only). `profile` restarts,
+// and polls, that profile's gateway rather than the ambient one's (#347).
+export async function runGatewayRestart(profile?: string): Promise<boolean> {
+  const shared = await confirmSharedGatewayRestart(profile)
 
   if (shared === false) {
     return false
@@ -83,8 +84,8 @@ export async function runGatewayRestart(): Promise<boolean> {
   $gatewayRestarting.set(true)
 
   try {
-    const started: ActionResponse = await restartGateway()
-    await awaitAction(started.name)
+    const started: ActionResponse = await restartGateway(profile)
+    await awaitAction(started.name, profile)
 
     if (shared) {
       notify({ kind: 'success', message: translateNow('commandCenter.sharedGatewayRestarted', shared.length) })

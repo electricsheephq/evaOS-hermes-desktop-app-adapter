@@ -70,7 +70,6 @@ import {
 import { $fleetRoster, refreshFleetRoster } from '@/store/fleet-roster'
 import { notify, notifyError } from '@/store/notifications'
 import {
-  $activeGatewayProfile,
   $profileColors,
   $profileCreateRequest,
   $profileErrors,
@@ -157,7 +156,6 @@ export function ProfileRail() {
   const profiles = useStore($profiles)
   const profileErrors = useStore($profileErrors)
   const scope = useStore($profileScope)
-  const gatewayProfile = useStore($activeGatewayProfile)
   const order = useStore($profileOrder)
   const colors = useStore($profileColors)
   const remoteOverrides = useStore($profileRemoteOverrides)
@@ -275,7 +273,10 @@ export function ProfileRail() {
   }, [condensed])
 
   const isAll = scope === ALL_PROFILES
-  const activeKey = normalizeProfileKey(gatewayProfile)
+  // Highlight the profile the sidebar is scoped to, not the gateway's: under a
+  // customer-wide support lease the gateway stays on the anchor while a pick
+  // moves the scope (#347). Ordinarily the two are the same profile.
+  const activeKey = scope
   const defaultProfile = profiles.find(profile => profile.is_default)
   const onDefault = !isAll && activeKey === 'default'
 

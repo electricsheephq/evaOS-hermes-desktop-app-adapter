@@ -1,6 +1,7 @@
 import { LOCAL_CONNECTION_ID, registryBackendScopeKey } from '@hermes/shared'
 import { atom, batch, computed } from 'nanostores'
 
+import { setApiSupportScopeProfile } from '@/api/client'
 import type { HermesConnection } from '@/global'
 import { getProfiles, hermesApi, setApiRequestProfile, STARTUP_REQUEST_TIMEOUT_MS } from '@/hermes'
 import { sortByProfileOrder as sortProfilesByOrder } from '@/lib/profile-order'
@@ -25,7 +26,8 @@ import {
   openGatewayForAgent,
   openGatewayForProfile,
   openSecondaryCount,
-  primaryGatewayConnectionId
+  primaryGatewayConnectionId,
+  requestGatewayForProfile
 } from '@/store/gateway'
 import { notifyError } from '@/store/notifications'
 import { $poolLimits } from '@/store/pool-limits'
@@ -136,7 +138,7 @@ export function refreshProfiles(): Promise<ProfileInfo[]> {
           const active = normalizeProfileKey($activeGatewayProfile.get())
           const activeSource = activeGatewayConnectionId()
           if (
-            delegatedSupportGatewayProfile === null &&
+            $delegatedSupportGatewayProfile.get() === null &&
             (activeSource === null || activeSource === primaryGatewayConnectionId()) &&
             !profiles.some(profile => normalizeProfileKey(profile.name) === active) &&
             !errors.some(error => normalizeProfileKey(error.profile) === active)
@@ -318,18 +320,27 @@ export const $activeGatewayProfile = atom<string>('default')
 // Only useGatewayBoot's authoritative adoption may move the renderer atom
 // while that mount is active; profile/registry activation paths must not
 // publish a different route before the renderer is reset.
-let delegatedSupportGatewayProfile: null | string = null
+const $delegatedSupportGatewayProfile = atom<null | string>(null)
 
 export function adoptActiveGatewayProfile(profile: string, delegatedSupport: boolean): string {
   const target = normalizeProfileKey(profile)
-  delegatedSupportGatewayProfile = delegatedSupport ? target : null
+  const anchor = delegatedSupport ? target : null
+
+  // Entering, leaving or re-targeting a support lease starts on its anchor: a
+  // new-chat intent picked in the previous context must not become this one's
+  // selection (#347). Re-adopting the same anchor keeps the operator's pick.
+  if (anchor !== $delegatedSupportGatewayProfile.get()) {
+    $newChatProfile.set(null)
+  }
+
+  $delegatedSupportGatewayProfile.set(anchor)
   $activeGatewayProfile.set(target)
 
   return target
 }
 
 export function setActiveGatewayProfile(profile: string): boolean {
-  if (delegatedSupportGatewayProfile !== null) {
+  if ($delegatedSupportGatewayProfile.get() !== null) {
     return false
   }
 
@@ -644,7 +655,7 @@ export async function ensureGatewayProfile(
 
   const target = normalizeProfileKey(profile)
 
-  if (delegatedSupportGatewayProfile !== null) {
+  if ($delegatedSupportGatewayProfile.get() !== null) {
     return
   }
 
@@ -877,7 +888,7 @@ export async function ensureGatewayAgent(
   const target = normalizeProfileKey(profile)
   const connection = (connectionId ?? '').trim() || null
 
-  if (delegatedSupportGatewayProfile !== null) {
+  if ($delegatedSupportGatewayProfile.get() !== null) {
     return
   }
 
@@ -982,14 +993,60 @@ export const $showAllProfiles = atom<boolean>(storedBoolean(SHOW_ALL_PROFILES_ST
 
 $showAllProfiles.subscribe(value => persistBoolean(SHOW_ALL_PROFILES_STORAGE_KEY, value))
 
+// The profile the window is "in". Ordinarily that is the live gateway's
+// profile: a pick swaps the gateway and everything follows it. A
+// delegated-support mount pins the gateway to the lease's anchor (#285), so a
+// customer-wide lease's pick moves only $newChatProfile — the profile the next
+// chat's session.create carries. Follow that same intent here, so the rail and
+// the session list never show one agent while the composer sends to another
+// (#347).
+export const $selectedProfile = computed(
+  [$delegatedSupportGatewayProfile, $newChatProfile, $activeGatewayProfile],
+  (supportAnchor, newChat, gateway) => normalizeProfileKey(supportAnchor !== null && newChat ? newChat : gateway)
+)
+
 // The profile context the sidebar is currently showing: a concrete profile key,
 // or ALL_PROFILES for the unified grouped view. Concrete scope is tied to the
 // gateway so opening/selecting a profile (which swaps the gateway) moves the
 // whole sidebar with it — a real context switch, not a separate filter to keep
 // in sync.
-export const $profileScope = computed([$showAllProfiles, $activeGatewayProfile], (showAll, gateway) =>
-  showAll ? ALL_PROFILES : normalizeProfileKey(gateway)
+export const $profileScope = computed([$showAllProfiles, $selectedProfile], (showAll, selected) =>
+  showAll ? ALL_PROFILES : selected
 )
+
+// Under a support lease, the concrete profile the sidebar is scoped to; null
+// without a lease or in the all-agents view. The sibling form is null on the
+// anchor too, where the gateway's own profile already is the scope.
+export const $supportScopeProfile = computed([$delegatedSupportGatewayProfile, $profileScope], (anchor, scope) =>
+  anchor === null || scope === ALL_PROFILES ? null : scope
+)
+
+export const $supportSiblingProfile = computed(
+  [$delegatedSupportGatewayProfile, $supportScopeProfile],
+  (anchor, scope) => (scope === anchor ? null : scope)
+)
+
+// The surfaces that render the scope (session search, cron, webhooks) route a
+// sibling pick by it instead of the anchor's ambient profile, so they read and
+// write the agent the window shows (#347). Otherwise requests keep their shape.
+$supportSiblingProfile.subscribe(setApiSupportScopeProfile)
+
+/** A profile-scoped gateway RPC for `profile`. Under a support lease the
+ *  window's socket stays on the anchor, whose managed resolver refuses any
+ *  other profile (4030); a sibling's RPC rides that sibling's own pooled socket,
+ *  the one its sessions' RPCs already use (session-request-router). Everything
+ *  else runs `ambient` unchanged (#347). */
+export function requestOnProfileSocket<T>(
+  profile: string,
+  method: string,
+  params: Record<string, unknown>,
+  ambient: () => Promise<T>
+): Promise<T> {
+  const anchor = $delegatedSupportGatewayProfile.get()
+  const key = normalizeProfileKey(profile)
+
+  return anchor !== null && key !== anchor ? requestGatewayForProfile<T>(key, method, params) : ambient()
+}
 
 // Switch the active context to `name`: leave "All profiles" mode, point new
 // chats at it, and swap the single live gateway onto its backend (which moves
@@ -998,7 +1055,7 @@ export function selectProfile(name: string): void {
   const target = normalizeProfileKey(name)
   // Switching profiles (or coming back from the all-profiles browse view) starts
   // fresh; re-tapping the profile you're already in leaves your session be.
-  const switching = $showAllProfiles.get() || target !== normalizeProfileKey($activeGatewayProfile.get())
+  const switching = $showAllProfiles.get() || target !== $selectedProfile.get()
   $showAllProfiles.set(false)
   $newChatProfile.set(target)
   $newChatRoute.set(null)
@@ -1163,7 +1220,10 @@ function orderedProfileKeys(): string[] {
 export function switchToDefaultProfile(): void {
   const def = $profiles.get().find(profile => profile.is_default)
 
-  selectProfile(def ? def.name : 'default')
+  // A support lease lists only granted profiles; with no default among them,
+  // the "default" alias is the lease anchor in Electron, so pick that real
+  // profile rather than an alias no rail item carries (#347).
+  selectProfile(def ? def.name : ($delegatedSupportGatewayProfile.get() ?? 'default'))
 }
 
 // Switch to the Nth named (non-default) profile in rail order (1-based).
@@ -1188,7 +1248,7 @@ export function cycleProfile(direction: 1 | -1): void {
     return
   }
 
-  const current = $showAllProfiles.get() ? -1 : keys.indexOf(normalizeProfileKey($activeGatewayProfile.get()))
+  const current = $showAllProfiles.get() ? -1 : keys.indexOf($selectedProfile.get())
   const start = current < 0 ? (direction === 1 ? -1 : 0) : current
   const next = (start + direction + keys.length) % keys.length
 

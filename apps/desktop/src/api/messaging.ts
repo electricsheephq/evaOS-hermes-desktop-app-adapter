@@ -13,7 +13,7 @@ import type {
   WebhooksResponse
 } from '@/types/hermes'
 
-import { hermesApi, profileScoped } from './client'
+import { hermesApi, profileScoped, scopeProfiled } from './client'
 
 export function getMessagingPlatforms(profile?: null | string): Promise<MessagingPlatformsResponse> {
   return hermesApi<MessagingPlatformsResponse>({
@@ -153,14 +153,14 @@ export function revokePairing(platform: string, userId: string, profile?: null |
 
 export function getWebhooks(): Promise<WebhooksResponse> {
   return hermesApi<WebhooksResponse>({
-    ...profileScoped(),
+    ...scopeProfiled(),
     path: '/api/webhooks'
   })
 }
 
 export function enableWebhooks(): Promise<WebhookEnableResponse> {
   return hermesApi<WebhookEnableResponse>({
-    ...profileScoped(),
+    ...scopeProfiled(),
     path: '/api/webhooks/enable',
     method: 'POST'
   })
@@ -168,7 +168,7 @@ export function enableWebhooks(): Promise<WebhookEnableResponse> {
 
 export function createWebhook(body: WebhookCreatePayload): Promise<WebhookCreateResponse> {
   return hermesApi<WebhookCreateResponse>({
-    ...profileScoped(),
+    ...scopeProfiled(),
     path: '/api/webhooks',
     method: 'POST',
     body
@@ -177,7 +177,7 @@ export function createWebhook(body: WebhookCreatePayload): Promise<WebhookCreate
 
 export function deleteWebhook(name: string): Promise<{ ok: boolean }> {
   return hermesApi<{ ok: boolean }>({
-    ...profileScoped(),
+    ...scopeProfiled(),
     path: `/api/webhooks/${encodeURIComponent(name)}`,
     method: 'DELETE'
   })
@@ -188,7 +188,7 @@ export function setWebhookEnabled(
   enabled: boolean
 ): Promise<{ enabled: boolean; name: string; ok: boolean }> {
   return hermesApi<{ enabled: boolean; name: string; ok: boolean }>({
-    ...profileScoped(),
+    ...scopeProfiled(),
     path: `/api/webhooks/${encodeURIComponent(name)}/enabled`,
     method: 'PUT',
     body: { enabled }
