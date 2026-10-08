@@ -183,7 +183,10 @@ describe('requestGatewayForProfile', () => {
           : { port: 4242, token: 'primary-token' }
       )
 
-      const getGatewayWsUrl = vi.fn(async (_profile?: null | string) => ({ error: 'relay unavailable', ok: false as const }))
+      const getGatewayWsUrl = vi.fn(async (_profile?: null | string) => ({
+        error: 'relay unavailable',
+        ok: false as const
+      }))
       installDesktop(getConnection, { getGatewayWsUrl })
       await ensureGatewayForProfile('default')
 

@@ -177,6 +177,7 @@ function OAuthPicker({
     : featured
       ? ordered.filter(p => p.id !== FEATURED_ID)
       : ordered
+
   // Keep connected accounts grouped and always visible; only the unconnected
   // providers hide behind the disclosure, so the page leads with what's set up.
   // Both lists preserve `sortProviders` order (curated priority, then name).

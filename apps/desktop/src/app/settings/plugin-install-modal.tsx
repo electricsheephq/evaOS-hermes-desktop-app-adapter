@@ -37,13 +37,7 @@ import {
   openPluginInstallRequest,
   type PluginInstallRequest
 } from '@/store/plugin-install-request'
-import {
-  $profiles,
-  $selectedProfile,
-  normalizeProfileKey,
-  profileLabel,
-  requestOnProfileSocket
-} from '@/store/profile'
+import { $profiles, $selectedProfile, normalizeProfileKey, profileLabel, requestOnProfileSocket } from '@/store/profile'
 import { $connection } from '@/store/session'
 
 type ProbeResult = Awaited<ReturnType<NonNullable<NonNullable<Window['hermesDesktop']>['probePluginRepo']>>>

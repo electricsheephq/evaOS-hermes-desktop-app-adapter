@@ -131,6 +131,7 @@ const DEFAULT_RELOAD_WINDOW_MS = 60_000
 const DEFAULT_RELOAD_MAX = 3
 
 const RECOVERABLE_REASONS = new Set(['crashed', 'oom'])
+
 const CHILD_PROCESS_RECOVERABLE_REASONS = new Set([
   'crashed',
   'oom',

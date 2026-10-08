@@ -1261,9 +1261,14 @@ describe('pilot fix round 2 (M7: shown only for agents that have it)', () => {
     expect(await probeMacBridgeAvailable({ managed: false })).toBe(true) // a remote (dev) gateway, as before
 
     expect(macBridgeAgentName({ managed: true, eva: ok.eva })).toBe('Jane’s agent')
-    expect(macBridgeAgentName({ managed: true, eva: facade(async () => null, { status: { agentDisplayName: null } }).eva })).toBe('agent-one')
     expect(
-      macBridgeAgentName({ managed: true, eva: facade(async () => null, { status: { delegatedSupportActive: true } }).eva })
+      macBridgeAgentName({ managed: true, eva: facade(async () => null, { status: { agentDisplayName: null } }).eva })
+    ).toBe('agent-one')
+    expect(
+      macBridgeAgentName({
+        managed: true,
+        eva: facade(async () => null, { status: { delegatedSupportActive: true } }).eva
+      })
     ).toBeNull()
   })
 

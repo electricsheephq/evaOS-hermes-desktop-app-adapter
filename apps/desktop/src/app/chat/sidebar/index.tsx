@@ -760,8 +760,7 @@ export function ChatSidebar({
   const { pending: searchPending, serverMatches } = useServerSessionSearch(trimmedQuery, profileScope)
 
   const searchResults = useMemo(
-    () =>
-      mergeSearchResults(sortedSessions, trimmedQuery, serverMatches, sessionByAnyId, searchPending, supportScope),
+    () => mergeSearchResults(sortedSessions, trimmedQuery, serverMatches, sessionByAnyId, searchPending, supportScope),
     [sortedSessions, trimmedQuery, serverMatches, sessionByAnyId, searchPending, supportScope]
   )
 
@@ -2027,17 +2026,17 @@ export function ChatSidebar({
               !worktreeGroupingActive &&
               showsAdvancedChrome &&
               (cronJobs.length > 0 || cronJobErrors.length > 0) && (
-              <SidebarCronJobsSection
-                errors={cronJobErrors}
-                jobs={cronJobs}
-                label={s.cronJobs}
-                onManageJob={onManageCronJob}
-                onOpenRun={onResumeSession}
-                onToggle={() => setSidebarCronOpen(!cronOpen)}
-                onTriggerJob={onTriggerCronJob}
-                open={cronOpen}
-              />
-            )}
+                <SidebarCronJobsSection
+                  errors={cronJobErrors}
+                  jobs={cronJobs}
+                  label={s.cronJobs}
+                  onManageJob={onManageCronJob}
+                  onOpenRun={onResumeSession}
+                  onToggle={() => setSidebarCronOpen(!cronOpen)}
+                  onTriggerJob={onTriggerCronJob}
+                  open={cronOpen}
+                />
+              )}
           </div>
         )}
 

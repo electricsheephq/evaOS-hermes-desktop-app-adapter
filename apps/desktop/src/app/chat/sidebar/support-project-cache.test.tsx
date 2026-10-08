@@ -84,7 +84,13 @@ beforeEach(() => {
   setSidebarAgentsGrouped(true)
   // One loaded row per agent, so neither scope is an empty list.
   $sessions.set([
-    makeSessionInfo({ id: 'alpha-preview', last_active: 2, profile: ANCHOR, started_at: 1, title: 'Alpha preview row' }),
+    makeSessionInfo({
+      id: 'alpha-preview',
+      last_active: 2,
+      profile: ANCHOR,
+      started_at: 1,
+      title: 'Alpha preview row'
+    }),
     makeSessionInfo({ id: 'bravo-row', last_active: 2, profile: SIBLING, started_at: 1, title: 'Bravo row' })
   ])
 })
