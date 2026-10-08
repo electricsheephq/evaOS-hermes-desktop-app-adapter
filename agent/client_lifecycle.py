@@ -134,7 +134,14 @@ class ClientLifecycleMixin:
                 if owner and owner != task_id:
                     clear_file_ops_cache(owner)
 
-        for step in (kill_processes, lambda: cleanup_vm(task_id), release_browser,
+        def reap_harnesses() -> None:
+            from tools.browser_use_lifecycle import cleanup_harnesses
+            cleanup_harnesses(
+                {*getattr(self, "_process_owner_task_ids", ()), task_id},
+                cron=getattr(self, "platform", None) == "cron",
+            )
+
+        for step in (kill_processes, lambda: cleanup_vm(task_id), reap_harnesses, release_browser,
                      release_computer_use, forget_file_state):
             _quietly(step)
 

@@ -788,8 +788,10 @@ def browser_exec(code: str, session: str = "", timeout_s: int = _DEFAULT_TIMEOUT
 
     def dispatch() -> Dict[str, Any]:
         _attach_vault_supervisor(env, task_id)
+        from tools.browser_use_lifecycle import owned_harness_call
         try:
-            return {"proc": _run_cli_killing_process_group(cmd, code, env, timeout)}
+            with owned_harness_call(cmd, env, task_id, session):
+                return {"proc": _run_cli_killing_process_group(cmd, code, env, timeout)}
         except subprocess.TimeoutExpired:
             return {"error_result": tool_error(
                 f"browser-use exec timed out after {timeout}s. The daemon may still be working; retry "
