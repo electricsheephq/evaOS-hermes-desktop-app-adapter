@@ -171,6 +171,8 @@ def _manual_run_delivery_note(deliver: str, refreshed: Dict[str, Any]) -> str:
     err = str(refreshed.get("last_delivery_error") or "").strip()
     if not err:
         if refreshed.get("last_delivery_queued"):
+            if any(not target.startswith("bot-chat:") for target in refreshed["last_delivery_queued"]):
+                return " (output queued for the gateway; completion unverified, do not resend)"
             return " (output queued for Bot Chat; completion unverified, do not resend)"
         return " (output was delivered there by the job itself)"
     return f" (⚠ delivery FAILED: {err[:200]})"
@@ -297,10 +299,12 @@ def _run_claimed_job(job: Dict[str, Any], extra_prompt: Optional[str] = None) ->
         runner = runner_ref() if callable(runner_ref) else None
         adapters = getattr(runner, "adapters", None) if runner is not None else None
         gateway_loop = getattr(runner, "_gateway_loop", None) if runner is not None else None
+        from cron.scheduler_delivery import manual_gateway_delivery_scope
         try:
             # run_one_job records last_run_at/last_status via mark_job_run; `job` is the
             # owner-bearing claimed snapshot, so terminal writes stay fenced by that owner.
-            with _run_heartbeat(str(job.get("name") or job_id)):
+            with manual_gateway_delivery_scope(gateway_available=runner is not None), \
+                    _run_heartbeat(str(job.get("name") or job_id)):
                 processed = run_one_job(job, adapters=adapters, loop=gateway_loop, extra_prompt=extra_prompt)
         finally:
             _registered = False
