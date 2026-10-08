@@ -25,6 +25,23 @@ from typing import Any, List, Optional
 logger = logging.getLogger("cron.scheduler")
 
 
+_manual_gateway_delivery = contextvars.ContextVar("manual_gateway_delivery", default=False)
+
+
+@contextlib.contextmanager
+def manual_gateway_delivery_scope(*, gateway_available: bool):
+    """Only hand-started runs without an in-process gateway may defer missing credentials."""
+    token = _manual_gateway_delivery.set(not gateway_available)
+    try:
+        yield
+    finally:
+        _manual_gateway_delivery.reset(token)
+
+
+def manual_gateway_delivery_required() -> bool:
+    return _manual_gateway_delivery.get()
+
+
 # Validates user-supplied delivery platform names, preventing env-var enumeration via crafted names.
 _KNOWN_DELIVERY_PLATFORMS = frozenset({
     "telegram", "discord", "slack", "whatsapp", "signal",
@@ -1272,11 +1289,12 @@ def _cron_delivery_notify_enabled(cfg: Optional[dict]) -> bool:
 
 def _record_delivery_verification(job: dict, unverified_targets: list) -> None:
     """Persist ``last_delivery_unverified``: list of ``platform:chat_id`` targets acked with no
-    evidence, or None, alongside queued Bot Chat receipts. Never raises (bookkeeping must not fail a
+    evidence, or None, alongside queued delivery receipts. Never raises (bookkeeping must not fail a
     delivery)."""
     new_value = list(unverified_targets) or None
-    queued = {target: receipt for target, receipt in
-              job.get("_bot_chat_delivery_receipts", {}).items()
+    receipts = {**job.get("_bot_chat_delivery_receipts", {}),
+                **job.get("_gateway_delivery_receipts", {})}
+    queued = {target: receipt for target, receipt in receipts.items()
               if receipt["status"] in ("queued", "claimed")} or None
     values = {key: value for key, value in {
         "last_delivery_unverified": new_value, "last_delivery_queued": queued,
@@ -1903,6 +1921,37 @@ def _unresolved_delivery_outcome(job: dict, for_failure: bool) -> Optional[str]:
     return msg
 
 
+def _queue_manual_gateway_delivery(
+    job: dict, targets: list, content: str, *, for_failure: bool,
+) -> Optional[str]:
+    from cron.delivery_queue import enqueue_and_wait, get_status
+    from cron.jobs import get_job
+
+    # Preserve exact destinations and origin/home provenance; mixed-credential fan-out must
+    # not replay targets already sent here. Replay runs outside the manual ContextVar scope.
+    job["_gateway_delivery_receipts"] = {
+        f"{target['platform']}:{target['chat_id']}": {
+            "id": str(job["execution_id"]), "status": "queued",
+        } for target in targets
+    }
+    # Publish bookkeeping before the gateway can complete and clear it.
+    _record_delivery_verification(job, [])
+    queued_job = {**job, "_gateway_delivery_targets": targets}
+    execution_id = str(job["execution_id"])
+    try:
+        error = enqueue_and_wait(
+            execution_id, queued_job,
+            _redact_cron_payload(content, "deferred delivery content"), for_failure=for_failure)
+    except Exception as exc:
+        return f"Gateway delivery handoff failed: {exc}"
+    delivery_status = get_status(execution_id)
+    if delivery_status and delivery_status["status"] == "suppressed":
+        job["_notification_all_targets_suppressed"] = True
+    refreshed = get_job(job["id"]) or {}
+    job["last_delivery_queued"] = refreshed.get("last_delivery_queued")
+    return error
+
+
 def _deliver_result(
     job: dict, content: str, adapters=None, loop=None, *, for_failure: bool = False
 ) -> Optional[str]:
@@ -1911,8 +1960,11 @@ def _deliver_result(
     standalone fallback. ``for_failure=True`` routes failure-category notices through the job's
     ``failure_deliver`` override when present (NS-788). Returns None on success, else an error."""
     job.pop("_bot_chat_delivery_receipts", None)
+    job.pop("_gateway_delivery_receipts", None)
     job.pop("_notification_all_targets_suppressed", None)
-    targets = _resolve_delivery_targets(job, for_failure=for_failure)
+    targets = job.pop("_gateway_delivery_targets", None)
+    if targets is None:
+        targets = _resolve_delivery_targets(job, for_failure=for_failure)
     if not targets:
         _record_delivery_verification(job, [])
         return _unresolved_delivery_outcome(job, for_failure)
@@ -2008,6 +2060,7 @@ def _deliver_result(
         return msg
 
     delivery_errors = []
+    gateway_targets = []
     suppressed_targets = 0  # local: `job` is snapshotted into durable deferred records mid-loop
     for target in targets:
         # A failure notice for a platform that hides warning notifications is a suppressed
@@ -2029,6 +2082,15 @@ def _deliver_result(
                 if receipt and receipt["status"] == "ambiguous":
                     unverified_targets.append(bot_chat_error)
             continue
+
+        if manual_gateway_delivery_required() and adapters is None:
+            from gateway.config import Platform, PlatformConfig
+            if _is_known_delivery_platform(target["platform"]):
+                platform = Platform(target["platform"])
+                pconfig = config.platforms.get(platform) or PlatformConfig()
+                if not config._is_platform_connected(platform, pconfig):
+                    gateway_targets.append(target)
+                    continue
 
         t = _prepare_target_delivery(
             job, target, adapters=adapters, loop=loop, config=config,
@@ -2053,6 +2115,13 @@ def _deliver_result(
     else:
         delivery_errors.extend(policy_drop_errors)
     _record_delivery_verification(job, unverified_targets)
+    # The queue helper refreshes gateway-owned bookkeeping after waiting; do not
+    # overwrite that terminal state with this producer's pre-enqueue receipts.
+    if gateway_targets:
+        handoff_error = _queue_manual_gateway_delivery(
+            job, gateway_targets, content, for_failure=for_failure)
+        if handoff_error:
+            delivery_errors.append(handoff_error)
     return "; ".join(delivery_errors) if delivery_errors else None
 
 

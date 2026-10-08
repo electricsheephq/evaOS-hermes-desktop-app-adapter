@@ -277,9 +277,12 @@ def _preflight_check_delivery(job: dict) -> Optional[str]:
                     "preflight: gateway config unavailable — skipping "
                     "delivery credential check", exc_info=True)
                 return None  # fail-open
+        # A hand-started run without a gateway queues missing-credential targets for gateway
+        # replay. Unknown platforms still block above; the ticker retains its credential gate.
         # Multiplex: a satellite served by the primary's adapters reads unconnected — no block.
         if (
             platform_name.lower() not in connected
+            and not _delivery.manual_gateway_delivery_required()
             # Multiplex escape hatch: a satellite profile whose deliveries are routed by the primary
             # gateway's profile_routes is served by the primary's adapters, so its own unconnected reading
             # is a false block (#97476).
