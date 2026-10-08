@@ -23,7 +23,7 @@ import {
 } from '@/components/ui/sidebar'
 import { Tip, TipKeybindLabel } from '@/components/ui/tooltip'
 import { useContributions } from '@/contrib/react/use-contributions'
-import { searchSessions, type SessionInfo, type SessionSearchResult } from '@/hermes'
+import type { SessionInfo, SessionSearchResult } from '@/hermes'
 import { useI18n } from '@/i18n'
 import { comboTokens } from '@/lib/keybinds/combo'
 import { sessionMatchesSearch } from '@/lib/session-search'
@@ -80,6 +80,7 @@ import {
   $profileColors,
   $profiles,
   $profileScope,
+  $supportScopeProfile,
   ALL_PROFILES,
   messagingTotalsKey,
   normalizeProfileKey,
@@ -94,6 +95,7 @@ import {
   $projectScope,
   $projectTree,
   $projectTreeLoading,
+  $projectTreeOwner,
   $reposScanning,
   ALL_PROJECTS,
   enterProject,
@@ -192,6 +194,7 @@ import { buildSessionByAnyId, resolvePinnedSessions } from './session-index'
 import { SidebarSessionsSection, VIRTUALIZE_THRESHOLD } from './sessions-section'
 import { CONTEXT_SPLIT_KIT, SplitSubmenu } from './split-submenu'
 import { useEnteredProjectSessions } from './use-entered-project-sessions'
+import { useServerSessionSearch } from './use-server-session-search'
 
 // Non-session groups (messaging platforms) stay compact: show a few rows up
 // front, reveal more in larger steps on demand. Keeps a busy platform from
@@ -203,6 +206,8 @@ const NON_SESSION_LOAD_STEP = 10
 // the grouped view. Long enough that the flat list — the thing actually on
 // screen — has the connection to itself first.
 const PROJECT_TREE_WARM_MS = 2_000
+const NO_PROJECT_TREE: SidebarProjectTree[] = []
+const NO_PROJECT_OWNERS: ReadonlyMap<string, string> = new Map()
 
 // A row's `tier` is the one mode it belongs to (Simple keeps the setup rows,
 // Advanced adds the readouts); the list filters once, nothing is passed down.
@@ -308,6 +313,9 @@ function searchResultToSession(result: SessionSearchResult): SessionInfo {
     model: result.model ?? null,
     output_tokens: 0,
     preview: stripFtsMarkers(result.snippet ?? '').trim() || null,
+    // The backend stamps the profile that served the hit; row actions name it
+    // as the owner so a write lands there, not on the ambient profile (#347).
+    ...(result.profile ? { profile: result.profile } : {}),
     source: result.source ?? null,
     started_at: ts,
     title: null,
@@ -320,7 +328,10 @@ export function mergeSearchResults(
   query: string,
   serverMatches: readonly SessionSearchResult[],
   sessionByAnyId: ReadonlyMap<string, SessionInfo>,
-  searchPending: boolean
+  searchPending: boolean,
+  // Under a support lease, the concrete profile in view: a hit stamped with any
+  // other profile belongs to another agent and is dropped (#347).
+  scopeProfile: null | string = null
 ): SessionInfo[] {
   if (!query) {
     return []
@@ -345,7 +356,7 @@ export function mergeSearchResults(
   }
 
   for (const match of serverMatches) {
-    if (out.has(match.session_id)) {
+    if (out.has(match.session_id) || (scopeProfile && match.profile && match.profile !== scopeProfile)) {
       continue
     }
 
@@ -490,6 +501,7 @@ export function ChatSidebar({
   const unreadCount = useStore($unreadFinishedSessionIds).length
   const profiles = useStore($profiles)
   const profileScope = useStore($profileScope)
+  const supportScope = useStore($supportScopeProfile)
   const activeConnectionId = useStore($activeConnectionId)
 
   // Toggle the persisted read-state watermark from a row menu. The row's own
@@ -519,8 +531,15 @@ export function ChatSidebar({
   const workspaceParentOrderIds = useStore($sidebarWorkspaceParentOrderIds)
   const projectOrderIds = useStore($sidebarProjectOrderIds)
   const projects = useStore($projects)
-  const projectTree = useStore($projectTree)
-  const projectOwners = useStore($projectOwnerBySessionId)
+  const cachedProjectTree = useStore($projectTree)
+  const projectTreeOwner = useStore($projectTreeOwner)
+  const cachedProjectOwners = useStore($projectOwnerBySessionId)
+  // Under a support lease a cached tree renders only for the profile it was
+  // read for: a sibling pick shows the skeleton, then the sibling's own tree or
+  // none — never the previous agent's projects (#347).
+  const projectTreeOwned = supportScope === null || projectTreeOwner === supportScope
+  const projectTree = projectTreeOwned ? cachedProjectTree : NO_PROJECT_TREE
+  const projectOwners = projectTreeOwned ? cachedProjectOwners : NO_PROJECT_OWNERS
 
   // The persisted project filter's storage is shared across profiles, so ids
   // picked in another profile don't resolve in the active one and the raw
@@ -541,8 +560,6 @@ export function ChatSidebar({
   const newSessionCombo = useStore($bindings)['session.new']?.[0]
   const newSessionKbd = newSessionCombo ? comboTokens(newSessionCombo) : []
   const [searchQuery, setSearchQuery] = useState('')
-  const [serverMatches, setServerMatches] = useState<SessionSearchResult[]>([])
-  const [searchPending, setSearchPending] = useState(false)
   const [newSessionKbdFlash, setNewSessionKbdFlash] = useState(false)
   const [messagingLoadMorePending, setMessagingLoadMorePending] = useState<Record<string, boolean>>({})
   const [recentsLoadMorePending, setRecentsLoadMorePending] = useState(false)
@@ -739,44 +756,13 @@ export function ChatSidebar({
   )
 
   // Full-text search across *all* sessions (not just the loaded page) so 699
-  // sessions stay findable. Debounced; loaded sessions are matched instantly
-  // client-side and merged ahead of the server hits.
-  useEffect(() => {
-    if (!trimmedQuery) {
-      setServerMatches([])
-      setSearchPending(false)
-
-      return
-    }
-
-    let cancelled = false
-
-    setSearchPending(true)
-
-    const id = window.setTimeout(() => {
-      void searchSessions(trimmedQuery)
-        .then(res => {
-          if (!cancelled) {
-            setServerMatches(res.results)
-          }
-        })
-        .catch(() => undefined)
-        .finally(() => {
-          if (!cancelled) {
-            setSearchPending(false)
-          }
-        })
-    }, 200)
-
-    return () => {
-      cancelled = true
-      window.clearTimeout(id)
-    }
-  }, [trimmedQuery])
+  // sessions stay findable; loaded sessions are matched instantly client-side.
+  const { pending: searchPending, serverMatches } = useServerSessionSearch(trimmedQuery, profileScope)
 
   const searchResults = useMemo(
-    () => mergeSearchResults(sortedSessions, trimmedQuery, serverMatches, sessionByAnyId, searchPending),
-    [sortedSessions, trimmedQuery, serverMatches, sessionByAnyId, searchPending]
+    () =>
+      mergeSearchResults(sortedSessions, trimmedQuery, serverMatches, sessionByAnyId, searchPending, supportScope),
+    [sortedSessions, trimmedQuery, serverMatches, sessionByAnyId, searchPending, supportScope]
   )
 
   const unpinnedAgentSessions = useMemo(

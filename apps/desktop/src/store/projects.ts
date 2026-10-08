@@ -20,11 +20,11 @@ import { $gateway, activeGateway, ensureActiveGatewayOpen } from '@/store/gatewa
 import { $sidebarShowAllSessions, setSidebarAgentsGrouped } from '@/store/layout'
 import { notify } from '@/store/notifications'
 import {
-  $activeGatewayProfile,
   $profileScope,
+  $selectedProfile,
   ALL_PROFILES,
-  normalizeProfileKey,
-  requestFreshSession
+  requestFreshSession,
+  requestOnProfileSocket
 } from '@/store/profile'
 import {
   $currentCwd,
@@ -52,6 +52,8 @@ export const $activeProjectId = atom<null | string>(null)
 // source of project membership — the desktop no longer derives it.
 export const $projectTree = atom<SidebarProjectTree[]>([])
 export const $projectTreeLoading = atom(false)
+// The profile (or ALL_PROFILES) whose read last filled $projectTree (#347).
+export const $projectTreeOwner = atom<null | string>(null)
 // Backend-resolved session -> project owner, the ONE authority the row
 // classifiers (filter, bucket, color, label) and the lane overlay share, so a
 // sibling worktree the git probe assigned to its repo project never re-files
@@ -305,15 +307,17 @@ async function gatewayRequest<T>(method: string, params: Record<string, unknown>
   return gateway.request<T>(method, params)
 }
 
+// The profile the sidebar is in: the gateway's, or under a support lease the
+// picked sibling, served over that sibling's own socket (#347).
 export function projectProfile(): null | string {
-  const profile = normalizeProfileKey($activeGatewayProfile.get())
+  const profile = $selectedProfile.get()
 
   return $profileScope.get() === ALL_PROFILES || profile === ALL_PROFILES ? null : profile
 }
 
-// All profiles filters the sidebar. Writes still belong to the live gateway profile.
+// All profiles filters the sidebar. Writes still belong to the selected profile.
 function writableProjectProfile(): string {
-  const profile = normalizeProfileKey($activeGatewayProfile.get())
+  const profile = $selectedProfile.get()
 
   if (!profile || profile === ALL_PROFILES) {
     throw new Error('Projects are unavailable while viewing all profiles')
@@ -338,7 +342,9 @@ async function gatewayRequestOn<T>(
   method: string,
   params: Record<string, unknown> = {}
 ): Promise<T> {
-  return gateway.request<T>(method, params)
+  const ambient = () => gateway.request<T>(method, params)
+
+  return typeof params.profile === 'string' ? requestOnProfileSocket(params.profile, method, params, ambient) : ambient()
 }
 
 function isRetryableProjectTreeReadError(error: unknown): boolean {
@@ -367,7 +373,7 @@ async function activeProjectsContext(profile = projectProfile()): Promise<Active
     gateway = await ensureActiveGatewayOpen()
   }
 
-  if (!gateway || gateway !== activeGateway() || profile !== normalizeProfileKey($activeGatewayProfile.get())) {
+  if (!gateway || gateway !== activeGateway() || profile !== $selectedProfile.get()) {
     throw new Error('Active Hermes profile changed while connecting')
   }
 
@@ -426,8 +432,9 @@ const PROJECT_TREE_REQUEST_TIMEOUT_MS = 60_000
 
 let projectTreeRefreshGeneration = 0
 
-function applyProjectTreePayload(res: ProjectTreePayload): void {
+function applyProjectTreePayload(res: ProjectTreePayload, owner: string): void {
   const scoped = new Set(res.scoped_session_ids ?? [])
+  $projectTreeOwner.set(owner)
   $projectTree.set(res.projects ?? [])
   $activeProjectId.set(res.active_id ?? null)
   const tombstones = $removedSessionIds.get()
@@ -482,7 +489,7 @@ async function refreshProjectTreeOn(context: ActiveProjectsContext): Promise<voi
       return
     }
 
-    applyProjectTreePayload(res)
+    applyProjectTreePayload(res, profile)
     markProjectsRpcSuccess()
   } catch (err) {
     if (generation === projectTreeRefreshGeneration && stillOnProjectsContext(context)) {
@@ -532,7 +539,7 @@ async function refreshProjectTreeAcrossProfiles(): Promise<void> {
       return
     }
 
-    applyProjectTreePayload(res)
+    applyProjectTreePayload(res, ALL_PROFILES)
     markProjectsRpcSuccess()
   } catch (err) {
     markProjectsRpcFailure(err)

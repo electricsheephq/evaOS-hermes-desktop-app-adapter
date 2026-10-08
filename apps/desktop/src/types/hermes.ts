@@ -1315,6 +1315,8 @@ export interface SessionSearchResult {
    *  used as the durable pin id; falls back to session_id when absent. */
   lineage_root?: string | null
   model: string | null
+  /** Profile whose database served the hit. */
+  profile?: string
   role: string | null
   /** Live compression tip of the matched conversation — resume by this id. */
   session_id: string

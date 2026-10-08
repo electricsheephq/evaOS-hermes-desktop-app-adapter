@@ -23,7 +23,13 @@ import { useI18n } from '@/i18n'
 import { ExternalLink } from '@/lib/external-link'
 import { AlertTriangle } from '@/lib/icons'
 import { resolvePluginSourceLinks } from '@/lib/plugin-source-urls'
-import { type AgentPluginLiveNow, COMMIT_SHA_RE, installAgentPlugin, loadAgentPlugins } from '@/store/agent-plugins'
+import {
+  type AgentPluginLiveNow,
+  COMMIT_SHA_RE,
+  type GatewayRequest,
+  installAgentPlugin,
+  loadAgentPlugins
+} from '@/store/agent-plugins'
 import { notify } from '@/store/notifications'
 import {
   $pluginInstallRequest,
@@ -31,7 +37,13 @@ import {
   openPluginInstallRequest,
   type PluginInstallRequest
 } from '@/store/plugin-install-request'
-import { $activeGatewayProfile, $profiles, $profileScope, normalizeProfileKey, profileLabel } from '@/store/profile'
+import {
+  $profiles,
+  $selectedProfile,
+  normalizeProfileKey,
+  profileLabel,
+  requestOnProfileSocket
+} from '@/store/profile'
 import { $connection } from '@/store/session'
 
 type ProbeResult = Awaited<ReturnType<NonNullable<NonNullable<Window['hermesDesktop']>['probePluginRepo']>>>
@@ -60,9 +72,9 @@ export function PluginInstallModal() {
   const location = useLocation()
   const onSettings = location.pathname.startsWith(SETTINGS_ROUTE)
   const connection = useStore($connection)
-  const activeProfile = useStore($activeGatewayProfile)
   const profiles = useStore($profiles)
-  const profileScope = useStore($profileScope)
+  // The profile the window is in — under a support lease, the rail's pick (#347).
+  const selectedProfile = useStore($selectedProfile)
 
   const [repoInput, setRepoInput] = useState('')
   const [targetProfile, setTargetProfile] = useState('default')
@@ -166,12 +178,12 @@ export function PluginInstallModal() {
       return
     }
 
-    setTargetProfile(normalizeProfileKey(request.profile || activeProfile || profileScope))
+    setTargetProfile(normalizeProfileKey(request.profile || selectedProfile))
 
     if (request.repo) {
       void runProbe(request)
     }
-  }, [activeProfile, profileScope, request, resetState, runProbe])
+  }, [request, resetState, runProbe, selectedProfile])
 
   const targetProfileInfo = profiles.find(profile => normalizeProfileKey(profile.name) === targetProfile)
   const profileOptions = targetProfileInfo ? profiles : [...profiles, { name: targetProfile }]
@@ -213,6 +225,10 @@ export function PluginInstallModal() {
       return
     }
 
+    // The target's own socket under a support lease (#347); the window's otherwise.
+    const requestTarget: GatewayRequest = (method, params = {}) =>
+      requestOnProfileSocket(targetProfile, method, params, () => requestGateway(method, params))
+
     setInstalling(true)
     setInstallError(null)
 
@@ -223,7 +239,7 @@ export function PluginInstallModal() {
 
     try {
       if (installAgent && probe.agent) {
-        const result = await installAgentPlugin(requestGateway, {
+        const result = await installAgentPlugin(requestTarget, {
           identifier: request.repo,
           force: forceReinstall,
           enable: enableAgent,
@@ -296,7 +312,7 @@ export function PluginInstallModal() {
         }
       }
 
-      await loadAgentPlugins(requestGateway, targetProfile)
+      await loadAgentPlugins(requestTarget, targetProfile)
 
       if (errors.length === 0) {
         for (const message of successes) {

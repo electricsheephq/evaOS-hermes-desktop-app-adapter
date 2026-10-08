@@ -13,6 +13,18 @@ const { requestGateway } = vi.hoisted(() => ({
 vi.mock('@/app/gateway/hooks/use-gateway-request', () => ({
   useGatewayRequest: () => ({ requestGateway })
 }))
+
+// The sibling socket of a support lease (#347): records which route carried the RPC.
+const { requestGatewayForProfile } = vi.hoisted(() => ({
+  requestGatewayForProfile: vi.fn(async (_profile: string, method: string): Promise<unknown> =>
+    method === 'plugins.manage' ? { ok: true, plugin_name: 'plugin', plugins: [] } : { plugins: [] }
+  )
+}))
+
+vi.mock('@/store/gateway', async importOriginal => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  requestGatewayForProfile
+}))
 vi.mock('@/hermes', async importOriginal => ({
   ...(await importOriginal<Record<string, unknown>>()),
   getProfiles: async () => ({ profiles: [] })
@@ -24,7 +36,7 @@ import {
   closePluginInstallRequest,
   openPluginInstallRequest
 } from '@/store/plugin-install-request'
-import { $activeGatewayProfile, $profiles } from '@/store/profile'
+import { $activeGatewayProfile, $profiles, adoptActiveGatewayProfile, selectProfile } from '@/store/profile'
 import { $connection, $gatewayState } from '@/store/session'
 
 import { PluginsTab } from '../capabilities/plugins/plugins-tab'
@@ -151,6 +163,30 @@ describe('Install from Git entry flow', () => {
         expect.objectContaining({ action: 'install', catalog_name: 'plugin', profile: 'research' })
       )
     )
+  })
+
+  it('under a support lease installs for the picked sibling over the sibling’s own socket (#347)', async () => {
+    probePluginRepo.mockResolvedValue({ ok: true, agent: true, desktop: false, warnings: [] })
+    adoptActiveGatewayProfile('default', true)
+
+    try {
+      selectProfile('research')
+      renderFlow()
+      act(() => openPluginInstallRequest({ catalogName: 'plugin', repo: 'https://github.com/example/plugin' }))
+      fireEvent.click(await screen.findByRole('button', { name: 'Install' }))
+
+      await waitFor(() =>
+        expect(requestGatewayForProfile).toHaveBeenCalledWith(
+          'research',
+          'plugins.manage',
+          expect.objectContaining({ action: 'install', profile: 'research' })
+        )
+      )
+      // Never the anchor's socket, which refuses a sibling profile (4030).
+      expect(requestGateway).not.toHaveBeenCalledWith('plugins.manage', expect.objectContaining({ action: 'install' }))
+    } finally {
+      adoptActiveGatewayProfile('default', false)
+    }
   })
 
   it('pins a custom install to a full commit SHA and refuses anything shorter', async () => {

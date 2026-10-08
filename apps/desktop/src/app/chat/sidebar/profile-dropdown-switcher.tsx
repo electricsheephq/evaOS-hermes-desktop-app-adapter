@@ -30,11 +30,11 @@ import {
 import { $fleetRoster } from '@/store/fleet-roster'
 import { notifyError } from '@/store/notifications'
 import {
-  $activeGatewayProfile,
   $profileColors,
   $profileCreateRequest,
   $profileOrder,
   $profiles,
+  $profileScope,
   $showAllProfiles,
   ALL_PROFILES,
   normalizeProfileKey,
@@ -70,7 +70,9 @@ export function ProfileSwitcher({ compact = false }: { compact?: boolean }) {
   const profiles = useStore($profiles)
   const order = useStore($profileOrder)
   const colors = useStore($profileColors)
-  const gatewayProfile = useStore($activeGatewayProfile)
+  // The sidebar's scope, which a customer-wide support pick moves while the
+  // gateway stays on the lease anchor (#347); ordinarily the gateway profile.
+  const scope = useStore($profileScope)
   const showAll = useStore($showAllProfiles)
   const multipleConnections = useStore($hasMultipleConnections)
   const registry = useStore($connectionsRegistry)
@@ -104,7 +106,7 @@ export function ProfileSwitcher({ compact = false }: { compact?: boolean }) {
     [activeConnectionId, connections, multipleConnections, order, roster]
   )
 
-  const activeKey = normalizeProfileKey(gatewayProfile)
+  const activeKey = normalizeProfileKey(scope)
   const defaultProfile = profiles.find(profile => profile.is_default)
 
   const named = sortByProfileOrder(

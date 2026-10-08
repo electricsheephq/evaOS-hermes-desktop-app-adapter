@@ -364,7 +364,9 @@ export function CronView({ onClose, onOpenSession, setStatusbarItemGroup: _setSt
   const profile = cronProfileForScope(profileScope)
   const activeGatewayProfile = useStore($activeGatewayProfile)
   const profiles = useStore($profiles)
-  const createTarget = normalizeProfileKey(activeGatewayProfile)
+  // Where a create lands and what the dialog names: the concrete scope (a support
+  // pick included, #347), or in the All view the live gateway's profile.
+  const createTarget = profileScope === ALL_PROFILES ? normalizeProfileKey(activeGatewayProfile) : profileScope
   const createTargetLabel = profileLabel(profiles.find(item => item.name === createTarget) ?? { name: createTarget })
 
   const refresh = useCallback(async () => {
