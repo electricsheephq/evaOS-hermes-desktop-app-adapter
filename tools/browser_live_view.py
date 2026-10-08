@@ -67,6 +67,7 @@ def browser_live_view(session: str = "", task_id: Optional[str] = None) -> str:
         if (
             not isinstance(current, dict)
             or str(current.get("bb_session_id") or "") != provider_session_id
+            or key in browser_tool._reaping_sessions
         ):
             return tool_error(
                 "No active Browserbase session was found for that session name; start it with a browser tool first.",

@@ -171,28 +171,33 @@ def _cleanup_inactive_browser_sessions():
             last = _bt._session_last_activity.get(task_id)
             if last is None or time.time() - last <= _bt.BROWSER_SESSION_INACTIVITY_TIMEOUT:
                 continue
-        elapsed = int(current_time - _bt._session_last_activity.get(task_id, current_time))
-        _bt.logger.info("Cleaning up inactive session for task: %s (inactive for %ss)", task_id, elapsed)
+            _bt._reaping_sessions.add(task_id)  # live view refuses this key until teardown ends (atomic with the recheck)
         try:
-            with _session_owner_scope(task_id):
-                cleanup_browser(task_id)
-            _forget_session_tracking(task_id)
-        except Exception as e:
-            with _bt._cleanup_lock:
-                failures = _bt._cleanup_failures[task_id] = _bt._cleanup_failures.get(task_id, 0) + 1
-            if failures < _bt.MAX_INACTIVITY_CLEANUP_FAILURES:
-                _bt.logger.warning("Error cleaning up inactive session %s (attempt %d/%d): %s",
-                               task_id, failures, _bt.MAX_INACTIVITY_CLEANUP_FAILURES, e)
-                continue
-            _bt.logger.error("Browser cleanup failed %d times for inactive session %s; "
-                         "force-reaping: %s", failures, task_id, e)
+            elapsed = int(current_time - _bt._session_last_activity.get(task_id, current_time))
+            _bt.logger.info("Cleaning up inactive session for task: %s (inactive for %ss)", task_id, elapsed)
             try:
                 with _session_owner_scope(task_id):
-                    _force_reap_browser_session(task_id)
-            except Exception as reap_exc:
-                _bt.logger.error("Force-reap of browser session %s failed: %s", task_id, reap_exc)
-            finally:
-                _forget_session_tracking(task_id, activity=False)
+                    cleanup_browser(task_id)
+                _forget_session_tracking(task_id)
+            except Exception as e:
+                with _bt._cleanup_lock:
+                    failures = _bt._cleanup_failures[task_id] = _bt._cleanup_failures.get(task_id, 0) + 1
+                if failures < _bt.MAX_INACTIVITY_CLEANUP_FAILURES:
+                    _bt.logger.warning("Error cleaning up inactive session %s (attempt %d/%d): %s",
+                                   task_id, failures, _bt.MAX_INACTIVITY_CLEANUP_FAILURES, e)
+                    continue
+                _bt.logger.error("Browser cleanup failed %d times for inactive session %s; "
+                             "force-reaping: %s", failures, task_id, e)
+                try:
+                    with _session_owner_scope(task_id):
+                        _force_reap_browser_session(task_id)
+                except Exception as reap_exc:
+                    _bt.logger.error("Force-reap of browser session %s failed: %s", task_id, reap_exc)
+                finally:
+                    _forget_session_tracking(task_id, activity=False)
+        finally:
+            with _bt._cleanup_lock:
+                _bt._reaping_sessions.discard(task_id)
 
 
 def _human_holds_shared_browser(task_id: str) -> bool:
