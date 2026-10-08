@@ -102,7 +102,7 @@ def _held(records):
 
 def _stop(record):
     process, started, marker, path, cmd, env, name, key = record
-    raw = json.loads(Path(path).read_text())
+    raw = json.loads(Path(path).read_text(encoding="utf-8"))
     pid = raw.get("pid") if isinstance(raw, dict) else raw
     if pid != process.pid or not _matches(process, marker, started, name):
         return
