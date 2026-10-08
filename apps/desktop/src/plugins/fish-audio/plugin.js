@@ -547,7 +547,7 @@ function Onboarding({ profile, operator }) {
     /* @__PURE__ */ jsxs3("div", { style: { display: "flex", gap: 8 }, children: [
       !operator && /* @__PURE__ */ jsxs3(Fragment2, { children: [
         /* @__PURE__ */ jsx3(Button3, { onClick: () => open(LINKS.keys), children: t("getKey") }),
-        /* @__PURE__ */ jsx3(Button3, { onClick: () => host3.navigate("/settings?tab=plugins&agent=fish-audio"), variant: "secondary", children: t("openPlugins") })
+        /* @__PURE__ */ jsx3(Button3, { onClick: () => host3.navigate("/settings?tab=plugins&agent=fish-audio&plugin=fish-audio"), variant: "secondary", children: t("openPlugins") })
       ] }),
       /* @__PURE__ */ jsx3(Button3, { onClick: () => void refreshAvailability(), variant: "ghost", children: t("checkAgain") })
     ] })
