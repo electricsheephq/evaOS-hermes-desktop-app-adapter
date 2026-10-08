@@ -56,6 +56,10 @@ class BrowserProvider(ProviderBase):
         """Best-effort teardown from atexit / signal handlers. Must tolerate missing credentials and
         network errors; must not raise."""
 
+    def get_live_view(self, session_id: str, page: str = "") -> dict:
+        """Keep URL-only live-view providers compatible with page selection."""
+        return {"url": self.get_live_view_url(session_id)}
+
 
 # ---- BEGIN PLUGIN-COMPAT (revert-scheduled; see COMPAT_MANIFEST.md) ----
 # Names external plugins imported from this module before the Sep 2026 decomposition.

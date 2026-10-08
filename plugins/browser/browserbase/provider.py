@@ -117,6 +117,10 @@ class BrowserbaseBrowserProvider(CloudBrowserProvider):
 
     def get_live_view_url(self, session_id: str) -> str:
         """Return Browserbase's live-view URL for an existing session."""
+        return self.get_live_view(session_id)["url"]
+
+    def get_live_view(self, session_id: str, page: str = "") -> dict:
+        """Select a page from one debug response; no additional browser connection."""
         import requests as _requests
         from urllib.parse import quote
 
@@ -150,14 +154,47 @@ class BrowserbaseBrowserProvider(CloudBrowserProvider):
             ) from exc
         if not isinstance(payload, dict):
             payload = {}
+        pages = payload.get("pages")
+        if not isinstance(pages, list):
+            pages = []
+        usable = [
+            entry for entry in pages
+            if isinstance(entry, dict)
+            and isinstance(entry.get("debuggerFullscreenUrl"), str)
+            and entry["debuggerFullscreenUrl"].startswith("https://")
+        ]
+        matches = [
+            entry for entry in usable
+            if page and any(page.lower() in str(entry.get(field) or "").lower() for field in ("url", "title"))
+        ]
+        nonblank = [
+            entry for entry in usable
+            if str(entry.get("url") or "").strip().lower().split("#", 1)[0].split("?", 1)[0].rstrip("/") not in {
+                "", "about:blank", "about:newtab", "chrome://newtab", "chrome://new-tab-page",
+            }
+        ]
+        selected = (matches or nonblank or [None])[-1]
         url = str(payload.get("liveViewUrl") or payload.get("debuggerFullscreenUrl") or "")
+        if selected is not None:
+            url = selected["debuggerFullscreenUrl"]
         if not url.startswith("https://"):
             raise CloudBrowserAPIError(
                 "Browserbase live view returned no secure URL (code: browser_invalid_response)",
                 status_code=response.status_code,
                 code="browser_invalid_response",
             )
-        return url
+        metadata = selected if selected is not None else (
+            pages[0] if pages and isinstance(pages[0], dict) else {}
+        )
+        result = {
+            "url": url,
+            "page_url": str(metadata.get("url") or ""),
+            "page_title": str(metadata.get("title") or ""),
+            "page_count": len(pages),
+        }
+        if page:
+            result["page_matched"] = bool(matches)
+        return result
 
 
 # ---- BEGIN PLUGIN-COMPAT (revert-scheduled; see COMPAT_MANIFEST.md) ----
