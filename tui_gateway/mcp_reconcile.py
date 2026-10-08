@@ -49,7 +49,7 @@ class ServeMCPReconciler:
                         missing = any(row["status"] in {"configured", "failed"} for row in get_mcp_status())
                         if rev == self.revisions[home] and home not in self.pending and not missing:
                             continue
-                        result = reconcile_mcp_servers_with_config()
+                        result = reconcile_mcp_servers_with_config(wait_for_discovery_lock=False)
                         self.revisions[home] = rev
                         if result.get("pending"):
                             self.pending.add(home)
