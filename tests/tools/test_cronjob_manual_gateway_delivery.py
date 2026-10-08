@@ -22,10 +22,12 @@ from tools.cronjob_tools import _execute_job_now, _manual_run_completion
 def manual_delivery(monkeypatch):
     home = Path(os.environ["HERMES_HOME"])
     (home / "config.yaml").write_text(
-        "platforms:\n  telegram:\n    enabled: true\ncron:\n  wrap_response: false\n",
+        "platforms:\n  telegram:\n    enabled: true\n  discord:\n    enabled: true\n"
+        "cron:\n  wrap_response: false\n",
         encoding="utf-8",
     )
     monkeypatch.setattr(delivery_queue, "DELIVERY_DB", None)
+    monkeypatch.setattr(delivery_queue, "DEFAULT_DELIVERY_WAIT_TIMEOUT_SECONDS", 0)
     monkeypatch.setitem(sys.modules, "gateway.run", None)
     monkeypatch.setattr(scheduler, "_launch_external_cron_worker", lambda job: False)
 
@@ -106,11 +108,21 @@ def test_manual_cron_delivery_routes_and_reports(lane, manual_delivery, monkeypa
         assert len(sends) == (1 if lane == "live" else 0)
 
 
-def test_manual_cron_deferred_record_replays_once_through_live_adapter(manual_delivery):
+@pytest.mark.parametrize("mixed", [False, True])
+def test_manual_cron_deferred_record_replays_once_through_live_adapter(manual_delivery, monkeypatch, mixed):
     start, standalone, sends, runner = manual_delivery
-    result, stored, execution = start()
+    if mixed:
+        monkeypatch.setenv("DISCORD_BOT_TOKEN", "synthetic-test-credential")
+    deliver = ["origin", "discord:987654321"] if mixed else "origin"
+    result, stored, execution = start(deliver)
     assert result["success"] is True
-    standalone.assert_not_called()
+    assert standalone.call_count == int(mixed)
+    if mixed:
+        assert standalone.call_args.args[0].platform == Platform.DISCORD
+    row = delivery_queue.get_status(execution["id"])
+    queued_targets = json.loads(row["job_json"])["_gateway_delivery_targets"]
+    assert len(queued_targets) == 1
+    assert queued_targets[0]["platform"] == "telegram"
     assert scheduler.drain_delivery_queue(runner.adapters, runner._gateway_loop) == 1
     assert scheduler.drain_delivery_queue(runner.adapters, runner._gateway_loop) == 0
     assert len(sends) == 1
@@ -119,5 +131,56 @@ def test_manual_cron_deferred_record_replays_once_through_live_adapter(manual_de
     assert target.chat_id == "123456789"
     assert text == "brief"
     assert transport.adapter is runner.adapters[Platform.TELEGRAM]
+    assert standalone.call_count == int(mixed)
     assert delivery_queue.get_status(execution["id"])["status"] == "delivered"
     assert not get_job(stored["id"]).get("last_delivery_queued")
+
+
+@pytest.mark.parametrize("outcome", ["failed", "delivered", "deferred"])
+def test_manual_cron_queue_terminal_outcome(outcome, manual_delivery, monkeypatch):
+    start, standalone, sends, runner = manual_delivery
+    original_enqueue = delivery_queue.enqueue
+    timeout = Mock(wraps=delivery_queue._terminalize_wait_timeout)
+    monkeypatch.setattr(delivery_queue, "_terminalize_wait_timeout", timeout)
+    if outcome == "failed":
+        async def reject(*args, **kwargs):
+            return {"success": False, "error": "gateway rejected delivery"}
+
+        monkeypatch.setattr("gateway.delivery.DeliveryRouter._deliver_to_platform", reject)
+        standalone.return_value = (None, "gateway rejected delivery")
+
+    def enqueue_then_drain(execution_id, job, content, *, for_failure=False):
+        receipt = original_enqueue(execution_id, job, content, for_failure=for_failure)
+        if outcome != "deferred":
+            # Complete before the producer sees its original pending snapshot.
+            assert scheduler.drain_delivery_queue(runner.adapters, runner._gateway_loop) == 1
+        return receipt
+
+    monkeypatch.setattr(delivery_queue, "enqueue", enqueue_then_drain)
+    result, stored, execution = start()
+    row = delivery_queue.get_status(execution["id"])
+    assert row["status"] == ("pending" if outcome == "deferred" else outcome)
+    if outcome == "failed":
+        assert result["success"] is False
+        assert "gateway rejected delivery" in result["error"]
+        assert "gateway rejected delivery" in stored["last_delivery_error"]
+        assert stored["last_status"] == "delivery_failed"
+        assert execution["delivery_outcome"] == "failed"
+        assert not stored.get("last_delivery_queued")
+    elif outcome == "delivered":
+        assert result["success"] is True
+        assert stored["last_status"] == "ok"
+        assert execution["delivery_outcome"] == "delivered"
+        assert not stored.get("last_delivery_queued")
+        assert len(sends) == 1
+        standalone.assert_not_called()
+    else:
+        timeout.assert_called_once_with(execution["id"])
+        assert result["success"] is True
+        assert result["error"] is None
+        assert stored["last_delivery_error"] is None
+        assert stored["last_status"] == "delivery_queued"
+        assert execution["delivery_outcome"] == "queued"
+        assert stored["last_delivery_queued"]
+        standalone.assert_not_called()
+        assert sends == []

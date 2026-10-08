@@ -1924,34 +1924,32 @@ def _unresolved_delivery_outcome(job: dict, for_failure: bool) -> Optional[str]:
 def _queue_manual_gateway_delivery(
     job: dict, targets: list, content: str, *, for_failure: bool,
 ) -> Optional[str]:
-    from cron.delivery_queue import enqueue
+    from cron.delivery_queue import enqueue_and_wait, get_status
+    from cron.jobs import get_job
 
     # Preserve exact destinations and origin/home provenance; mixed-credential fan-out must
     # not replay targets already sent here. Replay runs outside the manual ContextVar scope.
-    queued_receipts = {
+    job["_gateway_delivery_receipts"] = {
         f"{target['platform']}:{target['chat_id']}": {
             "id": str(job["execution_id"]), "status": "queued",
         } for target in targets
     }
-    queued_job = {**job, "_gateway_delivery_targets": targets,
-                  "last_delivery_queued": queued_receipts}
+    # Publish bookkeeping before the gateway can complete and clear it.
+    _record_delivery_verification(job, [])
+    queued_job = {**job, "_gateway_delivery_targets": targets}
+    execution_id = str(job["execution_id"])
     try:
-        receipt = enqueue(
-            str(job["execution_id"]), queued_job,
+        error = enqueue_and_wait(
+            execution_id, queued_job,
             _redact_cron_payload(content, "deferred delivery content"), for_failure=for_failure)
     except Exception as exc:
         return f"Gateway delivery handoff failed: {exc}"
-    status = receipt["status"]
-    if status in {"pending", "delivering"}:
-        if status == "delivering":
-            for queued_receipt in queued_receipts.values():
-                queued_receipt["status"] = "claimed"
-        job["_gateway_delivery_receipts"] = queued_receipts
-    elif status == "suppressed":
+    delivery_status = get_status(execution_id)
+    if delivery_status and delivery_status["status"] == "suppressed":
         job["_notification_all_targets_suppressed"] = True
-    elif status != "delivered":
-        return str(receipt.get("error") or f"Gateway delivery handoff {status}")
-    return None
+    refreshed = get_job(job["id"]) or {}
+    job["last_delivery_queued"] = refreshed.get("last_delivery_queued")
+    return error
 
 
 def _deliver_result(
@@ -2110,12 +2108,6 @@ def _deliver_result(
             _deliver_standalone(
                 t, cleaned_delivery_content, media_files, target_errors, delivery_errors)
 
-    if gateway_targets:
-        handoff_error = _queue_manual_gateway_delivery(
-            job, gateway_targets, content, for_failure=for_failure)
-        if handoff_error:
-            delivery_errors.append(handoff_error)
-
     # Filter-time drops apply to every target; report them once. A run whose every target was
     # suppressed sent nothing, so there is no drop to report.
     if suppressed_targets == len(targets):
@@ -2123,6 +2115,13 @@ def _deliver_result(
     else:
         delivery_errors.extend(policy_drop_errors)
     _record_delivery_verification(job, unverified_targets)
+    # The queue helper refreshes gateway-owned bookkeeping after waiting; do not
+    # overwrite that terminal state with this producer's pre-enqueue receipts.
+    if gateway_targets:
+        handoff_error = _queue_manual_gateway_delivery(
+            job, gateway_targets, content, for_failure=for_failure)
+        if handoff_error:
+            delivery_errors.append(handoff_error)
     return "; ".join(delivery_errors) if delivery_errors else None
 
 
