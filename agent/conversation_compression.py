@@ -3547,8 +3547,6 @@ def _candidate_rejected(
     if compressed == messages_before_compression or (
         _strip_marker_for_comparison(compressed) == _strip_marker_for_comparison(messages_before_compression)
     ):
-        if messages != messages_before_compression:
-            messages[:] = copy.deepcopy(messages_before_compression)
         logger.info(
             "Compression made no progress (session=%s) — skipping boundary rewrite.", agent.session_id or "none"
         )
@@ -3586,7 +3584,6 @@ def _candidate_rejected(
             _working_gen,
             agent.session_id or "none",
         )
-        _restore_messages_snapshot(messages, messages_before_compression)
         agent._last_compaction_in_place = False
         _emit_aborted_attempt_telemetry(agent, attempt_started_at, "attempt_superseded")
         return True
@@ -4127,6 +4124,8 @@ def compress_context(
             agent, compressed, messages, messages_before_compression, attempt_generation=attempt.generation,
             attempt_started_at=attempt.started_at,
         ):
+            # Engines may mutate their input in place; a refused candidate must not leak that mutation.
+            _restore_messages_snapshot(messages, messages_before_compression)
             return messages, _existing_system_prompt(agent, system_message)
         if commit_fence is not None:
             _commit_fence_entered = commit_fence.begin_commit(_hard_cancel_event)
@@ -4182,6 +4181,7 @@ def compress_context(
             carried_messages=[reinserted_reply] if reinserted_reply is not None else None,
         )
         if commit.refused_prompt is not None:
+            _restore_messages_snapshot(messages, messages_before_compression)
             return messages, commit.refused_prompt
         compressed = commit.compressed
         split_status = commit.split_status
