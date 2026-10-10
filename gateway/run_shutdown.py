@@ -1930,7 +1930,7 @@ class GatewayShutdownMixin:
             from gateway.shutdown_flush import flush_overflow_to_file
             flush_overflow_to_file(
                 {_k: list(_v) for _k, _v in dict(getattr(self, "_queued_events", None) or {}).items() if _v},
-                reason="shutdown",
+                reason="shutdown", session_key_for=self._session_key_for_source,
             )
         # Live SessionState views: clear() resets one field per session (never a wholesale dict swap).
         self._running_agents.clear()
