@@ -2645,6 +2645,7 @@ def _run_with_fire_claim_heartbeat(job: dict, run) -> bool:
                 "Job '%s': failed to close unstarted execution ledger row",
                 job_id,
                 exc_info=True)
+        _upsert_incident_for_failure(job, error)  # sc#1057: claim loss is a failure too
 
     try:
         owns_fire_claim = heartbeat_fire_claim(job_id, expected_owner=owner)
@@ -2792,9 +2793,9 @@ def _record_fire_ownership_lost(job_id: str, fire_owner: Optional[str], executio
         mark_job_run(job_id, False, _OWNERSHIP_LOST_INTERRUPTED, expected_fire_owner=fire_owner)
         finish_execution(execution_id, success=False, error=_OWNERSHIP_LOST_INTERRUPTED)
     else:
-        finish_execution(
-            execution_id, success=False,
-            error="Fire claim ownership lost; stale result was discarded.")
+        error = "Fire claim ownership lost; stale result was discarded."
+        finish_execution(execution_id, success=False, error=error)
+        _upsert_incident_for_failure({"id": job_id}, error)  # sc#1057
 
 
 def _classify_delivery_outcome(
@@ -3662,6 +3663,28 @@ def _launch_external_cron_worker(job: dict) -> bool:
     )
 
 
+def _adopt_fire_claim(job: dict) -> None:
+    """Move the dispatching gateway's fire claim to this restart-safe worker (sc#1057).
+
+    The claim's ``by`` names the gateway pid, and ``_claim_owner_is_dead`` releases a claim whose
+    same-host pid has exited. This worker outlives a gateway restart, so without the move the
+    replacement gateway's next tick re-claims the job and this run's result is discarded. A lost
+    CAS leaves ``job`` unchanged; the heartbeat wrapper then reports the loss before any work."""
+    claim = job.get("fire_claim")
+    owner = str(claim.get("by") or "") if isinstance(claim, dict) else ""
+    if not owner:
+        return
+    try:
+        from cron.jobs import transfer_fire_claim  # late: module-skew safe (see cron/incidents.py)
+
+        new_owner = transfer_fire_claim(str(job["id"]), expected_owner=owner)
+    except Exception:
+        logger.warning("Job '%s': could not move fire claim to the worker", job.get("id"), exc_info=True)
+        return
+    if new_owner:
+        job["fire_claim"] = dict(claim, by=new_owner)
+
+
 def _run_external_worker_payload(payload_path: Path, ack_path: Path) -> bool:
     """Adopt and execute one gateway-dispatched cron payload.
 
@@ -3713,6 +3736,7 @@ def _run_external_worker_payload(payload_path: Path, ack_path: Path) -> bool:
                     execution_id,
                 )
                 return False
+            _adopt_fire_claim(job)
             try:
                 ack_path.parent.mkdir(parents=True, exist_ok=True)
                 # Publish via write-to-temp + atomic rename. Writing ack_path in place
@@ -4026,8 +4050,9 @@ def _process_due_job(job: dict, adapters, loop, verbose: bool) -> bool:
     # Claim only when the worker actually starts, so a queued lease can't expire first.
     claimed = claim_job_for_fire(job["id"], return_job=True)
     if not claimed:
-        finish_execution(
-            job["execution_id"], success=False, error="Fire claim lost; execution was not started.")
+        error = "Fire claim lost; execution was not started."
+        finish_execution(job["execution_id"], success=False, error=error)
+        _upsert_incident_for_failure(job, error)  # sc#1057
         return True
     # CAS returns the persisted record; bool fallback only for older test doubles.
     claimed_job = dict(claimed) if isinstance(claimed, dict) else dict(job)
