@@ -689,6 +689,24 @@ class TestSchemaConversion:
             == schema["name"]
         )
 
+    def test_clamp_notice_is_debug_once_per_name(self, caplog, monkeypatch):
+        """adapter#374: every new process (each cron worker, the gateway, the backend) discovers MCP
+        tools again and logged one INFO line per clamped name, 10-26% of agent.log on busy customer
+        profiles. The notice is DEBUG, still once per name per process; the shortened name is unchanged."""
+        import logging
+        from tools import mcp_tool_schema
+
+        monkeypatch.setattr(mcp_tool_schema, "_clamped_names_warned", set())
+        caplog.set_level(logging.DEBUG, logger="tools.mcp_tool")
+        names = [
+            mcp_tool_schema.mcp_prefixed_tool_name(
+                "evaos-pipedream-google-sheets", "google_sheets_add_conditional_format_rule")
+            for _ in range(3)
+        ]
+        assert names == ["mcp__evaos_pipedream_google_sheets__google_sheets_add_c_6d70866f"] * 3
+        notices = [r for r in caplog.records if "exceeds the 64-char provider limit" in r.getMessage()]
+        assert [r.levelno for r in notices] == [logging.DEBUG]
+
 
 # ---------------------------------------------------------------------------
 # Check function
