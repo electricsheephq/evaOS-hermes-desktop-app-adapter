@@ -2726,6 +2726,24 @@ def heartbeat_fire_claim(job_id: str, *, expected_owner: str) -> bool:
     return _with_job(job_id, apply, False)
 
 
+def transfer_fire_claim(job_id: str, *, expected_owner: str) -> Optional[str]:
+    """Move a held ``fire_claim`` to THIS process (fresh ``by`` and ``at``); return the new owner,
+    or None when *expected_owner* no longer holds it. The restart-safe cron worker calls this on
+    adoption so the claim names a pid that lives as long as the run (sc#1057)."""
+    new_owner = f"{_machine_id()}:{uuid.uuid4().hex}"
+
+    def apply(jobs, _i, job):
+        claim = job.get("fire_claim")
+        if not isinstance(claim, dict) or claim.get("by") != expected_owner:
+            return None
+        claim["by"] = new_owner
+        claim["at"] = _hermes_now().isoformat()
+        save_jobs(jobs)
+        return new_owner
+
+    return _with_job(job_id, apply, None)
+
+
 # Completed one-shots are retained in jobs.json (final status stays inspectable) and pruned by
 # _sweep_completed_oneshots once they age out.
 COMPLETED_ONESHOT_RETENTION_DAYS = 7
