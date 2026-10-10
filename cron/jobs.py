@@ -2726,10 +2726,13 @@ def heartbeat_fire_claim(job_id: str, *, expected_owner: str) -> bool:
     return _with_job(job_id, apply, False)
 
 
-def transfer_fire_claim(job_id: str, *, expected_owner: str) -> Optional[str]:
+def transfer_fire_claim(
+    job_id: str, *, expected_owner: str, expected_run_owner: Optional[str] = None,
+) -> Optional[str]:
     """Move a held ``fire_claim`` to THIS process (fresh ``by`` and ``at``); return the new owner,
     or None when *expected_owner* no longer holds it. The restart-safe cron worker calls this on
-    adoption so the claim names a pid that lives as long as the run (sc#1057)."""
+    adoption so the claim names a pid that lives as long as the run (sc#1057). A matching
+    ``run_claim`` moves with it so a replacement gateway cannot retire an in-flight one-shot."""
     new_owner = f"{_machine_id()}:{uuid.uuid4().hex}"
 
     def apply(jobs, _i, job):
@@ -2738,6 +2741,11 @@ def transfer_fire_claim(job_id: str, *, expected_owner: str) -> Optional[str]:
             return None
         claim["by"] = new_owner
         claim["at"] = _hermes_now().isoformat()
+        run_claim = job.get("run_claim")
+        if (expected_run_owner is not None and isinstance(run_claim, dict)
+                and run_claim.get("by") == expected_run_owner):
+            run_claim["by"] = new_owner
+            run_claim["at"] = claim["at"]
         save_jobs(jobs)
         return new_owner
 
