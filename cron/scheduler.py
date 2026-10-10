@@ -3664,7 +3664,7 @@ def _launch_external_cron_worker(job: dict) -> bool:
 
 
 def _adopt_fire_claim(job: dict) -> None:
-    """Move the dispatching gateway's fire claim to this restart-safe worker (sc#1057).
+    """Move the dispatching gateway's claims to this restart-safe worker (sc#1057).
 
     The claim's ``by`` names the gateway pid, and ``_claim_owner_is_dead`` releases a claim whose
     same-host pid has exited. This worker outlives a gateway restart, so without the move the
@@ -3674,15 +3674,21 @@ def _adopt_fire_claim(job: dict) -> None:
     owner = str(claim.get("by") or "") if isinstance(claim, dict) else ""
     if not owner:
         return
+    run_claim = job.get("run_claim")
+    run_owner = str(run_claim.get("by") or "") if isinstance(run_claim, dict) else None
     try:
         from cron.jobs import transfer_fire_claim  # late: module-skew safe (see cron/incidents.py)
 
-        new_owner = transfer_fire_claim(str(job["id"]), expected_owner=owner)
+        new_owner = transfer_fire_claim(
+            str(job["id"]), expected_owner=owner, expected_run_owner=run_owner)
     except Exception:
         logger.warning("Job '%s': could not move fire claim to the worker", job.get("id"), exc_info=True)
         return
     if new_owner:
-        job["fire_claim"] = dict(claim, by=new_owner)
+        now = _hermes_now().isoformat()
+        job["fire_claim"] = dict(claim, by=new_owner, at=now)
+        if isinstance(run_claim, dict) and run_claim.get("by") == run_owner:
+            job["run_claim"] = dict(run_claim, by=new_owner, at=now)
 
 
 def _run_external_worker_payload(payload_path: Path, ack_path: Path) -> bool:
