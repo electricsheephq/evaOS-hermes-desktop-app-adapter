@@ -766,6 +766,7 @@ class TestOwnTabPreamble:
 
     def _run(self, tmp_path, monkeypatch, *, session="", private=False, provider=False, shared_cdp=""):
 
+        monkeypatch.setattr(bt_cloud, "_is_headed_mode", lambda: True)
         monkeypatch.setattr("tools.browser_tool_cdp._get_cdp_override", lambda: shared_cdp)
         if provider:
             monkeypatch.setattr(bt_cloud, "_get_cloud_provider", lambda: object())
@@ -902,6 +903,95 @@ def goto_url(url):
         assert "seen" in namespace
         for admin in ('start_remote_daemon("r7k2")', 'stop_remote_daemon("r7k2")'):
             assert json.loads(bu_cli.browser_exec(admin))["output"] == admin
+
+
+class TestForegroundPreamble:
+    @pytest.mark.parametrize("route", ["managed", "headed", "unnamed", "lightpanda", "override",
+                                       "real_profile", "provider", "provider_fallback", "bu_cloud", "bu_override", "admin"])
+    def test_only_named_headless_managed_session_gets_foreground(self, route, tmp_path, monkeypatch):
+        monkeypatch.setattr(bu_cli, "_base_subprocess_env",
+                            lambda: {"BU_CDP_WS": "wss://browser.example/cdp"} if route == "bu_override" else {})
+        monkeypatch.setattr(bu_cli, "_read_browser_cfg", lambda: {})
+        monkeypatch.setattr(bt_cloud, "_is_headed_mode", lambda: route == "headed")
+        monkeypatch.setattr(bu_cli, "_real_profile_consented", lambda: route == "real_profile")
+        monkeypatch.setattr("tools.browser_tool_cdp._get_cdp_override_raw", lambda: "")
+        monkeypatch.setattr("tools.browser_tool_real_profile._real_profile_cdp",
+                            lambda: ("http://127.0.0.1:9222", None))
+        monkeypatch.setattr("tools.browser_tool_cdp._get_cdp_override",
+                            lambda: "http://127.0.0.1:9222" if route == "override" else "")
+        provider = type("Provider", (), {"name": "browser-use"})() if route == "bu_cloud" else object()
+        monkeypatch.setattr(bt_cloud, "_get_cloud_provider",
+                            lambda: provider if route in ("provider", "provider_fallback", "bu_cloud") else None)
+        monkeypatch.setattr("tools.browser_tool_lightpanda_fallback._using_lightpanda_engine",
+                            lambda: route == "lightpanda")
+        monkeypatch.setattr(bt_session, "_get_session_info",
+                            lambda key: {"fallback_from_cloud": True} if route == "provider_fallback"
+                            else {"cdp_url": "wss://browser.example/cdp"})
+        cli = _fake_cli(tmp_path, 'cat\necho "\\nsentinel:${_HERMES_BU_FOREGROUND_TAB:-unset}"\n')
+        monkeypatch.setattr(bu_cli, "_find_cli", lambda: [cli])
+        code = 'start_remote_daemon("r7k2")' if route == "admin" else "print('payload')"
+        result = json.loads(bu_cli.browser_exec(code, session="" if route == "unnamed" else "r7k2",
+                                              local=route == "real_profile"))
+        assert result["success"] is True
+        assert ("_hermes_foreground_tab" in result["output"]) is (route == "managed")
+        assert "sentinel:unset" in result["output"]
+        if route == "admin":
+            assert result["output"].startswith(code)
+
+    def test_unavailable_headed_predicate_does_not_enable_foreground(self, monkeypatch):
+        monkeypatch.delattr(bt_cloud, "_is_headed_mode")
+        env = {}
+        assert bu_cli._resolve_managed_chromium_cdp(env, "t1", session_name="r7k2") is None
+        assert bu_cli._FOREGROUND_TAB_SENTINEL not in env
+
+    @pytest.mark.parametrize("foreground", [False, True])
+    def test_composition_preserves_line_offset_and_future_import(self, foreground):
+        code = "raise RuntimeError('model error')"
+        source = bu_cli._with_preambles(code, own_tab=False, foreground=foreground)
+        assert source.splitlines()[1:] == [code]
+        with pytest.raises(RuntimeError) as caught:
+            exec(compile(source, "<browser_exec>", "exec"), {})
+        assert caught.traceback[-1].lineno + 1 == 2  # pytest's line numbers are zero-based
+        future = "from __future__ import annotations\nprint('payload')"
+        source = bu_cli._with_preambles(future, own_tab=False, foreground=foreground)
+        assert source.startswith("from __future__ import annotations\n")
+        compile(source, "<browser_exec>", "exec")
+        # Shared-tab composition still includes both steps after the runtime.
+        source = bu_cli._with_preambles(future, own_tab=True, foreground=foreground)
+        assert bu_cli._OWN_TAB_PREAMBLE in source
+        compile(source, "<browser_exec>", "exec")
+
+    @pytest.mark.parametrize("activate,raises", [(False, False), (True, False), (False, True)])
+    def test_activation_and_switch_default(self, activate, raises, fake_browser_harness):
+        helpers = fake_browser_harness(f'''
+DEFAULT_IPC_RESPONSE_TIMEOUT_SECONDS = 5.0
+calls = []
+def cdp(method, session_id=None, _response_timeout=5.0, **params):
+    calls.append((method, params, _response_timeout))
+    if {raises!r}:
+        raise RuntimeError("activation failed")
+    return {{}}
+def current_tab():
+    return {{"targetId": "harness-tab"}}
+def switch_tab(target, activate={activate!r}):
+    return activate
+''')
+        original = helpers.switch_tab
+        defaults = original.__defaults__
+        # The harness traces exec-global helpers; their wrappers call these same module functions.
+        @functools.wraps(original)
+        def traced_switch(*args, **kwargs):
+            return original(*args, **kwargs)
+
+        namespace = {"cdp": helpers.cdp, "current_tab": helpers.current_tab, "switch_tab": traced_switch}
+        exec(bu_cli._with_preambles("completed = True", own_tab=False, foreground=True), namespace)
+        assert namespace["completed"] is True
+        assert helpers.calls == [("Target.activateTarget", {"targetId": "harness-tab"}, 5.0)]
+        assert helpers.switch_tab is original
+        assert namespace["switch_tab"]("next-tab") is True
+        assert namespace["switch_tab"]("next-tab", activate=False) is False
+        if activate:
+            assert original.__defaults__ is defaults
 
 
 class TestProviderPickerIntegration:
