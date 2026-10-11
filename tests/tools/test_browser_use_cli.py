@@ -906,8 +906,9 @@ def goto_url(url):
 
 
 class TestForegroundPreamble:
-    @pytest.mark.parametrize("route", ["managed", "provider_fallback", "headed", "headed_unknown", "unnamed", "lightpanda",
-                                       "override", "real_profile", "provider", "bu_cloud", "bu_override", "admin"])
+    @pytest.mark.parametrize("route", ["managed", "provider_fallback", "headed", "headed_unknown", "bot_desktop_display",
+                                       "human_lease", "unnamed", "lightpanda", "override", "real_profile", "provider",
+                                       "bu_cloud", "bu_override", "admin"])
     def test_only_named_headless_managed_session_gets_foreground(self, route, tmp_path, monkeypatch):
         monkeypatch.setattr(bu_cli, "_base_subprocess_env",
                             lambda: {"BU_CDP_WS": "wss://browser.example/cdp"} if route == "bu_override" else {})
@@ -917,6 +918,9 @@ class TestForegroundPreamble:
                 raise RuntimeError("headed-mode lookup unavailable")
             return route == "headed"
         monkeypatch.setattr(bt_cloud, "_is_headed_mode", headed)
+        monkeypatch.setattr("tools.bot_desktop.runtime.published_env",
+                            lambda: {"DISPLAY": ":7"} if route == "bot_desktop_display" else {})
+        monkeypatch.setattr("tools.bot_desktop.lease.human_holds", lambda: route == "human_lease")
         monkeypatch.setattr(bu_cli, "_real_profile_consented", lambda: route == "real_profile")
         monkeypatch.setattr("tools.browser_tool_cdp._get_cdp_override_raw", lambda: "")
         monkeypatch.setattr("tools.browser_tool_real_profile._real_profile_cdp",
