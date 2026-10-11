@@ -31,9 +31,9 @@ On evaOS, the gateway half is the managed `hermes-cloud-file-manager` plugin tha
 
 | | |
 |---|---|
-| Release | v0.3.7 (`e075d139f23fcad5febc5e632739e93690a13b9b`) |
+| Release | v0.3.8 (`9ee6c10b9276b7cbfcf27d199c7833a4a6cfebbb`) |
 | File | `desktop/plugin.js` |
-| sha256 | `480b94f43b0d9e19c4b21db9b42b72ece653b6c6a11c9aa180a2f49b8d0dfc5d` |
+| sha256 | `4ed1d90f64bd05d9ec76c2e86671a6a27342b5d3e90023909524eb5f7e2dd2e3` |
 | License | MIT (`LICENSE`) |
 
 It imports only `@hermes/plugin-sdk`, `react` and `react/jsx-runtime`. The app build fails if it imports a name this

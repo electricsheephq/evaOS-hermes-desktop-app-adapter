@@ -2335,7 +2335,7 @@ function registerAvailabilityGate(ctx, onChange) {
   const onAgentChange = () => {
     if (!disposed) {
       set(null);
-      if ($driveAvailable.get() === true) $driveAvailable.set(null);
+      if ($driveAvailable.get() !== null) $driveAvailable.set(null);
       driveRemover?.();
       driveRemover = null;
     }
