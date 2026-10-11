@@ -431,16 +431,16 @@ def _handle_http_write_outcome_uncertain(server_name: str, exc: BaseException, r
         return None
     status = snapshot.get("status")
     # _capture_http_rejection attaches only rejections newer than this call's seq mark.
-    if (status is None or not 500 <= status < 600 or snapshot.get("method") != "POST"
-            or not _http_rejection_detail(_unwrap_exception_group(exc), snapshot)):
+    detail = _http_rejection_detail(_unwrap_exception_group(exc), snapshot)
+    if status is None or not 500 <= status < 600 or snapshot.get("method") != "POST" or not detail:
         return None
     _core._bump_server_error(server_name)  # recovered results skip on_final_failure
     logger.warning("MCP server '%s' returned HTTP %s after dispatch; NOT auto-retrying a write-capable tool.",
                    server_name, status)
-    return tool_error(
+    return tool_error(_sanitize_error(
         f"MCP server '{server_name}' returned HTTP {status} after the request was sent; "
         "the action may already have happened. Do NOT retry automatically. Check "
-        "(e.g. read Sent mail / the target record) before retrying.",
+        f"(e.g. read Sent mail / the target record) before retrying.{detail}"),
         outcome_uncertain=True, server=server_name)
 
 
