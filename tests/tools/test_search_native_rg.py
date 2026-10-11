@@ -127,6 +127,7 @@ def test_limit_hit_keeps_drained_matches_when_group_kill_is_refused(tree, ops_fa
     assert not result.error and len(result.matches) == 2, result.to_dict()
 
 
+@pytest.mark.linux_only
 def test_limit_hit_keeps_drained_matches_when_rg_exits_before_getpgid(tree, ops_factory, monkeypatch):
     """rg can exit between the bounded poll() and the kill's getpgid() (ESRCH under load); the kill
     falls back to the group recorded at spawn instead of failing the search."""

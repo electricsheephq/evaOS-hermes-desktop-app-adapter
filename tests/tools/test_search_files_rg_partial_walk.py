@@ -17,7 +17,18 @@ from tools.environments.local import LocalEnvironment
 from tools.file_operations import ShellFileOperations
 from tools.file_operations_search import _PARTIAL_WALK_WARNING, _rg_errors_are_only_eacces
 
-pytestmark = pytest.mark.platforms("posix")
+
+
+def test_bounded_eacces_diagnostics_still_warn():
+    """Merged stderr counts toward the fetch bound; a bound hit by permission diagnostics alone is
+    reported as exit 0 and must still carry the partial-walk warning."""
+    from tools.file_operations_common import ExecuteResult
+    from tools.file_operations_search import _parse_search_output
+
+    noise = "\n".join(f"rg: /blocked/{i}: Permission denied (os error 13)" for i in range(5))
+    result = _parse_search_output(ExecuteResult(stdout=noise, exit_code=0), "content", 2, 0, 0)
+    assert not result.error and result.total_count == 0
+    assert _PARTIAL_WALK_WARNING in (result.warning or "")
 
 
 def test_eacces_classifier():
@@ -28,6 +39,7 @@ def test_eacces_classifier():
     assert not _rg_errors_are_only_eacces("rg: /a: Input/output error (os error 5)")
 
 
+@pytest.mark.linux_only
 def test_non_eacces_after_stderr_sample_fails_closed(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_NATIVE_FILE_READ", "1")
     ops = ShellFileOperations(LocalEnvironment(cwd=str(tmp_path)), cwd=str(tmp_path))
@@ -70,6 +82,7 @@ def ops(blocked_tree, monkeypatch):
     return o
 
 
+@pytest.mark.linux_only
 def test_matches_beside_unreadable_dir_are_returned_with_warning(ops, blocked_tree):
     result = ops.search("probe-target*", path=str(blocked_tree), target="files")
     assert result.error is None
@@ -77,6 +90,7 @@ def test_matches_beside_unreadable_dir_are_returned_with_warning(ops, blocked_tr
     assert result.warning == _PARTIAL_WALK_WARNING
 
 
+@pytest.mark.linux_only
 def test_zero_matches_beside_unreadable_dir_is_an_empty_result_not_an_error(ops, blocked_tree):
     result = ops.search("no-such-name*", path=str(blocked_tree), target="files")
     assert result.error is None
@@ -84,12 +98,14 @@ def test_zero_matches_beside_unreadable_dir_is_an_empty_result_not_an_error(ops,
     assert result.warning == _PARTIAL_WALK_WARNING
 
 
+@pytest.mark.linux_only
 def test_clean_tree_has_no_warning(ops, blocked_tree):
     result = ops.search("probe-target*", path=str(blocked_tree / "readable"), target="files")
     assert result.error is None and result.warning is None
     assert len(result.files) == 1
 
 
+@pytest.mark.linux_only
 def test_content_search_zero_matches_beside_unreadable_dir_is_empty_not_error(ops, blocked_tree):
     result = ops.search("zz-no-such-content", path=str(blocked_tree), target="content")
     assert result.error is None
@@ -97,6 +113,7 @@ def test_content_search_zero_matches_beside_unreadable_dir_is_empty_not_error(op
     assert result.warning == _PARTIAL_WALK_WARNING
 
 
+@pytest.mark.linux_only
 @pytest.mark.parametrize("output_mode", ["content", "files_only", "count"])
 def test_content_match_beside_unreadable_dir_keeps_warning(ops, blocked_tree, output_mode):
     result = ops.search("x", path=str(blocked_tree), target="content", output_mode=output_mode)
@@ -112,6 +129,7 @@ def test_content_match_beside_unreadable_dir_keeps_warning(ops, blocked_tree, ou
     assert result.warning == _PARTIAL_WALK_WARNING
 
 
+@pytest.mark.linux_only
 @pytest.mark.parametrize("target,pattern", [("files", "probe-target*"), ("content", "x")])
 def test_multipath_recovery_preserves_partial_walk_warning(ops, blocked_tree, target, pattern):
     result = ops.search(pattern, path=f"{blocked_tree}, {blocked_tree / 'missing'}", target=target)
