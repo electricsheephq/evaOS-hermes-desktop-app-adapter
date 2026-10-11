@@ -13,9 +13,11 @@ that evaOS agents running the plugin's gateway half get **Cloud Files**:
 
 The plugin is on by default, but it shows nothing until the selected agent's gateway answers
 `/api/plugins/hermes-cloud-file-manager/available`. Agents without the gateway plugin get no sidebar row and no
-**+ → Cloud** entry. The plugin re-probes when the agent changes and every 60 s. A 404 removes the row and the composer
-entries; a transport error keeps the last answer. The `/cloud-files` route itself is always registered, so a restored
-tab never falls through to the session route.
+**+ → Cloud** entry. The plugin re-probes when the agent changes and every 60 s. On an agent change the row and
+**+ → Cloud** go away until the new agent answers; an open picker stays, pinned to its agent. A 404 removes the row and
+the composer entries; a transport error keeps the last answer for the same agent. The `/cloud-files` route itself is
+always registered, so a restored tab never falls through to the session route; it waits for the answer before asking
+the agent for anything.
 
 On evaOS, the gateway half is the managed `hermes-cloud-file-manager` plugin that PCS installs from its pin
 (`manifests/hermes-cloud-file-manager-<version>.v1.json`). Its root is the agent's workspace (`terminal.cwd`).
@@ -26,9 +28,9 @@ On evaOS, the gateway half is the managed `hermes-cloud-file-manager` plugin tha
 
 | | |
 |---|---|
-| Release | v0.3.5 (`173962fb144d3de446c0784b189adca346e5cffe`) |
+| Release | v0.3.6 (`40d9e753b82e4395dd3279a909a2e85693e7bd1c`) |
 | File | `desktop/plugin.js` |
-| sha256 | `2b7d42cb510643584e09caab2196af3ead0049f80f1cafc6ed71c285071a0ea0` |
+| sha256 | `2e1783f36abd1fbcc2e9f5e3c03be620c435d71e914456bb08bed4747b9c7a3b` |
 | License | MIT (`LICENSE`) |
 
 It imports only `@hermes/plugin-sdk`, `react` and `react/jsx-runtime`. The app build fails if it imports a name this
