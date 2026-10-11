@@ -184,6 +184,8 @@ class ExecuteResult:
     cwd_error: str = ""
     # Native rg lane only: captured stderr when the caller asked for it (bounded).
     stderr: str = ""
+    # Verdict over the full drain, including diagnostics beyond the sample.
+    stderr_eacces_only: bool = False
 
 
 # ---------------------------------------------------------------------------
