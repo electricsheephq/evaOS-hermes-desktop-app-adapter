@@ -620,7 +620,6 @@ def _resolve_backend_cdp(env: dict, task_id: Optional[str], session_name: str = 
                 env[_PRIVATE_BROWSER_SENTINEL] = "1"
             return None
         local_err = _resolve_managed_chromium_cdp(env, task_id, session_name)
-        env.pop(_FOREGROUND_TAB_SENTINEL, None)  # provider routes retain their existing tab behavior
         if local_err is None:
             return None
         return _BrowserRouteError(
