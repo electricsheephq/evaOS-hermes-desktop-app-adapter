@@ -29,6 +29,7 @@ def test_bounded_eacces_diagnostics_still_warn():
     result = _parse_search_output(ExecuteResult(stdout=noise, exit_code=0), "content", 2, 0, 0)
     assert not result.error and result.total_count == 0
     assert _PARTIAL_WALK_WARNING in (result.warning or "")
+    assert result.truncated  # later readable matches may have been cut off by the bound
 
 
 def test_eacces_classifier():
