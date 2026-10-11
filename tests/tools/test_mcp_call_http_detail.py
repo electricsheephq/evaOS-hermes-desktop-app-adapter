@@ -9,6 +9,7 @@ import pytest
 
 from tools import mcp_tool_handlers as handlers
 from tools.mcp_tool_errors import _make_http_rejection_recorder
+from tools.mcp_tool_scope import _server_key
 
 
 class SdkInternalError(Exception):
@@ -56,6 +57,7 @@ def mcp_call(monkeypatch):
     monkeypatch.setattr(handlers, "_acquire_call_server", lambda *a: (server, None))
     monkeypatch.setattr(mcp_tool, "_bump_server_error", lambda *a, **kw: None)
     monkeypatch.setattr(mcp_tool, "_reset_server_error", lambda *a: None)
+    monkeypatch.setattr(mcp_tool, "_tool_read_only_hints", {_server_key("srv"): {"lookup": True}})
     return server, handlers._make_tool_handler("srv", "lookup", 1)
 
 

@@ -423,6 +423,27 @@ def _handle_stdio_child_exited_and_retry(server_name: str, exc: Exception, retry
             f"{type(retry_exc).__name__}: {_exc_str(retry_exc)}"))
 
 
+def _handle_http_write_outcome_uncertain(server_name: str, exc: BaseException, retry_call, op: str,
+                                        *, read_only: bool):
+    """A fresh opaque POST 5xx can follow a completed write; never replay it."""
+    snapshot = getattr(exc, "_mcp_http_rejection", None)
+    if read_only or not isinstance(snapshot, dict):
+        return None
+    status = snapshot.get("status")
+    # _capture_http_rejection attaches only rejections newer than this call's seq mark.
+    if (status is None or not 500 <= status < 600 or snapshot.get("method") != "POST"
+            or not _http_rejection_detail(_unwrap_exception_group(exc), snapshot)):
+        return None
+    _core._bump_server_error(server_name)  # recovered results skip on_final_failure
+    logger.warning("MCP server '%s' returned HTTP %s after dispatch; NOT auto-retrying a write-capable tool.",
+                   server_name, status)
+    return tool_error(
+        f"MCP server '{server_name}' returned HTTP {status} after the request was sent; "
+        "the action may already have happened. Do NOT retry automatically. Check "
+        "(e.g. read Sent mail / the target record) before retrying.",
+        outcome_uncertain=True, server=server_name)
+
+
 def _dispatch(server_name: str, server: Any, op: str, call, tool_timeout: float, recoverers,
               on_final_failure: Callable[[BaseException], None], record_outcome: bool = False) -> str:
     """Mark the call started on *server* (doubles may lack ``mark_tool_call``), run coroutine function *call*
@@ -694,9 +715,10 @@ def _make_tool_handler(server_name: str, tool_name: str, tool_timeout: float):
             _core._bump_server_error(server_name)
             logger.error("MCP tool %s/%s call failed: %s", server_name, tool_name, exc)
         session_expired = partial(_handle_session_expired_and_retry, call_may_have_side_effects=not read_only)
+        http_write = partial(_handle_http_write_outcome_uncertain, read_only=read_only)
         return _dispatch(
             server_name, server, op, _call, tool_timeout,
-            (_handle_stdio_child_exited_and_retry, _handle_auth_error_and_retry, session_expired),
+            (_handle_stdio_child_exited_and_retry, _handle_auth_error_and_retry, session_expired, http_write),
             _on_failure, record_outcome=True)
     return _handler
 
