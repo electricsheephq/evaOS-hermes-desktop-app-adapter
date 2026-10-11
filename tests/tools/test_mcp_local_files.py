@@ -5,11 +5,13 @@ import base64
 import copy
 import json
 import os
+import sys
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
 
+from tools import mcp_local_files
 from tools.mcp_local_files import expand_local_file_refs
 
 
@@ -56,9 +58,9 @@ def test_file_errors_return_original_without_partial_expansion(tmp_path, kind, r
     assert error.startswith(f"local-file reference '{bad}': ") and reason in error
 
 
-@pytest.mark.parametrize("cap, limit, size", [("MAX_BYTES", 3, 4), ("MAX_TOTAL_BYTES", 7, 8)])
+@pytest.mark.parametrize("cap, limit, size", [("MAX_FILE_BYTES", 3, 4), ("MAX_CALL_BYTES", 7, 8)])
 def test_caps_report_sizes(tmp_path, monkeypatch, cap, limit, size):
-    monkeypatch.setenv(f"HERMES_MCP_LOCAL_FILE_{cap}", str(limit))
+    monkeypatch.setattr(mcp_local_files, cap, limit)
     files = [tmp_path / "one", tmp_path / "two"]
     for path in files:
         path.write_bytes(b"1234")
@@ -68,15 +70,7 @@ def test_caps_report_sizes(tmp_path, monkeypatch, cap, limit, size):
     assert f"size {size} bytes" in error and f"cap {limit} bytes" in error
 
 
-@pytest.mark.parametrize("cap", ["MAX_BYTES", "MAX_TOTAL_BYTES"])
-@pytest.mark.parametrize("value", ["invalid", "-1"])
-def test_invalid_caps_use_defaults(tmp_path, monkeypatch, cap, value):
-    monkeypatch.setenv(f"HERMES_MCP_LOCAL_FILE_{cap}", value)
-    path = tmp_path / "file"
-    path.write_bytes(b"data")
-    assert expand_local_file_refs({"file": f"local-file:{path}"})[1] is None
-
-
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX file modes")
 def test_unreadable_file_reports_errno(tmp_path):
     if os.geteuid() == 0:
         pytest.skip("root bypasses file permissions")
