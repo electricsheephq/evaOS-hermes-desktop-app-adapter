@@ -8,9 +8,10 @@ import re
 import stat
 
 _REFERENCE = re.compile(r"local-file:(?://)?(/[^\x00\r\n]+)")
-# Fixed caps (Gmail's 25 MB message limit, base64 inflating 4/3): not a config surface.
+# Fixed caps, not a config surface. Raw bytes; base64 inflates 4/3, so a full call (17 MiB ->
+# ~22.7 MiB encoded) stays under Gmail's 25 MB message limit with room for headers.
 MAX_FILE_BYTES = 15 * 1024 * 1024
-MAX_CALL_BYTES = 20 * 1024 * 1024
+MAX_CALL_BYTES = 17 * 1024 * 1024
 
 
 def expand_local_file_refs(args: dict) -> tuple[dict, str | None]:
