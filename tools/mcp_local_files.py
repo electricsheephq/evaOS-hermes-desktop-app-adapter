@@ -8,20 +8,14 @@ import re
 import stat
 
 _REFERENCE = re.compile(r"local-file:(?://)?(/[^\x00\r\n]+)")
-
-
-def _limit(name: str, default: int) -> int:
-    try:
-        value = int(os.environ.get(name, default))
-    except ValueError:
-        return default
-    return value if value >= 0 else default
+# Fixed caps (Gmail's 25 MB message limit, base64 inflating 4/3): not a config surface.
+MAX_FILE_BYTES = 15 * 1024 * 1024
+MAX_CALL_BYTES = 20 * 1024 * 1024
 
 
 def expand_local_file_refs(args: dict) -> tuple[dict, str | None]:
     """Return expanded arguments, or the original arguments on any file error."""
-    per_file = _limit("HERMES_MCP_LOCAL_FILE_MAX_BYTES", 15728640)
-    per_call = _limit("HERMES_MCP_LOCAL_FILE_MAX_TOTAL_BYTES", 20971520)
+    per_file, per_call = MAX_FILE_BYTES, MAX_CALL_BYTES
     total = 0
 
     def walk(value):
