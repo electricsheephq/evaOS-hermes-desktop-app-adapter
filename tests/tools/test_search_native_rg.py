@@ -125,3 +125,25 @@ def test_limit_hit_keeps_drained_matches_when_group_kill_is_refused(tree, ops_fa
     monkeypatch.setattr(os, "killpg", lambda pgid, sig: (_ for _ in ()).throw(PermissionError(1, "Operation not permitted")))
     result = ops.search(pattern="needle", path=str(tree), limit=2)
     assert not result.error and len(result.matches) == 2, result.to_dict()
+
+
+def test_limit_hit_keeps_drained_matches_when_rg_exits_before_getpgid(tree, ops_factory, monkeypatch):
+    """rg can exit between the bounded poll() and the kill's getpgid() (ESRCH under load); the kill
+    falls back to the group recorded at spawn instead of failing the search."""
+    import os
+    import sys
+
+    monkeypatch.setenv("HERMES_NATIVE_FILE_READ", "1")
+    ops = ops_factory(tree, [])
+    real_getpgid, calls = os.getpgid, []
+
+    def getpgid(pid):
+        if sys._getframe(1).f_code.co_name == "_kill_process_group_posix" and not calls:
+            calls.append(pid)
+            raise ProcessLookupError(3, "No such process")
+        return real_getpgid(pid)
+
+    monkeypatch.setattr(os, "getpgid", getpgid)
+    result = ops.search(pattern="needle", path=str(tree), limit=2)
+    assert calls, "the bounded kill path was not exercised"
+    assert not result.error and len(result.matches) == 2, result.to_dict()

@@ -1437,10 +1437,11 @@ class ShellFileOperations(LintMixin, SearchMixin, FileOperations):
         exclusions = self._macos_search_exclusions(path)
         if exclusions and not result.error:
             skipped = ", ".join(item.split("/")[-1] for item in exclusions)
-            result.warning = (
+            warning = (
                 "Skipped macOS protected folders during broad search to avoid "
                 f"an unattended privacy prompt: {skipped}. Search a protected "
                 "folder directly when access is intentional.")
+            result.warning = f"{result.warning} {warning}" if result.warning else warning
         return result
 
 

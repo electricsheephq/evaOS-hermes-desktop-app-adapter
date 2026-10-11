@@ -213,13 +213,13 @@ def _parse_search_output(result, output_mode: str, limit: int, offset: int,
     """Parse rg/grep ``| head`` output into a SearchResult (shared by both engines).
     Exit codes: 0=matches, 1=none, 2=error — but both tools return 2 on PARTIAL
     errors (one unreadable file), so an error is surfaced only when exit==2 AND no
-    usable payload remains. ``warning`` is attached to files_only/content results."""
+    usable payload remains. EACCES-only partial walks warn in every output mode."""
     stdout, limit_reason = _search_stdout_and_limit(result)
     diagnostics, payload = _split_tool_diagnostics(stdout)
-    if result.exit_code == 2 and not payload.strip():
-        if _rg_errors_are_only_eacces(diagnostics):
-            # Nothing matched in the readable part; the only errors were unreadable dirs.
-            return SearchResult(total_count=0, warning=_PARTIAL_WALK_WARNING)
+    partial_walk = result.exit_code == 2 and _rg_errors_are_only_eacces(diagnostics)
+    if partial_walk:
+        warning = f"{warning} {_PARTIAL_WALK_WARNING}" if warning else _PARTIAL_WALK_WARNING
+    elif result.exit_code == 2 and not payload.strip():
         error_msg = diagnostics.strip() or result.stdout.strip() or "Search error"
         return SearchResult(error=f"Search failed: {error_msg}", total_count=0)
     lines = [ln for ln in payload.strip().split('\n') if ln]
@@ -238,7 +238,8 @@ def _parse_search_output(result, output_mode: str, limit: int, offset: int,
                     pass
         return SearchResult(
             counts=counts, total_count=sum(counts.values()),
-            truncated=bool(limit_reason), limit_reason=limit_reason)
+            truncated=bool(limit_reason), limit_reason=limit_reason,
+            warning=warning if partial_walk else None)
     matches = []
     for line in lines:
         if line == "--":
@@ -360,6 +361,9 @@ class SearchMixin:
                 start_new_session=True)
         except OSError as exc:
             return ExecuteResult(stdout=f"rg: {exc}", exit_code=2)
+        # start_new_session: rg leads its own group. Recorded so the bounded kill can still
+        # signal it when rg exits between poll() and getpgid() (ESRCH under load).
+        proc._hermes_pgid = getattr(proc, "pid", None)  # doubles may lack pid
 
         # Drain on a thread so a silent rg (huge tree, no hits yet) cannot pin the
         # caller past the deadline or past a /stop; the waiter below owns both.
@@ -376,10 +380,18 @@ class SearchMixin:
         drainer = threading.Thread(target=_drain, daemon=True)
         drainer.start()
         err_lines: List[bytes] = []
+        err_count = 0
+        err_all_eacces = True
         err_drainer: Optional[threading.Thread] = None
         if capture_stderr and not merge_stderr:
             def _drain_err() -> None:
+                nonlocal err_count, err_all_eacces
                 for raw in proc.stderr:  # keep a bounded sample; always drain to EOF
+                    line = raw.decode("utf-8", errors="replace")
+                    if line.strip():
+                        err_count += 1
+                        if not _RG_EACCES_RE.match(line):
+                            err_all_eacces = False
                     if len(err_lines) < 200:
                         err_lines.append(raw)
             err_drainer = threading.Thread(target=_drain_err, daemon=True)
@@ -414,7 +426,7 @@ class SearchMixin:
         # A killed-at-bound rg reports a signal (negative returncode); head would have
         # left the pipeline at 0 unless rg itself already failed.
         return ExecuteResult(stdout=stdout, exit_code=0 if bounded.is_set() else proc.returncode,
-                             stderr=stderr)
+                             stderr=stderr, stderr_eacces_only=err_count > 0 and err_all_eacces)
 
     def _run_rg_bounded(self, words: List[str], fetch_limit: int, timeout: int, *,
                         merge_stderr: bool = False, native_ok: bool = True,
@@ -583,6 +595,8 @@ class SearchMixin:
                 merged.counts.update(sub.counts)
                 merged.total_count += sub.total_count
                 merged.truncated = merged.truncated or sub.truncated
+                if sub.warning:
+                    merged.warning = f"{merged.warning} {sub.warning}" if merged.warning else sub.warning
             merged.matches = merged.matches[:limit]
             merged.files = merged.files[:limit]
         note = f"path contained {len(parts)} entries; searched {len(existing)} that exist"
@@ -590,7 +604,7 @@ class SearchMixin:
             note += "; skipped missing: " + ", ".join(missing[:3])
             if len(missing) > 3:
                 note += f" (+{len(missing) - 3} more)"
-        warning_parts = [note]
+        warning_parts = [merged.warning, note] if merged.warning else [note]
         if not merged.error:
             protected_paths = [absolute for _r, _rel, absolute in self._effective_macos_search_exclusions(existing)]
             if protected_paths:
@@ -847,7 +861,7 @@ class SearchMixin:
         # sibling/child dirs) the listing is complete for what this agent can read:
         # return it with a warning instead of discarding it. Any other rg error
         # (bad glob, I/O) still fails closed.
-        partial_walk = result.exit_code == 2 and _rg_errors_are_only_eacces(result.stderr)
+        partial_walk = result.exit_code == 2 and result.stderr_eacces_only
         warning = _PARTIAL_WALK_WARNING if partial_walk else None
         if result.exit_code not in {0, 1, 124} and not bounded_sigpipe and not partial_walk:
             if order == "modified":
