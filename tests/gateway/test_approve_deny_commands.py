@@ -354,7 +354,9 @@ class TestBlockingApprovalE2E:
 
         t = threading.Thread(target=agent_thread)
         t.start()
-        t.join(timeout=1)
+        # timeout=0 expires the wait at once; the join only bounds a hang. A 1 s join raced a slow CI
+        # runner's guard scan, and the deny fallback then turned the expected timeout into 'denied'.
+        t.join(timeout=30)
         if t.is_alive():
             resolve_gateway_approval(session_key, "deny")
             t.join(timeout=5)
