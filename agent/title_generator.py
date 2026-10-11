@@ -143,9 +143,13 @@ _MACHINE_PREFIXES = (
     "[System: The active model for this chat has changed to ",
     # Background-process and async-delegation notices (tools.process_registry_notifications), also
     # persisted as role="user". A notice turn that starts before the first model title is saved
-    # otherwise fires a second title call and can name the session after the notice (#473).
-    "[IMPORTANT: ", "[Background process ", "[ASYNC DELEGATION ",
+    # otherwise fires a second title call and can name the session after the notice (#473). Kept
+    # exact: skill invocations also open with "[IMPORTANT: " and carry the user's real request.
+    "[IMPORTANT: Background process ", "[IMPORTANT: Watch patterns disabled ", "[IMPORTANT: Watch-pattern ",
+    "[Background process ", "[ASYNC DELEGATION ",
 )
+# Batched completions open with a counted header (ProcessNotificationBatch.render).
+_PROCESS_BATCH_HEADER = re.compile(r"\[IMPORTANT: \d+ background processes completed\. ")
 
 
 def _title_config() -> dict:
@@ -281,6 +285,7 @@ def build_title_input(user_message: str, title_preview: str | None = None) -> st
 def is_titleable_user_message(user_message: str) -> bool:
     """False for machine-authored openers and turns that reduce to nothing once scaffolding is stripped."""
     return (isinstance(user_message, str) and bool(user_message.strip()) and not user_message.lstrip().startswith(_MACHINE_PREFIXES)
+            and not _PROCESS_BATCH_HEADER.match(user_message.lstrip())
             and bool(_summarize_user_message(user_message).strip()))
 
 

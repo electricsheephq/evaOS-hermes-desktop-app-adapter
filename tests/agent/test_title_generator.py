@@ -846,7 +846,9 @@ def test_process_and_delegation_notices_never_title_a_session():
         {"type": "completion", "session_id": "proc_1", "command": "make test", "exit_code": 7, "output": "done"},
         {"type": "watch_match", "session_id": "proc_1", "command": "tail", "pattern": "ERR", "output": "ERR x"},
         {"type": "heartbeat", "session_id": "proc_1", "command": "sleep 9", "seq": 1, "elapsed": 60, "interval": 60},
-        {"type": "watch_disabled", "session_id": "proc_1", "message": "Watch disabled after too many matches"},
+        {"type": "watch_disabled", "session_id": "proc_1", "message": "Watch patterns disabled for process proc_1 — x"},
+        {"type": "watch_overflow_tripped", "message": "Watch-pattern overflow: >15 notifications in 10s."},
+        {"type": "watch_overflow_released", "message": "Watch-pattern notifications resumed. 3 suppressed."},
         {"type": "async_delegation", "delegation_id": "d1", "status": "completed", "summary": "ok", "goal": "g"},
     ]
     notices = [format_process_notification(evt) for evt in events]
@@ -855,5 +857,11 @@ def test_process_and_delegation_notices_never_title_a_session():
     for notice in notices:
         assert is_titleable_user_message(notice) is False, notice[:60]
         assert not _is_real_user_turn({"role": "user", "content": notice})
-    # The guard stays narrow: a person's own bracketed opener still titles.
-    assert is_titleable_user_message("[Important] why does the build fail?") is True
+    # The guard stays narrow: a skill invocation also opens with "[IMPORTANT: " but carries the
+    # user's real request, and a person's own bracketed opener still titles.
+    from agent.skill_commands import _build_skill_message
+    note = ('[IMPORTANT: The user has invoked the "work" skill, indicating they want '
+            "you to follow its instructions. The full skill content is loaded below.]")
+    skill_turn = _build_skill_message({"content": "Do the work."}, None, note, user_instruction="fix the title leak")
+    assert is_titleable_user_message(skill_turn) is True
+    assert is_titleable_user_message("[IMPORTANT: read this first] why does the build fail?") is True
