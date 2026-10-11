@@ -2,13 +2,15 @@ import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 import * as sdk from '@hermes/plugin-sdk'
+import * as react from 'react'
+import * as jsxRuntime from 'react/jsx-runtime'
 import { describe, expect, it } from 'vitest'
 
 // Vendored plugin builds (src/plugins/<id>/plugin.js) are copied byte for byte from their own repos, so nothing
 // type-checks them against this app. This guard fails the app's tests, before any release, when an upstream merge
-// drops an SDK name a vendored plugin imports, or when a plugin imports anything outside the runtime allowlist.
+// drops a name a vendored plugin imports, or when a plugin imports anything outside the runtime allowlist.
 const PLUGINS = join(__dirname, '..', 'plugins')
-const ALLOWED = new Set(['@hermes/plugin-sdk', 'react', 'react/jsx-runtime'])
+const MODULES: Record<string, object> = { '@hermes/plugin-sdk': sdk, react, 'react/jsx-runtime': jsxRuntime }
 
 const vendored = readdirSync(PLUGINS, { withFileTypes: true })
   .filter(entry => entry.isDirectory())
@@ -22,16 +24,20 @@ const vendored = readdirSync(PLUGINS, { withFileTypes: true })
   })
 
 function imports(source: string) {
-  const specifiers = [...source.matchAll(/^\s*import\s[^;]*?from\s*["']([^"']+)["']/gm)].map(match => match[1])
+  const statements = source.match(/^\s*import\b/gm)?.length ?? 0
 
-  const names = [...source.matchAll(/^\s*import\s*\{([^}]*)\}\s*from\s*["']@hermes\/plugin-sdk["']/gm)].flatMap(match =>
-    match[1]
+  const named = [...source.matchAll(/^\s*import\s*\{([^}]*)\}\s*from\s*["']([^"']+)["']/gm)].map(match => ({
+    module: match[2],
+    names: match[1]
       .split(',')
       .map(part => part.trim().split(/\s+as\s+/)[0].trim())
       .filter(Boolean)
-  )
+  }))
 
-  return { names, specifiers }
+  // Only `import { … } from '…'` can be checked by name, so any other import form fails the guard.
+  const unchecked = /\bimport\s*\(|^\s*export\b[^;]*\bfrom\b|\brequire\s*\(/m.test(source)
+
+  return { named, statements, unchecked }
 }
 
 describe('vendored bundled plugins', () => {
@@ -39,10 +45,12 @@ describe('vendored bundled plugins', () => {
     expect(vendored).toEqual(expect.arrayContaining(['fish-audio', 'hermes-cloud-file-manager']))
   })
 
-  it.each(vendored)('%s imports only allowlisted modules and SDK names this app exports', name => {
-    const { names, specifiers } = imports(readFileSync(join(PLUGINS, name, 'plugin.js'), 'utf8'))
-    expect(specifiers.length).toBeGreaterThan(0)
-    expect(specifiers.filter(specifier => !ALLOWED.has(specifier))).toEqual([])
-    expect(names.filter(imported => !(imported in sdk))).toEqual([])
+  it.each(vendored)('%s imports only allowlisted modules and names they export', name => {
+    const { named, statements, unchecked } = imports(readFileSync(join(PLUGINS, name, 'plugin.js'), 'utf8'))
+    expect(named.length).toBeGreaterThan(0)
+    expect(statements).toBe(named.length)
+    expect(unchecked).toBe(false)
+    expect(named.filter(i => !(i.module in MODULES)).map(i => i.module)).toEqual([])
+    expect(named.flatMap(i => i.names.filter(n => !(n in (MODULES[i.module] ?? {}))).map(n => `${i.module}:${n}`))).toEqual([])
   })
 })
