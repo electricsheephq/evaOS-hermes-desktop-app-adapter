@@ -17,8 +17,11 @@ from tools.registry import registry
 
 
 @pytest.fixture
-def task_browser(monkeypatch):
+def task_browser(monkeypatch, request):
     # The repository's autouse fixture supplies a fresh HERMES_HOME per case.
+    options = getattr(request, "param", {})
+    base_url = options.get("base_url", "https://api.browserbase.com")
+    project_id = options.get("project_id", "test-only-project")
     home = get_hermes_home()
     (home / "config.yaml").write_text(
         "browser:\n  cloud_provider: browserbase\n  headed: false\n"
@@ -26,18 +29,24 @@ def task_browser(monkeypatch):
     )
     # Synthetic credentials also let the real janitor re-enter its owner's scope.
     (home / ".env").write_text(
-        "BROWSERBASE_API_KEY=test-only-key\nBROWSERBASE_PROJECT_ID=test-only-project\n"
+        f"BROWSERBASE_API_KEY=test-only-key\nBROWSERBASE_PROJECT_ID={project_id}\n"
+        f"BROWSERBASE_BASE_URL={base_url}\n"
     )
     monkeypatch.setenv("BROWSERBASE_API_KEY", "test-only-key")
-    monkeypatch.setenv("BROWSERBASE_PROJECT_ID", "test-only-project")
+    monkeypatch.setenv("BROWSERBASE_PROJECT_ID", project_id)
+    monkeypatch.setenv("BROWSERBASE_BASE_URL", base_url)
     clock = [time.time()]
     monkeypatch.setattr(lifecycle.time, "time", lambda: clock[0])
     created, debugged, released, commands = [], [], [], []
+    http_calls = []
+    release_status = [200]
     url = "https://93.184.216.34/"  # Public IP literal: URL safety needs no DNS.
 
     def http_request(_client, method, url, **kwargs):
+        http_calls.append((method.upper(), url, kwargs.get("json")))
+        status = 200
         endpoint = url
-        root = "https://api.browserbase.com/v1/sessions"
+        root = f"{base_url}/v1/sessions"
         if method.upper() == "POST" and endpoint == root:
             session_id = f"provider-session-{len(created) + 1}"
             created.append(session_id)
@@ -53,11 +62,12 @@ def task_browser(monkeypatch):
             assert session_id in created
             assert kwargs["json"]["status"] == "REQUEST_RELEASE"
             released.append(session_id)
-            payload = {}
+            status = release_status[0]
+            payload = {"code": "browser_unauthorized"} if status == 403 else {}
         else:
             raise AssertionError(f"Unexpected HTTP request: {method} {endpoint}")
         response = requests.Response()
-        response.status_code = 200
+        response.status_code = status
         response._content = json.dumps(payload).encode()
         return response
 
@@ -94,10 +104,11 @@ def task_browser(monkeypatch):
         return result
 
     try:
-        dispatch("browser_navigate", {"url": url})
-        # Exercise the real startup, then stop the worker before advancing test time.
-        lifecycle._stop_browser_cleanup_thread()
-        assert len(created) == 1
+        if options.get("navigate", True):
+            dispatch("browser_navigate", {"url": url})
+            # Exercise the real startup, then stop the worker before advancing test time.
+            lifecycle._stop_browser_cleanup_thread()
+            assert len(created) == 1
         yield SimpleNamespace(
             agent=agent,
             task_id=task_id,
@@ -108,6 +119,8 @@ def task_browser(monkeypatch):
             debugged=debugged,
             released=released,
             commands=commands,
+            http_calls=http_calls,
+            release_status=release_status,
         )
     finally:
         lifecycle._stop_browser_cleanup_thread()
@@ -155,3 +168,82 @@ def test_unheld_or_expired_idle_session_is_released(task_browser, live_view):
     assert len(browser.created) == 2
     assert browser.created[1] != browser.released[0]
     assert browser.commands[-1][1] == browser.created[1]
+
+
+def test_release_closes_held_session_once(task_browser):
+    browser = task_browser
+    browser.dispatch("browser_live_view")
+    assert browser.task_id in bt._live_view_hold_until
+
+    result = browser.dispatch("browser_live_view", {"release": True})
+
+    assert result["released"] is True
+    assert result["status"] == "released"
+    assert browser.released == browser.created
+    assert len(browser.released) == 1
+    assert browser.task_id not in bt._active_sessions
+    assert browser.task_id not in bt._live_view_hold_until
+    assert browser.task_id not in bt._reaping_sessions
+    browser.agent._cleanup_task_resources(browser.task_id)
+    assert len(browser.released) == 1
+
+
+@pytest.mark.parametrize("task_browser", [{"navigate": False}], indirect=True)
+def test_release_without_session_makes_no_http_calls(task_browser):
+    result = task_browser.dispatch("browser_live_view", {"release": True})
+
+    assert result["status"] == "no_active_session"
+    assert result["released"] is False
+    assert task_browser.http_calls == []
+
+
+def test_release_denied_by_provider_forgets_session(task_browser):
+    browser = task_browser
+    browser.dispatch("browser_live_view")
+    browser.release_status[0] = 403
+
+    result = browser.dispatch("browser_live_view", {"release": True})
+
+    assert result["success"] is True
+    assert result["released"] is False
+    assert result["status"] == "release_not_confirmed"
+    assert browser.task_id not in bt._active_sessions
+    assert browser.task_id not in bt._live_view_hold_until
+    assert browser.task_id not in bt._reaping_sessions
+    assert "do not contact support" in result["instruction"]
+
+
+@pytest.mark.parametrize(
+    "task_browser",
+    [{"base_url": "https://broker.example/browserbase", "project_id": "evaos:c:hermes:a"}],
+    indirect=True,
+)
+def test_release_uses_broker_base_url_and_project(task_browser):
+    browser = task_browser
+    result = browser.dispatch("browser_live_view", {"release": True})
+
+    assert result["released"] is True
+    assert browser.http_calls[-1] == (
+        "POST",
+        f"https://broker.example/browserbase/v1/sessions/{browser.created[0]}",
+        {"projectId": "evaos:c:hermes:a", "status": "REQUEST_RELEASE"},
+    )
+
+
+def test_release_already_reaping_session_makes_no_http_calls(task_browser):
+    browser = task_browser
+    browser.dispatch("browser_live_view")
+    before = len(browser.http_calls)
+    with bt._cleanup_lock:
+        bt._reaping_sessions.add(browser.task_id)
+    try:
+        result = browser.dispatch("browser_live_view", {"release": True})
+
+        assert result["status"] == "no_active_session"
+        assert result["released"] is False
+        assert len(browser.http_calls) == before
+        assert browser.task_id not in bt._live_view_hold_until
+        assert browser.task_id in bt._reaping_sessions
+    finally:
+        with bt._cleanup_lock:
+            bt._reaping_sessions.discard(browser.task_id)

@@ -666,7 +666,7 @@ def _kill_verified_daemon(socket_dir: str, session_name: str) -> bool:
         return False
 
 
-def _release_session_resources(task_id: str, session_info: Dict[str, Any]) -> None:
+def _release_session_resources(task_id: str, session_info: Dict[str, Any]) -> Optional[bool]:
     """Untrack ``task_id``, close its cloud provider session, kill its daemon — the
     unconditional tail of a teardown, and the whole of the janitor's force-reap path.
 
@@ -677,12 +677,14 @@ def _release_session_resources(task_id: str, session_info: Dict[str, Any]) -> No
     bb_session_id = session_info.get("bb_session_id", "unknown")
     _forget_session_tracking(task_id, session=True)
 
+    released = None
     if bb_session_id:  # cloud only — local sidecars have bb_session_id=None
         provider = _cloud._get_cloud_provider()
         if provider is not None:
             try:
-                provider.close_session(bb_session_id)
+                released = provider.close_session(bb_session_id)
             except Exception as e:
+                released = False
                 _bt.logger.warning("Could not close cloud browser session: %s", e)
 
     session_name = session_info.get("session_name", "")
@@ -695,6 +697,7 @@ def _release_session_resources(task_id: str, session_info: Dict[str, Any]) -> No
         if os.path.exists(socket_dir):
             _kill_verified_daemon(socket_dir, session_name)
             shutil.rmtree(socket_dir, ignore_errors=True)
+    return released
 
 
 def _force_reap_browser_session(task_id: str) -> None:
@@ -713,7 +716,7 @@ def _force_reap_browser_session(task_id: str) -> None:
     _drop_last_active_binding(task_id)
 
 
-def _cleanup_single_browser_session(task_id: str) -> None:
+def _cleanup_single_browser_session(task_id: str) -> Optional[bool]:
     """Reap a single browser session by its exact session key."""
     _cdp._stop_cdp_supervisor(task_id)  # close our WebSocket BEFORE the backend tears down the endpoint
 
@@ -759,8 +762,9 @@ def _cleanup_single_browser_session(task_id: str) -> None:
         except Exception as e:
             _bt.logger.warning("agent-browser close failed for task %s: %s", task_id, e)
 
-    _release_session_resources(task_id, session_info)
+    released = _release_session_resources(task_id, session_info)
     _bt.logger.debug("Removed task %s from active sessions", task_id)
+    return released
 
 
 def cleanup_all_browsers() -> None:
