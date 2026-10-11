@@ -14,7 +14,8 @@ that evaOS agents running the plugin's gateway half get **Cloud Files**:
 The plugin is on by default, but it shows nothing until the selected agent's gateway answers
 `/api/plugins/hermes-cloud-file-manager/available`. Agents without the gateway plugin get no sidebar row and no
 **+ → Cloud** entry. The plugin re-probes when the agent changes and every 60 s. On an agent change the row and
-**+ → Cloud** go away until the new agent answers; an open picker stays, pinned to its agent. A 404 removes the row and
+**+ → Cloud** go away until the new agent answers; an open picker stays, pinned to its agent, unless the new agent
+answers 404 (then it closes). A 404 removes the row and
 the composer entries; a transport error keeps the last answer for the same agent. The `/cloud-files` route itself is
 always registered, so a restored tab never falls through to the session route; it waits for the answer before asking
 the agent for anything.
