@@ -5,7 +5,6 @@ import base64
 import copy
 import json
 import os
-import sys
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
@@ -70,7 +69,7 @@ def test_caps_report_sizes(tmp_path, monkeypatch, cap, limit, size):
     assert f"size {size} bytes" in error and f"cap {limit} bytes" in error
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="POSIX file modes")
+@pytest.mark.linux_only
 def test_unreadable_file_reports_errno(tmp_path):
     if os.geteuid() == 0:
         pytest.skip("root bypasses file permissions")
