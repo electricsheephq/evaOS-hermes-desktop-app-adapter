@@ -37,10 +37,12 @@ def _existing_session(task_id: Optional[str], session: str) -> Dict[str, Any]:
         return dict(info) if isinstance(info, dict) else {}
 
 
-def browser_live_view(session: str = "", task_id: Optional[str] = None, page: str = "") -> str:
-    """Return a secure live-view URL and keep its session open for at least 15 minutes."""
+def browser_live_view(
+    session: str = "", task_id: Optional[str] = None, page: str = "", release: bool = False,
+) -> str:
+    """Return a held live-view URL, or release this chat's browser session."""
     page = page if isinstance(page, str) else str(page or "")
-    if len(page) > 200:
+    if not release and len(page) > 200:
         return tool_error(
             "Invalid page selector: use at most 200 characters.",
             code="invalid_browser_page",
@@ -51,6 +53,42 @@ def browser_live_view(session: str = "", task_id: Optional[str] = None, page: st
             f"Invalid session name {session!r}: use 1-64 letters, digits, dashes, or underscores.",
             code="invalid_browser_session",
             retryable=False,
+        )
+    if release:
+        from tools import browser_tool, browser_tool_lifecycle
+
+        key = _backend_cache_key(task_id, session)
+        no_active_session = tool_result(
+            success=True,
+            released=False,
+            status="no_active_session",
+            instruction="No browser session is open in this chat. A browser opened from another chat closes on its own when its session times out; nothing else is needed.",
+        )
+        with browser_tool._cleanup_lock:
+            info = browser_tool._active_sessions.get(key)
+            if not isinstance(info, dict) or key in browser_tool._reaping_sessions:
+                browser_tool._live_view_hold_until.pop(key, None)
+                return no_active_session
+            browser_tool._live_view_hold_until.pop(key, None)
+            browser_tool._reaping_sessions.add(key)
+            cloud = bool(info.get("bb_session_id"))
+        try:
+            released = browser_tool_lifecycle._cleanup_single_browser_session(key)
+        finally:
+            with browser_tool._cleanup_lock:
+                browser_tool._reaping_sessions.discard(key)
+        if released is None and cloud:
+            return no_active_session
+        if released or released is None:  # None here: a local browser, closed by the cleanup above
+            return tool_result(
+                success=True, released=True, status="released",
+                instruction="The browser session is closed.",
+            )
+        return tool_result(
+            success=True,
+            released=False,
+            status="release_not_confirmed",
+            instruction="This chat no longer tracks the session, but the browser provider did not confirm the close. It may already have ended; otherwise the provider ends it when its session times out. Nothing else is needed — do not contact support about this.",
         )
     provider = _live_view_provider()
     if provider is None:
@@ -202,12 +240,17 @@ BROWSER_LIVE_VIEW_SCHEMA = {
         "Get a live-view link for an existing Browserbase session without creating a browser. Use when the "
         "user asks to watch, or when a step needs the human to act in the page (login, MFA, or payment). "
         "Send the link and say plainly that the user types into the remote page themselves. The session is "
-        "kept open for at least 15 minutes after the link is issued; call this tool again to extend the hold. "
+        "kept open for at least 15 minutes after the link is issued unless released; call this tool again to extend the hold. "
         "Defaults to the last nonblank tab; use page to select by URL or title."
+        " When the user is done or asks to close the browser, call with release=true."
     ),
     "parameters": {
         "type": "object",
         "properties": {
+            "release": {
+                "type": "boolean",
+                "description": "Close this chat's browser session instead of returning a link. Use when the user is done or asks to close the browser.",
+            },
             "session": {
                 "type": "string",
                 "description": "Existing named browser session. Reuse the same name passed to the other browser tools; omit for the current task session.",
@@ -230,6 +273,7 @@ registry.register(
         session=args.get("session", "") or "",
         task_id=kw.get("task_id"),
         page=str(args.get("page") or ""),
+        release=bool(args.get("release")),
     ),
     check_fn=check_browser_live_view_requirements,
     emoji="📺",
