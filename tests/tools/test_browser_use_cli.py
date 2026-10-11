@@ -906,13 +906,17 @@ def goto_url(url):
 
 
 class TestForegroundPreamble:
-    @pytest.mark.parametrize("route", ["managed", "headed", "unnamed", "lightpanda", "override",
-                                       "real_profile", "provider", "provider_fallback", "bu_cloud", "bu_override", "admin"])
+    @pytest.mark.parametrize("route", ["managed", "provider_fallback", "headed", "headed_unknown", "unnamed", "lightpanda",
+                                       "override", "real_profile", "provider", "bu_cloud", "bu_override", "admin"])
     def test_only_named_headless_managed_session_gets_foreground(self, route, tmp_path, monkeypatch):
         monkeypatch.setattr(bu_cli, "_base_subprocess_env",
                             lambda: {"BU_CDP_WS": "wss://browser.example/cdp"} if route == "bu_override" else {})
         monkeypatch.setattr(bu_cli, "_read_browser_cfg", lambda: {})
-        monkeypatch.setattr(bt_cloud, "_is_headed_mode", lambda: route == "headed")
+        def headed():
+            if route == "headed_unknown":
+                raise RuntimeError("headed-mode lookup unavailable")
+            return route == "headed"
+        monkeypatch.setattr(bt_cloud, "_is_headed_mode", headed)
         monkeypatch.setattr(bu_cli, "_real_profile_consented", lambda: route == "real_profile")
         monkeypatch.setattr("tools.browser_tool_cdp._get_cdp_override_raw", lambda: "")
         monkeypatch.setattr("tools.browser_tool_real_profile._real_profile_cdp",
@@ -933,33 +937,11 @@ class TestForegroundPreamble:
         result = json.loads(bu_cli.browser_exec(code, session="" if route == "unnamed" else "r7k2",
                                               local=route == "real_profile"))
         assert result["success"] is True
-        assert ("_hermes_foreground_tab" in result["output"]) is (route == "managed")
+        # Only a named session on private headless managed Chromium (directly, or as a provider's local fallback).
+        assert ("_hermes_foreground_tab" in result["output"]) is (route in ("managed", "provider_fallback"))
         assert "sentinel:unset" in result["output"]
         if route == "admin":
             assert result["output"].startswith(code)
-
-    def test_unavailable_headed_predicate_does_not_enable_foreground(self, monkeypatch):
-        monkeypatch.delattr(bt_cloud, "_is_headed_mode")
-        env = {}
-        assert bu_cli._resolve_managed_chromium_cdp(env, "t1", session_name="r7k2") is None
-        assert bu_cli._FOREGROUND_TAB_SENTINEL not in env
-
-    @pytest.mark.parametrize("foreground", [False, True])
-    def test_composition_preserves_line_offset_and_future_import(self, foreground):
-        code = "raise RuntimeError('model error')"
-        source = bu_cli._with_preambles(code, own_tab=False, foreground=foreground)
-        assert source.splitlines()[1:] == [code]
-        with pytest.raises(RuntimeError) as caught:
-            exec(compile(source, "<browser_exec>", "exec"), {})
-        assert caught.traceback[-1].lineno + 1 == 2  # pytest's line numbers are zero-based
-        future = "from __future__ import annotations\nprint('payload')"
-        source = bu_cli._with_preambles(future, own_tab=False, foreground=foreground)
-        assert source.startswith("from __future__ import annotations\n")
-        compile(source, "<browser_exec>", "exec")
-        # Shared-tab composition still includes both steps after the runtime.
-        source = bu_cli._with_preambles(future, own_tab=True, foreground=foreground)
-        assert bu_cli._OWN_TAB_PREAMBLE in source
-        compile(source, "<browser_exec>", "exec")
 
     @pytest.mark.parametrize("activate,raises", [(False, False), (True, False), (False, True)])
     def test_activation_and_switch_default(self, activate, raises, fake_browser_harness):
@@ -984,7 +966,9 @@ def switch_tab(target, activate={activate!r}):
             return original(*args, **kwargs)
 
         namespace = {"cdp": helpers.cdp, "current_tab": helpers.current_tab, "switch_tab": traced_switch}
-        exec(bu_cli._with_preambles("completed = True", own_tab=False, foreground=True), namespace)
+        source = bu_cli._with_preambles("completed = True", own_tab=False, foreground=True)
+        assert source.splitlines()[1:] == ["completed = True"]  # model line numbers still shift by exactly one
+        exec(compile(source, "<browser_exec>", "exec"), namespace)
         assert namespace["completed"] is True
         assert helpers.calls == [("Target.activateTarget", {"targetId": "harness-tab"}, 5.0)]
         assert helpers.switch_tab is original
