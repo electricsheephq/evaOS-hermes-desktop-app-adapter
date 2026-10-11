@@ -182,6 +182,8 @@ class ExecuteResult:
     # the command never ran, so the verdict is about the working directory, not
     # the requested path (callers must neither cache it nor blame the path).
     cwd_error: str = ""
+    # Native rg lane only: captured stderr when the caller asked for it (bounded).
+    stderr: str = ""
 
 
 # ---------------------------------------------------------------------------

@@ -108,6 +108,18 @@ _ADMISSION_INTERRUPTED_ERROR = (
     "File search was interrupted while waiting for another filename "
     "search on the same root. Retry when ready.")
 
+_PARTIAL_WALK_WARNING = (
+    "Some directories under the search root are not readable by this agent "
+    "(permission denied); results list only readable paths.")
+_RG_EACCES_RE = re.compile(r"^rg: .*\(os error 13\)\s*$")
+
+
+def _rg_errors_are_only_eacces(stderr: str) -> bool:
+    """True when rg's stderr is non-empty and every line is a permission-denied walk error."""
+    lines = [ln for ln in stderr.splitlines() if ln.strip()]
+    return bool(lines) and all(_RG_EACCES_RE.match(ln) for ln in lines)
+
+
 _SEARCH_TIMEOUT_MARKER_RE = re.compile(r"\n?\[Command timed out after \d+s\]\s*$")
 
 
@@ -205,6 +217,9 @@ def _parse_search_output(result, output_mode: str, limit: int, offset: int,
     stdout, limit_reason = _search_stdout_and_limit(result)
     diagnostics, payload = _split_tool_diagnostics(stdout)
     if result.exit_code == 2 and not payload.strip():
+        if _rg_errors_are_only_eacces(diagnostics):
+            # Nothing matched in the readable part; the only errors were unreadable dirs.
+            return SearchResult(total_count=0, warning=_PARTIAL_WALK_WARNING)
         error_msg = diagnostics.strip() or result.stdout.strip() or "Search error"
         return SearchResult(error=f"Search failed: {error_msg}", total_count=0)
     lines = [ln for ln in payload.strip().split('\n') if ln]
@@ -322,7 +337,7 @@ class SearchMixin:
     # --- native rg transport (local POSIX) --------------------------------------
 
     def _run_rg_native(self, argv: List[str], fetch_limit: int, timeout: int,
-                       merge_stderr: bool = False) -> ExecuteResult:
+                       merge_stderr: bool = False, capture_stderr: bool = False) -> ExecuteResult:
         """Run ``argv`` (shell-quoted rg words) natively and stop reading after
         ``fetch_limit`` lines — the ``| head -n`` of the shell pipeline without the
         two bash spawns. ``shlex.split`` undoes the escaping the builders apply for
@@ -339,7 +354,9 @@ class SearchMixin:
         try:
             proc = subprocess.Popen(
                 args, cwd=cwd, env=_make_run_env(self.env.env), stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE, stderr=subprocess.STDOUT if merge_stderr else subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=(subprocess.STDOUT if merge_stderr
+                        else subprocess.PIPE if capture_stderr else subprocess.DEVNULL),
                 start_new_session=True)
         except OSError as exc:
             return ExecuteResult(stdout=f"rg: {exc}", exit_code=2)
@@ -358,6 +375,15 @@ class SearchMixin:
 
         drainer = threading.Thread(target=_drain, daemon=True)
         drainer.start()
+        err_lines: List[bytes] = []
+        err_drainer: Optional[threading.Thread] = None
+        if capture_stderr and not merge_stderr:
+            def _drain_err() -> None:
+                for raw in proc.stderr:  # keep a bounded sample; always drain to EOF
+                    if len(err_lines) < 200:
+                        err_lines.append(raw)
+            err_drainer = threading.Thread(target=_drain_err, daemon=True)
+            err_drainer.start()
         deadline = time.monotonic() + timeout
         exit_code: Optional[int] = None
         while True:
@@ -375,6 +401,11 @@ class SearchMixin:
         proc.wait()
         drainer.join()
         proc.stdout.close()
+        stderr = ""
+        if err_drainer is not None:
+            err_drainer.join()
+            proc.stderr.close()
+            stderr = b"".join(err_lines).decode("utf-8", errors="replace")
         stdout = b"".join(lines).decode("utf-8", errors="replace")
         if exit_code == 124:
             return ExecuteResult(stdout=stdout + f"\n[Command timed out after {timeout}s]", exit_code=124)
@@ -382,17 +413,19 @@ class SearchMixin:
             return ExecuteResult(stdout=stdout + "\n[Command interrupted]", exit_code=130)
         # A killed-at-bound rg reports a signal (negative returncode); head would have
         # left the pipeline at 0 unless rg itself already failed.
-        return ExecuteResult(stdout=stdout, exit_code=0 if bounded.is_set() else proc.returncode)
+        return ExecuteResult(stdout=stdout, exit_code=0 if bounded.is_set() else proc.returncode,
+                             stderr=stderr)
 
     def _run_rg_bounded(self, words: List[str], fetch_limit: int, timeout: int, *,
                         merge_stderr: bool = False, native_ok: bool = True,
-                        shell_prefix: str = "") -> ExecuteResult:
+                        shell_prefix: str = "", capture_stderr: bool = False) -> ExecuteResult:
         """Run an rg command (shell-quoted words) and keep the first ``fetch_limit``
         lines: natively on a local POSIX host, else through the backend shell as
         ``<prefix><words> | head -n N``. ``native_ok=False`` keeps a form the native
  lane cannot express (the multi-root ``cd`` prefix); ``shell_prefix`` is shell-only."""
         if native_ok and self._native_read_enabled():
-            return self._run_rg_native(words, fetch_limit, timeout, merge_stderr=merge_stderr)
+            return self._run_rg_native(words, fetch_limit, timeout, merge_stderr=merge_stderr,
+                                       capture_stderr=capture_stderr)
         stderr = "" if merge_stderr else " 2>/dev/null"
         return self._exec(f"{shell_prefix}{' '.join(words)}{stderr} | head -n {fetch_limit}", timeout=timeout)
 
@@ -801,7 +834,7 @@ class SearchMixin:
         rg_cmd = (f"{rg} --files{sort_arg} -g {self._escape_shell_arg(glob_pattern)}"
                   f"{exclusion_args} -- {root_args}")
         result = self._run_rg_bounded([rg_cmd], fetch_limit, timeout=60, native_ok=not scoped_common,
-                                      shell_prefix=f"set -o pipefail; {cd_prefix}")
+                                      shell_prefix=f"set -o pipefail; {cd_prefix}", capture_stderr=True)
         stdout, limit_reason = _search_stdout_and_limit(result)
         all_files = [f for f in stdout.splitlines() if f]
         if scoped_common:
@@ -809,7 +842,14 @@ class SearchMixin:
                 f if posixpath.isabs(f) else posixpath.normpath(posixpath.join(scoped_common, f))
                 for f in all_files]
         bounded_sigpipe = result.exit_code == 141 and len(all_files) >= fetch_limit
-        if result.exit_code not in {0, 1, 124} and not bounded_sigpipe:
+        # rg exits 2 when ANY path in the walk errored, after listing every readable
+        # match. When every diagnostic is a permission-denied walk error (unreadable
+        # sibling/child dirs) the listing is complete for what this agent can read:
+        # return it with a warning instead of discarding it. Any other rg error
+        # (bad glob, I/O) still fails closed.
+        partial_walk = result.exit_code == 2 and _rg_errors_are_only_eacces(result.stderr)
+        warning = _PARTIAL_WALK_WARNING if partial_walk else None
+        if result.exit_code not in {0, 1, 124} and not bounded_sigpipe and not partial_walk:
             if order == "modified":
                 return SearchResult(error=(
                     "Exact modification-time order failed; ripgrep 14+ is "
@@ -817,7 +857,8 @@ class SearchMixin:
             return SearchResult(error="File search failed while running ripgrep.")
         return SearchResult(
             files=all_files[offset:offset + limit], total_count=len(all_files),
-            truncated=len(all_files) > offset + limit or bool(limit_reason), limit_reason=limit_reason)
+            truncated=len(all_files) > offset + limit or bool(limit_reason), limit_reason=limit_reason,
+            warning=warning)
 
     def _search_content(self, pattern: str, path: str, file_glob: Optional[str],
                         limit: int, offset: int, output_mode: str, context: int) -> SearchResult:
