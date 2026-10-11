@@ -216,7 +216,8 @@ def _parse_search_output(result, output_mode: str, limit: int, offset: int,
     usable payload remains. EACCES-only partial walks warn in every output mode."""
     stdout, limit_reason = _search_stdout_and_limit(result)
     diagnostics, payload = _split_tool_diagnostics(stdout)
-    partial_walk = result.exit_code == 2 and _rg_errors_are_only_eacces(diagnostics)
+    # exit 0 too: merged diagnostics count toward the native fetch bound, which reports a kill as 0.
+    partial_walk = result.exit_code in (0, 2) and _rg_errors_are_only_eacces(diagnostics)
     if partial_walk:
         warning = f"{warning} {_PARTIAL_WALK_WARNING}" if warning else _PARTIAL_WALK_WARNING
     elif result.exit_code == 2 and not payload.strip():
