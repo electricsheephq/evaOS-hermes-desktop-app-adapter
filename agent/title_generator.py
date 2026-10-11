@@ -148,8 +148,10 @@ _MACHINE_PREFIXES = (
     "[IMPORTANT: Background process ", "[IMPORTANT: Watch patterns disabled ", "[IMPORTANT: Watch-pattern ",
     "[Background process ", "[ASYNC DELEGATION ",
 )
-# Batched completions open with a counted header (ProcessNotificationBatch.render).
-_PROCESS_BATCH_HEADER = re.compile(r"\[IMPORTANT: \d+ background processes completed\. ")
+# Batched completions open with a counted header: ProcessNotificationBatch.render (CLI/TUI) and the
+# gateway's coalesced process and delegation batches (gateway/run_notifications.py).
+_PROCESS_BATCH_HEADER = re.compile(
+    r"\[IMPORTANT: \d+ background (?:processes|subagent delegations) completed(?: for this session)?\.\s")
 
 
 def _title_config() -> dict:

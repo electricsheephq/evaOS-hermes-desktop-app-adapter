@@ -854,6 +854,12 @@ def test_process_and_delegation_notices_never_title_a_session():
     notices = [format_process_notification(evt) for evt in events]
     batch = ProcessNotificationBatch(((events[0], notices[0]), ({**events[0], "session_id": "proc_2"}, notices[0])))
     notices.append(batch.render(MagicMock(is_completion_consumed=lambda _sid: False)))
+    # Gateway coalescing (what messaging and Desktop sessions receive): process and delegation batches.
+    from gateway.run_notifications import GatewayNotificationsMixin
+    notices.append(GatewayNotificationsMixin._format_coalesced_process_completions(
+        [("", {**events[0], "session_id": f"proc_{i}"}, None) for i in range(2)]))
+    notices.append("[IMPORTANT: 2 background subagent delegations completed for this session. Treat these "
+                   "results as one completion batch and send at most one consolidated user-facing response.]")
     for notice in notices:
         assert is_titleable_user_message(notice) is False, notice[:60]
         assert not _is_real_user_turn({"role": "user", "content": notice})
