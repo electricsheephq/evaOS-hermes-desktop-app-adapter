@@ -19,6 +19,7 @@ from tools import approval_context as _approval_context
 from tools import approval_prompt as _approval_prompt
 from tools import approval_smart as _approval_smart
 from tools.mcp_tool_common import _exc_str, _sanitize_error, mcp_field, _core
+from tools.mcp_local_files import expand_local_file_refs
 from tools import mcp_tool_loop as _loop
 from tools.mcp_tool_content import (
     _MCP_HARD_RESULT_CAP_CHARS, _cache_mcp_audio_block, _cache_mcp_image_block,
@@ -692,6 +693,9 @@ def _make_tool_handler(server_name: str, tool_name: str, tool_timeout: float):
         error = _trust_gate_check(server_name, tool_name, args) or _check_circuit_breaker(server_name)
         if error is not None:
             return error
+        expanded_args, error = expand_local_file_refs(args)
+        if error is not None:
+            return tool_error(error)
         server, error = _acquire_call_server(server_name, tool_timeout)
         if server is None:
             return error
@@ -704,7 +708,7 @@ def _make_tool_handler(server_name: str, tool_name: str, tool_timeout: float):
                         _capture_http_rejection(server)):
                 server._pending_call_context = contextvars.copy_context()  # for the elicitation callback
                 try:
-                    result = await _call_tool_racing_stdio_death(server, server_name, tool_name, args)
+                    result = await _call_tool_racing_stdio_death(server, server_name, tool_name, expanded_args)
                 finally:
                     server._pending_call_context = None
             if getattr(server, "_mark_session_proven", None) is not None:  # round-trip done: transport healthy
