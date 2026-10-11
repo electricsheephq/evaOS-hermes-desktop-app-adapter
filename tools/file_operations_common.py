@@ -186,6 +186,8 @@ class ExecuteResult:
     stderr: str = ""
     # Verdict over the full drain, including diagnostics beyond the sample.
     stderr_eacces_only: bool = False
+    # Native rg lane only: the drain stopped at the fetch bound (rg was killed; exit reported as 0).
+    fetch_bounded: bool = False
 
 
 # ---------------------------------------------------------------------------

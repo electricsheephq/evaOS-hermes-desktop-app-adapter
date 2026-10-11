@@ -220,7 +220,7 @@ def _parse_search_output(result, output_mode: str, limit: int, offset: int,
     partial_walk = result.exit_code in (0, 2) and _rg_errors_are_only_eacces(diagnostics)
     if partial_walk:
         warning = f"{warning} {_PARTIAL_WALK_WARNING}" if warning else _PARTIAL_WALK_WARNING
-        if result.exit_code == 0:  # rg only exits 0 after an EACCES when the fetch bound killed it
+        if result.fetch_bounded:  # diagnostics spent the fetch budget: later readable matches may be missing
             limit_reason = limit_reason or "search_bound"
     elif result.exit_code == 2 and not payload.strip():
         error_msg = diagnostics.strip() or result.stdout.strip() or "Search error"
@@ -429,7 +429,8 @@ class SearchMixin:
         # A killed-at-bound rg reports a signal (negative returncode); head would have
         # left the pipeline at 0 unless rg itself already failed.
         return ExecuteResult(stdout=stdout, exit_code=0 if bounded.is_set() else proc.returncode,
-                             stderr=stderr, stderr_eacces_only=err_count > 0 and err_all_eacces)
+                             stderr=stderr, stderr_eacces_only=err_count > 0 and err_all_eacces,
+                             fetch_bounded=bounded.is_set())
 
     def _run_rg_bounded(self, words: List[str], fetch_limit: int, timeout: int, *,
                         merge_stderr: bool = False, native_ok: bool = True,
@@ -589,6 +590,7 @@ class SearchMixin:
             merged = self._search_files(pattern, existing, limit, offset, order)
         else:
             merged = SearchResult()
+            sub_warnings: List[str] = []
             for root in existing:
                 sub = self._search_content(pattern, root, file_glob, limit, offset, output_mode, context)
                 if sub.error:
@@ -598,8 +600,12 @@ class SearchMixin:
                 merged.counts.update(sub.counts)
                 merged.total_count += sub.total_count
                 merged.truncated = merged.truncated or sub.truncated
-                if sub.warning and _PARTIAL_WALK_WARNING in sub.warning and not merged.warning:
-                    merged.warning = _PARTIAL_WALK_WARNING  # root-local zero-match hints may be false for the union
+                if sub.warning and sub.warning not in sub_warnings:
+                    sub_warnings.append(sub.warning)
+            if not merged.total_count:
+                merged.warning = " ".join(sub_warnings) or None  # zero-match hints hold for an empty union
+            elif any(_PARTIAL_WALK_WARNING in w for w in sub_warnings):
+                merged.warning = _PARTIAL_WALK_WARNING  # root-local zero-match hints may be false for the union
             merged.matches = merged.matches[:limit]
             merged.files = merged.files[:limit]
         note = f"path contained {len(parts)} entries; searched {len(existing)} that exist"
