@@ -65,6 +65,7 @@ def test_write_post_502_is_uncertain_without_replay(invoke, caplog):
     assert result["server"] == "srv"
     assert "HTTP 502" in result["error"] and "may already have happened" in result["error"]
     assert "before retrying" in result["error"]
+    assert "synthetic response body" in result["error"]  # the server's own words still reach the model
     warnings = [r for r in caplog.records if r.name == "tools.mcp_tool"]
     assert len(warnings) == 1 and warnings[0].levelno == logging.WARNING
     assert "synthetic argument" not in warnings[0].getMessage()
