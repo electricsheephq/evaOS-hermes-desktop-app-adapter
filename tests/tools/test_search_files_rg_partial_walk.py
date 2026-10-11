@@ -26,10 +26,13 @@ def test_bounded_eacces_diagnostics_still_warn():
     from tools.file_operations_search import _parse_search_output
 
     noise = "\n".join(f"rg: /blocked/{i}: Permission denied (os error 13)" for i in range(5))
-    result = _parse_search_output(ExecuteResult(stdout=noise, exit_code=0), "content", 2, 0, 0)
+    result = _parse_search_output(ExecuteResult(stdout=noise, exit_code=0, fetch_bounded=True), "content", 2, 0, 0)
     assert not result.error and result.total_count == 0
     assert _PARTIAL_WALK_WARNING in (result.warning or "")
     assert result.truncated  # later readable matches may have been cut off by the bound
+    # exit 0 without a bound hit (rg's ignore-file EACCES warning) is complete: warn, never truncate
+    complete = _parse_search_output(ExecuteResult(stdout=noise, exit_code=0), "content", 2, 0, 0)
+    assert _PARTIAL_WALK_WARNING in (complete.warning or "") and not complete.truncated
 
 
 def test_eacces_classifier():
