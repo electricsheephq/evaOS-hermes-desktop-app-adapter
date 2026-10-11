@@ -1,6 +1,7 @@
 """Regression for adapter#450: registry-created live views survive task teardown."""
 
 import json
+import os
 import time
 from types import SimpleNamespace
 
@@ -170,80 +171,61 @@ def test_unheld_or_expired_idle_session_is_released(task_browser, live_view):
     assert browser.commands[-1][1] == browser.created[1]
 
 
-def test_release_closes_held_session_once(task_browser):
+@pytest.mark.parametrize(
+    "task_browser",
+    [{}, {"base_url": "https://broker.example/browserbase", "project_id": "evaos:c:hermes:a"}],
+    indirect=True,
+    ids=["direct", "brokered"],
+)
+def test_release_closes_held_session_exactly_once(task_browser):
     browser = task_browser
     browser.dispatch("browser_live_view")
     assert browser.task_id in bt._live_view_hold_until
 
     result = browser.dispatch("browser_live_view", {"release": True})
 
-    assert result["released"] is True
-    assert result["status"] == "released"
-    assert browser.released == browser.created
-    assert len(browser.released) == 1
-    assert browser.task_id not in bt._active_sessions
-    assert browser.task_id not in bt._live_view_hold_until
-    assert browser.task_id not in bt._reaping_sessions
+    assert (result["released"], result["status"]) == (True, "released")
+    assert browser.released == browser.created and len(browser.released) == 1
+    base = browser.http_calls[-1][1].rsplit("/v1/sessions/", 1)[0]
+    assert browser.http_calls[-1] == (
+        "POST",
+        f"{base}/v1/sessions/{browser.created[0]}",
+        {"projectId": os.environ["BROWSERBASE_PROJECT_ID"], "status": "REQUEST_RELEASE"},
+    )
+    for registry_map in (bt._active_sessions, bt._live_view_hold_until, bt._reaping_sessions):
+        assert browser.task_id not in registry_map
     browser.agent._cleanup_task_resources(browser.task_id)
     assert len(browser.released) == 1
 
 
-@pytest.mark.parametrize("task_browser", [{"navigate": False}], indirect=True)
-def test_release_without_session_makes_no_http_calls(task_browser):
-    result = task_browser.dispatch("browser_live_view", {"release": True})
-
-    assert result["status"] == "no_active_session"
-    assert result["released"] is False
-    assert task_browser.http_calls == []
-
-
-def test_release_denied_by_provider_forgets_session(task_browser):
-    browser = task_browser
-    browser.dispatch("browser_live_view")
-    browser.release_status[0] = 403
-
-    result = browser.dispatch("browser_live_view", {"release": True})
-
-    assert result["success"] is True
-    assert result["released"] is False
-    assert result["status"] == "release_not_confirmed"
-    assert browser.task_id not in bt._active_sessions
-    assert browser.task_id not in bt._live_view_hold_until
-    assert browser.task_id not in bt._reaping_sessions
-    assert "do not contact support" in result["instruction"]
-
-
 @pytest.mark.parametrize(
-    "task_browser",
-    [{"base_url": "https://broker.example/browserbase", "project_id": "evaos:c:hermes:a"}],
-    indirect=True,
+    ("task_browser", "case"),
+    [({"navigate": False}, "no_session"), ({}, "provider_403"), ({}, "already_reaping")],
+    indirect=["task_browser"],
 )
-def test_release_uses_broker_base_url_and_project(task_browser):
+def test_release_never_fails_the_turn_or_invites_escalation(task_browser, case):
     browser = task_browser
-    result = browser.dispatch("browser_live_view", {"release": True})
-
-    assert result["released"] is True
-    assert browser.http_calls[-1] == (
-        "POST",
-        f"https://broker.example/browserbase/v1/sessions/{browser.created[0]}",
-        {"projectId": "evaos:c:hermes:a", "status": "REQUEST_RELEASE"},
-    )
-
-
-def test_release_already_reaping_session_makes_no_http_calls(task_browser):
-    browser = task_browser
-    browser.dispatch("browser_live_view")
+    if case != "no_session":
+        browser.dispatch("browser_live_view")
     before = len(browser.http_calls)
-    with bt._cleanup_lock:
-        bt._reaping_sessions.add(browser.task_id)
+    if case == "provider_403":
+        browser.release_status[0] = 403
+    if case == "already_reaping":
+        with bt._cleanup_lock:
+            bt._reaping_sessions.add(browser.task_id)
     try:
         result = browser.dispatch("browser_live_view", {"release": True})
-
-        assert result["status"] == "no_active_session"
-        assert result["released"] is False
-        assert len(browser.http_calls) == before
-        assert browser.task_id not in bt._live_view_hold_until
-        assert browser.task_id in bt._reaping_sessions
     finally:
-        with bt._cleanup_lock:
-            bt._reaping_sessions.discard(browser.task_id)
+        if case == "already_reaping":
+            with bt._cleanup_lock:
+                bt._reaping_sessions.discard(browser.task_id)
+
+    assert result["success"] is True and result["released"] is False
+    assert browser.task_id not in bt._live_view_hold_until
+    if case == "provider_403":
+        assert result["status"] == "release_not_confirmed"
+        assert browser.task_id not in bt._active_sessions
+        assert "do not contact support" in result["instruction"]
+    else:
+        assert result["status"] == "no_active_session"
+        assert len(browser.http_calls) == before

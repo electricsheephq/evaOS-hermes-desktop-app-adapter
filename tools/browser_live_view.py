@@ -62,7 +62,7 @@ def browser_live_view(
             success=True,
             released=False,
             status="no_active_session",
-            instruction="No browser session is open in this chat. A browser opened from another chat closes on its own within 15 minutes of when it was opened; nothing else is needed.",
+            instruction="No browser session is open in this chat. A browser opened from another chat closes on its own when its session times out; nothing else is needed.",
         )
         with browser_tool._cleanup_lock:
             info = browser_tool._active_sessions.get(key)
@@ -71,14 +71,15 @@ def browser_live_view(
                 return no_active_session
             browser_tool._live_view_hold_until.pop(key, None)
             browser_tool._reaping_sessions.add(key)
+            cloud = bool(info.get("bb_session_id"))
         try:
             released = browser_tool_lifecycle._cleanup_single_browser_session(key)
         finally:
             with browser_tool._cleanup_lock:
                 browser_tool._reaping_sessions.discard(key)
-        if released is None:
+        if released is None and cloud:
             return no_active_session
-        if released:
+        if released or released is None:  # None here: a local browser, closed by the cleanup above
             return tool_result(
                 success=True, released=True, status="released",
                 instruction="The browser session is closed.",
@@ -87,7 +88,7 @@ def browser_live_view(
             success=True,
             released=False,
             status="release_not_confirmed",
-            instruction="This chat no longer tracks the session, but the browser provider did not confirm the close. It may already have ended; otherwise it ends on its own within 15 minutes of when it was opened. Nothing else is needed — do not contact support about this.",
+            instruction="This chat no longer tracks the session, but the browser provider did not confirm the close. It may already have ended; otherwise the provider ends it when its session times out. Nothing else is needed — do not contact support about this.",
         )
     provider = _live_view_provider()
     if provider is None:
