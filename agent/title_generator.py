@@ -141,6 +141,10 @@ _MACHINE_PREFIXES = (
     # message titled the session "[System: The active model for this chat has…" instead of the user's actual
     # question.
     "[System: The active model for this chat has changed to ",
+    # Background-process and async-delegation notices (tools.process_registry_notifications), also
+    # persisted as role="user". A notice turn that starts before the first model title is saved
+    # otherwise fires a second title call and can name the session after the notice (#473).
+    "[IMPORTANT: ", "[Background process ", "[ASYNC DELEGATION ",
 )
 
 

@@ -832,3 +832,28 @@ class TestModelSwitchMarkerNotTitleable:
         assert apply_instant_title(db, "sess-1", "南京市秦淮区 小时级天气预报") == (
             "南京市秦淮区 小时级天气预报"
         )
+
+
+def test_process_and_delegation_notices_never_title_a_session():
+    """Notices are persisted as role="user"; a notice turn must not name the session (#473).
+
+    Built with the real formatters so a new notice opener fails here, not in a user's sidebar.
+    """
+    from agent.title_generator import _is_real_user_turn, is_titleable_user_message
+    from tools.process_registry_notifications import ProcessNotificationBatch, format_process_notification
+
+    events = [
+        {"type": "completion", "session_id": "proc_1", "command": "make test", "exit_code": 7, "output": "done"},
+        {"type": "watch_match", "session_id": "proc_1", "command": "tail", "pattern": "ERR", "output": "ERR x"},
+        {"type": "heartbeat", "session_id": "proc_1", "command": "sleep 9", "seq": 1, "elapsed": 60, "interval": 60},
+        {"type": "watch_disabled", "session_id": "proc_1", "message": "Watch disabled after too many matches"},
+        {"type": "async_delegation", "delegation_id": "d1", "status": "completed", "summary": "ok", "goal": "g"},
+    ]
+    notices = [format_process_notification(evt) for evt in events]
+    batch = ProcessNotificationBatch(((events[0], notices[0]), ({**events[0], "session_id": "proc_2"}, notices[0])))
+    notices.append(batch.render(MagicMock(is_completion_consumed=lambda _sid: False)))
+    for notice in notices:
+        assert is_titleable_user_message(notice) is False, notice[:60]
+        assert not _is_real_user_turn({"role": "user", "content": notice})
+    # The guard stays narrow: a person's own bracketed opener still titles.
+    assert is_titleable_user_message("[Important] why does the build fail?") is True
