@@ -26,7 +26,7 @@ describe('bundled Fish Audio plugin', () => {
       path === '/available' ? new Promise(resolve => (answer = resolve)) : Promise.resolve({ ok: false })
     )
     // Other bundled plugins are outside this test; Fish Audio has no saved decision.
-    $pluginDecisions.set({ accent: false, kanban: false, 'hermes-bots': false })
+    $pluginDecisions.set({ accent: false, kanban: false, 'hermes-bots': false, 'hermes-cloud-file-manager': false })
 
     discoverBundledPlugins()
     expect($pluginRecords.get()['fish-audio']).toMatchObject({ kind: 'bundled', status: 'loaded' })
