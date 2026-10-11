@@ -35,6 +35,9 @@ _PRIVATE_BROWSER_SENTINEL = "_HERMES_BU_PRIVATE_BROWSER"
 # Internal route provenance: this exec resolved to a browser on the Bot Desktop display and must use
 # the same human-control lease fence as the built-in browser tools. Popped before launching the CLI.
 _BOT_DESKTOP_BROWSER_SENTINEL = "_HERMES_BU_BOT_DESKTOP_BROWSER"
+# Named sessions on private headless managed Chromium need their background tab painted.
+# Popped before launching the CLI, like the other internal route sentinels.
+_FOREGROUND_TAB_SENTINEL = "_HERMES_BU_FOREGROUND_TAB"
 
 # Prepended to EVERY browser_exec call: raises the harness's 5 s default CDP response timeout to 30 s (cloud
 # navigations routinely exceed 5 s; screenshots already get 60 s) and binds `workspace` for the model's code.
@@ -65,6 +68,28 @@ del _hermes_os
 """
 # One line, so the model's traceback line numbers shift by one, not by the preamble's length.
 _RUNTIME_PREAMBLE = f"exec({_RUNTIME_PREAMBLE_SOURCE!r})\n"
+
+# Hidden background tabs can stall compositor screenshots on private headless Chromium.
+_FOREGROUND_SOURCE = """\
+def _hermes_foreground_tab():
+    try:
+        import browser_harness.helpers as _helpers
+        _switch = _helpers.switch_tab
+        _args = _switch.__code__.co_varnames[:_switch.__code__.co_argcount]
+        _defaults = _switch.__defaults__
+        _index = _args.index("activate") - (len(_args) - len(_defaults))
+        if _index >= 0 and _defaults[_index] is False:
+            _switch.__defaults__ = _defaults[:_index] + (True,) + _defaults[_index + 1:]
+    except Exception:
+        pass
+    try:
+        cdp("Target.activateTarget", targetId=current_tab()["targetId"], _response_timeout=5.0)
+    except Exception:
+        pass
+_hermes_foreground_tab()
+del _hermes_foreground_tab
+"""
+_RUNTIME_PREAMBLE_FOREGROUND = f"exec({(_RUNTIME_PREAMBLE_SOURCE + _FOREGROUND_SOURCE)!r})\n"
 
 # Prepended to the model's code for named sessions on SHARED browsers (a /browser connect CDP override): the
 # harness daemon attaches to the first existing page at startup, so two fresh named daemons can land on the
@@ -110,13 +135,14 @@ del _hermes_ensure_own_tab
 _CLOUD_ADMIN_CALLS = ("start_remote_daemon(", "stop_remote_daemon(")
 
 
-def _with_preambles(code: str, own_tab: bool) -> str:
+def _with_preambles(code: str, own_tab: bool, foreground: bool = False) -> str:
     """Prepend the runtime (and, for shared browsers, own-tab) preamble to the model's code. A leading cloud-admin
     call gets neither: it drives no page, and any prefix would hide it from the harness's leading-call check. A
     leading ``from __future__`` block stays first, as Python requires."""
     if code.lstrip().startswith(_CLOUD_ADMIN_CALLS):
         return code
-    preamble = _RUNTIME_PREAMBLE + (_OWN_TAB_PREAMBLE if own_tab else "")
+    runtime = _RUNTIME_PREAMBLE_FOREGROUND if foreground else _RUNTIME_PREAMBLE
+    preamble = runtime + (_OWN_TAB_PREAMBLE if own_tab else "")
     try:
         body = ast.parse(code).body
     except SyntaxError:  # the harness reports it; nothing to keep in front
@@ -497,6 +523,13 @@ def _resolve_managed_chromium_cdp(env: dict, task_id: Optional[str], session_nam
     _set_cdp_env(env, cdp)
     env[_PRIVATE_BROWSER_SENTINEL] = "1"  # one Chromium per cache key: nothing to share a tab with
     env[_BOT_DESKTOP_BROWSER_SENTINEL] = "1"
+    if session_name:
+        try:
+            from tools import browser_tool_cloud as _cloud
+            if not _cloud._is_headed_mode():
+                env[_FOREGROUND_TAB_SENTINEL] = "1"
+        except Exception as e:  # stubbed browser_tool / headed-mode lookup unavailable
+            logger.debug("managed chromium headed-mode lookup unavailable: %s", e)
     return None
 
 
@@ -587,6 +620,7 @@ def _resolve_backend_cdp(env: dict, task_id: Optional[str], session_name: str = 
                 env[_PRIVATE_BROWSER_SENTINEL] = "1"
             return None
         local_err = _resolve_managed_chromium_cdp(env, task_id, session_name)
+        env.pop(_FOREGROUND_TAB_SENTINEL, None)  # provider routes retain their existing tab behavior
         if local_err is None:
             return None
         return _BrowserRouteError(
@@ -772,7 +806,8 @@ def browser_exec(code: str, session: str = "", timeout_s: int = _DEFAULT_TIMEOUT
     # SHARED browser (/browser connect CDP override): pin each named session to its own tab (see
     # _OWN_TAB_PREAMBLE). Private per-name browsers skip this — nothing to collide with.
     private_browser = env.pop(_PRIVATE_BROWSER_SENTINEL, None)  # always pop: never exported to the CLI
-    code = _with_preambles(code, own_tab=bool(session and not private_browser))
+    foreground = env.pop(_FOREGROUND_TAB_SENTINEL, None)
+    code = _with_preambles(code, own_tab=bool(session and not private_browser), foreground=bool(foreground))
 
     workspace = _workspace_dir(task_id)
     if workspace:
