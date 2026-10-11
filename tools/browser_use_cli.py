@@ -526,9 +526,13 @@ def _resolve_managed_chromium_cdp(env: dict, task_id: Optional[str], session_nam
     if session_name:
         try:
             from tools import browser_tool_cloud as _cloud
-            if not _cloud._is_headed_mode():
+            from tools.bot_desktop import lease as _bd_lease, runtime as _bd_runtime
+            # A published Bot Desktop screen or a human lease means someone may be watching this browser
+            # (the session can even attach to a human-started Chromium there): never take its foreground.
+            watched = bool(_bd_runtime.published_env().get("DISPLAY")) or _bd_lease.human_holds()
+            if not (_cloud._is_headed_mode() or watched):
                 env[_FOREGROUND_TAB_SENTINEL] = "1"
-        except Exception as e:  # stubbed browser_tool / headed-mode lookup unavailable
+        except Exception as e:  # stubbed browser_tool / headed-mode or Bot Desktop lookup unavailable
             logger.debug("managed chromium headed-mode lookup unavailable: %s", e)
     return None
 
