@@ -832,3 +832,42 @@ class TestModelSwitchMarkerNotTitleable:
         assert apply_instant_title(db, "sess-1", "南京市秦淮区 小时级天气预报") == (
             "南京市秦淮区 小时级天气预报"
         )
+
+
+def test_process_and_delegation_notices_never_title_a_session():
+    """Notices are persisted as role="user"; a notice turn must not name the session (#473).
+
+    Built with the real formatters so a new notice opener fails here, not in a user's sidebar.
+    """
+    from agent.title_generator import _is_real_user_turn, is_titleable_user_message
+    from tools.process_registry_notifications import ProcessNotificationBatch, format_process_notification
+
+    events = [
+        {"type": "completion", "session_id": "proc_1", "command": "make test", "exit_code": 7, "output": "done"},
+        {"type": "watch_match", "session_id": "proc_1", "command": "tail", "pattern": "ERR", "output": "ERR x"},
+        {"type": "heartbeat", "session_id": "proc_1", "command": "sleep 9", "seq": 1, "elapsed": 60, "interval": 60},
+        {"type": "watch_disabled", "session_id": "proc_1", "message": "Watch patterns disabled for process proc_1 — x"},
+        {"type": "watch_overflow_tripped", "message": "Watch-pattern overflow: >15 notifications in 10s."},
+        {"type": "watch_overflow_released", "message": "Watch-pattern notifications resumed. 3 suppressed."},
+        {"type": "async_delegation", "delegation_id": "d1", "status": "completed", "summary": "ok", "goal": "g"},
+    ]
+    notices = [format_process_notification(evt) for evt in events]
+    batch = ProcessNotificationBatch(((events[0], notices[0]), ({**events[0], "session_id": "proc_2"}, notices[0])))
+    notices.append(batch.render(MagicMock(is_completion_consumed=lambda _sid: False)))
+    # Gateway coalescing (what messaging and Desktop sessions receive): process and delegation batches.
+    from gateway.run_notifications import GatewayNotificationsMixin
+    notices.append(GatewayNotificationsMixin._format_coalesced_process_completions(
+        [("", {**events[0], "session_id": f"proc_{i}"}, None) for i in range(2)]))
+    notices.append("[IMPORTANT: 2 background subagent delegations completed for this session. Treat these "
+                   "results as one completion batch and send at most one consolidated user-facing response.]")
+    for notice in notices:
+        assert is_titleable_user_message(notice) is False, notice[:60]
+        assert not _is_real_user_turn({"role": "user", "content": notice})
+    # The guard stays narrow: a skill invocation also opens with "[IMPORTANT: " but carries the
+    # user's real request, and a person's own bracketed opener still titles.
+    from agent.skill_commands import _build_skill_message
+    note = ('[IMPORTANT: The user has invoked the "work" skill, indicating they want '
+            "you to follow its instructions. The full skill content is loaded below.]")
+    skill_turn = _build_skill_message({"content": "Do the work."}, None, note, user_instruction="fix the title leak")
+    assert is_titleable_user_message(skill_turn) is True
+    assert is_titleable_user_message("[IMPORTANT: read this first] why does the build fail?") is True
