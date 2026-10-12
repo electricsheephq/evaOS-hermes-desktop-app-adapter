@@ -14,8 +14,10 @@ that evaOS agents running the plugin's gateway half get **Cloud Files**:
 The plugin is on by default, but it shows nothing until the selected agent's gateway answers
 `/api/plugins/hermes-cloud-file-manager/available`. Agents without the gateway plugin get no sidebar row and no
 **+ → Cloud** entry. The plugin re-probes when the agent changes and every 60 s. On an agent change the row and
-**+ → Cloud** go away until the new agent answers; an open picker stays, pinned to its agent, unless the new agent
-answers 404 (then it closes). A 404 removes the row and
+**+ → Cloud** go away until the new agent answers. An open picker stays, pinned to its agent: while the new agent's
+answer is pending it waits and asks that agent nothing, and if the new agent has no Cloud Files (or no Google Drive) it
+says so and offers to switch back. A Drive import already started resumes on switching back. It closes only when you
+close it or its own agent answers 404. A 404 removes the row and
 the composer entries; a transport error keeps the last answer for the same agent. The `/cloud-files` route itself is
 always registered, so a restored tab never falls through to the session route; it waits for the answer before asking
 the agent for anything.
@@ -29,9 +31,9 @@ On evaOS, the gateway half is the managed `hermes-cloud-file-manager` plugin tha
 
 | | |
 |---|---|
-| Release | v0.3.6 (`40d9e753b82e4395dd3279a909a2e85693e7bd1c`) |
+| Release | v0.3.8 (`9ee6c10b9276b7cbfcf27d199c7833a4a6cfebbb`) |
 | File | `desktop/plugin.js` |
-| sha256 | `2e1783f36abd1fbcc2e9f5e3c03be620c435d71e914456bb08bed4747b9c7a3b` |
+| sha256 | `4ed1d90f64bd05d9ec76c2e86671a6a27342b5d3e90023909524eb5f7e2dd2e3` |
 | License | MIT (`LICENSE`) |
 
 It imports only `@hermes/plugin-sdk`, `react` and `react/jsx-runtime`. The app build fails if it imports a name this
