@@ -21,6 +21,13 @@ afterEach(async () => {
 })
 
 describe('bundled Cloud File Manager plugin', () => {
+  it('finds the download capture it looks up on the SDK namespace', async () => {
+    // The plugin reads captureGatewayFileDownload off `import * as sdk`, so a rename would hide Download silently.
+    const sdk: Record<string, unknown> = await import('@hermes/plugin-sdk')
+
+    expect(typeof sdk.captureGatewayFileDownload).toBe('function')
+  })
+
   it('loads by default and shows its sidebar row only once the agent gateway answers /available', async () => {
     let answer: (value: unknown) => void = () => {}
     rest.mockImplementation((_id: string, path: string) =>
