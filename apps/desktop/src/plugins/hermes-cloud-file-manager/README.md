@@ -7,7 +7,7 @@ that evaOS agents running the plugin's gateway half get **Cloud Files**:
 - upload files and whole folders;
 - open and edit Markdown and text files with an explicit Save;
 - read-only previews of images, PDFs and code or data files (CSV as a table), with Retry on a failed preview; these
-  need a 0.4.1 or newer gateway half, and an older one shows "needs 0.4.1";
+  need a 0.4.1 or newer gateway half, and an older one says previews need Cloud Files 0.4.1 or newer;
 - drag files and folders into a chat as `@file:` / `@folder:` chips, or use **Add to chat** (the keyboard equivalent);
 - **Show** on a finished upload, and Drive imports that land in the open folder;
 - a file list that follows what the agent writes, without a Refresh;
