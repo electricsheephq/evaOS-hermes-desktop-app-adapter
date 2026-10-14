@@ -254,6 +254,56 @@ class TestResolverConflictMemory:
         ld.reset_resolver_conflicts()
         assert ld.install_blocked_reason("wake.sherpa") is None
 
+    def test_conflict_expires_after_ttl(self, monkeypatch):
+        clock = [1000.0]
+        monkeypatch.setattr(ld.time, "monotonic", lambda: clock[0])
+        calls = []
+
+        def install(specs, **kwargs):
+            calls.append(specs)
+            return ld._InstallResult(False, "", "No solution found when resolving dependencies")
+
+        monkeypatch.setattr(ld, "_venv_pip_install", install)
+        for _ in range(2):
+            with pytest.raises(ld.FeatureUnavailable):
+                ld.ensure("wake.sherpa", prompt=False)
+        assert len(calls) == 1
+        clock[0] += ld._RESOLVER_CONFLICT_TTL_S
+        assert ld.install_blocked_reason("wake.sherpa") is None
+        with pytest.raises(ld.FeatureUnavailable):
+            ld.ensure("wake.sherpa", prompt=False)
+        assert len(calls) == 2
+
+    def test_conflict_memory_is_scoped_per_profile_home(self, monkeypatch):
+        home = ["/profiles/a"]
+        monkeypatch.setattr("hermes_constants.hermes_home_key", lambda path=None: home[0])
+        calls = []
+
+        def install(specs, **kwargs):
+            calls.append(specs)
+            return ld._InstallResult(False, "", "your requirements are unsatisfiable")
+
+        monkeypatch.setattr(ld, "_venv_pip_install", install)
+        for profile, expected_calls in (("/profiles/a", 1), ("/profiles/b", 2), ("/profiles/a", 2)):
+            home[0] = profile
+            with pytest.raises(ld.FeatureUnavailable):
+                ld.ensure("wake.sherpa", prompt=False)
+            assert len(calls) == expected_calls
+
+    def test_marker_on_stdout_is_detected_despite_stderr_noise(self, monkeypatch):
+        calls = []
+
+        def install(specs, **kwargs):
+            calls.append(specs)
+            return ld._InstallResult(False, "ERROR: ResolutionImpossible: conflicting pins", "WARNING: cache dir unwritable")
+
+        monkeypatch.setattr(ld, "_venv_pip_install", install)
+        for _ in range(2):
+            with pytest.raises(ld.FeatureUnavailable) as exc:
+                ld.ensure("wake.sherpa", prompt=False)
+        assert len(calls) == 1
+        assert exc.value.reason.startswith("resolver conflict (cached")
+
     def test_network_failure_is_retried(self, monkeypatch):
         calls = []
 

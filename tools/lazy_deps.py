@@ -21,6 +21,7 @@ import site
 import subprocess
 import sys
 import sysconfig
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -29,7 +30,11 @@ from hermes_cli._subprocess_compat import windows_hide_flags
 
 logger = logging.getLogger(__name__)
 
-_RESOLVER_CONFLICTS: dict[tuple[str, tuple[str, ...]], str] = {}
+# (profile home key, feature, missing specs) -> (reason, monotonic time recorded). Keyed by home because one
+# process may serve several profiles; entries expire so a temporary "unsatisfiable" (offline mode, a release
+# still inside the exclude-newer quarantine) is retried instead of sticking until restart.
+_RESOLVER_CONFLICT_TTL_S = 3600.0
+_RESOLVER_CONFLICTS: dict[tuple[str, str, tuple[str, ...]], tuple[str, float]] = {}
 
 
 # Allowlist: "namespace.backend" -> pip specs matching the pyproject extra. Pins are exact
@@ -344,10 +349,13 @@ def _unsupported_feature_reason(feature: str) -> Optional[str]:
     if sys.platform == "win32" and feature == "platform.matrix":
         return ("unsupported on Windows: Matrix E2EE depends on python-olm, which has no Windows wheel and "
                 "requires make + libolm to build from sdist. Run Hermes under WSL to use Matrix on Windows.")
-    if feature == "wake.openwakeword" and _openwakeword_unsupported(
-            sys.platform, sys.version_info, _installed_version("tflite-runtime") is not None):
-        return ("unsupported on Linux with Python 3.12+: openWakeWord 0.6.0 requires tflite-runtime on Linux, "
-                "which has no wheel for Python 3.12 or newer (an already-installed tflite-runtime build lifts this).")
+    if feature == "wake.openwakeword":
+        from hermes_platform.host import facts as host_facts
+
+        if _openwakeword_unsupported(host_facts.os_family(), sys.version_info,
+                                     _installed_version("tflite-runtime") is not None):
+            return ("unsupported on Linux with Python 3.12+: openWakeWord 0.6.0 requires tflite-runtime on Linux, "
+                    "which has no wheel for Python 3.12 or newer (an already-installed tflite-runtime build lifts this).")
     return None
 
 
@@ -712,8 +720,8 @@ def ensure(feature: str, *, prompt: bool = True) -> None:
         return
     if unsupported := _unsupported_feature_reason(feature):
         raise FeatureUnavailable(feature, missing, unsupported)
-    conflict_key = (feature, tuple(missing))
-    if conflict := _RESOLVER_CONFLICTS.get(conflict_key):
+    conflict_key = _conflict_key(feature, missing)
+    if conflict := _cached_conflict(conflict_key):
         raise FeatureUnavailable(feature, missing, conflict)
     # Package-manager installs (NixOS etc.) have read-only site-packages: fail fast instead of burning
     # ~15s on ensurepip — unless a durable target is configured. The reason MUST start with
@@ -747,9 +755,10 @@ def ensure(feature: str, *, prompt: bool = True) -> None:
         output = result.stderr or result.stdout or ""
         snippet = output.strip()[-2000:]
         reason = f"pip install failed: {snippet or 'no error output'}"
-        if any(marker in output.lower() for marker in ("unsatisfiable", "no solution found", "resolutionimpossible")):
-            reason = "resolver conflict (cached for this process; restart after changing the environment): " + reason
-            _RESOLVER_CONFLICTS[conflict_key] = reason
+        both_streams = f"{result.stderr or ''}\n{result.stdout or ''}".lower()
+        if any(marker in both_streams for marker in ("unsatisfiable", "no solution found", "resolutionimpossible")):
+            reason = "resolver conflict (cached for up to an hour; restart after changing the environment): " + reason
+            _RESOLVER_CONFLICTS[conflict_key] = (reason, time.monotonic())
         raise FeatureUnavailable(feature, missing, reason)
     _invalidate_import_caches()
     if still_missing := feature_missing(feature):
@@ -768,9 +777,31 @@ def install_blocked_reason(feature: str) -> Optional[str]:
         missing = feature_missing(feature)
         if not missing:
             return None
-        return _unsupported_feature_reason(feature) or _RESOLVER_CONFLICTS.get((feature, tuple(missing)))
+        return _unsupported_feature_reason(feature) or _cached_conflict(_conflict_key(feature, missing))
     except Exception:
         return None
+
+
+def _conflict_key(feature: str, missing: tuple[str, ...]) -> tuple[str, str, tuple[str, ...]]:
+    """Conflict-memory key, scoped to the serving profile's home (resolved at call time)."""
+    home = ""
+    with contextlib.suppress(Exception):
+        from hermes_constants import hermes_home_key
+
+        home = hermes_home_key()
+    return (home, feature, tuple(missing))
+
+
+def _cached_conflict(key: tuple[str, str, tuple[str, ...]]) -> Optional[str]:
+    """The conflict reason recorded for ``key`` within the TTL, else None; expired entries are dropped."""
+    entry = _RESOLVER_CONFLICTS.get(key)
+    if entry is None:
+        return None
+    reason, recorded = entry
+    if time.monotonic() - recorded >= _RESOLVER_CONFLICT_TTL_S:
+        _RESOLVER_CONFLICTS.pop(key, None)
+        return None
+    return reason
 
 
 def reset_resolver_conflicts() -> None:
