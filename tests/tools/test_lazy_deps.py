@@ -165,52 +165,51 @@ class TestEnsure:
 
 
 class TestOpenWakeWordPlatformGate:
-    @pytest.mark.parametrize("platform,version,tflite,expected", [
-        ("linux", (3, 12), False, True),
-        ("linux", (3, 13, 1), False, True),
-        ("linux", (3, 12), True, False),
-        ("linux", (3, 11), False, False),
-        ("darwin", (3, 12), False, False),
-        ("win32", (3, 12), False, False),
+    """Invariant: openWakeWord is unsupported exactly when resolving openWakeWord itself cannot succeed,
+    and an unsupported feature never reaches the installer."""
+
+    @pytest.mark.parametrize("platform,version,tflite,oww_missing,expected", [
+        ("linux", (3, 12), False, True, True),
+        ("linux", (3, 13, 1), False, True, True),
+        ("linux", (3, 12), True, True, False),
+        ("linux", (3, 12), False, False, False),
+        ("linux", (3, 11), False, True, False),
+        ("darwin", (3, 12), False, True, False),
+        ("win32", (3, 12), False, True, False),
     ])
-    def test_gate_decision_takes_host_facts_as_data(self, platform, version, tflite, expected):
-        assert ld._openwakeword_unsupported(platform, version, tflite) is expected
+    def test_gate_decision_takes_host_facts_as_data(self, platform, version, tflite, oww_missing, expected):
+        assert ld._openwakeword_unsupported(
+            platform, version, tflite_installed=tflite, openwakeword_missing=oww_missing) is expected
 
-    def test_unsupported_reason_blocks_before_installer(self, monkeypatch):
+    def test_unsupported_feature_never_reaches_the_installer(self, monkeypatch):
+        reason = "unsupported on test host"
+        missing = [ld.LAZY_DEPS["wake.openwakeword"]]
         monkeypatch.setattr(ld, "_unsupported_feature_reason",
-                            lambda feature: "unsupported on test host" if feature == "wake.openwakeword" else None)
-        monkeypatch.setattr(ld, "feature_missing", lambda feature: ld.LAZY_DEPS[feature])
+                            lambda feature: reason if feature == "wake.openwakeword" else None)
+        monkeypatch.setattr(ld, "feature_missing", lambda feature: missing[0])
         monkeypatch.setattr(ld, "_allow_lazy_installs", lambda: True)
-        calls = []
-
-        def install(specs, **kwargs):
-            calls.append(specs)
-            return ld._InstallResult(False, "", "unexpected install")
-
-        monkeypatch.setattr(ld, "_venv_pip_install", install)
+        monkeypatch.setattr(ld, "_venv_pip_install", lambda *a, **kw: pytest.fail("installer must not run"))
         with pytest.raises(ld.FeatureUnavailable) as exc:
             ld.ensure("wake.openwakeword", prompt=False)
-        assert exc.value.reason == "unsupported on test host"
-        assert calls == []
-        assert ld.install_blocked_reason("wake.openwakeword") == "unsupported on test host"
-
-    def test_installed_dependencies_bypass_gate(self, monkeypatch):
-        monkeypatch.setattr(ld, "_unsupported_feature_reason", lambda feature: "unsupported on test host")
-        monkeypatch.setattr(ld, "feature_missing", lambda feature: ())
-        monkeypatch.setattr(ld, "_venv_pip_install", lambda *a, **kw: pytest.fail("installer must not run"))
+        assert exc.value.reason == reason
+        assert ld.install_blocked_reason("wake.openwakeword") == reason
+        refreshed = ld._refresh_features(["wake.openwakeword"], prompt=False, restoring=True)
+        assert refreshed["wake.openwakeword"] == f"skipped: {reason}"
+        missing[0] = ()  # everything installed: no install, no blocker
         ld.ensure("wake.openwakeword", prompt=False)
         assert ld.install_blocked_reason("wake.openwakeword") is None
 
-    def test_refresh_skips_unsupported_missing_feature(self, monkeypatch):
-        monkeypatch.setattr(ld, "_unsupported_feature_reason", lambda feature: "unsupported on test host")
-        monkeypatch.setattr(ld, "feature_missing", lambda feature: ld.LAZY_DEPS[feature])
-        monkeypatch.setattr(ld, "_venv_pip_install", lambda *a, **kw: pytest.fail("installer must not run"))
-        result = ld._refresh_features(["wake.openwakeword"], prompt=False, restoring=True)
-        assert result["wake.openwakeword"] == "skipped: unsupported on test host"
+        def broken(feature):
+            raise RuntimeError("dependency probe failed")
+
+        monkeypatch.setattr(ld, "feature_missing", broken)
+        assert ld.install_blocked_reason("wake.openwakeword") is None  # a status probe never raises
 
     @pytest.mark.linux_only
     def test_linux_host_gate_follows_python_and_tflite(self):
-        expected = sys.version_info >= (3, 12) and ld._installed_version("tflite-runtime") is None
+        spec = next(s for s in ld.LAZY_DEPS["wake.openwakeword"] if s.startswith("openwakeword"))
+        expected = (sys.version_info >= (3, 12) and ld._installed_version("tflite-runtime") is None
+                    and not ld._is_satisfied(spec))
         reason = ld._unsupported_feature_reason("wake.openwakeword")
         assert (reason is not None) is expected
         if reason:
@@ -222,57 +221,56 @@ class TestOpenWakeWordPlatformGate:
 
 
 class TestResolverConflictMemory:
+    """Invariant: a resolver-proven conflict is re-resolved at most once per profile home per TTL and
+    keeps the resolver's own diagnostic; any other install failure is always retried."""
+
     @pytest.fixture(autouse=True)
     def isolated_conflicts(self, monkeypatch):
-        # Also works on the unmodified source during the red/green revert proof.
-        monkeypatch.setattr(ld, "_RESOLVER_CONFLICTS", {}, raising=False)
+        monkeypatch.setattr(ld, "_RESOLVER_CONFLICTS", {})
         monkeypatch.setattr(ld, "feature_missing", lambda feature: ld.LAZY_DEPS[feature])
         monkeypatch.setattr(ld, "_lazy_install_target", lambda: None)
         monkeypatch.setattr("hermes_cli.config.get_managed_system", lambda: "")
         monkeypatch.setattr(ld, "_allow_lazy_installs", lambda: True)
 
-    @pytest.mark.parametrize("output", [
-        "your requirements are unsatisfiable", "No solution found", "ResolutionImpossible",
+    @pytest.mark.parametrize("stderr,stdout,diagnostic", [
+        ("your requirements are unsatisfiable", "", "your requirements are unsatisfiable"),
+        ("", "No solution found when resolving dependencies", "No solution found"),
+        ("WARNING: cache dir unwritable", "ERROR: ResolutionImpossible: conflicting pins", "ResolutionImpossible"),
     ])
-    def test_resolver_conflict_is_cached(self, monkeypatch, output):
-        calls = []
-
-        def install(specs, **kwargs):
-            calls.append(specs)
-            return ld._InstallResult(False, "", output)
-
-        monkeypatch.setattr(ld, "_venv_pip_install", install)
-        with pytest.raises(ld.FeatureUnavailable) as first:
-            ld.ensure("wake.sherpa", prompt=False)
-        assert len(calls) == 1
-        with pytest.raises(ld.FeatureUnavailable) as second:
-            ld.ensure("wake.sherpa", prompt=False)
-        assert len(calls) == 1
-        assert second.value.reason.startswith("resolver conflict (cached")
-        assert second.value.reason == first.value.reason
-        assert ld.install_blocked_reason("wake.sherpa") == second.value.reason
-        ld.reset_resolver_conflicts()
-        assert ld.install_blocked_reason("wake.sherpa") is None
-
-    def test_conflict_expires_after_ttl(self, monkeypatch):
-        clock = [1000.0]
+    def test_conflict_is_resolved_once_per_profile_per_ttl(self, monkeypatch, stderr, stdout, diagnostic):
+        clock, home, calls = [1000.0], ["/profiles/a"], []
         monkeypatch.setattr(ld.time, "monotonic", lambda: clock[0])
-        calls = []
+        monkeypatch.setattr("hermes_constants.hermes_home_key", lambda path=None: home[0])
+        output = [stdout, stderr]
 
         def install(specs, **kwargs):
             calls.append(specs)
-            return ld._InstallResult(False, "", "No solution found when resolving dependencies")
+            return ld._InstallResult(False, output[0], output[1])
 
         monkeypatch.setattr(ld, "_venv_pip_install", install)
-        for _ in range(2):
-            with pytest.raises(ld.FeatureUnavailable):
+
+        def attempt(profile):
+            home[0] = profile
+            with pytest.raises(ld.FeatureUnavailable) as exc:
                 ld.ensure("wake.sherpa", prompt=False)
-        assert len(calls) == 1
+            return exc.value.reason
+
+        first = attempt("/profiles/a")
+        assert first.startswith("resolver conflict (cached") and diagnostic in first
+        assert attempt("/profiles/a") == first and len(calls) == 1
+        assert ld.install_blocked_reason("wake.sherpa") == first
+        attempt("/profiles/b")
+        attempt("/profiles/a")
+        assert len(calls) == 2  # B resolves for itself; A (A->B->A) is still served from its own entry
         clock[0] += ld._RESOLVER_CONFLICT_TTL_S
         assert ld.install_blocked_reason("wake.sherpa") is None
-        with pytest.raises(ld.FeatureUnavailable):
-            ld.ensure("wake.sherpa", prompt=False)
-        assert len(calls) == 2
+        attempt("/profiles/a")
+        assert len(calls) == 3  # expired: a temporary cause gets retried
+        output[:] = ["", "Connection reset by peer"]
+        ld.reset_resolver_conflicts()
+        assert attempt("/profiles/a") == "pip install failed: Connection reset by peer"
+        attempt("/profiles/a")
+        assert len(calls) == 5  # a non-resolver failure is never cached
 
     def test_expired_read_never_drops_a_concurrent_fresh_entry(self, monkeypatch):
         key = ("home", "wake.sherpa", ("sherpa-onnx",))
@@ -289,51 +287,6 @@ class TestResolverConflictMemory:
         monkeypatch.setattr(ld.time, "monotonic", lambda: 10_000.0)
         assert ld._cached_conflict(key) is None
         assert ld._RESOLVER_CONFLICTS[key] == fresh
-
-    def test_conflict_memory_is_scoped_per_profile_home(self, monkeypatch):
-        home = ["/profiles/a"]
-        monkeypatch.setattr("hermes_constants.hermes_home_key", lambda path=None: home[0])
-        calls = []
-
-        def install(specs, **kwargs):
-            calls.append(specs)
-            return ld._InstallResult(False, "", "your requirements are unsatisfiable")
-
-        monkeypatch.setattr(ld, "_venv_pip_install", install)
-        for profile, expected_calls in (("/profiles/a", 1), ("/profiles/b", 2), ("/profiles/a", 2)):
-            home[0] = profile
-            with pytest.raises(ld.FeatureUnavailable):
-                ld.ensure("wake.sherpa", prompt=False)
-            assert len(calls) == expected_calls
-
-    def test_marker_on_stdout_is_detected_despite_stderr_noise(self, monkeypatch):
-        calls = []
-
-        def install(specs, **kwargs):
-            calls.append(specs)
-            return ld._InstallResult(False, "ERROR: ResolutionImpossible: conflicting pins", "WARNING: cache dir unwritable")
-
-        monkeypatch.setattr(ld, "_venv_pip_install", install)
-        for _ in range(2):
-            with pytest.raises(ld.FeatureUnavailable) as exc:
-                ld.ensure("wake.sherpa", prompt=False)
-        assert len(calls) == 1
-        assert exc.value.reason.startswith("resolver conflict (cached")
-
-    def test_network_failure_is_retried(self, monkeypatch):
-        calls = []
-
-        def install(specs, **kwargs):
-            calls.append(specs)
-            return ld._InstallResult(False, "", "Connection reset")
-
-        monkeypatch.setattr(ld, "_venv_pip_install", install)
-        for _ in range(2):
-            with pytest.raises(ld.FeatureUnavailable) as exc:
-                ld.ensure("wake.sherpa", prompt=False)
-            assert exc.value.reason == "pip install failed: Connection reset"
-        assert len(calls) == 2
-        assert ld.install_blocked_reason("wake.sherpa") is None
 
 
 @pytest.mark.skipif(ld._uv_binary() is None, reason="needs the uv binary")
@@ -359,14 +312,6 @@ def test_real_uv_resolver_conflict_is_cached(monkeypatch):
             ld.ensure("test.realuv", prompt=False)
         assert exc.value.reason.startswith("resolver conflict (cached")
     assert len(calls) == 1
-
-
-def test_install_blocked_reason_never_raises(monkeypatch):
-    def broken(feature):
-        raise RuntimeError("dependency probe failed")
-
-    monkeypatch.setattr(ld, "feature_missing", broken)
-    assert ld.install_blocked_reason("wake.sherpa") is None
 
 
 # ---------------------------------------------------------------------------

@@ -34,6 +34,7 @@ logger = logging.getLogger(__name__)
 # process may serve several profiles; entries expire so a temporary "unsatisfiable" (offline mode, a release
 # still inside the exclude-newer quarantine) is retried instead of sticking until restart.
 _RESOLVER_CONFLICT_TTL_S = 3600.0
+_RESOLVER_CONFLICT_MARKERS = ("unsatisfiable", "no solution found", "resolutionimpossible")
 _RESOLVER_CONFLICTS: dict[tuple[str, str, tuple[str, ...]], tuple[str, float]] = {}
 
 
@@ -352,18 +353,23 @@ def _unsupported_feature_reason(feature: str) -> Optional[str]:
     if feature == "wake.openwakeword":
         from hermes_platform.host import facts as host_facts
 
+        oww_spec = next((s for s in LAZY_DEPS[feature] if _pkg_name_from_spec(s) == "openwakeword"), "openwakeword")
         if _openwakeword_unsupported(host_facts.os_family(), sys.version_info,
-                                     _installed_version("tflite-runtime") is not None):
+                                     tflite_installed=_installed_version("tflite-runtime") is not None,
+                                     openwakeword_missing=not _is_satisfied(oww_spec)):
             return ("unsupported on Linux with Python 3.12+: openWakeWord 0.6.0 requires tflite-runtime on Linux, "
                     "which has no wheel for Python 3.12 or newer (an already-installed tflite-runtime build lifts this).")
     return None
 
 
-def _openwakeword_unsupported(platform: str, version_info: tuple, tflite_installed: bool) -> bool:
+def _openwakeword_unsupported(platform: str, version_info: tuple, *, tflite_installed: bool,
+                              openwakeword_missing: bool) -> bool:
     """openWakeWord 0.6.0 declares ``tflite-runtime`` on Linux, whose last release ships no wheel past
-    cp311 and no sdist, so a resolve there can only succeed when a tflite-runtime build is already
-    installed. Host facts come in as data so the decision is testable on any host."""
-    return platform.startswith("linux") and tuple(version_info[:2]) >= (3, 12) and not tflite_installed
+    cp311 and no sdist, so resolving openWakeWord there only succeeds when a tflite-runtime build is
+    already installed. Repairing another missing package never resolves openWakeWord, so it is not
+    gated. Host facts come in as data so the decision is testable on any host."""
+    return (openwakeword_missing and platform.startswith("linux") and tuple(version_info[:2]) >= (3, 12)
+            and not tflite_installed)
 
 
 def _spec_is_safe(spec: str) -> bool:
@@ -752,11 +758,12 @@ def ensure(feature: str, *, prompt: bool = True) -> None:
     logger.info("Lazy-installing %s for feature %r", " ".join(missing), feature)
     result = _venv_pip_install(missing)
     if not result.success:  # surface pip's own error (quarantine 404, network), tail-clipped
-        output = result.stderr or result.stdout or ""
+        conflict_stream = next((out for out in (result.stderr or "", result.stdout or "")
+                                if any(marker in out.lower() for marker in _RESOLVER_CONFLICT_MARKERS)), None)
+        output = conflict_stream if conflict_stream is not None else (result.stderr or result.stdout or "")
         snippet = output.strip()[-2000:]
         reason = f"pip install failed: {snippet or 'no error output'}"
-        both_streams = f"{result.stderr or ''}\n{result.stdout or ''}".lower()
-        if any(marker in both_streams for marker in ("unsatisfiable", "no solution found", "resolutionimpossible")):
+        if conflict_stream is not None:  # keep the resolver's own diagnostic, whichever stream carried it
             reason = "resolver conflict (cached for up to an hour; restart after changing the environment): " + reason
             _RESOLVER_CONFLICTS[conflict_key] = (reason, time.monotonic())
         raise FeatureUnavailable(feature, missing, reason)
