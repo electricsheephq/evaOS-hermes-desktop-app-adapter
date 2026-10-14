@@ -6,13 +6,18 @@ that evaOS agents running the plugin's gateway half get **Cloud Files**:
 - browse, search and create folders in the agent's workspace;
 - upload files and whole folders;
 - open and edit Markdown and text files with an explicit Save;
+- read-only previews of images, PDFs and code or data files (CSV as a table), with Retry on a failed preview; these
+  need a 0.4.1 or newer gateway half, and an older one says previews need Cloud Files 0.4.1 or newer;
+- drag files and folders into a chat as `@file:` / `@folder:` chips, or use **Add to chat** (the keyboard equivalent);
+- **Show** on a finished upload, and Drive imports that land in the open folder;
+- a file list that follows what the agent writes, without a Refresh;
 - download one file at a time through this app's own authenticated download (`captureGatewayFileDownload`, the
   gateway's `/api/files/download`), from the toolbar or while viewing a file;
 - import files from the agent's Google Drive;
 - **+ → Cloud** in the chat composer, which hands the agent file locations without re-uploading.
 
-The file list works from the keyboard (one tab stop; arrows, Home/End, Page Up/Down, Enter, Space, Alt+Up or Backspace)
-and announces item counts, search results and load errors to screen readers.
+The file list and the Drive picker work from the keyboard (one tab stop; arrows, Home/End, Page Up/Down, Enter, Space,
+Alt+Up or Backspace), and the file list announces item counts, search results and load errors to screen readers.
 
 ## Availability
 
@@ -37,9 +42,9 @@ On evaOS, the gateway half is the managed `hermes-cloud-file-manager` plugin tha
 
 | | |
 |---|---|
-| Release | v0.4.0 (`d89400b4e6148507daa15c6c3ef4c6ad969f0e1b`) |
+| Release | v0.4.5 (`1f49fbb0867b74ad29cf9de52cfe8d9995591fae`); the desktop bundle is unchanged from v0.4.4 |
 | File | `desktop/plugin.js` |
-| sha256 | `42df3bf3fc989b8a1b281bf75854bc3272d9adadef58862f4a22a8461491bcf4` |
+| sha256 | `1b13b64964500d17b765fa23c8154d3a1b44a754f42a16828f066c17e083e874` |
 | License | MIT (`LICENSE`) |
 
 It imports only `@hermes/plugin-sdk`, `react` and `react/jsx-runtime`. The app build fails if it imports a name this
