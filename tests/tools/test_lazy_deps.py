@@ -14,6 +14,7 @@ from __future__ import annotations
 
 
 import os
+import sys
 
 import pytest
 
@@ -161,6 +162,104 @@ class TestEnsure:
         )
         with pytest.raises(ld.FeatureUnavailable, match="still not importable"):
             ld.ensure("test.cache", prompt=False)
+
+
+class TestOpenWakeWordPlatformGate:
+    def test_linux_python312_missing_blocks_before_installer(self, monkeypatch):
+        monkeypatch.setattr(sys, "platform", "linux")
+        monkeypatch.setattr(sys, "version_info", (3, 12))
+        monkeypatch.setattr(ld, "feature_missing", lambda feature: ld.LAZY_DEPS[feature])
+        monkeypatch.setattr(ld, "_allow_lazy_installs", lambda: True)
+        calls = []
+
+        def install(specs, **kwargs):
+            calls.append(specs)
+            return ld._InstallResult(False, "", "unexpected install")
+
+        monkeypatch.setattr(ld, "_venv_pip_install", install)
+        with pytest.raises(ld.FeatureUnavailable) as exc:
+            ld.ensure("wake.openwakeword", prompt=False)
+        assert exc.value.reason.startswith("unsupported on Linux with Python 3.12+")
+        assert calls == []
+
+    @pytest.mark.parametrize("platform,version", [("darwin", (3, 12)), ("linux", (3, 11))])
+    def test_other_platform_or_python_is_not_gated(self, monkeypatch, platform, version):
+        monkeypatch.setattr(sys, "platform", platform)
+        monkeypatch.setattr(sys, "version_info", version)
+        assert ld._unsupported_feature_reason("wake.openwakeword") is None
+
+    def test_installed_dependencies_bypass_gate(self, monkeypatch):
+        monkeypatch.setattr(sys, "platform", "linux")
+        monkeypatch.setattr(sys, "version_info", (3, 12))
+        monkeypatch.setattr(ld, "feature_missing", lambda feature: ())
+        monkeypatch.setattr(ld, "_venv_pip_install", lambda *a, **kw: pytest.fail("installer must not run"))
+        ld.ensure("wake.openwakeword", prompt=False)
+        assert ld.install_blocked_reason("wake.openwakeword") is None
+
+    def test_refresh_skips_unsupported_missing_feature(self, monkeypatch):
+        monkeypatch.setattr(sys, "platform", "linux")
+        monkeypatch.setattr(sys, "version_info", (3, 12))
+        monkeypatch.setattr(ld, "feature_missing", lambda feature: ld.LAZY_DEPS[feature])
+        monkeypatch.setattr(ld, "_venv_pip_install", lambda *a, **kw: pytest.fail("installer must not run"))
+        result = ld._refresh_features(["wake.openwakeword"], prompt=False, restoring=True)
+        assert result["wake.openwakeword"].startswith("skipped: unsupported on Linux with Python 3.12+")
+
+
+class TestResolverConflictMemory:
+    @pytest.fixture(autouse=True)
+    def isolated_conflicts(self, monkeypatch):
+        # Also works on the unmodified source during the red/green revert proof.
+        monkeypatch.setattr(ld, "_RESOLVER_CONFLICTS", {}, raising=False)
+        monkeypatch.setattr(ld, "feature_missing", lambda feature: ld.LAZY_DEPS[feature])
+        monkeypatch.setattr(ld, "_lazy_install_target", lambda: None)
+        monkeypatch.setattr("hermes_cli.config.get_managed_system", lambda: "")
+        monkeypatch.setattr(ld, "_allow_lazy_installs", lambda: True)
+
+    @pytest.mark.parametrize("output", [
+        "your requirements are unsatisfiable", "No solution found", "ResolutionImpossible",
+    ])
+    def test_resolver_conflict_is_cached(self, monkeypatch, output):
+        calls = []
+
+        def install(specs, **kwargs):
+            calls.append(specs)
+            return ld._InstallResult(False, "", output)
+
+        monkeypatch.setattr(ld, "_venv_pip_install", install)
+        with pytest.raises(ld.FeatureUnavailable) as first:
+            ld.ensure("wake.sherpa", prompt=False)
+        assert len(calls) == 1
+        with pytest.raises(ld.FeatureUnavailable) as second:
+            ld.ensure("wake.sherpa", prompt=False)
+        assert len(calls) == 1
+        assert second.value.reason.startswith("resolver conflict (cached")
+        assert second.value.reason == first.value.reason
+        assert ld.install_blocked_reason("wake.sherpa") == second.value.reason
+        ld.reset_resolver_conflicts()
+        assert ld.install_blocked_reason("wake.sherpa") is None
+
+    def test_network_failure_is_retried(self, monkeypatch):
+        calls = []
+
+        def install(specs, **kwargs):
+            calls.append(specs)
+            return ld._InstallResult(False, "", "Connection reset")
+
+        monkeypatch.setattr(ld, "_venv_pip_install", install)
+        for _ in range(2):
+            with pytest.raises(ld.FeatureUnavailable) as exc:
+                ld.ensure("wake.sherpa", prompt=False)
+            assert exc.value.reason == "pip install failed: Connection reset"
+        assert len(calls) == 2
+        assert ld.install_blocked_reason("wake.sherpa") is None
+
+
+def test_install_blocked_reason_never_raises(monkeypatch):
+    def broken(feature):
+        raise RuntimeError("dependency probe failed")
+
+    monkeypatch.setattr(ld, "feature_missing", broken)
+    assert ld.install_blocked_reason("wake.sherpa") is None
 
 
 # ---------------------------------------------------------------------------

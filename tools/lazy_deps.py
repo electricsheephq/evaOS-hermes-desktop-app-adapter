@@ -29,6 +29,8 @@ from hermes_cli._subprocess_compat import windows_hide_flags
 
 logger = logging.getLogger(__name__)
 
+_RESOLVER_CONFLICTS: dict[tuple[str, tuple[str, ...]], str] = {}
+
 
 # Allowlist: "namespace.backend" -> pip specs matching the pyproject extra. Pins are exact
 # (security posture); bump here AND in pyproject. Shared patched floors (aiohttp==3.14.3,
@@ -342,6 +344,9 @@ def _unsupported_feature_reason(feature: str) -> Optional[str]:
     if sys.platform == "win32" and feature == "platform.matrix":
         return ("unsupported on Windows: Matrix E2EE depends on python-olm, which has no Windows wheel and "
                 "requires make + libolm to build from sdist. Run Hermes under WSL to use Matrix on Windows.")
+    if feature == "wake.openwakeword" and sys.platform.startswith("linux") and sys.version_info >= (3, 12):
+        return ("unsupported on Linux with Python 3.12+: openWakeWord 0.6.0 requires tflite-runtime on Linux, "
+                "which has no wheel for Python 3.12 or newer.")
     return None
 
 
@@ -699,6 +704,9 @@ def ensure(feature: str, *, prompt: bool = True) -> None:
         return
     if unsupported := _unsupported_feature_reason(feature):
         raise FeatureUnavailable(feature, missing, unsupported)
+    conflict_key = (feature, tuple(missing))
+    if conflict := _RESOLVER_CONFLICTS.get(conflict_key):
+        raise FeatureUnavailable(feature, missing, conflict)
     # Package-manager installs (NixOS etc.) have read-only site-packages: fail fast instead of burning
     # ~15s on ensurepip — unless a durable target is configured. The reason MUST start with
     # "unsupported ": _refresh_features classifies skips by that prefix.
@@ -728,8 +736,13 @@ def ensure(feature: str, *, prompt: bool = True) -> None:
     logger.info("Lazy-installing %s for feature %r", " ".join(missing), feature)
     result = _venv_pip_install(missing)
     if not result.success:  # surface pip's own error (quarantine 404, network), tail-clipped
-        snippet = (result.stderr or result.stdout or "").strip()[-2000:]
-        raise FeatureUnavailable(feature, missing, f"pip install failed: {snippet or 'no error output'}")
+        output = result.stderr or result.stdout or ""
+        snippet = output.strip()[-2000:]
+        reason = f"pip install failed: {snippet or 'no error output'}"
+        if any(marker in output.lower() for marker in ("unsatisfiable", "no solution found", "resolutionimpossible")):
+            reason = "resolver conflict (cached for this process; restart after changing the environment): " + reason
+            _RESOLVER_CONFLICTS[conflict_key] = reason
+        raise FeatureUnavailable(feature, missing, reason)
     _invalidate_import_caches()
     if still_missing := feature_missing(feature):
         raise FeatureUnavailable(feature, still_missing, "install reported success but packages still not importable (may require Python restart)")
@@ -739,6 +752,22 @@ def ensure(feature: str, *, prompt: bool = True) -> None:
 def is_available(feature: str) -> bool:
     """Return True if the feature's deps are already satisfied."""
     return feature in LAZY_DEPS and not feature_missing(feature)
+
+
+def install_blocked_reason(feature: str) -> Optional[str]:
+    """Probe known install blockers without resolving packages or raising."""
+    try:
+        missing = feature_missing(feature)
+        if not missing:
+            return None
+        return _unsupported_feature_reason(feature) or _RESOLVER_CONFLICTS.get((feature, tuple(missing)))
+    except Exception:
+        return None
+
+
+def reset_resolver_conflicts() -> None:
+    """Clear process-local resolver conflict memory for tests."""
+    _RESOLVER_CONFLICTS.clear()
 
 
 def feature_install_command(feature: str, *, venv_pip: bool = False) -> Optional[str]:

@@ -372,6 +372,9 @@ def check_wake_word_requirements(cfg: Optional[Dict[str, Any]] = None) -> Dict[s
     feature = _PROVIDERS.get(provider, ("", "wake.openwakeword"))[1]
     deps_ok = lazy_deps.is_available(feature)
     lazy_ok = lazy_deps._allow_lazy_installs()
+    blocked = None if deps_ok else lazy_deps.install_blocked_reason(feature)
+    if blocked:
+        lazy_ok = False
     # The audio probe imports sounddevice + numpy — packages the lazy installer would
     # fetch — so only trust it once deps are installed; on a fresh install the engine
     # constructors' ``lazy_deps.ensure()`` + stream-open surface any real audio problem.
@@ -389,6 +392,7 @@ def check_wake_word_requirements(cfg: Optional[Dict[str, Any]] = None) -> Dict[s
 
     # Ordered remediation ladder: first true predicate wins.
     ladder = (
+        (bool(blocked), lambda: blocked),
         (not key_ok, lambda: "Set PORCUPINE_ACCESS_KEY (free key at https://console.picovoice.ai)."),
         (not deps_ok and not lazy_ok, lambda: lazy_deps.feature_install_command(feature) or ""),
         (not tflite_ok,
