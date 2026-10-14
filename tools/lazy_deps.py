@@ -344,10 +344,18 @@ def _unsupported_feature_reason(feature: str) -> Optional[str]:
     if sys.platform == "win32" and feature == "platform.matrix":
         return ("unsupported on Windows: Matrix E2EE depends on python-olm, which has no Windows wheel and "
                 "requires make + libolm to build from sdist. Run Hermes under WSL to use Matrix on Windows.")
-    if feature == "wake.openwakeword" and sys.platform.startswith("linux") and sys.version_info >= (3, 12):
+    if feature == "wake.openwakeword" and _openwakeword_unsupported(
+            sys.platform, sys.version_info, _installed_version("tflite-runtime") is not None):
         return ("unsupported on Linux with Python 3.12+: openWakeWord 0.6.0 requires tflite-runtime on Linux, "
-                "which has no wheel for Python 3.12 or newer.")
+                "which has no wheel for Python 3.12 or newer (an already-installed tflite-runtime build lifts this).")
     return None
+
+
+def _openwakeword_unsupported(platform: str, version_info: tuple, tflite_installed: bool) -> bool:
+    """openWakeWord 0.6.0 declares ``tflite-runtime`` on Linux, whose last release ships no wheel past
+    cp311 and no sdist, so a resolve there can only succeed when a tflite-runtime build is already
+    installed. Host facts come in as data so the decision is testable on any host."""
+    return platform.startswith("linux") and tuple(version_info[:2]) >= (3, 12) and not tflite_installed
 
 
 def _spec_is_safe(spec: str) -> bool:

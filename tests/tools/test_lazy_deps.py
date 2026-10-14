@@ -165,9 +165,20 @@ class TestEnsure:
 
 
 class TestOpenWakeWordPlatformGate:
-    def test_linux_python312_missing_blocks_before_installer(self, monkeypatch):
-        monkeypatch.setattr(sys, "platform", "linux")
-        monkeypatch.setattr(sys, "version_info", (3, 12))
+    @pytest.mark.parametrize("platform,version,tflite,expected", [
+        ("linux", (3, 12), False, True),
+        ("linux", (3, 13, 1), False, True),
+        ("linux", (3, 12), True, False),
+        ("linux", (3, 11), False, False),
+        ("darwin", (3, 12), False, False),
+        ("win32", (3, 12), False, False),
+    ])
+    def test_gate_decision_takes_host_facts_as_data(self, platform, version, tflite, expected):
+        assert ld._openwakeword_unsupported(platform, version, tflite) is expected
+
+    def test_unsupported_reason_blocks_before_installer(self, monkeypatch):
+        monkeypatch.setattr(ld, "_unsupported_feature_reason",
+                            lambda feature: "unsupported on test host" if feature == "wake.openwakeword" else None)
         monkeypatch.setattr(ld, "feature_missing", lambda feature: ld.LAZY_DEPS[feature])
         monkeypatch.setattr(ld, "_allow_lazy_installs", lambda: True)
         calls = []
@@ -179,30 +190,35 @@ class TestOpenWakeWordPlatformGate:
         monkeypatch.setattr(ld, "_venv_pip_install", install)
         with pytest.raises(ld.FeatureUnavailable) as exc:
             ld.ensure("wake.openwakeword", prompt=False)
-        assert exc.value.reason.startswith("unsupported on Linux with Python 3.12+")
+        assert exc.value.reason == "unsupported on test host"
         assert calls == []
-
-    @pytest.mark.parametrize("platform,version", [("darwin", (3, 12)), ("linux", (3, 11))])
-    def test_other_platform_or_python_is_not_gated(self, monkeypatch, platform, version):
-        monkeypatch.setattr(sys, "platform", platform)
-        monkeypatch.setattr(sys, "version_info", version)
-        assert ld._unsupported_feature_reason("wake.openwakeword") is None
+        assert ld.install_blocked_reason("wake.openwakeword") == "unsupported on test host"
 
     def test_installed_dependencies_bypass_gate(self, monkeypatch):
-        monkeypatch.setattr(sys, "platform", "linux")
-        monkeypatch.setattr(sys, "version_info", (3, 12))
+        monkeypatch.setattr(ld, "_unsupported_feature_reason", lambda feature: "unsupported on test host")
         monkeypatch.setattr(ld, "feature_missing", lambda feature: ())
         monkeypatch.setattr(ld, "_venv_pip_install", lambda *a, **kw: pytest.fail("installer must not run"))
         ld.ensure("wake.openwakeword", prompt=False)
         assert ld.install_blocked_reason("wake.openwakeword") is None
 
     def test_refresh_skips_unsupported_missing_feature(self, monkeypatch):
-        monkeypatch.setattr(sys, "platform", "linux")
-        monkeypatch.setattr(sys, "version_info", (3, 12))
+        monkeypatch.setattr(ld, "_unsupported_feature_reason", lambda feature: "unsupported on test host")
         monkeypatch.setattr(ld, "feature_missing", lambda feature: ld.LAZY_DEPS[feature])
         monkeypatch.setattr(ld, "_venv_pip_install", lambda *a, **kw: pytest.fail("installer must not run"))
         result = ld._refresh_features(["wake.openwakeword"], prompt=False, restoring=True)
-        assert result["wake.openwakeword"].startswith("skipped: unsupported on Linux with Python 3.12+")
+        assert result["wake.openwakeword"] == "skipped: unsupported on test host"
+
+    @pytest.mark.linux_only
+    def test_linux_host_gate_follows_python_and_tflite(self):
+        expected = sys.version_info >= (3, 12) and ld._installed_version("tflite-runtime") is None
+        reason = ld._unsupported_feature_reason("wake.openwakeword")
+        assert (reason is not None) is expected
+        if reason:
+            assert reason.startswith("unsupported on Linux with Python 3.12+")
+
+    @pytest.mark.macos_only
+    def test_macos_host_is_not_gated(self):
+        assert ld._unsupported_feature_reason("wake.openwakeword") is None
 
 
 class TestResolverConflictMemory:
@@ -252,6 +268,31 @@ class TestResolverConflictMemory:
             assert exc.value.reason == "pip install failed: Connection reset"
         assert len(calls) == 2
         assert ld.install_blocked_reason("wake.sherpa") is None
+
+
+@pytest.mark.skipif(ld._uv_binary() is None, reason="needs the uv binary")
+def test_real_uv_resolver_conflict_is_cached(monkeypatch):
+    """Real installer path: uv's own unsatisfiable report, on the stream it really uses, is recognised
+    and the second ensure() never re-runs the resolver. Offline + a nonexistent name keep it hermetic."""
+    monkeypatch.setenv("UV_OFFLINE", "1")
+    monkeypatch.setitem(ld.LAZY_DEPS, "test.realuv", ("hermes-nonexistent-probe-pkg==1.0",))
+    monkeypatch.setattr(ld, "_RESOLVER_CONFLICTS", {})
+    monkeypatch.setattr(ld, "_allow_lazy_installs", lambda: True)
+    monkeypatch.setattr(ld, "_lazy_install_target", lambda: None)
+    monkeypatch.setattr("hermes_cli.config.get_managed_system", lambda: "")
+    calls = []
+    real_run = ld._run_installer
+
+    def spy(cmd, **kw):
+        calls.append(cmd)
+        return real_run(cmd, **kw)
+
+    monkeypatch.setattr(ld, "_run_installer", spy)
+    for _ in range(2):
+        with pytest.raises(ld.FeatureUnavailable) as exc:
+            ld.ensure("test.realuv", prompt=False)
+        assert exc.value.reason.startswith("resolver conflict (cached")
+    assert len(calls) == 1
 
 
 def test_install_blocked_reason_never_raises(monkeypatch):
