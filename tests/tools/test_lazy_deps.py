@@ -274,6 +274,22 @@ class TestResolverConflictMemory:
             ld.ensure("wake.sherpa", prompt=False)
         assert len(calls) == 2
 
+    def test_expired_read_never_drops_a_concurrent_fresh_entry(self, monkeypatch):
+        key = ("home", "wake.sherpa", ("sherpa-onnx",))
+        fresh = ("fresh conflict", 10_000.0)
+
+        class Interleaved(dict):
+            # Another thread stores a fresh entry between this reader's get() and its expiry decision.
+            def get(self, k, default=None):
+                stale = super().get(k, default)
+                self[k] = fresh
+                return stale
+
+        monkeypatch.setattr(ld, "_RESOLVER_CONFLICTS", Interleaved({key: ("stale conflict", 0.0)}))
+        monkeypatch.setattr(ld.time, "monotonic", lambda: 10_000.0)
+        assert ld._cached_conflict(key) is None
+        assert ld._RESOLVER_CONFLICTS[key] == fresh
+
     def test_conflict_memory_is_scoped_per_profile_home(self, monkeypatch):
         home = ["/profiles/a"]
         monkeypatch.setattr("hermes_constants.hermes_home_key", lambda path=None: home[0])

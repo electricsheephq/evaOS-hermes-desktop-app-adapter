@@ -793,15 +793,14 @@ def _conflict_key(feature: str, missing: tuple[str, ...]) -> tuple[str, str, tup
 
 
 def _cached_conflict(key: tuple[str, str, tuple[str, ...]]) -> Optional[str]:
-    """The conflict reason recorded for ``key`` within the TTL, else None; expired entries are dropped."""
+    """The conflict reason recorded for ``key`` within the TTL, else None. Expired entries are left in
+    place (the next conflict overwrites them): deleting here could drop a fresh entry another thread
+    just wrote."""
     entry = _RESOLVER_CONFLICTS.get(key)
     if entry is None:
         return None
     reason, recorded = entry
-    if time.monotonic() - recorded >= _RESOLVER_CONFLICT_TTL_S:
-        _RESOLVER_CONFLICTS.pop(key, None)
-        return None
-    return reason
+    return reason if time.monotonic() - recorded < _RESOLVER_CONFLICT_TTL_S else None
 
 
 def reset_resolver_conflicts() -> None:
