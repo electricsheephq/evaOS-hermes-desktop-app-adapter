@@ -163,6 +163,23 @@ def test_requirements_fresh_install_lazy_allowed(monkeypatch):
     assert r["hint"] == ""
 
 
+@pytest.mark.parametrize("blocked", ["unsupported on test host", None])
+def test_requirements_client_capture_honors_install_gate(monkeypatch, blocked):
+    from tools import lazy_deps
+
+    _voice_loop_ready(monkeypatch)
+    monkeypatch.setattr(lazy_deps, "feature_missing", lambda feature: lazy_deps.LAZY_DEPS[feature])
+    monkeypatch.setattr(lazy_deps, "_allow_lazy_installs", lambda: True)
+    monkeypatch.setattr(lazy_deps, "install_blocked_reason", lambda feature: blocked)
+    monkeypatch.setattr(ww, "_audio_available", lambda: False)
+    monkeypatch.setattr(ww, "ensure_tflite_runtime", lambda: False)
+    reqs = ww.check_wake_word_requirements({"provider": "openwakeword", "capture": "client"})
+    assert reqs["available"] is (blocked is None)
+    assert reqs["deps_available"] is False
+    assert reqs["capture"] == "client"
+    assert reqs["hint"] == (blocked or "")
+
+
 def test_requirements_deps_present_but_no_audio_hint(monkeypatch):
     """Once deps ARE installed, a failing audio probe blocks with a mic hint
     (lazy installs can't fix a missing audio device)."""

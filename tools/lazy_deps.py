@@ -21,6 +21,7 @@ import site
 import subprocess
 import sys
 import sysconfig
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -28,6 +29,13 @@ from typing import Any, Callable, Optional
 from hermes_cli._subprocess_compat import windows_hide_flags
 
 logger = logging.getLogger(__name__)
+
+# (profile home key, feature, missing specs) -> (reason, monotonic time recorded). Keyed by home because one
+# process may serve several profiles; entries expire so a temporary "unsatisfiable" (offline mode, a release
+# still inside the exclude-newer quarantine) is retried instead of sticking until restart.
+_RESOLVER_CONFLICT_TTL_S = 3600.0
+_RESOLVER_CONFLICT_MARKERS = ("unsatisfiable", "no solution found", "resolutionimpossible")
+_RESOLVER_CONFLICTS: dict[tuple[str, str, tuple[str, ...]], tuple[str, float]] = {}
 
 
 # Allowlist: "namespace.backend" -> pip specs matching the pyproject extra. Pins are exact
@@ -342,7 +350,26 @@ def _unsupported_feature_reason(feature: str) -> Optional[str]:
     if sys.platform == "win32" and feature == "platform.matrix":
         return ("unsupported on Windows: Matrix E2EE depends on python-olm, which has no Windows wheel and "
                 "requires make + libolm to build from sdist. Run Hermes under WSL to use Matrix on Windows.")
+    if feature == "wake.openwakeword":
+        from hermes_platform.host import facts as host_facts
+
+        oww_spec = next((s for s in LAZY_DEPS[feature] if _pkg_name_from_spec(s) == "openwakeword"), "openwakeword")
+        if _openwakeword_unsupported(host_facts.os_family(), sys.version_info,
+                                     tflite_installed=_installed_version("tflite-runtime") is not None,
+                                     openwakeword_missing=not _is_satisfied(oww_spec)):
+            return ("unsupported on Linux with Python 3.12+: openWakeWord 0.6.0 requires tflite-runtime on Linux, "
+                    "which has no wheel for Python 3.12 or newer (an already-installed tflite-runtime build lifts this).")
     return None
+
+
+def _openwakeword_unsupported(platform: str, version_info: tuple, *, tflite_installed: bool,
+                              openwakeword_missing: bool) -> bool:
+    """openWakeWord 0.6.0 declares ``tflite-runtime`` on Linux, whose last release ships no wheel past
+    cp311 and no sdist, so resolving openWakeWord there only succeeds when a tflite-runtime build is
+    already installed. Repairing another missing package never resolves openWakeWord, so it is not
+    gated. Host facts come in as data so the decision is testable on any host."""
+    return (openwakeword_missing and platform.startswith("linux") and tuple(version_info[:2]) >= (3, 12)
+            and not tflite_installed)
 
 
 def _spec_is_safe(spec: str) -> bool:
@@ -699,6 +726,9 @@ def ensure(feature: str, *, prompt: bool = True) -> None:
         return
     if unsupported := _unsupported_feature_reason(feature):
         raise FeatureUnavailable(feature, missing, unsupported)
+    conflict_key = _conflict_key(feature, missing)
+    if conflict := _cached_conflict(conflict_key):
+        raise FeatureUnavailable(feature, missing, conflict)
     # Package-manager installs (NixOS etc.) have read-only site-packages: fail fast instead of burning
     # ~15s on ensurepip — unless a durable target is configured. The reason MUST start with
     # "unsupported ": _refresh_features classifies skips by that prefix.
@@ -728,8 +758,15 @@ def ensure(feature: str, *, prompt: bool = True) -> None:
     logger.info("Lazy-installing %s for feature %r", " ".join(missing), feature)
     result = _venv_pip_install(missing)
     if not result.success:  # surface pip's own error (quarantine 404, network), tail-clipped
-        snippet = (result.stderr or result.stdout or "").strip()[-2000:]
-        raise FeatureUnavailable(feature, missing, f"pip install failed: {snippet or 'no error output'}")
+        conflict_stream = next((out for out in (result.stderr or "", result.stdout or "")
+                                if any(marker in out.lower() for marker in _RESOLVER_CONFLICT_MARKERS)), None)
+        output = conflict_stream if conflict_stream is not None else (result.stderr or result.stdout or "")
+        snippet = output.strip()[-2000:]
+        reason = f"pip install failed: {snippet or 'no error output'}"
+        if conflict_stream is not None:  # keep the resolver's own diagnostic, whichever stream carried it
+            reason = "resolver conflict (cached for up to an hour; restart after changing the environment): " + reason
+            _RESOLVER_CONFLICTS[conflict_key] = (reason, time.monotonic())
+        raise FeatureUnavailable(feature, missing, reason)
     _invalidate_import_caches()
     if still_missing := feature_missing(feature):
         raise FeatureUnavailable(feature, still_missing, "install reported success but packages still not importable (may require Python restart)")
@@ -739,6 +776,43 @@ def ensure(feature: str, *, prompt: bool = True) -> None:
 def is_available(feature: str) -> bool:
     """Return True if the feature's deps are already satisfied."""
     return feature in LAZY_DEPS and not feature_missing(feature)
+
+
+def install_blocked_reason(feature: str) -> Optional[str]:
+    """Probe known install blockers without resolving packages or raising."""
+    try:
+        missing = feature_missing(feature)
+        if not missing:
+            return None
+        return _unsupported_feature_reason(feature) or _cached_conflict(_conflict_key(feature, missing))
+    except Exception:
+        return None
+
+
+def _conflict_key(feature: str, missing: tuple[str, ...]) -> tuple[str, str, tuple[str, ...]]:
+    """Conflict-memory key, scoped to the serving profile's home (resolved at call time)."""
+    home = ""
+    with contextlib.suppress(Exception):
+        from hermes_constants import hermes_home_key
+
+        home = hermes_home_key()
+    return (home, feature, tuple(missing))
+
+
+def _cached_conflict(key: tuple[str, str, tuple[str, ...]]) -> Optional[str]:
+    """The conflict reason recorded for ``key`` within the TTL, else None. Expired entries are left in
+    place (the next conflict overwrites them): deleting here could drop a fresh entry another thread
+    just wrote."""
+    entry = _RESOLVER_CONFLICTS.get(key)
+    if entry is None:
+        return None
+    reason, recorded = entry
+    return reason if time.monotonic() - recorded < _RESOLVER_CONFLICT_TTL_S else None
+
+
+def reset_resolver_conflicts() -> None:
+    """Clear process-local resolver conflict memory for tests."""
+    _RESOLVER_CONFLICTS.clear()
 
 
 def feature_install_command(feature: str, *, venv_pip: bool = False) -> Optional[str]:
