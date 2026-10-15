@@ -7,13 +7,23 @@ import { I18nProvider } from '@/i18n'
 import { TRANSLATIONS } from '@/i18n/catalog'
 import { $notifications, clearNotifications } from '@/store/notifications'
 import { $statusbarVisible } from '@/store/statusbar-prefs'
-import { $evaManagedStatus, $supportPickerOpen, runSupportSessionAction, setSupportPickerOpen } from '@/store/support-picker'
+import {
+  $evaManagedStatus,
+  $supportPickerOpen,
+  runSupportSessionAction,
+  setSupportPickerOpen
+} from '@/store/support-picker'
 
 import { supportSessionStatusbarItem, useStatusbarItems } from './hooks/use-statusbar-items'
 import { TitlebarControls } from './titlebar-controls'
 
-const active = { delegatedSupportActive: true, supportCustomerLabel: 'Customer', supportAgentLabel: 'Agent',
-  supportExpiresAt: new Date(Date.now() + 60_000).toISOString() } as never
+const active = {
+  delegatedSupportActive: true,
+  supportCustomerLabel: 'Customer',
+  supportAgentLabel: 'Agent',
+  supportExpiresAt: new Date(Date.now() + 60_000).toISOString()
+} as never
+
 const noStatusbarItems: never[] = []
 const openAgents = vi.fn()
 const openCommandCenterSection = vi.fn()
@@ -40,7 +50,12 @@ describe('support-session shell indicator', () => {
       }
     })
     const item = supportSessionStatusbarItem(active, TRANSLATIONS.en.delegatedSupport)
-    expect(item).toMatchObject({ hidden: false, id: 'support-session', lockedVisible: true, to: '/settings?tab=gateway' })
+    expect(item).toMatchObject({
+      hidden: false,
+      id: 'support-session',
+      lockedVisible: true,
+      to: '/settings?tab=gateway'
+    })
     expect(item.menuItems?.[0]).toMatchObject({ to: '/settings?tab=gateway' })
     item.menuItems?.[1].onSelect?.()
     await waitFor(() => expect($supportPickerOpen.get()).toBe(true))
@@ -74,6 +89,7 @@ describe('support-session shell indicator', () => {
         </I18nProvider>
       </MemoryRouter>
     )
+
     const { result } = renderHook(
       () =>
         useStatusbarItems({

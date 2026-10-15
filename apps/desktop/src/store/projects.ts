@@ -344,7 +344,9 @@ async function gatewayRequestOn<T>(
 ): Promise<T> {
   const ambient = () => gateway.request<T>(method, params)
 
-  return typeof params.profile === 'string' ? requestOnProfileSocket(params.profile, method, params, ambient) : ambient()
+  return typeof params.profile === 'string'
+    ? requestOnProfileSocket(params.profile, method, params, ambient)
+    : ambient()
 }
 
 function isRetryableProjectTreeReadError(error: unknown): boolean {

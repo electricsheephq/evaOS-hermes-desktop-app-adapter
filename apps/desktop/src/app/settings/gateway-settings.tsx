@@ -42,7 +42,13 @@ import {
 } from '@/store/connections'
 import { managedUpdatesSupported } from '@/store/managed-updates'
 import { notify, notifyError, readableError } from '@/store/notifications'
-import { $evaManagedStatus, activeSupportSession, formatSupportRemaining, refreshEvaManagedStatus, runSupportSessionAction } from '@/store/support-picker'
+import {
+  $evaManagedStatus,
+  activeSupportSession,
+  formatSupportRemaining,
+  refreshEvaManagedStatus,
+  runSupportSessionAction
+} from '@/store/support-picker'
 
 import { cloudTeamChanged, reconnectMovedCloudAgent } from './cloud-team-change'
 import { ConnectionsRegistrySection } from './connections-registry'
@@ -103,7 +109,13 @@ const EMPTY_STATE: GatewaySettingsState = {
   sshRemoteProfile: ''
 }
 
-function SupportSessionCard({ status, onStatus }: { status: EvaManagedStatus | null; onStatus: (next: EvaManagedStatus | null) => void }) {
+function SupportSessionCard({
+  status,
+  onStatus
+}: {
+  status: EvaManagedStatus | null
+  onStatus: (next: EvaManagedStatus | null) => void
+}) {
   const { t } = useI18n()
   const session = activeSupportSession(status)
   const sessionExpiresAt = session?.expiresAt
@@ -115,7 +127,9 @@ function SupportSessionCard({ status, onStatus }: { status: EvaManagedStatus | n
     if (!sessionExpiresAt) {
       return
     }
+
     const timer = window.setInterval(() => setNow(Date.now()), 1_000)
+
     return () => window.clearInterval(timer)
   }, [sessionExpiresAt])
 
@@ -127,6 +141,7 @@ function SupportSessionCard({ status, onStatus }: { status: EvaManagedStatus | n
     if (busy) {
       return
     }
+
     setBusy(action)
 
     try {
@@ -140,7 +155,11 @@ function SupportSessionCard({ status, onStatus }: { status: EvaManagedStatus | n
   }
 
   return (
-    <section aria-label={t.delegatedSupport.sessionTitle} className="rounded-xl border border-border/70 px-4" role="region">
+    <section
+      aria-label={t.delegatedSupport.sessionTitle}
+      className="rounded-xl border border-border/70 px-4"
+      role="region"
+    >
       <ListRow
         action={
           <div className="flex flex-wrap gap-2">

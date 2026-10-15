@@ -53,9 +53,11 @@ const api = vi.fn((request: { body?: unknown; method?: string; path: string; pro
   }
 
   // The profile roster is the grant's two agents; nothing else matters here.
-  return Promise.resolve(request.path.startsWith('/api/profiles?') || request.path === '/api/profiles'
-    ? { profiles: [profile(ANCHOR), profile(SIBLING)] }
-    : {})
+  return Promise.resolve(
+    request.path.startsWith('/api/profiles?') || request.path === '/api/profiles'
+      ? { profiles: [profile(ANCHOR), profile(SIBLING)] }
+      : {}
+  )
 })
 
 const noop = () => {}
@@ -128,7 +130,9 @@ describe('sidebar search under customer-wide support (#347)', () => {
 
     // The row menu hands the row's owner to the write (session-row → SessionActionsMenu).
     await renameSession(row.id, 'Renamed', row.profile)
-    const write = api.mock.calls.map(([request]) => request).findLast(request => request.path === '/api/sessions/bravo-hit')
+    const write = api.mock.calls
+      .map(([request]) => request)
+      .findLast(request => request.path === '/api/sessions/bravo-hit')
 
     expect(write).toMatchObject({ body: { profile: SIBLING }, method: 'PATCH', profile: SIBLING })
   })

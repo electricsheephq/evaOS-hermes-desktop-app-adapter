@@ -787,6 +787,7 @@ describe('createBackendSessionForSend profile routing', () => {
     const activeSessionIdRef: MutableRefObject<string | null> = { current: null }
     const selectedStoredSessionIdRef: MutableRefObject<string | null> = { current: null }
     const navigate = vi.fn()
+
     const requestGateway = vi.fn(async (method: string) => {
       if (method === 'session.create') {
         return { session_id: RUNTIME_SESSION_ID, stored_session_id: 'stored-new' } as never
@@ -794,12 +795,14 @@ describe('createBackendSessionForSend profile routing', () => {
 
       return {} as never
     })
+
     const onRuntimeSessionCreated = vi.fn((runtimeSessionId: string) => {
       expect(runtimeSessionId).toBe(RUNTIME_SESSION_ID)
       expect(activeSessionIdRef.current).toBeNull()
       expect(selectedStoredSessionIdRef.current).toBeNull()
       expect(navigate).not.toHaveBeenCalled()
     })
+
     let handle: HarnessHandle | null = null
 
     render(

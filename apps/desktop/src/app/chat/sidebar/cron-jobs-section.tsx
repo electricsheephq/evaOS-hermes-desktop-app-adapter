@@ -206,7 +206,9 @@ export function SidebarCronJobsSection({
             <div className="px-2 py-1 text-xs text-(--ui-warning-text)" role="status">
               {c.partialFailures(
                 errors.length,
-                errors.map(error => error.status != null ? `${error.profile}: ${error.status}` : error.profile).join(', ')
+                errors
+                  .map(error => (error.status != null ? `${error.profile}: ${error.status}` : error.profile))
+                  .join(', ')
               )}
             </div>
           )}

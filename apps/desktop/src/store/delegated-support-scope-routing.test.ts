@@ -92,12 +92,13 @@ interface SentRequest {
 
 // Any JSON body satisfies the helpers here; an array also reads as a cron list.
 // A gateway restart starts an action that has already finished cleanly.
-const api = vi.fn(async (request: SentRequest) =>
-  (request.path.startsWith('/api/gateway/restart')
-    ? { name: 'gateway-restart' }
-    : request.path.startsWith('/api/actions/')
-      ? { exit_code: 0, running: false }
-      : []) as never
+const api = vi.fn(
+  async (request: SentRequest) =>
+    (request.path.startsWith('/api/gateway/restart')
+      ? { name: 'gateway-restart' }
+      : request.path.startsWith('/api/actions/')
+        ? { exit_code: 0, running: false }
+        : []) as never
 )
 
 const sent = (pathPrefix: string): SentRequest => {

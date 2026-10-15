@@ -78,7 +78,7 @@ describe('Computer Use sidebar entry and page', () => {
   it('not available: the page shows only "isn’t set up", with no install, permissions or Enable controls', async () => {
     render(<ComputerUsePage />)
     await settle()
-    expect(screen.getByText('Computer Use isn\'t set up for Jane’s agent yet.')).toBeTruthy()
+    expect(screen.getByText("Computer Use isn't set up for Jane’s agent yet.")).toBeTruthy()
     expect(screen.queryByRole('button')).toBeNull()
     expect(screen.queryByRole('switch')).toBeNull()
     expect(screen.queryByText('Enable Computer Use')).toBeNull()

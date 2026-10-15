@@ -86,7 +86,9 @@ describe('webhook restart banner under customer-wide support (#347)', () => {
 
     await waitFor(() => expect(api.mock.calls.some(([request]) => request.path === '/api/gateway/restart')).toBe(true))
 
-    const restarts = api.mock.calls.map(([request]) => request).filter(request => request.path === '/api/gateway/restart')
+    const restarts = api.mock.calls
+      .map(([request]) => request)
+      .filter(request => request.path === '/api/gateway/restart')
 
     expect(restarts.map(request => request.profile)).toEqual([SIBLING])
     // The sibling's own success is what clears its banner.

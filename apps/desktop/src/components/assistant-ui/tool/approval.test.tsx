@@ -6,7 +6,13 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import type { HermesGateway } from '@/hermes'
 import { handleApprovalKey, releaseApprovalKey } from '@/lib/keybinds/approval-keys'
 import { $gateway } from '@/store/gateway'
-import { $approvalRequest, APPROVAL_RESPOND_REQUEST_TIMEOUT_MS, clearAllPrompts, sessionApprovalRequests, setApprovalRequest } from '@/store/prompts'
+import {
+  $approvalRequest,
+  APPROVAL_RESPOND_REQUEST_TIMEOUT_MS,
+  clearAllPrompts,
+  sessionApprovalRequests,
+  setApprovalRequest
+} from '@/store/prompts'
 import { hasOpenServerRequest, rememberServerRequest, resetServerRequestsForTests } from '@/store/server-requests'
 import { $activeSessionId } from '@/store/session'
 import { stubMenuDomApis, stubResizeObserver } from '@/test/jsdom'

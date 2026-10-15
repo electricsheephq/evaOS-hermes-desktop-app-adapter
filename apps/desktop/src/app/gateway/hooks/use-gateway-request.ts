@@ -15,6 +15,7 @@ function waitForGatewayOpen(gateway: HermesGateway, timeoutMs = RECONNECT_ATTEMP
 
   return new Promise((resolve, reject) => {
     let settled = false
+
     let offState = () => {}
 
     const finish = (error?: Error) => {

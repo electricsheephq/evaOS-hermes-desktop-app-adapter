@@ -95,9 +95,7 @@ export async function triggerAndRefreshCronJobs(
   profile: 'all' | string,
   jobProfile?: string
 ): Promise<CronTriggerRefreshResult> {
-  const { value: _value, ...result } = await mutateAndRefreshCronJobs(profile, () =>
-    triggerCronJob(jobId, jobProfile)
-  )
+  const { value: _value, ...result } = await mutateAndRefreshCronJobs(profile, () => triggerCronJob(jobId, jobProfile))
 
   return result
 }

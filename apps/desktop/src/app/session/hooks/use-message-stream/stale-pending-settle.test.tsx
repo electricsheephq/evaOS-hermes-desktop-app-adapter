@@ -128,7 +128,13 @@ describe('turn end without message.complete (session.info running=false)', () =>
     await mountHarness()
 
     emit({ session_id: SID, type: 'message.start', payload: {} })
-    setClarifyRequest({ choices: ['a', 'b'], multiSelect: false, question: 'Which one?', requestId: 'clarify-1', sessionId: SID })
+    setClarifyRequest({
+      choices: ['a', 'b'],
+      multiSelect: false,
+      question: 'Which one?',
+      requestId: 'clarify-1',
+      sessionId: SID
+    })
 
     emit({ payload: { running: false }, session_id: SID, type: 'session.info' })
 

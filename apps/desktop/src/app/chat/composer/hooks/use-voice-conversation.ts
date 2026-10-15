@@ -663,6 +663,7 @@ export function useVoiceConversation({
         if (responseIdRef.current !== responseId) {
           return
         }
+
         stopVoicePlayback()
         dropSpeechSession()
         awaitingSpokenResponseRef.current = false
