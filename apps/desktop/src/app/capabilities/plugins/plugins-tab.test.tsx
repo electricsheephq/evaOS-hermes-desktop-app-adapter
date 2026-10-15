@@ -103,6 +103,44 @@ describe('PluginsTab', () => {
     expect(screen.getByRole('button', { name: 'Settings: other' }).getAttribute('aria-expanded')).toBe('false')
   })
 
+  // A row that only shows up in a LATER reload must not pop its form open (and
+  // so move the user's attention) long after the link was followed.
+  it('drops a settings= request whose row is missing from the first list load', async () => {
+    const row: AgentPluginRow = {
+      description: '',
+      key: 'fish-audio',
+      name: 'fish-audio',
+      settings_schema: [
+        {
+          description: '',
+          env: 'FISH_API_KEY',
+          has_value: false,
+          key: 'api_key',
+          label: 'Fish Audio API key',
+          required: false,
+          type: 'secret'
+        }
+      ],
+      source: 'git',
+      status: 'enabled',
+      version: '1.3.1'
+    }
+
+    render(
+      <MemoryRouter initialEntries={['/capabilities?tab=plugins&settings=fish-audio']}>
+        <PluginsTab profile={null} />
+      </MemoryRouter>
+    )
+
+    await waitFor(() => expect(requestGateway).toHaveBeenCalled())
+    await new Promise(resolve => setTimeout(resolve, 50))
+    $agentPlugins.set([row])
+
+    const gear = await screen.findByRole('button', { name: 'Settings: fish-audio' })
+    await new Promise(resolve => setTimeout(resolve, 50))
+    expect(gear.getAttribute('aria-expanded')).toBe('false')
+  })
+
   it('keeps the settings form closed without the deep link', () => {
     $agentPlugins.set([
       {

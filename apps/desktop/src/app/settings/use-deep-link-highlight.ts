@@ -15,7 +15,7 @@ interface DeepLinkHighlightOptions {
 // is none, and this degrades to an inert [empty params, no-op setter] instead of
 // crashing. Router presence is stable for a mounted instance's lifetime, so the
 // try/catch never changes the hook count between renders (rules-of-hooks safe).
-function useOptionalSearchParams(): ReturnType<typeof useSearchParams> {
+export function useOptionalSearchParams(): ReturnType<typeof useSearchParams> {
   try {
     return useSearchParams()
   } catch {

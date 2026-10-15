@@ -50,7 +50,7 @@ import { $connection } from '@/store/session'
 import { PanelEmpty } from '../../overlays/panel'
 import { PLUGIN_SETTINGS_PARAM } from '../../settings/moved-tabs'
 import { Pill } from '../../settings/primitives'
-import { useDeepLinkHighlight } from '../../settings/use-deep-link-highlight'
+import { useDeepLinkHighlight, useOptionalSearchParams } from '../../settings/use-deep-link-highlight'
 
 import { mergePluginPackages, type PackageKind, type PluginPackage } from './plugin-packages'
 import { PluginSettingsForm } from './plugin-settings-form'
@@ -88,10 +88,6 @@ interface PluginPickMessage {
 /** Deep-link anchor for a package row (`/capabilities?tab=plugins&plugin=<key>`).
  *  Accepts the agent key, the agent name, or the desktop record id. */
 export const pluginElementId = (target: string) => `plugin-${target}`
-
-/** Deep-link anchor for an agent plugin's inline settings form
- *  (`/capabilities?tab=plugins&settings=<agent key>`). */
-export const pluginSettingsElementId = (key: string) => `plugin-settings-panel-${key}`
 
 /** Derive the bare profile name a `plugins.manage` call should target. */
 function profileParam(scope: ProfileScope): null | string {
@@ -250,7 +246,8 @@ function PackageRow({
   onAgentUpdate,
   onAgentRemove,
   onDesktopRemove,
-  openSettings = false
+  openSettings = false,
+  onSettingsOpened
 }: {
   pkg: PluginPackage
   scope: null | string
@@ -264,6 +261,7 @@ function PackageRow({
   onDesktopRemove: (record: PluginRecord) => void
   /** A deep link asked for this row's settings form (`settings=<agent key>`). */
   openSettings?: boolean
+  onSettingsOpened?: () => void
 }) {
   const { t } = useI18n()
   const p = t.skills.plugins
@@ -278,8 +276,9 @@ function PackageRow({
   useEffect(() => {
     if (openSettings && hasSettings) {
       setSettingsOpen(true)
+      onSettingsOpened?.()
     }
-  }, [hasSettings, openSettings])
+  }, [hasSettings, onSettingsOpened, openSettings])
 
   const desktopOn = desktop ? desktop.status !== 'disabled' : false
   const agentOn = agent?.status === 'enabled'
@@ -481,10 +480,7 @@ function PackageRow({
         </HalfCell>
       </div>
       {hasSettings && settingsOpen && agent?.key && (
-        <div
-          className="border-b border-(--ui-stroke-tertiary) bg-(--ui-bg-secondary,transparent) px-3 py-3 last:border-b-0"
-          id={pluginSettingsElementId(agent.key)}
-        >
+        <div className="border-b border-(--ui-stroke-tertiary) bg-(--ui-bg-secondary,transparent) px-3 py-3 last:border-b-0">
           <PluginSettingsForm
             disabled={busy}
             fields={settingsFields}
@@ -542,8 +538,18 @@ export const PluginsTab = memo(function PluginsTab({
   const scope = profileParam(profile)
   const label = scopeLabel ?? scope ?? t.skills.plugins.defaultProfile
 
+  // The scope whose list has finished loading since this tab mounted: a deep
+  // link is only judged against a list loaded for the scope it arrived in.
+  const [loadedScope, setLoadedScope] = useState<undefined | null | string>(undefined)
+
   useEffect(() => {
-    void loadAgentPlugins(requestGateway, scope)
+    let live = true
+
+    void loadAgentPlugins(requestGateway, scope).finally(() => live && setLoadedScope(scope))
+
+    return () => {
+      live = false
+    }
   }, [requestGateway, scope])
 
   const packages = useMemo(
@@ -553,18 +559,52 @@ export const PluginsTab = memo(function PluginsTab({
 
   useDeepLinkHighlight({ param: 'plugin', ready: () => true, elementId: pluginElementId })
 
-  // `settings=<agent key>` (an upstream `agent=` link, via moved-tabs) opens that
-  // row's form once the row has loaded, then scrolls to and flashes the form.
-  const settingsReady = useCallback(
-    (key: string) => packages.some(pkg => pkg.agent?.key === key && Boolean(pkg.agent.settings_schema?.length)),
-    [packages]
-  )
+  // `settings=<agent key>` (an upstream `agent=` link, via moved-tabs) asks for
+  // that row's settings form. Judged ONCE, against the first list loaded for this
+  // scope: a row that arrives in a later reload never pops a form open. Focus
+  // stays where the row highlight put it. The param is dropped only after the
+  // row highlight has consumed `plugin=`, so the two removals never race.
+  const [searchParams, setSearchParams] = useOptionalSearchParams()
+  const settingsParam = searchParams.get(PLUGIN_SETTINGS_PARAM)
+  const rowParamPending = searchParams.has('plugin')
+  const listLoaded = loadedScope === scope
+  const [judgedSettings, setJudgedSettings] = useState<null | string>(null)
+  const [settingsOpenFor, setSettingsOpenFor] = useState<null | string>(null)
+  const clearSettingsOpen = useCallback(() => setSettingsOpenFor(null), [])
 
-  const settingsTarget = useDeepLinkHighlight({
-    param: PLUGIN_SETTINGS_PARAM,
-    ready: settingsReady,
-    elementId: pluginSettingsElementId
-  })
+  useEffect(() => {
+    if (!settingsParam) {
+      // Consumed: the same link may be followed again.
+      setJudgedSettings(null)
+
+      return
+    }
+
+    if (!listLoaded || judgedSettings === settingsParam) {
+      return
+    }
+
+    const found = packages.some(pkg => pkg.agent?.key === settingsParam && Boolean(pkg.agent.settings_schema?.length))
+
+    setJudgedSettings(settingsParam)
+    setSettingsOpenFor(found ? settingsParam : null)
+  }, [judgedSettings, listLoaded, packages, settingsParam])
+
+  useEffect(() => {
+    if (!settingsParam || !listLoaded || rowParamPending) {
+      return
+    }
+
+    setSearchParams(
+      previous => {
+        const next = new URLSearchParams(previous)
+        next.delete(PLUGIN_SETTINGS_PARAM)
+
+        return next
+      },
+      { replace: true }
+    )
+  }, [listLoaded, rowParamPending, setSearchParams, settingsParam])
 
   // Catalog picker viewport (persisted height, collapse toggle, top-edge sash).
   const heightOverride = useStore($paneHeightOverride(CATALOG_PANE_ID))
@@ -804,7 +844,8 @@ export const PluginsTab = memo(function PluginsTab({
                     }
                   })
                 }}
-                openSettings={Boolean(settingsTarget) && pkg.agent?.key === settingsTarget}
+                onSettingsOpened={clearSettingsOpen}
+                openSettings={Boolean(settingsOpenFor) && pkg.agent?.key === settingsOpenFor}
                 pkg={pkg}
                 profile={profile}
                 request={requestGateway}
