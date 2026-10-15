@@ -29,6 +29,9 @@ interface ControlProps {
   onChange: (raw: string) => void
   /** Localised hint for a secret that already has a stored value. */
   secretSetHint: string
+  /** Shown in an EMPTY secret field: without it an unset key field has no visible
+   *  content, and the dark theme's faint input border makes it disappear. */
+  secretEmptyHint: string
 }
 
 /** What the input shows before the user touches it. */
@@ -129,7 +132,7 @@ function EnumControl({ disabled, field, id, onChange, raw }: ControlProps) {
   )
 }
 
-function SecretControl({ disabled, field, id, onChange, raw, secretSetHint }: ControlProps) {
+function SecretControl({ disabled, field, id, onChange, raw, secretEmptyHint, secretSetHint }: ControlProps) {
   return (
     <Input
       autoComplete="off"
@@ -138,7 +141,7 @@ function SecretControl({ disabled, field, id, onChange, raw, secretSetHint }: Co
       disabled={disabled}
       id={id}
       onChange={e => onChange(e.currentTarget.value)}
-      placeholder={field.has_value ? secretSetHint : ''}
+      placeholder={field.has_value ? secretSetHint : secretEmptyHint}
       type="password"
       value={raw}
     />
@@ -276,6 +279,7 @@ export function PluginSettingsForm({
                 id={id}
                 onChange={raw => setDraft(current => ({ ...current, [field.key]: raw }))}
                 raw={draft[field.key] ?? ''}
+                secretEmptyHint={s.secretEmpty}
                 secretSetHint={s.secretSet}
               />
               {(field.description || field.type === 'secret') && (

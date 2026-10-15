@@ -54,6 +54,17 @@ describe('PluginSettingsForm (#46600, #87934)', () => {
     expect((screen.getByLabelText(/^Extra/) as HTMLTextAreaElement).value).toBe(JSON.stringify({ a: 1 }, null, 2))
     // Nothing changed yet → nothing to save.
     expect((screen.getByRole('button', { name: 'Save settings' }) as HTMLButtonElement).disabled).toBe(true)
+    cleanup()
+    // An unset secret still shows something to type over (dark mode hid the empty field).
+    render(
+      <PluginSettingsForm
+        disabled={false}
+        fields={[{ ...FIELDS[4], has_value: false }]}
+        idPrefix="q"
+        onSave={vi.fn(async () => true)}
+      />
+    )
+    expect((screen.getByLabelText(/^API key/) as HTMLInputElement).placeholder).toBe('Not set. Paste the value here')
   })
 
   it('submits only what changed, coerced to wire types, secrets routed by env name; clears secrets after save', async () => {

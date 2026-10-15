@@ -1,8 +1,9 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { MemoryRouter } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { $pluginRecords } from '@/contrib/plugins-store'
-import { $agentPlugins, $agentPluginsStatus } from '@/store/agent-plugins'
+import { $agentPlugins, $agentPluginsStatus, type AgentPluginRow } from '@/store/agent-plugins'
 import { $confirmRequest, settleConfirm } from '@/store/confirm'
 import { $paneHeightOverride, setPaneHeightOverride } from '@/store/panes'
 import { $pluginInstallRequest, closePluginInstallRequest } from '@/store/plugin-install-request'
@@ -45,6 +46,94 @@ describe('PluginsTab', () => {
   afterEach(() => {
     cleanup()
     $connection.set(null)
+  })
+
+  // Voices' "Enter API key" and other upstream `agent=` links land here via
+  // moved-tabs as `settings=<key>`: the form must open, not just flash the row.
+  it('opens the settings form a settings= deep link names, and only that one', async () => {
+    const schema = [
+      {
+        description: '',
+        env: 'FISH_API_KEY',
+        has_value: false,
+        key: 'api_key',
+        label: 'Fish Audio API key',
+        required: false,
+        type: 'secret' as const
+      }
+    ]
+
+    const rows: AgentPluginRow[] = [
+      {
+        description: '',
+        key: 'fish-audio',
+        name: 'fish-audio',
+        settings_schema: schema,
+        source: 'git',
+        status: 'enabled',
+        version: '1.3.1'
+      },
+      {
+        description: '',
+        key: 'other',
+        name: 'other',
+        settings_schema: schema,
+        source: 'git',
+        status: 'enabled',
+        version: '1'
+      }
+    ]
+
+    $agentPlugins.set(rows)
+    // The mount-time list load answers with the same rows (the default mock answers with none).
+    requestGateway.mockResolvedValueOnce({ plugins: rows } as never)
+
+    render(
+      <MemoryRouter initialEntries={['/capabilities?tab=plugins&plugin=fish-audio&settings=fish-audio']}>
+        <PluginsTab profile={null} />
+      </MemoryRouter>
+    )
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Settings: fish-audio' }).getAttribute('aria-expanded')).toBe('true')
+    )
+    const field = screen.getByLabelText(/^Fish Audio API key/) as HTMLInputElement
+    expect(field.type).toBe('password')
+    expect(field.placeholder).toBe('Not set. Paste the value here')
+    expect(screen.getByRole('button', { name: 'Settings: other' }).getAttribute('aria-expanded')).toBe('false')
+  })
+
+  it('keeps the settings form closed without the deep link', () => {
+    $agentPlugins.set([
+      {
+        description: '',
+        key: 'fish-audio',
+        name: 'fish-audio',
+        settings_schema: [
+          {
+            description: '',
+            env: 'FISH_API_KEY',
+            has_value: false,
+            key: 'api_key',
+            label: 'Fish Audio API key',
+            required: false,
+            type: 'secret'
+          }
+        ],
+        source: 'git',
+        status: 'enabled',
+        version: '1.3.1'
+      }
+    ])
+
+    render(
+      <MemoryRouter initialEntries={['/capabilities?tab=plugins&plugin=fish-audio']}>
+        <PluginsTab profile={null} />
+      </MemoryRouter>
+    )
+
+    expect(screen.getByRole('button', { name: 'Settings: fish-audio' }).getAttribute('aria-expanded')).toBe('false')
+    expect(screen.queryByLabelText(/^Fish Audio API key/)).toBeNull()
   })
 
   it('renders declared server pills and the unavailable sentence under the description', () => {

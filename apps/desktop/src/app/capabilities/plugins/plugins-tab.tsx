@@ -3,6 +3,7 @@ import {
   memo,
   type ReactNode,
   type PointerEvent as ReactPointerEvent,
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -47,6 +48,7 @@ import { openPluginInstallRequest } from '@/store/plugin-install-request'
 import { $connection } from '@/store/session'
 
 import { PanelEmpty } from '../../overlays/panel'
+import { PLUGIN_SETTINGS_PARAM } from '../../settings/moved-tabs'
 import { Pill } from '../../settings/primitives'
 import { useDeepLinkHighlight } from '../../settings/use-deep-link-highlight'
 
@@ -86,6 +88,10 @@ interface PluginPickMessage {
 /** Deep-link anchor for a package row (`/capabilities?tab=plugins&plugin=<key>`).
  *  Accepts the agent key, the agent name, or the desktop record id. */
 export const pluginElementId = (target: string) => `plugin-${target}`
+
+/** Deep-link anchor for an agent plugin's inline settings form
+ *  (`/capabilities?tab=plugins&settings=<agent key>`). */
+export const pluginSettingsElementId = (key: string) => `plugin-settings-panel-${key}`
 
 /** Derive the bare profile name a `plugins.manage` call should target. */
 function profileParam(scope: ProfileScope): null | string {
@@ -243,7 +249,8 @@ function PackageRow({
   onAgentToggle,
   onAgentUpdate,
   onAgentRemove,
-  onDesktopRemove
+  onDesktopRemove,
+  openSettings = false
 }: {
   pkg: PluginPackage
   scope: null | string
@@ -255,6 +262,8 @@ function PackageRow({
   onAgentUpdate: (row: AgentPluginRow) => void
   onAgentRemove: (row: AgentPluginRow) => void
   onDesktopRemove: (record: PluginRecord) => void
+  /** A deep link asked for this row's settings form (`settings=<agent key>`). */
+  openSettings?: boolean
 }) {
   const { t } = useI18n()
   const p = t.skills.plugins
@@ -265,6 +274,13 @@ function PackageRow({
   const settingsFields = agent?.settings_schema ?? []
   const hasSettings = Boolean(agent?.key) && settingsFields.length > 0
   const [settingsOpen, setSettingsOpen] = useState(false)
+
+  useEffect(() => {
+    if (openSettings && hasSettings) {
+      setSettingsOpen(true)
+    }
+  }, [hasSettings, openSettings])
+
   const desktopOn = desktop ? desktop.status !== 'disabled' : false
   const agentOn = agent?.status === 'enabled'
   const agentToggleable = Boolean(agent?.key)
@@ -465,7 +481,10 @@ function PackageRow({
         </HalfCell>
       </div>
       {hasSettings && settingsOpen && agent?.key && (
-        <div className="border-b border-(--ui-stroke-tertiary) bg-(--ui-bg-secondary,transparent) px-3 py-3 last:border-b-0">
+        <div
+          className="border-b border-(--ui-stroke-tertiary) bg-(--ui-bg-secondary,transparent) px-3 py-3 last:border-b-0"
+          id={pluginSettingsElementId(agent.key)}
+        >
           <PluginSettingsForm
             disabled={busy}
             fields={settingsFields}
@@ -533,6 +552,19 @@ export const PluginsTab = memo(function PluginsTab({
   )
 
   useDeepLinkHighlight({ param: 'plugin', ready: () => true, elementId: pluginElementId })
+
+  // `settings=<agent key>` (an upstream `agent=` link, via moved-tabs) opens that
+  // row's form once the row has loaded, then scrolls to and flashes the form.
+  const settingsReady = useCallback(
+    (key: string) => packages.some(pkg => pkg.agent?.key === key && Boolean(pkg.agent.settings_schema?.length)),
+    [packages]
+  )
+
+  const settingsTarget = useDeepLinkHighlight({
+    param: PLUGIN_SETTINGS_PARAM,
+    ready: settingsReady,
+    elementId: pluginSettingsElementId
+  })
 
   // Catalog picker viewport (persisted height, collapse toggle, top-edge sash).
   const heightOverride = useStore($paneHeightOverride(CATALOG_PANE_ID))
@@ -772,6 +804,7 @@ export const PluginsTab = memo(function PluginsTab({
                     }
                   })
                 }}
+                openSettings={Boolean(settingsTarget) && pkg.agent?.key === settingsTarget}
                 pkg={pkg}
                 profile={profile}
                 request={requestGateway}
