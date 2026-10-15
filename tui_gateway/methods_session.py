@@ -1324,6 +1324,15 @@ def _account_usage_lines(session: dict) -> list[str]:
     return render_account_usage_lines(snapshot)
 
 
+@method("account.usage")
+@_profile_scoped
+def _(rid, params: dict) -> dict:
+    """Provider quota snapshots (Codex / Claude / OpenRouter; Nous stays on ``usage.bars``) for the
+    bound profile — same fetchers as ``/usage``, per-provider typed errors (``account_usage_view``)."""
+    from tui_gateway.account_usage_view import account_usage_snapshots
+    return _ok(rid, {"snapshots": account_usage_snapshots()})
+
+
 @_session_method("session.context_breakdown")
 def _(rid, params: dict, session: dict) -> dict:
     if (agent := session.get("agent")) is None:

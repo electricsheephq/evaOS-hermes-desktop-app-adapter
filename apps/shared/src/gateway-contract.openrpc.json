@@ -7,6 +7,24 @@
   },
   "methods": [
     {
+      "name": "account.usage",
+      "summary": "Provider quota snapshots (not Nous \u2014 see usage.bars); a provider without a credential is omitted.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/ProfileParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/AccountUsageResult"
+        }
+      }
+    },
+    {
       "name": "agents.list",
       "summary": "Registry-wide background process summary for ``/agents``.",
       "params": [
@@ -4288,6 +4306,175 @@
           "type"
         ],
         "title": "AccountOwner",
+        "type": "object"
+      },
+      "AccountUsageResult": {
+        "additionalProperties": false,
+        "properties": {
+          "snapshots": {
+            "items": {
+              "$ref": "#/components/schemas/AccountUsageSnapshotModel"
+            },
+            "title": "Snapshots",
+            "type": "array"
+          }
+        },
+        "required": [
+          "snapshots"
+        ],
+        "title": "AccountUsageResult",
+        "type": "object"
+      },
+      "AccountUsageSnapshotModel": {
+        "additionalProperties": false,
+        "description": "One provider's quota card. On failure ``windows`` is empty, ``details`` holds one sentence and\n``error`` one of auth_expired / rate_limited / timeout / unavailable / not_oauth.",
+        "properties": {
+          "provider": {
+            "minLength": 1,
+            "pattern": "^[^:]+$",
+            "title": "Provider",
+            "type": "string"
+          },
+          "plan": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Plan"
+          },
+          "details": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Details",
+            "type": "array"
+          },
+          "windows": {
+            "items": {
+              "$ref": "#/components/schemas/AccountUsageWindowModel"
+            },
+            "title": "Windows",
+            "type": "array"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "available": {
+            "title": "Available",
+            "type": "boolean"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "fetched_at": {
+            "title": "Fetched At",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "unavailable_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unavailable Reason"
+          }
+        },
+        "required": [
+          "provider",
+          "plan",
+          "details",
+          "windows",
+          "error",
+          "available",
+          "source",
+          "fetched_at",
+          "title",
+          "unavailable_reason"
+        ],
+        "title": "AccountUsageSnapshotModel",
+        "type": "object"
+      },
+      "AccountUsageWindowModel": {
+        "additionalProperties": false,
+        "description": "``account_usage_view.serialize_window``: percents clamped to 0..100 server-side;\n``remaining_percent`` is ``100 - used_percent`` when the provider gives none.",
+        "properties": {
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "used_percent": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Used Percent"
+          },
+          "remaining_percent": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Remaining Percent"
+          },
+          "reset_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reset At"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          }
+        },
+        "required": [
+          "label",
+          "used_percent",
+          "remaining_percent",
+          "reset_at",
+          "detail"
+        ],
+        "title": "AccountUsageWindowModel",
         "type": "object"
       },
       "ActiveIdResult": {
