@@ -2901,7 +2901,7 @@ export const fr = defineLocale({
         saveFailed: (name: string) => `Impossible d’enregistrer les paramètres de ${name}`,
         optional: '(facultatif)',
         secretSet: '•••••••• (défini)',
-        secretEmpty: 'Non défini. Collez la valeur ici',
+        secretEmpty: 'Vide. Collez ici',
         secretStoredAs: (env: string) =>
           `Stocké dans le .env du profil sous ${env}, jamais dans config.yaml ; laissez vide pour conserver la valeur actuelle.`
       }

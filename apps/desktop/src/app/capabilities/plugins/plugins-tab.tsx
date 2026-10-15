@@ -567,7 +567,8 @@ export const PluginsTab = memo(function PluginsTab({
   const [searchParams, setSearchParams] = useOptionalSearchParams()
   const settingsParam = searchParams.get(PLUGIN_SETTINGS_PARAM)
   const rowParamPending = searchParams.has('plugin')
-  const listLoaded = loadedScope === scope
+  // A failed load is not a verdict: judge after a successful list (e.g. Retry).
+  const listLoaded = loadedScope === scope && status === 'ready'
   const [judgedSettings, setJudgedSettings] = useState<null | string>(null)
   const [settingsOpenFor, setSettingsOpenFor] = useState<null | string>(null)
   const clearSettingsOpen = useCallback(() => setSettingsOpenFor(null), [])

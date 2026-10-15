@@ -23,6 +23,13 @@ export function useOptionalSearchParams(): ReturnType<typeof useSearchParams> {
   }
 }
 
+function isEditing(active: Element | null): boolean {
+  return (
+    active instanceof HTMLElement &&
+    (active.isContentEditable || active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement)
+  )
+}
+
 // Deep-link from the command palette (?<param>=<id>): once the target row is
 // renderable, scroll it into view and flash it, then drop the param so it
 // doesn't re-fire. Returns the pending target (null once consumed) so callers
@@ -60,13 +67,19 @@ export function useDeepLinkHighlight({
       const element = document.getElementById(elementId(target))
 
       if (element) {
-        element.scrollIntoView({ behavior: 'smooth', block })
+        // The target can mount a moment after the user has started typing (a
+        // deep-linked form opens right under its row): never scroll away from or
+        // take focus off a field they are editing. The flash still shows.
+        if (!isEditing(document.activeElement)) {
+          element.scrollIntoView({ behavior: 'smooth', block })
 
-        if (!element.hasAttribute('tabindex')) {
-          element.tabIndex = -1
+          if (!element.hasAttribute('tabindex')) {
+            element.tabIndex = -1
+          }
+
+          element.focus({ preventScroll: true })
         }
 
-        element.focus({ preventScroll: true })
         element.classList.add('setting-field-highlight')
         window.setTimeout(() => element.classList.remove('setting-field-highlight'), 1600)
 

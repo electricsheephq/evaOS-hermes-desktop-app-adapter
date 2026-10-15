@@ -99,7 +99,7 @@ describe('PluginsTab', () => {
     )
     const field = screen.getByLabelText(/^Fish Audio API key/) as HTMLInputElement
     expect(field.type).toBe('password')
-    expect(field.placeholder).toBe('Not set. Paste the value here')
+    expect(field.placeholder).toBe('Not set. Paste here')
     expect(screen.getByRole('button', { name: 'Settings: other' }).getAttribute('aria-expanded')).toBe('false')
   })
 
@@ -139,6 +139,91 @@ describe('PluginsTab', () => {
     const gear = await screen.findByRole('button', { name: 'Settings: fish-audio' })
     await new Promise(resolve => setTimeout(resolve, 50))
     expect(gear.getAttribute('aria-expanded')).toBe('false')
+  })
+
+  it('does not take focus from a field the user is already typing in', async () => {
+    const row: AgentPluginRow = {
+      description: '',
+      key: 'fish-audio',
+      name: 'fish-audio',
+      settings_schema: [
+        {
+          description: '',
+          env: 'FISH_API_KEY',
+          has_value: false,
+          key: 'api_key',
+          label: 'Fish Audio API key',
+          required: false,
+          type: 'secret'
+        }
+      ],
+      source: 'git',
+      status: 'enabled',
+      version: '1.3.1'
+    }
+
+    // jsdom has no scrollIntoView; without a stub the highlight throws before it could take focus.
+    const scroll = vi.fn()
+    Element.prototype.scrollIntoView = scroll
+    const typing = document.createElement('input')
+    document.body.append(typing)
+    typing.focus()
+    $agentPlugins.set([row])
+    requestGateway.mockResolvedValueOnce({ plugins: [row] } as never)
+
+    render(
+      <MemoryRouter initialEntries={['/capabilities?tab=plugins&plugin=fish-audio&settings=fish-audio']}>
+        <PluginsTab profile={null} />
+      </MemoryRouter>
+    )
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Settings: fish-audio' }).getAttribute('aria-expanded')).toBe('true')
+    )
+    await new Promise(resolve => setTimeout(resolve, 250))
+    expect(document.activeElement).toBe(typing)
+    expect(scroll).not.toHaveBeenCalled()
+    typing.remove()
+    Reflect.deleteProperty(Element.prototype, 'scrollIntoView')
+  })
+
+  it('opens the requested form after a failed list load is retried', async () => {
+    const row: AgentPluginRow = {
+      description: '',
+      key: 'fish-audio',
+      name: 'fish-audio',
+      settings_schema: [
+        {
+          description: '',
+          env: 'FISH_API_KEY',
+          has_value: false,
+          key: 'api_key',
+          label: 'Fish Audio API key',
+          required: false,
+          type: 'secret'
+        }
+      ],
+      source: 'git',
+      status: 'enabled',
+      version: '1.3.1'
+    }
+
+    $agentPluginsStatus.set('loading')
+    requestGateway.mockRejectedValueOnce(new Error('gateway down'))
+
+    render(
+      <MemoryRouter initialEntries={['/capabilities?tab=plugins&settings=fish-audio']}>
+        <PluginsTab profile={null} />
+      </MemoryRouter>
+    )
+
+    const retry = await screen.findByRole('button', { name: 'Refresh skills' })
+    requestGateway.mockResolvedValueOnce({ plugins: [row] } as never)
+    fireEvent.click(retry)
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Settings: fish-audio' }).getAttribute('aria-expanded')).toBe('true')
+    )
   })
 
   it('keeps the settings form closed without the deep link', () => {

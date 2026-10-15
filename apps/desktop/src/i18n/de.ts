@@ -2892,7 +2892,7 @@ export const de = defineLocale({
         saveFailed: (name: string) => `Einstellungen von ${name} konnten nicht gespeichert werden`,
         optional: '(optional)',
         secretSet: '•••••••• (gesetzt)',
-        secretEmpty: 'Nicht gesetzt. Wert hier einfügen',
+        secretEmpty: 'Leer. Hier einfügen',
         secretStoredAs: (env: string) =>
           `Wird in der .env des Profils als ${env} gespeichert, nie in config.yaml; leer lassen, um den aktuellen Wert zu behalten.`
       }

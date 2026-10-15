@@ -64,7 +64,7 @@ describe('PluginSettingsForm (#46600, #87934)', () => {
         onSave={vi.fn(async () => true)}
       />
     )
-    expect((screen.getByLabelText(/^API key/) as HTMLInputElement).placeholder).toBe('Not set. Paste the value here')
+    expect((screen.getByLabelText(/^API key/) as HTMLInputElement).placeholder).toBe('Not set. Paste here')
   })
 
   it('submits only what changed, coerced to wire types, secrets routed by env name; clears secrets after save', async () => {
