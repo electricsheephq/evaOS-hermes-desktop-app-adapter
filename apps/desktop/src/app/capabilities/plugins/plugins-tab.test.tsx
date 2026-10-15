@@ -103,6 +103,104 @@ describe('PluginsTab', () => {
     expect(screen.getByRole('button', { name: 'Settings: other' }).getAttribute('aria-expanded')).toBe('false')
   })
 
+  // The row's long description would push the key field below the fold: the
+  // link scrolls and flashes the opened form, not the row.
+  it('lands a settings= deep link on the opened form, key field first', async () => {
+    const row: AgentPluginRow = {
+      description: 'A very long description.',
+      key: 'fish-audio',
+      name: 'fish-audio',
+      settings_schema: [
+        {
+          description: '',
+          env: 'FISH_API_KEY',
+          has_value: false,
+          key: 'api_key',
+          label: 'Fish Audio API key',
+          required: false,
+          type: 'secret'
+        }
+      ],
+      source: 'git',
+      status: 'enabled',
+      version: '1.3.1'
+    }
+
+    const scrolled: { block?: ScrollLogicalPosition; id: string }[] = []
+
+    Element.prototype.scrollIntoView = function (this: Element, options?: boolean | ScrollIntoViewOptions) {
+      scrolled.push({ block: typeof options === 'object' ? options.block : undefined, id: this.id })
+    }
+
+    $agentPlugins.set([row])
+    requestGateway.mockResolvedValueOnce({ plugins: [row] } as never)
+
+    render(
+      <MemoryRouter initialEntries={['/capabilities?tab=plugins&plugin=fish-audio&settings=fish-audio']}>
+        <PluginsTab profile={null} />
+      </MemoryRouter>
+    )
+
+    await waitFor(() => expect(scrolled).toEqual([{ block: 'start', id: 'plugin-settings-panel-fish-audio' }]))
+    expect(document.getElementById('plugin-settings-panel-fish-audio')?.classList).toContain('setting-field-highlight')
+    expect(document.getElementById('plugin-fish-audio')?.classList).not.toContain('setting-field-highlight')
+    Reflect.deleteProperty(Element.prototype, 'scrollIntoView')
+  })
+
+  // Cold start: the app's bundled desktop half renders as its own gear-less row
+  // until the agent list arrives and merges it. The link must wait for the list.
+  it('does not flash the bundled row a settings= link is about to merge away', async () => {
+    const row: AgentPluginRow = {
+      description: '',
+      has_desktop_half: true,
+      key: 'fish-audio',
+      name: 'fish-audio',
+      settings_schema: [
+        {
+          description: '',
+          env: 'FISH_API_KEY',
+          has_value: false,
+          key: 'api_key',
+          label: 'Fish Audio API key',
+          required: false,
+          type: 'secret'
+        }
+      ],
+      source: 'git',
+      status: 'enabled',
+      version: '1.3.1'
+    }
+
+    const scrolled: string[] = []
+
+    Element.prototype.scrollIntoView = function (this: Element) {
+      scrolled.push(this.id)
+    }
+
+    let answer: (value: { plugins: AgentPluginRow[] }) => void = () => undefined
+
+    $pluginRecords.set({ 'fish-audio': { id: 'fish-audio', kind: 'bundled', name: 'Fish Audio', status: 'loaded' } })
+    $agentPluginsStatus.set('loading')
+    requestGateway.mockImplementationOnce(() => new Promise(resolve => (answer = resolve)) as never)
+
+    render(
+      <MemoryRouter initialEntries={['/capabilities?tab=plugins&plugin=fish-audio&settings=fish-audio']}>
+        <PluginsTab profile={null} />
+      </MemoryRouter>
+    )
+
+    await waitFor(() => expect(requestGateway).toHaveBeenCalled())
+    await new Promise(resolve => setTimeout(resolve, 250))
+    expect(scrolled).toEqual([])
+    expect(document.querySelector('.setting-field-highlight')).toBeNull()
+
+    answer({ plugins: [row] })
+
+    await waitFor(() => expect(scrolled).toEqual(['plugin-settings-panel-fish-audio']))
+    expect(screen.getAllByTestId(/^plugin-row-/)).toHaveLength(1)
+    Reflect.deleteProperty(Element.prototype, 'scrollIntoView')
+  })
+
   // A row that only shows up in a LATER reload must not pop its form open (and
   // so move the user's attention) long after the link was followed.
   it('drops a settings= request whose row is missing from the first list load', async () => {

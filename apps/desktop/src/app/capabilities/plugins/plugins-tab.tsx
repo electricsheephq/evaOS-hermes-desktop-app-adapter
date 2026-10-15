@@ -89,6 +89,9 @@ interface PluginPickMessage {
  *  Accepts the agent key, the agent name, or the desktop record id. */
 export const pluginElementId = (target: string) => `plugin-${target}`
 
+/** Anchor of a row's inline settings form, where a `settings=` deep link lands. */
+export const pluginSettingsElementId = (key: string) => `plugin-settings-panel-${key}`
+
 /** Derive the bare profile name a `plugins.manage` call should target. */
 function profileParam(scope: ProfileScope): null | string {
   if (!scope) {
@@ -480,7 +483,10 @@ function PackageRow({
         </HalfCell>
       </div>
       {hasSettings && settingsOpen && agent?.key && (
-        <div className="border-b border-(--ui-stroke-tertiary) bg-(--ui-bg-secondary,transparent) px-3 py-3 last:border-b-0">
+        <div
+          className="border-b border-(--ui-stroke-tertiary) bg-(--ui-bg-secondary,transparent) px-3 py-3 last:border-b-0"
+          id={pluginSettingsElementId(agent.key)}
+        >
           <PluginSettingsForm
             disabled={busy}
             fields={settingsFields}
@@ -557,13 +563,11 @@ export const PluginsTab = memo(function PluginsTab({
     [agentRows, desktopRecords]
   )
 
-  useDeepLinkHighlight({ param: 'plugin', ready: () => true, elementId: pluginElementId })
-
   // `settings=<agent key>` (an upstream `agent=` link, via moved-tabs) asks for
   // that row's settings form. Judged ONCE, against the first list loaded for this
-  // scope: a row that arrives in a later reload never pops a form open. Focus
-  // stays where the row highlight put it. The param is dropped only after the
-  // row highlight has consumed `plugin=`, so the two removals never race.
+  // scope: a row that arrives in a later reload never pops a form open. The
+  // param is dropped only after the highlight has consumed `plugin=`, so the
+  // two removals never race.
   const [searchParams, setSearchParams] = useOptionalSearchParams()
   const settingsParam = searchParams.get(PLUGIN_SETTINGS_PARAM)
   const rowParamPending = searchParams.has('plugin')
@@ -571,12 +575,35 @@ export const PluginsTab = memo(function PluginsTab({
   const listLoaded = loadedScope === scope && status === 'ready'
   const [judgedSettings, setJudgedSettings] = useState<null | string>(null)
   const [settingsOpenFor, setSettingsOpenFor] = useState<null | string>(null)
+  // The row whose form the link opened: the highlight lands on that form.
+  const [settingsLanding, setSettingsLanding] = useState<null | string>(null)
   const clearSettingsOpen = useCallback(() => setSettingsOpenFor(null), [])
+
+  // With a settings link the highlight waits for the verdict, then scrolls the
+  // opened form (key field first) into view instead of its long row, and never
+  // flashes a row that the first list load is about to replace.
+  const highlightReady = useCallback(
+    () => !settingsParam || judgedSettings === settingsParam,
+    [judgedSettings, settingsParam]
+  )
+
+  const highlightElementId = useCallback(
+    (target: string) => (target === settingsLanding ? pluginSettingsElementId(target) : pluginElementId(target)),
+    [settingsLanding]
+  )
+
+  useDeepLinkHighlight({
+    param: 'plugin',
+    ready: highlightReady,
+    elementId: highlightElementId,
+    block: settingsLanding ? 'start' : 'center'
+  })
 
   useEffect(() => {
     if (!settingsParam) {
       // Consumed: the same link may be followed again.
       setJudgedSettings(null)
+      setSettingsLanding(null)
 
       return
     }
@@ -589,6 +616,7 @@ export const PluginsTab = memo(function PluginsTab({
 
     setJudgedSettings(settingsParam)
     setSettingsOpenFor(found ? settingsParam : null)
+    setSettingsLanding(found ? settingsParam : null)
   }, [judgedSettings, listLoaded, packages, settingsParam])
 
   useEffect(() => {
