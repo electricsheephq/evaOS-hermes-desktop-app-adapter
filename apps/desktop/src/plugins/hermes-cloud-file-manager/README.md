@@ -17,7 +17,9 @@ that evaOS agents running the plugin's gateway half get **Cloud Files**:
 - **+ → Cloud** in the chat composer, which hands the agent file locations without re-uploading.
 
 The file list and the Drive picker work from the keyboard (one tab stop; arrows, Home/End, Page Up/Down, Enter, Space,
-Alt+Up or Backspace), and the file list announces item counts, search results and load errors to screen readers.
+Alt+Up or Backspace), also with a chat open beside Cloud Files, and the file list announces item counts, search results
+and load errors to screen readers. In a narrow pane the toolbar wraps and the folder path stays readable (the current
+folder keeps most of the width; hover a shortened name for the full one).
 
 ## Availability
 
@@ -42,9 +44,9 @@ On evaOS, the gateway half is the managed `hermes-cloud-file-manager` plugin tha
 
 | | |
 |---|---|
-| Release | v0.4.5 (`1f49fbb0867b74ad29cf9de52cfe8d9995591fae`); the desktop bundle is unchanged from v0.4.4 |
+| Release | v0.4.6 (`a7844c777c475a0e03784b72dab824457155a4e0`) |
 | File | `desktop/plugin.js` |
-| sha256 | `1b13b64964500d17b765fa23c8154d3a1b44a754f42a16828f066c17e083e874` |
+| sha256 | `1621f73df3040b32bc060cc14750d0684332c98dd1ff32106791c8813514091e` |
 | License | MIT (`LICENSE`) |
 
 It imports only `@hermes/plugin-sdk`, `react` and `react/jsx-runtime`. The app build fails if it imports a name this
