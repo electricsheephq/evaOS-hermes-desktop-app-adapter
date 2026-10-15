@@ -70,7 +70,12 @@ export function mergePluginPackages(
   }
 
   for (const record of desktopRecords) {
-    const pkg = desktopPackageName(record)
+    // A desktop half vendored into this app (kind 'bundled') carries no package
+    // name. Its id is the package's plugin id, so it joins the agent row of
+    // that name when the row declares a desktop half: one row, one gear.
+    const pkg =
+      desktopPackageName(record) ??
+      (record.kind === 'bundled' && byKey.get(record.id)?.agent?.has_desktop_half ? record.id : null)
 
     if (pkg) {
       const existing = byKey.get(pkg)

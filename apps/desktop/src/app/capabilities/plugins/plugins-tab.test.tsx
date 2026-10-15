@@ -1,8 +1,9 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { MemoryRouter } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { $pluginRecords } from '@/contrib/plugins-store'
-import { $agentPlugins, $agentPluginsStatus } from '@/store/agent-plugins'
+import { $agentPlugins, $agentPluginsStatus, type AgentPluginRow } from '@/store/agent-plugins'
 import { $confirmRequest, settleConfirm } from '@/store/confirm'
 import { $paneHeightOverride, setPaneHeightOverride } from '@/store/panes'
 import { $pluginInstallRequest, closePluginInstallRequest } from '@/store/plugin-install-request'
@@ -45,6 +46,314 @@ describe('PluginsTab', () => {
   afterEach(() => {
     cleanup()
     $connection.set(null)
+    // Deep-link tests stub it (jsdom has none); never leak a stub past a failure.
+    Reflect.deleteProperty(Element.prototype, 'scrollIntoView')
+  })
+
+  // Voices' "Enter API key" and other upstream `agent=` links land here via
+  // moved-tabs as `settings=<key>`: the form must open, not just flash the row.
+  it('opens the settings form a settings= deep link names, and only that one', async () => {
+    const schema = [
+      {
+        description: '',
+        env: 'FISH_API_KEY',
+        has_value: false,
+        key: 'api_key',
+        label: 'Fish Audio API key',
+        required: false,
+        type: 'secret' as const
+      }
+    ]
+
+    const rows: AgentPluginRow[] = [
+      {
+        description: '',
+        key: 'fish-audio',
+        name: 'fish-audio',
+        settings_schema: schema,
+        source: 'git',
+        status: 'enabled',
+        version: '1.3.1'
+      },
+      {
+        description: '',
+        key: 'other',
+        name: 'other',
+        settings_schema: schema,
+        source: 'git',
+        status: 'enabled',
+        version: '1'
+      }
+    ]
+
+    $agentPlugins.set(rows)
+    // The mount-time list load answers with the same rows (the default mock answers with none).
+    requestGateway.mockResolvedValueOnce({ plugins: rows } as never)
+
+    render(
+      <MemoryRouter initialEntries={['/capabilities?tab=plugins&plugin=fish-audio&settings=fish-audio']}>
+        <PluginsTab profile={null} />
+      </MemoryRouter>
+    )
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Settings: fish-audio' }).getAttribute('aria-expanded')).toBe('true')
+    )
+    const field = screen.getByLabelText(/^Fish Audio API key/) as HTMLInputElement
+    expect(field.type).toBe('password')
+    expect(field.placeholder).toBe('Not set. Paste here')
+    expect(screen.getByRole('button', { name: 'Settings: other' }).getAttribute('aria-expanded')).toBe('false')
+  })
+
+  // The row's long description would push the key field below the fold: the
+  // link scrolls and flashes the opened form, not the row.
+  it('lands a settings= deep link on the opened form, key field first', async () => {
+    const row: AgentPluginRow = {
+      description: 'A very long description.',
+      key: 'fish-audio',
+      name: 'fish-audio',
+      settings_schema: [
+        {
+          description: '',
+          env: 'FISH_API_KEY',
+          has_value: false,
+          key: 'api_key',
+          label: 'Fish Audio API key',
+          required: false,
+          type: 'secret'
+        }
+      ],
+      source: 'git',
+      status: 'enabled',
+      version: '1.3.1'
+    }
+
+    const scrolled: { block?: ScrollLogicalPosition; id: string }[] = []
+
+    Element.prototype.scrollIntoView = function (this: Element, options?: boolean | ScrollIntoViewOptions) {
+      scrolled.push({ block: typeof options === 'object' ? options.block : undefined, id: this.id })
+    }
+
+    $agentPlugins.set([row])
+    requestGateway.mockResolvedValueOnce({ plugins: [row] } as never)
+
+    render(
+      <MemoryRouter initialEntries={['/capabilities?tab=plugins&plugin=fish-audio&settings=fish-audio']}>
+        <PluginsTab profile={null} />
+      </MemoryRouter>
+    )
+
+    await waitFor(() => expect(scrolled).toEqual([{ block: 'start', id: 'plugin-settings-panel-fish-audio' }]))
+    expect(document.getElementById('plugin-settings-panel-fish-audio')?.classList).toContain('setting-field-highlight')
+    expect(document.getElementById('plugin-fish-audio')?.classList).not.toContain('setting-field-highlight')
+  })
+
+  // Cold start: the app's bundled desktop half renders as its own gear-less row
+  // until the agent list arrives and merges it. The link must wait for the list.
+  it('does not flash the bundled row a settings= link is about to merge away', async () => {
+    const row: AgentPluginRow = {
+      description: '',
+      has_desktop_half: true,
+      key: 'fish-audio',
+      name: 'fish-audio',
+      settings_schema: [
+        {
+          description: '',
+          env: 'FISH_API_KEY',
+          has_value: false,
+          key: 'api_key',
+          label: 'Fish Audio API key',
+          required: false,
+          type: 'secret'
+        }
+      ],
+      source: 'git',
+      status: 'enabled',
+      version: '1.3.1'
+    }
+
+    const scrolled: string[] = []
+
+    Element.prototype.scrollIntoView = function (this: Element) {
+      scrolled.push(this.id)
+    }
+
+    let answer: (value: { plugins: AgentPluginRow[] }) => void = () => undefined
+
+    $pluginRecords.set({ 'fish-audio': { id: 'fish-audio', kind: 'bundled', name: 'Fish Audio', status: 'loaded' } })
+    $agentPluginsStatus.set('loading')
+    requestGateway.mockImplementationOnce(() => new Promise(resolve => (answer = resolve)) as never)
+
+    render(
+      <MemoryRouter initialEntries={['/capabilities?tab=plugins&plugin=fish-audio&settings=fish-audio']}>
+        <PluginsTab profile={null} />
+      </MemoryRouter>
+    )
+
+    await waitFor(() => expect(requestGateway).toHaveBeenCalled())
+    await new Promise(resolve => setTimeout(resolve, 250))
+    expect(scrolled).toEqual([])
+    expect(document.querySelector('.setting-field-highlight')).toBeNull()
+
+    answer({ plugins: [row] })
+
+    await waitFor(() => expect(scrolled).toEqual(['plugin-settings-panel-fish-audio']))
+    expect(screen.getAllByTestId(/^plugin-row-/)).toHaveLength(1)
+  })
+
+  // A row that only shows up in a LATER reload must not pop its form open (and
+  // so move the user's attention) long after the link was followed.
+  it('drops a settings= request whose row is missing from the first list load', async () => {
+    const row: AgentPluginRow = {
+      description: '',
+      key: 'fish-audio',
+      name: 'fish-audio',
+      settings_schema: [
+        {
+          description: '',
+          env: 'FISH_API_KEY',
+          has_value: false,
+          key: 'api_key',
+          label: 'Fish Audio API key',
+          required: false,
+          type: 'secret'
+        }
+      ],
+      source: 'git',
+      status: 'enabled',
+      version: '1.3.1'
+    }
+
+    render(
+      <MemoryRouter initialEntries={['/capabilities?tab=plugins&settings=fish-audio']}>
+        <PluginsTab profile={null} />
+      </MemoryRouter>
+    )
+
+    await waitFor(() => expect(requestGateway).toHaveBeenCalled())
+    await new Promise(resolve => setTimeout(resolve, 50))
+    $agentPlugins.set([row])
+
+    const gear = await screen.findByRole('button', { name: 'Settings: fish-audio' })
+    await new Promise(resolve => setTimeout(resolve, 50))
+    expect(gear.getAttribute('aria-expanded')).toBe('false')
+  })
+
+  it('does not take focus from a field the user is already typing in', async () => {
+    const row: AgentPluginRow = {
+      description: '',
+      key: 'fish-audio',
+      name: 'fish-audio',
+      settings_schema: [
+        {
+          description: '',
+          env: 'FISH_API_KEY',
+          has_value: false,
+          key: 'api_key',
+          label: 'Fish Audio API key',
+          required: false,
+          type: 'secret'
+        }
+      ],
+      source: 'git',
+      status: 'enabled',
+      version: '1.3.1'
+    }
+
+    // jsdom has no scrollIntoView; without a stub the highlight throws before it could take focus.
+    const scroll = vi.fn()
+    Element.prototype.scrollIntoView = scroll
+    const typing = document.createElement('input')
+    document.body.append(typing)
+    typing.focus()
+    $agentPlugins.set([row])
+    requestGateway.mockResolvedValueOnce({ plugins: [row] } as never)
+
+    render(
+      <MemoryRouter initialEntries={['/capabilities?tab=plugins&plugin=fish-audio&settings=fish-audio']}>
+        <PluginsTab profile={null} />
+      </MemoryRouter>
+    )
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Settings: fish-audio' }).getAttribute('aria-expanded')).toBe('true')
+    )
+    await new Promise(resolve => setTimeout(resolve, 250))
+    expect(document.activeElement).toBe(typing)
+    expect(scroll).not.toHaveBeenCalled()
+    typing.remove()
+  })
+
+  it('opens the requested form after a failed list load is retried', async () => {
+    const row: AgentPluginRow = {
+      description: '',
+      key: 'fish-audio',
+      name: 'fish-audio',
+      settings_schema: [
+        {
+          description: '',
+          env: 'FISH_API_KEY',
+          has_value: false,
+          key: 'api_key',
+          label: 'Fish Audio API key',
+          required: false,
+          type: 'secret'
+        }
+      ],
+      source: 'git',
+      status: 'enabled',
+      version: '1.3.1'
+    }
+
+    $agentPluginsStatus.set('loading')
+    requestGateway.mockRejectedValueOnce(new Error('gateway down'))
+
+    render(
+      <MemoryRouter initialEntries={['/capabilities?tab=plugins&settings=fish-audio']}>
+        <PluginsTab profile={null} />
+      </MemoryRouter>
+    )
+
+    const retry = await screen.findByRole('button', { name: 'Refresh skills' })
+    requestGateway.mockResolvedValueOnce({ plugins: [row] } as never)
+    fireEvent.click(retry)
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Settings: fish-audio' }).getAttribute('aria-expanded')).toBe('true')
+    )
+  })
+
+  it('keeps the settings form closed without the deep link', () => {
+    $agentPlugins.set([
+      {
+        description: '',
+        key: 'fish-audio',
+        name: 'fish-audio',
+        settings_schema: [
+          {
+            description: '',
+            env: 'FISH_API_KEY',
+            has_value: false,
+            key: 'api_key',
+            label: 'Fish Audio API key',
+            required: false,
+            type: 'secret'
+          }
+        ],
+        source: 'git',
+        status: 'enabled',
+        version: '1.3.1'
+      }
+    ])
+
+    render(
+      <MemoryRouter initialEntries={['/capabilities?tab=plugins&plugin=fish-audio']}>
+        <PluginsTab profile={null} />
+      </MemoryRouter>
+    )
+
+    expect(screen.getByRole('button', { name: 'Settings: fish-audio' }).getAttribute('aria-expanded')).toBe('false')
+    expect(screen.queryByLabelText(/^Fish Audio API key/)).toBeNull()
   })
 
   it('renders declared server pills and the unavailable sentence under the description', () => {
