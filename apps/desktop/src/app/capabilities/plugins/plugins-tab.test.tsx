@@ -47,6 +47,7 @@ describe('PluginsTab', () => {
     cleanup()
     $connection.set(null)
     // Deep-link tests stub it (jsdom has none); never leak a stub past a failure.
+    Reflect.deleteProperty(Element.prototype, 'scrollIntoView')
   })
 
   // Voices' "Enter API key" and other upstream `agent=` links land here via
