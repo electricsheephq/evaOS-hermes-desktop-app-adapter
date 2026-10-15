@@ -46,6 +46,7 @@ describe('PluginsTab', () => {
   afterEach(() => {
     cleanup()
     $connection.set(null)
+    // Deep-link tests stub it (jsdom has none); never leak a stub past a failure.
   })
 
   // Voices' "Enter API key" and other upstream `agent=` links land here via
@@ -144,7 +145,6 @@ describe('PluginsTab', () => {
     await waitFor(() => expect(scrolled).toEqual([{ block: 'start', id: 'plugin-settings-panel-fish-audio' }]))
     expect(document.getElementById('plugin-settings-panel-fish-audio')?.classList).toContain('setting-field-highlight')
     expect(document.getElementById('plugin-fish-audio')?.classList).not.toContain('setting-field-highlight')
-    Reflect.deleteProperty(Element.prototype, 'scrollIntoView')
   })
 
   // Cold start: the app's bundled desktop half renders as its own gear-less row
@@ -198,7 +198,6 @@ describe('PluginsTab', () => {
 
     await waitFor(() => expect(scrolled).toEqual(['plugin-settings-panel-fish-audio']))
     expect(screen.getAllByTestId(/^plugin-row-/)).toHaveLength(1)
-    Reflect.deleteProperty(Element.prototype, 'scrollIntoView')
   })
 
   // A row that only shows up in a LATER reload must not pop its form open (and
@@ -282,7 +281,6 @@ describe('PluginsTab', () => {
     expect(document.activeElement).toBe(typing)
     expect(scroll).not.toHaveBeenCalled()
     typing.remove()
-    Reflect.deleteProperty(Element.prototype, 'scrollIntoView')
   })
 
   it('opens the requested form after a failed list load is retried', async () => {
