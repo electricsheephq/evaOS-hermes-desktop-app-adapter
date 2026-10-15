@@ -973,6 +973,31 @@ function selectedEntries(entries, selected) {
 var muted = { color: "var(--ui-text-tertiary)" };
 var hidden = { position: "absolute", width: 1, height: 1, overflow: "hidden", clip: "rect(0 0 0 0)", whiteSpace: "nowrap" };
 var ellipsis = { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" };
+var crumbStyle = (index, current) => ({
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 2,
+  overflow: "hidden",
+  ...current ? { flex: "0 0 auto", maxWidth: "70%", minWidth: 0 } : { flex: "0 100 auto", minWidth: index === 0 ? "2em" : 0 }
+});
+function useCrumbFocus(trail) {
+  const ref = useRef(null);
+  const [focused, setFocused] = useState(null);
+  useEffect(() => {
+    const active = document.activeElement;
+    const index = ref.current && active instanceof HTMLButtonElement ? [...ref.current.children].findIndex((crumb) => crumb.contains(active)) : -1;
+    setFocused(index >= 0 ? index : null);
+  }, [trail]);
+  return {
+    focused,
+    ref,
+    handlers: (index) => ({ onBlur: () => setFocused((f) => f === index ? null : f), onFocus: () => setFocused(index) })
+  };
+}
+var crumbNavStyle = { display: "flex", alignItems: "center", gap: 2, minWidth: 0, flex: "1 1 160px", fontSize: 12, ...ellipsis };
+var crumbButtonStyle = { flexShrink: 1, minWidth: 0, maxWidth: "100%", overflow: "hidden" };
+var crumbLabelStyle = { ...ellipsis, minWidth: 0 };
+var chevronStyle = { ...muted, flexShrink: 0 };
 function LoadError({ error, onRetry }) {
   const retry = /* @__PURE__ */ jsx("div", { style: { display: "flex", justifyContent: "center" }, children: /* @__PURE__ */ jsx(Button, { onClick: onRetry, size: "sm", variant: "secondary", children: S.retry }) });
   if (isNotFoundError(error)) {
@@ -1019,12 +1044,13 @@ function RootSelect({ b, drive }) {
 function Breadcrumbs({ b, folder = b.path, rootLabel = b.root?.label ?? "", leaf, onNavigate = b.navigate }) {
   const parts = folder.split("/").filter(Boolean);
   const crumbs = [{ label: rootLabel, path: "" }, ...parts.map((part, i) => ({ label: part, path: parts.slice(0, i + 1).join("/") }))];
-  return /* @__PURE__ */ jsxs("nav", { "aria-label": S.breadcrumbs, style: { display: "flex", alignItems: "center", gap: 2, minWidth: 0, flex: 1, fontSize: 12, ...ellipsis }, children: [
+  const focus = useCrumbFocus(`${rootLabel}/${folder}/${leaf ?? ""}/${b.query ? "?" : ""}`);
+  return /* @__PURE__ */ jsxs("nav", { "aria-label": S.breadcrumbs, ref: focus.ref, style: crumbNavStyle, children: [
     crumbs.map((crumb, i) => {
       const last = i === crumbs.length - 1;
-      return /* @__PURE__ */ jsxs("span", { style: { display: "inline-flex", alignItems: "center", gap: 2, minWidth: 0 }, children: [
-        i > 0 && /* @__PURE__ */ jsx(Codicon, { name: "chevron-right", size: "0.75rem", style: muted }),
-        last && !b.query && !leaf ? /* @__PURE__ */ jsx("span", { style: { ...ellipsis, color: "var(--ui-text-primary)", fontWeight: 500 }, children: crumb.label }) : /* @__PURE__ */ jsx(
+      return /* @__PURE__ */ jsxs("span", { ...focus.handlers(i), style: crumbStyle(i, last && !leaf || focus.focused === i), children: [
+        i > 0 && /* @__PURE__ */ jsx(Codicon, { name: "chevron-right", size: "0.75rem", style: chevronStyle }),
+        last && !b.query && !leaf ? /* @__PURE__ */ jsx("span", { style: { ...crumbLabelStyle, color: "var(--ui-text-primary)", fontWeight: 500 }, title: crumb.label, children: crumb.label }) : /* @__PURE__ */ jsx(
           Button,
           {
             onClick: (event) => {
@@ -1032,15 +1058,17 @@ function Breadcrumbs({ b, folder = b.path, rootLabel = b.root?.label ?? "", leaf
               onNavigate(crumb.path);
             },
             size: "inline",
+            style: crumbButtonStyle,
+            title: crumb.label,
             variant: "text",
-            children: crumb.label
+            children: /* @__PURE__ */ jsx("span", { style: crumbLabelStyle, children: crumb.label })
           }
         )
       ] }, crumb.path || "/");
     }),
-    leaf && /* @__PURE__ */ jsxs("span", { style: { display: "inline-flex", alignItems: "center", gap: 2, minWidth: 0 }, children: [
-      /* @__PURE__ */ jsx(Codicon, { name: "chevron-right", size: "0.75rem", style: muted }),
-      /* @__PURE__ */ jsx("span", { style: { ...ellipsis, color: "var(--ui-text-primary)", fontWeight: 500 }, children: leaf })
+    leaf && /* @__PURE__ */ jsxs("span", { style: crumbStyle(crumbs.length, true), children: [
+      /* @__PURE__ */ jsx(Codicon, { name: "chevron-right", size: "0.75rem", style: chevronStyle }),
+      /* @__PURE__ */ jsx("span", { style: { ...crumbLabelStyle, color: "var(--ui-text-primary)", fontWeight: 500 }, title: leaf, children: leaf })
     ] })
   ] });
 }
@@ -1297,9 +1325,10 @@ function useDriveBrowser() {
   };
 }
 function DriveCrumbs({ d }) {
-  return /* @__PURE__ */ jsx2("nav", { "aria-label": S.breadcrumbs, style: { display: "flex", alignItems: "center", gap: 2, minWidth: 0, flex: 1, fontSize: 12, ...ellipsis2 }, children: d.trail.map((crumb, i) => /* @__PURE__ */ jsxs2("span", { style: { display: "inline-flex", alignItems: "center", gap: 2, minWidth: 0 }, children: [
-    i > 0 && /* @__PURE__ */ jsx2(Codicon2, { name: "chevron-right", size: "0.75rem", style: muted2 }),
-    i === d.trail.length - 1 && !d.q ? /* @__PURE__ */ jsx2("span", { style: { ...ellipsis2, color: "var(--ui-text-primary)", fontWeight: 500 }, children: crumb.name }) : /* @__PURE__ */ jsx2(
+  const focus = useCrumbFocus(`${d.trail.map((crumb) => crumb.id).join("/")}/${d.q ? "?" : ""}`);
+  return /* @__PURE__ */ jsx2("nav", { "aria-label": S.breadcrumbs, ref: focus.ref, style: crumbNavStyle, children: d.trail.map((crumb, i) => /* @__PURE__ */ jsxs2("span", { ...focus.handlers(i), style: crumbStyle(i, i === d.trail.length - 1 || focus.focused === i), children: [
+    i > 0 && /* @__PURE__ */ jsx2(Codicon2, { name: "chevron-right", size: "0.75rem", style: chevronStyle }),
+    i === d.trail.length - 1 && !d.q ? /* @__PURE__ */ jsx2("span", { style: { ...crumbLabelStyle, color: "var(--ui-text-primary)", fontWeight: 500 }, title: crumb.name, children: crumb.name }) : /* @__PURE__ */ jsx2(
       Button2,
       {
         onClick: (event) => {
@@ -1307,8 +1336,10 @@ function DriveCrumbs({ d }) {
           d.crumb(i);
         },
         size: "inline",
+        style: crumbButtonStyle,
+        title: crumb.name,
         variant: "text",
-        children: crumb.name
+        children: /* @__PURE__ */ jsx2("span", { style: crumbLabelStyle, children: crumb.name })
       }
     )
   ] }, `${i}:${crumb.id}`)) });
@@ -1336,7 +1367,7 @@ function DriveList({ d, height }) {
     if (!(event.key in step) || event.altKey) return;
     event.preventDefault();
     const next = Math.max(0, Math.min(items.length - 1, items.indexOf(item) + step[event.key]));
-    const row = ref.current?.querySelectorAll("[role=listitem]")[next];
+    const row = ref.current?.querySelectorAll("[role=option]")[next];
     row?.focus();
     row?.scrollIntoView?.({ block: "nearest" });
   };
@@ -1348,7 +1379,9 @@ function DriveList({ d, height }) {
   } else if (!items.length) {
     body = /* @__PURE__ */ jsx2(EmptyState2, { title: d.q ? S.noResults : S.driveEmpty });
   } else {
-    body = /* @__PURE__ */ jsxs2("div", { role: "list", children: [
+    body = // A listbox of options, like the Cloud list: Hermes Desktop leaves Enter and Space on an option to the row, but sends
+    // them to a visible chat's message box from anything it doesn't know handles them (a listitem did that, 0.4.5).
+    /* @__PURE__ */ jsxs2("div", { "aria-label": d.q ? S.searchResults : S.filesIn(d.trail[d.trail.length - 1].name), "aria-multiselectable": "true", role: "listbox", children: [
       items.map((item) => /* @__PURE__ */ jsx2(DriveRow, { d, item, onFocus: () => setLastFocused(item.id), onNavKey: navKey, sized, tabStop: item.id === tabStop }, item.id)),
       list.data.truncated && /* @__PURE__ */ jsx2("div", { style: { ...muted2, fontSize: 11, padding: "8px 12px" }, children: S.truncated(items.length) })
     ] });
@@ -1379,7 +1412,7 @@ function DriveRow({ d, item, sized, tabStop, onFocus, onNavKey }) {
       onMouseLeave: () => setHover(false),
       ...focus.handlers,
       onFocus: () => (focus.handlers.onFocus(), onFocus()),
-      role: "listitem",
+      role: "option",
       style: {
         display: "grid",
         gridTemplateColumns: `16px 16px minmax(0, 1fr)${sized ? " 72px" : ""} 96px`,
