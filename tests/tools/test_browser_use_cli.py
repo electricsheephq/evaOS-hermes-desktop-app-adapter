@@ -892,7 +892,7 @@ def goto_url(url):
         monkeypatch.setattr(bu_cli, "_find_cli", lambda: [cli])
         future = '"""doc"""\nfrom __future__ import annotations\nprint("x")'
         sent = json.loads(bu_cli.browser_exec(future))["output"]
-        assert sent.startswith('"""doc"""\nfrom __future__ import annotations\n' + bu_cli._RUNTIME_PREAMBLE)
+        assert sent.startswith('"""doc"""\nfrom __future__ import annotations\n' + bu_cli._RUNTIME_PREAMBLE_FOREGROUND)
         compile(sent, "<browser_exec>", "exec")
         # A module docstring stays the docstring, and a statement sharing the future import's line runs after
         # the preamble (so `workspace` exists by then).
@@ -909,7 +909,7 @@ class TestForegroundPreamble:
     @pytest.mark.parametrize("route", ["managed", "provider_fallback", "headed", "headed_unknown", "bot_desktop_display",
                                        "human_lease", "unnamed", "lightpanda", "override", "real_profile", "provider",
                                        "bu_cloud", "bu_override", "admin"])
-    def test_only_named_headless_managed_session_gets_foreground(self, route, tmp_path, monkeypatch):
+    def test_only_headless_managed_session_gets_foreground(self, route, tmp_path, monkeypatch):
         monkeypatch.setattr(bu_cli, "_base_subprocess_env",
                             lambda: {"BU_CDP_WS": "wss://browser.example/cdp"} if route == "bu_override" else {})
         monkeypatch.setattr(bu_cli, "_read_browser_cfg", lambda: {})
@@ -941,8 +941,8 @@ class TestForegroundPreamble:
         result = json.loads(bu_cli.browser_exec(code, session="" if route == "unnamed" else "r7k2",
                                               local=route == "real_profile"))
         assert result["success"] is True
-        # Only a named session on private headless managed Chromium (directly, or as a provider's local fallback).
-        assert ("_hermes_foreground_tab" in result["output"]) is (route in ("managed", "provider_fallback"))
+        # Only a session on private headless managed Chromium (directly, or as a provider's local fallback).
+        assert ("_hermes_foreground_tab" in result["output"]) is (route in ("managed", "provider_fallback", "unnamed"))
         assert "sentinel:unset" in result["output"]
         if route == "admin":
             assert result["output"].startswith(code)
@@ -1277,7 +1277,7 @@ class TestBrowserExec:
         result = json.loads(bu_cli.browser_exec('print("hi")'))
         assert result["success"] is True
         assert result["exit_code"] == 0
-        assert result["output"].startswith("got:" + bu_cli._RUNTIME_PREAMBLE)
+        assert result["output"].startswith("got:" + bu_cli._RUNTIME_PREAMBLE_FOREGROUND)
         assert result["output"].endswith('print("hi")\n')
         assert "session" not in result
 

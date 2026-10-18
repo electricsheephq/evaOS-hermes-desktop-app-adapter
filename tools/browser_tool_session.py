@@ -793,6 +793,40 @@ def _dispatch_browser_command(
     return engine, result
 
 
+def _keepalive_managed_browser(task_id: str, timeout: int) -> Dict[str, Any]:
+    """Touch only an existing managed session; a failed heartbeat must never recycle Chromium.
+
+    Bypass session resolution, protocol recovery and output interpretation: those paths may
+    replace the browser or log its endpoint. A timeout kills only this CLI client.
+    """
+    with _bt._cleanup_lock:
+        session_info = _bt._active_sessions.get(task_id)
+    if session_info is None:
+        return {"success": False}
+
+    def ping() -> Dict[str, Any]:
+        _lifecycle._update_session_activity(task_id)
+        socket_dir = _prepare_session_socket_dir(session_info["session_name"])
+        env = _agent_browser_command_env(socket_dir)
+        _apply_chromium_sandbox_args(env)
+        argv = _agent_browser_argv(_install._find_agent_browser())
+        argv += ["--session", session_info["session_name"], "--json", "get", "cdp-url"]
+        tag = "keepalive_" + uuid.uuid4().hex
+        proc = _popen_agent_browser(argv, env, socket_dir, tag)
+        try:
+            proc.wait(timeout=timeout)
+            return {"success": proc.returncode == 0}
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+            raise
+        finally:
+            _unlink_command_output_files(*(os.path.join(socket_dir, f"_{slot}_{tag}")
+                                           for slot in ("stdout", "stderr")))
+
+    return run_fenced(session_info, ping)
+
+
 def _run_browser_command(
     task_id: str,
     command: str,

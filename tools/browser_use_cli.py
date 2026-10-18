@@ -6,6 +6,7 @@ instead of default browser tools
 
 import ast
 import contextlib
+import hashlib
 import importlib
 import json
 import logging
@@ -35,9 +36,11 @@ _PRIVATE_BROWSER_SENTINEL = "_HERMES_BU_PRIVATE_BROWSER"
 # Internal route provenance: this exec resolved to a browser on the Bot Desktop display and must use
 # the same human-control lease fence as the built-in browser tools. Popped before launching the CLI.
 _BOT_DESKTOP_BROWSER_SENTINEL = "_HERMES_BU_BOT_DESKTOP_BROWSER"
-# Named sessions on private headless managed Chromium need their background tab painted.
+# Private headless managed Chromium sessions need their background tab painted.
 # Popped before launching the CLI, like the other internal route sentinels.
 _FOREGROUND_TAB_SENTINEL = "_HERMES_BU_FOREGROUND_TAB"
+# Internal cache key, removed before launching the CLI.
+_MANAGED_KEY_SENTINEL = "_HERMES_BU_MANAGED_KEY"
 
 # Prepended to EVERY browser_exec call: raises the harness's 5 s default CDP response timeout to 30 s (cloud
 # navigations routinely exceed 5 s; screenshots already get 60 s) and binds `workspace` for the model's code.
@@ -523,17 +526,17 @@ def _resolve_managed_chromium_cdp(env: dict, task_id: Optional[str], session_nam
     _set_cdp_env(env, cdp)
     env[_PRIVATE_BROWSER_SENTINEL] = "1"  # one Chromium per cache key: nothing to share a tab with
     env[_BOT_DESKTOP_BROWSER_SENTINEL] = "1"
-    if session_name:
-        try:
-            from tools import browser_tool_cloud as _cloud
-            from tools.bot_desktop import lease as _bd_lease, runtime as _bd_runtime
-            # A published Bot Desktop screen or a human lease means someone may be watching this browser
-            # (the session can even attach to a human-started Chromium there): never take its foreground.
-            watched = bool(_bd_runtime.published_env().get("DISPLAY")) or _bd_lease.human_holds()
-            if not (_cloud._is_headed_mode() or watched):
-                env[_FOREGROUND_TAB_SENTINEL] = "1"
-        except Exception as e:  # stubbed browser_tool / headed-mode or Bot Desktop lookup unavailable
-            logger.debug("managed chromium headed-mode lookup unavailable: %s", e)
+    env[_MANAGED_KEY_SENTINEL] = _backend_cache_key(task_id, session_name)
+    try:
+        from tools import browser_tool_cloud as _cloud
+        from tools.bot_desktop import lease as _bd_lease, runtime as _bd_runtime
+        # A published Bot Desktop screen or a human lease means someone may be watching this browser
+        # (the session can even attach to a human-started Chromium there): never take its foreground.
+        watched = bool(_bd_runtime.published_env().get("DISPLAY")) or _bd_lease.human_holds()
+        if not (_cloud._is_headed_mode() or watched):
+            env[_FOREGROUND_TAB_SENTINEL] = "1"
+    except Exception as e:  # stubbed browser_tool / headed-mode or Bot Desktop lookup unavailable
+        logger.debug("managed chromium headed-mode lookup unavailable: %s", e)
     return None
 
 
@@ -773,6 +776,41 @@ def _run_cli_killing_process_group(cmd, code, env, timeout):
     return subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
 
 
+def _keepalive_period_s() -> float:
+    from tools.browser_tool import BROWSER_SESSION_INACTIVITY_TIMEOUT
+    return max(5.0, min(30.0, BROWSER_SESSION_INACTIVITY_TIMEOUT / 3))
+
+
+@contextlib.contextmanager
+def _managed_browser_keepalive(cache_key: Optional[str]):
+    """Direct CDP traffic is invisible to agent-browser's idle timer and the Python janitor."""
+    if not cache_key:
+        yield
+        return
+    import threading
+    from agent.memory_provider import ctx_bound
+    from tools.browser_tool import _get_open_command_timeout
+    from tools.browser_tool_session import _keepalive_managed_browser
+
+    stop = threading.Event()
+    period = _keepalive_period_s()
+    timeout = _get_open_command_timeout(first_open=True)
+
+    def beat():
+        while not stop.wait(period):
+            result = _quiet(lambda: _keepalive_managed_browser(cache_key, timeout), None)
+            if not result or not result.get("success"):
+                logger.debug("Managed browser keepalive failed")
+
+    thread = threading.Thread(target=ctx_bound(beat), daemon=True, name="browser-exec-keepalive")
+    thread.start()
+    try:
+        yield
+    finally:
+        stop.set()
+        thread.join()
+
+
 def browser_exec(code: str, session: str = "", timeout_s: int = _DEFAULT_TIMEOUT_S,
                  task_id: Optional[str] = None, local: bool = False):
     """Run Python code through the browser-use CLI, and return its output"""
@@ -810,6 +848,10 @@ def browser_exec(code: str, session: str = "", timeout_s: int = _DEFAULT_TIMEOUT
     # _OWN_TAB_PREAMBLE). Private per-name browsers skip this — nothing to collide with.
     private_browser = env.pop(_PRIVATE_BROWSER_SENTINEL, None)  # always pop: never exported to the CLI
     foreground = env.pop(_FOREGROUND_TAB_SENTINEL, None)
+    managed_key = env.pop(_MANAGED_KEY_SENTINEL, None)
+    if managed_key and not session:
+        # Each cached Chromium needs its own daemon: the harness binds CDP only at daemon startup.
+        env["BU_NAME"] = "t-" + hashlib.sha1(managed_key.encode()).hexdigest()[:20]
     code = _with_preambles(code, own_tab=bool(session and not private_browser), foreground=bool(foreground))
 
     workspace = _workspace_dir(task_id)
@@ -828,7 +870,7 @@ def browser_exec(code: str, session: str = "", timeout_s: int = _DEFAULT_TIMEOUT
         _attach_vault_supervisor(env, task_id)
         from tools.browser_use_lifecycle import owned_harness_call
         try:
-            with owned_harness_call(cmd, env, task_id, session):
+            with owned_harness_call(cmd, env, task_id, session), _managed_browser_keepalive(managed_key):
                 return {"proc": _run_cli_killing_process_group(cmd, code, env, timeout)}
         except subprocess.TimeoutExpired:
             return {"error_result": tool_error(
@@ -966,7 +1008,7 @@ BROWSER_EXEC_SCHEMA = {
         "type": "object",
         "properties": {
             "code": {"type": "string", "description": "Python code to execute using the pre-imported browser helpers. Use print(...) for any data you need back."},
-            "session": {"type": "string", "description": "Named isolated browser session — its own daemon and (on cloud backends) own browser, so concurrent tasks don't share tabs. Reuse the same name on every related call; omit for the shared default session."},
+            "session": {"type": "string", "description": "Named isolated browser session — its own daemon and (on cloud backends) own browser, so concurrent tasks don't share tabs. Reuse the same name on every related call; omit for a per-task managed Chromium session or the backend's default session on other routes."},
             "timeout_s": {"type": "integer", "default": _DEFAULT_TIMEOUT_S,
                           "description": f"Max seconds to wait for the code to finish (default {_DEFAULT_TIMEOUT_S}, max {_MAX_TIMEOUT_S})."},
         },
