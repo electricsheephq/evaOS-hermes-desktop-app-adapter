@@ -29,7 +29,7 @@ def manual_delivery(monkeypatch):
     monkeypatch.setattr(delivery_queue, "DELIVERY_DB", None)
     monkeypatch.setattr(delivery_queue, "DEFAULT_DELIVERY_WAIT_TIMEOUT_SECONDS", 0)
     monkeypatch.setitem(sys.modules, "gateway.run", None)
-    monkeypatch.setattr(scheduler, "_launch_external_cron_worker", lambda job: False)
+    monkeypatch.setattr(scheduler, "_launch_external_cron_worker", lambda job, **kwargs: False)
 
     def run(job, **kwargs):
         error = scheduler_preflight._preflight_check_delivery(job)
