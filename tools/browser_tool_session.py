@@ -5,6 +5,7 @@ Split out of ``tools/browser_tool.py``. Facade-owned state is read through ``_bt
 """
 
 import base64
+import contextlib
 import json
 import logging
 import os
@@ -751,6 +752,22 @@ def _bot_desktop_attach_port(session_info: Dict[str, Any]) -> Optional[int]:
                                                  exclude_session=session_info["session_name"])
 
 
+def _local_backend_args(session_info: Dict[str, Any], engine: str) -> List[str]:
+    """Share launch inputs: a mismatched heartbeat can replace a live browser."""
+    backend_args = ["--session", session_info["session_name"]]
+    if (bd_port := _bot_desktop_attach_port(session_info)) is not None:
+        # A Chromium already runs on the Bot Desktop's shared profile (the human clicked the dock's
+        # Browser first): a launch would be forwarded into it by Chromium's singleton and die without
+        # a DevTools endpoint, so the session's daemon attaches to the port it advertises instead.
+        # Same daemon (keyed by --session) either way, so snapshot refs stay valid across commands.
+        backend_args += ["--cdp", str(bd_port)]
+    if _cloud._is_headed_mode():
+        backend_args.append("--headed")
+    if engine != "auto" and not _bt._is_camofox_mode():
+        backend_args += ["--engine", engine]
+    return backend_args
+
+
 def _dispatch_browser_command(
     task_id: str, session_info: Dict[str, Any], browser_cmd: str, command: str, args: List[str],
     timeout: int, _engine_override: Optional[str],
@@ -768,17 +785,7 @@ def _dispatch_browser_command(
     if session_info.get("cdp_url"):
         backend_args = ["--cdp", session_info["cdp_url"]]
     else:
-        backend_args = ["--session", session_info["session_name"]]
-        if (bd_port := _bot_desktop_attach_port(session_info)) is not None:
-            # A Chromium already runs on the Bot Desktop's shared profile (the human clicked the dock's
-            # Browser first): a launch would be forwarded into it by Chromium's singleton and die without
-            # a DevTools endpoint, so the session's daemon attaches to the port it advertises instead.
-            # Same daemon (keyed by --session) either way, so snapshot refs stay valid across commands.
-            backend_args += ["--cdp", str(bd_port)]
-        if _cloud._is_headed_mode():
-            backend_args.append("--headed")
-        if engine != "auto" and not _bt._is_camofox_mode():
-            backend_args += ["--engine", engine]
+        backend_args = _local_backend_args(session_info, engine)
 
     argv = _agent_browser_argv(browser_cmd)
     spawn_command, spawn_args, stdin_payload = _shim_safe_args(argv[0], command, args)
@@ -796,13 +803,17 @@ def _dispatch_browser_command(
 def _keepalive_managed_browser(task_id: str, timeout: int) -> Dict[str, Any]:
     """Touch only an existing managed session; a failed heartbeat must never recycle Chromium.
 
-    Bypass session resolution, protocol recovery and output interpretation: those paths may
-    replace the browser or log its endpoint. A timeout kills only this CLI client.
+    Bypass session resolution and protocol recovery: those paths may replace the browser
+    or log its endpoint. A timeout kills only this CLI client.
     """
     with _bt._cleanup_lock:
         session_info = _bt._active_sessions.get(task_id)
     if session_info is None:
         return {"success": False}
+
+    engine = _cloud._get_browser_engine()
+    if engine == "lightpanda":
+        return {"success": False, "skipped": "lightpanda"}
 
     def ping() -> Dict[str, Any]:
         _lifecycle._update_session_activity(task_id)
@@ -810,19 +821,38 @@ def _keepalive_managed_browser(task_id: str, timeout: int) -> Dict[str, Any]:
         env = _agent_browser_command_env(socket_dir)
         _apply_chromium_sandbox_args(env)
         argv = _agent_browser_argv(_install._find_agent_browser())
-        argv += ["--session", session_info["session_name"], "--json", "get", "cdp-url"]
-        tag = "keepalive_" + uuid.uuid4().hex
-        proc = _popen_agent_browser(argv, env, socket_dir, tag)
+        argv += _local_backend_args(session_info, engine) + ["--json"]
+
+        def command(*args: str) -> tuple[int, str]:
+            tag = "keepalive_" + uuid.uuid4().hex
+            paths = [os.path.join(socket_dir, f"_{slot}_{tag}") for slot in ("stdout", "stderr")]
+            proc = _popen_agent_browser(argv + list(args), env, socket_dir, tag)
+            try:
+                proc.wait(timeout=timeout)
+                stdout, _ = _read_command_output_files(*paths)
+                return proc.returncode, stdout
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                with contextlib.suppress(subprocess.TimeoutExpired):
+                    proc.wait(timeout=2)
+                raise
+            finally:
+                _unlink_command_output_files(*paths)
+
+        # session list never launches a daemon. get cdp-url refreshes both old and
+        # new daemons, but would cold-launch Chromium if the session is gone.
+        code, stdout = command("session", "list")
         try:
-            proc.wait(timeout=timeout)
-            return {"success": proc.returncode == 0}
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait()
-            raise
-        finally:
-            _unlink_command_output_files(*(os.path.join(socket_dir, f"_{slot}_{tag}")
-                                           for slot in ("stdout", "stderr")))
+            result = json.loads(stdout) if code == 0 else None
+        except json.JSONDecodeError:
+            result = None
+        data = result.get("data") if isinstance(result, dict) and result.get("success") is True else None
+        sessions = data.get("sessions") if isinstance(data, dict) else None
+        if isinstance(sessions, list) and all(isinstance(name, str) for name in sessions):
+            if session_info["session_name"] not in sessions:
+                return {"success": False, "skipped": "session_gone"}
+        code, _ = command("get", "cdp-url")
+        return {"success": code == 0}
 
     return run_fenced(session_info, ping)
 

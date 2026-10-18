@@ -808,7 +808,9 @@ def _managed_browser_keepalive(cache_key: Optional[str]):
         yield
     finally:
         stop.set()
-        thread.join()
+        # An in-flight CLI/fence may be stuck. It can finish on this daemon thread;
+        # stop.wait() prevents a subsequent beat without extending browser_exec indefinitely.
+        thread.join(timeout=2)
 
 
 def browser_exec(code: str, session: str = "", timeout_s: int = _DEFAULT_TIMEOUT_S,
