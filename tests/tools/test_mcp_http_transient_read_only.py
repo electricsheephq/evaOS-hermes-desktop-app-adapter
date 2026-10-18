@@ -17,9 +17,9 @@ from tools.registry import ToolRegistry
 
 @pytest.fixture
 def invoke(monkeypatch):
-    sleep = Mock()
+    sleep = Mock(return_value=False)  # the backoff; True = the user interrupted it
     auth = AsyncMock(return_value=False)
-    monkeypatch.setattr(handlers.time, "sleep", sleep)
+    monkeypatch.setattr(handlers, "_interruptible_backoff", sleep)
     monkeypatch.setattr(mcp_oauth_manager, "get_manager", lambda: SimpleNamespace(handle_401=auth))
     monkeypatch.setattr(handlers._loop, "_run_on_mcp_loop", lambda call, **kw: asyncio.run(call()))
     monkeypatch.setattr(handlers, "_trust_gate_check", lambda *a: None)
@@ -28,24 +28,34 @@ def invoke(monkeypatch):
     monkeypatch.setattr(mcp_tool, "_server_errors_all_application", {})
     monkeypatch.setattr(mcp_tool, "_server_breaker_opened_at", {})
 
-    def run(*, status=502, method="POST", read_only=True, retry="success", failures=0):
+    def run(*, status=502, method="POST", read_only=True, retry="success", failures=0,
+            stale=False, opaque=True, interrupted=False):
         server = SimpleNamespace(_http_rejection={}, _rpc_lock=asyncio.Lock())
         recorder = _make_http_rejection_recorder(server._http_rejection)
+        sleep.return_value = interrupted
+
+        async def reject():
+            response = httpx.Response(
+                status, text="synthetic response body", headers={"content-type": "text/plain"},
+                request=httpx.Request(method, "https://provider.example/mcp"))
+            await recorder(response)
+            return response
 
         async def rpc(*args, **kwargs):
             if call_tool.await_count > 1 and retry != "raise":
                 return SimpleNamespace(
                     content=[SimpleNamespace(type="text", text="ok")], isError=retry == "error")
-            if status is not None:
-                response = httpx.Response(
-                    status, text="synthetic response body", headers={"content-type": "text/plain"},
-                    request=httpx.Request(method, "https://provider.example/mcp"))
-                await recorder(response)
+            if status is not None and not stale:
+                response = await reject()
                 if status == 401:
                     raise httpx.HTTPStatusError("Unauthorized", request=response.request, response=response)
-            exc = RuntimeError("Server returned an error response")
-            exc.error = SimpleNamespace(code=-32603)
+            exc = RuntimeError("Server returned an error response" if opaque else "unrelated failure")
+            if opaque:
+                exc.error = SimpleNamespace(code=-32603)
             raise ExceptionGroup("transport", [exc])
+
+        if stale:  # recorded before this call: the capture's seq mark must not attach it
+            asyncio.run(reject())
 
         call_tool = AsyncMock(side_effect=rpc)
         server.session = SimpleNamespace(call_tool=call_tool)
@@ -96,14 +106,18 @@ def test_transient_read_only_has_one_retry_and_one_outcome(invoke, caplog, statu
 @pytest.mark.parametrize("options", [
     {"status": 500}, {"status": 404}, {"status": 401}, {"status": None},
     {"method": "GET"}, {"read_only": False}, {"read_only": None}, {"read_only": "true"},
+    {"stale": True}, {"opaque": False}, {"interrupted": True},
 ])
 def test_ineligible_calls_do_not_transient_retry(invoke, options):
     run, sleep, auth = invoke
     result, call_tool, key = run(**options)
     assert call_tool.await_count == 1
-    sleep.assert_not_called()
+    assert sleep.call_count == int(bool(options.get("interrupted")))
     assert mcp_tool._server_error_counts[key] == 1
-    if options.get("status") == 401:
+    if options.get("interrupted"):
+        assert result["error"] == "MCP call interrupted: user sent a new message"
+        auth.assert_not_awaited()
+    elif options.get("status") == 401:
         assert result["needs_reauth"] is True
         auth.assert_awaited_once_with("srv", None)
     elif "read_only" in options:

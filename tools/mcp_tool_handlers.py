@@ -425,6 +425,18 @@ def _handle_stdio_child_exited_and_retry(server_name: str, exc: Exception, retry
             f"{type(retry_exc).__name__}: {_exc_str(retry_exc)}"))
 
 
+def _interruptible_backoff(seconds: float) -> bool:
+    """Wait up to *seconds*; True as soon as the user interrupts the turn."""
+    from tools.interrupt import is_interrupted
+    deadline = time.monotonic() + seconds
+    while not is_interrupted():
+        left = deadline - time.monotonic()
+        if left <= 0:
+            return False
+        time.sleep(min(0.1, left))
+    return True
+
+
 def _handle_http_transient_read_only(server_name: str, exc: BaseException, retry_call, op: str,
                                      *, read_only: bool) -> Optional[str]:
     """Back off once for a captured transient POST rejection of a read-only tool."""
@@ -434,9 +446,14 @@ def _handle_http_transient_read_only(server_name: str, exc: BaseException, retry
     status = snapshot.get("status")
     if status not in (502, 503, 504) or snapshot.get("method") != "POST":
         return None
+    # Same test as the write handler: the call itself must be the SDK's opaque rejection of this POST.
+    if not _http_rejection_detail(_unwrap_exception_group(exc), snapshot):
+        return None
     logger.warning("MCP server '%s': %s returned HTTP %s; backing off before one read-only retry.",
                    server_name, op, status)
-    time.sleep(random.uniform(2, 5))
+    if _interruptible_backoff(random.uniform(2, 5)):
+        _core._bump_server_error(server_name)  # the call did fail; a returned result skips on_final_failure
+        return tool_error("MCP call interrupted: user sent a new message")
     # _retry_once records a returned outcome; a raised retry falls through to one final strike.
     # Unlike auth reconnect, a 5xx alone is no evidence of viability, so do not reset early.
     return _retry_once(server_name, retry_call, op, f"transient HTTP {status}")
