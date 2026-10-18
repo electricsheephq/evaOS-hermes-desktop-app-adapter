@@ -6,6 +6,7 @@ import asyncio
 import contextvars
 import inspect
 import json
+import random
 import time
 from contextlib import asynccontextmanager
 from functools import partial
@@ -424,6 +425,23 @@ def _handle_stdio_child_exited_and_retry(server_name: str, exc: Exception, retry
             f"{type(retry_exc).__name__}: {_exc_str(retry_exc)}"))
 
 
+def _handle_http_transient_read_only(server_name: str, exc: BaseException, retry_call, op: str,
+                                     *, read_only: bool) -> Optional[str]:
+    """Back off once for a captured transient POST rejection of a read-only tool."""
+    snapshot = getattr(exc, "_mcp_http_rejection", None)
+    if read_only is not True or not isinstance(snapshot, dict):
+        return None
+    status = snapshot.get("status")
+    if status not in (502, 503, 504) or snapshot.get("method") != "POST":
+        return None
+    logger.warning("MCP server '%s': %s returned HTTP %s; backing off before one read-only retry.",
+                   server_name, op, status)
+    time.sleep(random.uniform(2, 5))
+    # _retry_once records a returned outcome; a raised retry falls through to one final strike.
+    # Unlike auth reconnect, a 5xx alone is no evidence of viability, so do not reset early.
+    return _retry_once(server_name, retry_call, op, f"transient HTTP {status}")
+
+
 def _handle_http_write_outcome_uncertain(server_name: str, exc: BaseException, retry_call, op: str,
                                         *, read_only: bool):
     """A fresh opaque POST 5xx can follow a completed write; never replay it."""
@@ -719,10 +737,12 @@ def _make_tool_handler(server_name: str, tool_name: str, tool_timeout: float):
             _core._bump_server_error(server_name)
             logger.error("MCP tool %s/%s call failed: %s", server_name, tool_name, exc)
         session_expired = partial(_handle_session_expired_and_retry, call_may_have_side_effects=not read_only)
+        http_read_only = partial(_handle_http_transient_read_only, read_only=read_only)
         http_write = partial(_handle_http_write_outcome_uncertain, read_only=read_only)
         return _dispatch(
             server_name, server, op, _call, tool_timeout,
-            (_handle_stdio_child_exited_and_retry, _handle_auth_error_and_retry, session_expired, http_write),
+            (_handle_stdio_child_exited_and_retry, _handle_auth_error_and_retry, session_expired,
+             http_read_only, http_write),
             _on_failure, record_outcome=True)
     return _handler
 
