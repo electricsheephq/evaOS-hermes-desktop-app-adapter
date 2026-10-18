@@ -679,6 +679,12 @@ def _render_call_tool_result(result, server_name: str) -> str:
         return json.dumps({"result": text_result}, ensure_ascii=False)
 
 
+def _server_is_http(server) -> bool:
+    """Unknown transports keep the conservative hosted attachment cap."""
+    is_http = getattr(server, "_is_http", None)
+    return is_http() if callable(is_http) else True
+
+
 def _make_tool_handler(server_name: str, tool_name: str, tool_timeout: float):
     """Sync registry handler (``handler(args_dict, **kwargs) -> str``) calling an MCP tool via the background loop."""
     op = f"tools/call {tool_name}"
@@ -693,12 +699,12 @@ def _make_tool_handler(server_name: str, tool_name: str, tool_timeout: float):
         error = _trust_gate_check(server_name, tool_name, args) or _check_circuit_breaker(server_name)
         if error is not None:
             return error
-        expanded_args, error = expand_local_file_refs(args)
-        if error is not None:
-            return tool_error(error)
         server, error = _acquire_call_server(server_name, tool_timeout)
         if server is None:
             return error
+        expanded_args, error = expand_local_file_refs(args, http=_server_is_http(server))
+        if error is not None:
+            return tool_error(error)
         # Only a tool annotated readOnlyHint=True is replayed after session expiry; a 401 is always
         # pre-dispatch so the auth recoverer keeps its retry for every tool.
         read_only = _tool_is_read_only(server_name, tool_name)
