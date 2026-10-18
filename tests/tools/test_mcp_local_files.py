@@ -66,7 +66,65 @@ def test_caps_report_sizes(tmp_path, monkeypatch, cap, limit, size):
     args = {"files": [f"local-file:{path}" for path in files]}
     expanded, error = expand_local_file_refs(args)
     assert expanded is args
-    assert f"size {size} bytes" in error and f"cap {limit} bytes" in error
+    assert f"size {size} bytes" in error and f"({limit} bytes)" in error
+    assert f"{limit / 1024:g} KB" in error
+    assert all(str(path) not in error for path in files)
+
+
+@pytest.mark.parametrize("size, body_size, rejected", [
+    (111_097, 0, True),
+    (23_301, 0, False),
+    (30_000, 60_000, True),
+])
+def test_attachment_request_limits(tmp_path, monkeypatch, size, body_size, rejected):
+    path = tmp_path / "attachment.txt"
+    data = b"x" * size
+    path.write_bytes(data)
+    args = {"file": f"local-file:{path}", "body": "t" * body_size}
+    before = copy.deepcopy(args)
+    if size == 111_097:
+        # The stat guard must reject before any attempt to read the file.
+        monkeypatch.setattr(mcp_local_files, "open", Mock(side_effect=AssertionError("file read")), raising=False)
+    expanded, error = expand_local_file_refs(args)
+    assert args == before
+    if rejected:
+        assert expanded is args
+        assert "local-file attachments too large" in error
+        assert str(path) not in error and "x" * 100 not in error
+        assert "Do not retry, re-encode, split the file, or use a public file host" in error
+        if size == 111_097:
+            assert "72 KB" in error
+        else:
+            assert "100 KB (HTTP 413)" in error
+    else:
+        assert error is None
+        assert base64.b64decode(expanded["file"].split(",", 1)[1]) == data
+
+
+@pytest.mark.parametrize("extra_byte", [0, 1])
+def test_serialized_request_boundary(tmp_path, monkeypatch, extra_byte):
+    path = tmp_path / "attachment.txt"
+    path.write_bytes(b"x")
+    budget = 128
+    monkeypatch.setattr(mcp_local_files, "MAX_REQUEST_BYTES", budget, raising=False)
+    expected = {"file": "data:text/plain;base64,eA==", "body": "é"}
+    overhead = len(json.dumps(expected, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+    expected["body"] += "t" * (budget - overhead + extra_byte)
+    args = {"file": f"local-file:{path}", "body": expected["body"]}
+    expanded, error = expand_local_file_refs(args)
+    if extra_byte:
+        assert expanded is args
+        assert f"the request would be {budget + 1} bytes" in error
+        assert str(path) not in error
+    else:
+        assert expanded == expected and error is None
+
+
+def test_large_arguments_without_references_are_unchanged(monkeypatch):
+    monkeypatch.setattr(mcp_local_files, "MAX_REQUEST_BYTES", 1, raising=False)
+    args = {"body": "text" * 30_000}
+    expanded, error = expand_local_file_refs(args)
+    assert expanded is args and error is None
 
 
 @pytest.mark.linux_only
@@ -84,14 +142,16 @@ def test_unreadable_file_reports_errno(tmp_path):
         path.chmod(0o600)
 
 
-@pytest.mark.parametrize("valid", [True, False])
-def test_handler_expands_after_trust_before_server_acquisition(tmp_path, monkeypatch, valid):
+@pytest.mark.parametrize("kind", ["valid", "missing", "oversized"])
+def test_handler_expands_after_trust_before_server_acquisition(tmp_path, monkeypatch, kind):
     from tools import mcp_tool, mcp_tool_handlers as handlers, mcp_tool_loop
 
     path = tmp_path / "attachment.pdf"
-    if valid:
-        path.write_bytes(b"attachment")
+    if kind != "missing":
+        path.write_bytes(b"attachment" if kind == "valid" else b"x" * 30_000)
     args = {"attachments": [f"local-file:{path}"]}
+    if kind == "oversized":
+        args["body"] = "t" * 60_000
     seen = []
     monkeypatch.setattr(handlers, "_trust_gate_check", lambda s, t, a: seen.append(copy.deepcopy(a)))
     monkeypatch.setattr(handlers, "_check_circuit_breaker", lambda s: None)
@@ -104,12 +164,13 @@ def test_handler_expands_after_trust_before_server_acquisition(tmp_path, monkeyp
     monkeypatch.setattr(mcp_tool_loop, "_run_on_mcp_loop", lambda c, timeout: asyncio.run(c() if callable(c) else c))
     result = json.loads(handlers._make_tool_handler("local_files", "send", 10)(args))
     assert seen == [args]
-    if valid:
+    if kind == "valid":
         assert result["result"] == "sent"
         sent = session.call_tool.call_args.kwargs["arguments"]["attachments"][0]
         assert sent == "data:application/pdf;base64," + base64.b64encode(b"attachment").decode("ascii")
         session.call_tool.assert_awaited_once()
     else:
-        assert "local-file reference" in result["error"]
+        assert ("local-file reference" if kind == "missing" else "local-file attachments too large") in result["error"]
         acquire.assert_not_called()
         session.call_tool.assert_not_called()
+        session.call_tool.assert_not_awaited()
