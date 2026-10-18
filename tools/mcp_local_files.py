@@ -13,18 +13,19 @@ _REFERENCE = re.compile(r"local-file:(?://)?(/[^\x00\r\n]+)")
 # ~22.7 MiB encoded) stays under Gmail's 25 MB message limit with room for headers.
 MAX_FILE_BYTES = 15 * 1024 * 1024
 MAX_CALL_BYTES = 17 * 1024 * 1024
-# Leave room for the JSON-RPC envelope under the hosted connector's ~100 KB body limit.
-HTTP_MAX_REQUEST_BYTES = 96 * 1024
-HTTP_MAX_FILE_BYTES = HTTP_MAX_CALL_BYTES = HTTP_MAX_REQUEST_BYTES * 3 // 4
+# The managed hosted connector (evaos_lease) rejects request bodies over ~100 KB (HTTP 413);
+# leave room for the JSON-RPC envelope.
+HOSTED_MAX_REQUEST_BYTES = 96 * 1024
+HOSTED_MAX_FILE_BYTES = HOSTED_MAX_CALL_BYTES = HOSTED_MAX_REQUEST_BYTES * 3 // 4
 _LIMIT_GUIDANCE = (
     "Do not retry, re-encode, split the file, or use a public file host; "
     "tell the user the file cannot be attached this way."
 )
 
 
-def expand_local_file_refs(args: dict, *, http: bool) -> tuple[dict, str | None]:
+def expand_local_file_refs(args: dict, *, hosted: bool) -> tuple[dict, str | None]:
     """Return expanded arguments, or the original arguments on a file or size error."""
-    per_file, per_call = (HTTP_MAX_FILE_BYTES, HTTP_MAX_CALL_BYTES) if http else (MAX_FILE_BYTES, MAX_CALL_BYTES)
+    per_file, per_call = (HOSTED_MAX_FILE_BYTES, HOSTED_MAX_CALL_BYTES) if hosted else (MAX_FILE_BYTES, MAX_CALL_BYTES)
     total = 0
 
     def walk(value):
@@ -50,7 +51,7 @@ def expand_local_file_refs(args: dict, *, http: bool) -> tuple[dict, str | None]
             if not stat.S_ISREG(info.st_mode):
                 raise ValueError(prefix + "not a regular file")
             if info.st_size > per_file:
-                if not http:
+                if not hosted:
                     raise ValueError(prefix + f"size {info.st_size} bytes exceeds per-file cap {per_file} bytes")
                 raise ValueError(
                     f"local-file attachments too large: size {info.st_size} bytes exceeds per-file "
@@ -63,7 +64,7 @@ def expand_local_file_refs(args: dict, *, http: bool) -> tuple[dict, str | None]
             reason = {errno.ENOENT: "not found", errno.EACCES: "permission denied"}.get(exc.errno, "OS error")
             raise ValueError(prefix + f"{reason} ({code})") from None
         if len(data) > per_file:
-            if not http:
+            if not hosted:
                 raise ValueError(prefix + f"size {len(data)} bytes exceeds per-file cap {per_file} bytes")
             raise ValueError(
                 f"local-file attachments too large: size {len(data)} bytes exceeds per-file "
@@ -71,7 +72,7 @@ def expand_local_file_refs(args: dict, *, http: bool) -> tuple[dict, str | None]
             )
         total += len(data)
         if total > per_call:
-            if not http:
+            if not hosted:
                 raise ValueError(prefix + f"total size {total} bytes exceeds total cap {per_call} bytes")
             raise ValueError(
                 f"local-file attachments too large: total size {total} bytes exceeds total "
@@ -82,9 +83,9 @@ def expand_local_file_refs(args: dict, *, http: bool) -> tuple[dict, str | None]
 
     try:
         expanded = walk(args)
-        if http and expanded is not args:
+        if hosted and expanded is not args:
             request_bytes = len(json.dumps(expanded, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
-            if request_bytes > HTTP_MAX_REQUEST_BYTES:
+            if request_bytes > HOSTED_MAX_REQUEST_BYTES:
                 return args, (
                     f"local-file attachments too large: the request would be {request_bytes} bytes; "
                     "the hosted connector rejects requests over about 100 KB (HTTP 413), "

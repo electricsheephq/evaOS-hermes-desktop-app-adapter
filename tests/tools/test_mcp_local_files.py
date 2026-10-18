@@ -18,7 +18,7 @@ from tools.mcp_local_files import expand_local_file_refs
                                   "file:///x", "local-file:relative", "local-file:/x\x00", "local-file:/x\r"])
 def test_non_references_are_identical(value):
     args = {"nested": [value, {"number": 1}]}
-    expanded, error = expand_local_file_refs(args, http=False)
+    expanded, error = expand_local_file_refs(args, hosted=False)
     assert expanded is args and error is None
 
 
@@ -34,7 +34,7 @@ def test_expansion_round_trips_without_mutation(tmp_path, form):
     ref = f"local-file:{'//' if form == 'triple-slash' else ''}{path}"
     args = {"file": {"items": [ref]} if form == "nested" else ref}
     before = copy.deepcopy(args)
-    expanded, error = expand_local_file_refs(args, http=False)
+    expanded, error = expand_local_file_refs(args, hosted=False)
     assert error is None and args == before and expanded is not args
     uri = expanded["file"]["items"][0] if form == "nested" else expanded["file"]
     header, encoded = uri.split(",", 1)
@@ -52,7 +52,7 @@ def test_file_errors_return_original_without_partial_expansion(tmp_path, kind, r
         bad.mkdir()
     args = {"files": [f"local-file:{good}", f"local-file:{bad}"]}
     before = copy.deepcopy(args)
-    expanded, error = expand_local_file_refs(args, http=False)
+    expanded, error = expand_local_file_refs(args, hosted=False)
     assert expanded is args and args == before
     assert error.startswith(f"local-file reference '{bad}': ") and reason in error
 
@@ -64,24 +64,24 @@ def test_caps_report_sizes(tmp_path, monkeypatch, cap, limit, size):
     for path in files:
         path.write_bytes(b"1234")
     args = {"files": [f"local-file:{path}" for path in files]}
-    expanded, error = expand_local_file_refs(args, http=False)
+    expanded, error = expand_local_file_refs(args, hosted=False)
     assert expanded is args
     assert f"size {size} bytes" in error and f"cap {limit} bytes" in error
 
 
-@pytest.mark.parametrize("http, case", [
+@pytest.mark.parametrize("hosted, case", [
     (True, "per-file"), (True, "per-call"),
     (True, "request-under"), (True, "request-at"), (True, "request-over"),
     (True, "no-reference"), (False, "no-reference"), (False, "large-file"),
 ])
-def test_attachment_limits_follow_transport(tmp_path, monkeypatch, http, case):
+def test_attachment_limits_follow_transport(tmp_path, monkeypatch, hosted, case):
     path = tmp_path / "attachment.txt"
     data = b"x" * ({"per-file": 72 * 1024 + 1, "large-file": 200 * 1024}.get(case, 1))
     path.write_bytes(data)
     args = {"file": f"local-file:{path}", "body": "é"}
     expected = {"file": "data:text/plain;base64," + base64.b64encode(data).decode("ascii"), "body": "é"}
     if case.startswith("request-"):
-        budget = mcp_local_files.HTTP_MAX_REQUEST_BYTES
+        budget = mcp_local_files.HOSTED_MAX_REQUEST_BYTES
         overhead = len(json.dumps(expected, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
         delta = {"request-under": -1, "request-at": 0, "request-over": 1}[case]
         args["body"] += "t" * (budget - overhead + delta)
@@ -90,12 +90,12 @@ def test_attachment_limits_follow_transport(tmp_path, monkeypatch, http, case):
         # The stat guard must reject before any attempt to read the file.
         monkeypatch.setattr(mcp_local_files, "open", Mock(side_effect=AssertionError("file read")), raising=False)
     elif case == "per-call":
-        monkeypatch.setattr(mcp_local_files, "HTTP_MAX_CALL_BYTES", 1)
+        monkeypatch.setattr(mcp_local_files, "HOSTED_MAX_CALL_BYTES", 1)
         args["files"] = [args["file"]]
     if case == "no-reference":
         args = {"body": "text" * 30_000}
     before = copy.deepcopy(args)
-    expanded, error = expand_local_file_refs(args, http=http)
+    expanded, error = expand_local_file_refs(args, hosted=hosted)
     assert args == before
     if case in {"per-file", "per-call", "request-over"}:
         assert expanded is args
@@ -124,7 +124,7 @@ def test_unreadable_file_reports_errno(tmp_path):
     path.chmod(0)
     try:
         args = {"file": f"local-file:{path}"}
-        expanded, error = expand_local_file_refs(args, http=False)
+        expanded, error = expand_local_file_refs(args, hosted=False)
         assert expanded is args and "permission denied (EACCES)" in error
     finally:
         path.chmod(0o600)
@@ -133,7 +133,7 @@ def test_unreadable_file_reports_errno(tmp_path):
 @pytest.mark.parametrize("transport, kind", [
     (True, "valid"), (False, "valid"), (True, "missing"), (False, "missing"),
     (True, "oversized"), (False, "oversized"),
-    ("unknown", "oversized"), ("noncallable", "oversized"),
+    ("unknown", "oversized"), ("oauth", "oversized"),
 ])
 def test_registry_dispatch_expands_after_trust_and_transport_acquisition(tmp_path, monkeypatch, transport, kind):
     from tools import mcp_tool, mcp_tool_handlers as handlers, mcp_tool_loop
@@ -155,10 +155,10 @@ def test_registry_dispatch_expands_after_trust_and_transport_acquisition(tmp_pat
     session = SimpleNamespace(call_tool=AsyncMock(return_value=SimpleNamespace(
         content=[SimpleNamespace(text="sent")], isError=False)))
     server = SimpleNamespace(session=session, _rpc_lock=asyncio.Lock())
-    if isinstance(transport, bool):
-        server._is_http = Mock(return_value=transport)
-    elif transport == "noncallable":
-        server._is_http = False
+    # True: the managed hosted connector; False: a plain-URL server; "oauth": another HTTP server; "unknown": no auth type.
+    if transport != "unknown":
+        server._auth_type = {True: "evaos_lease", False: None, "oauth": "oauth"}[transport]
+        server._config = {"url": "https://mcp.example.invalid/"}
     acquire = Mock(side_effect=lambda *a: (seen.append("acquired") or server, None))
     monkeypatch.setattr(handlers, "_acquire_call_server", acquire)
     monkeypatch.setattr(mcp_tool_loop, "_run_on_mcp_loop", lambda c, timeout: asyncio.run(c() if callable(c) else c))
@@ -168,7 +168,7 @@ def test_registry_dispatch_expands_after_trust_and_transport_acquisition(tmp_pat
     assert seen == [args, "acquired"]
     acquire.assert_called_once_with("local_files", 10)
     bump.assert_not_called()
-    if kind == "valid" or (kind == "oversized" and transport is False):
+    if kind == "valid" or (kind == "oversized" and transport in (False, "oauth")):
         assert result["result"] == "sent"
         sent = session.call_tool.call_args.kwargs["arguments"]["attachments"][0]
         assert sent == "data:application/pdf;base64," + base64.b64encode(data).decode("ascii")

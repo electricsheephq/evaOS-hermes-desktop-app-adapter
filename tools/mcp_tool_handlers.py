@@ -679,10 +679,11 @@ def _render_call_tool_result(result, server_name: str) -> str:
         return json.dumps({"result": text_result}, ensure_ascii=False)
 
 
-def _server_is_http(server) -> bool:
-    """Unknown transports keep the conservative hosted attachment cap."""
-    is_http = getattr(server, "_is_http", None)
-    return is_http() if callable(is_http) else True
+def _server_is_hosted(server) -> bool:
+    """Only the managed hosted connector (evaos_lease) has the ~100 KB body limit; an unknown server keeps
+    its conservative cap. Other HTTP and stdio servers keep the generic caps."""
+    auth = getattr(server, "_auth_type", _MISSING)
+    return True if auth is _MISSING else auth == "evaos_lease"
 
 
 def _make_tool_handler(server_name: str, tool_name: str, tool_timeout: float):
@@ -702,7 +703,7 @@ def _make_tool_handler(server_name: str, tool_name: str, tool_timeout: float):
         server, error = _acquire_call_server(server_name, tool_timeout)
         if server is None:
             return error
-        expanded_args, error = expand_local_file_refs(args, http=_server_is_http(server))
+        expanded_args, error = expand_local_file_refs(args, hosted=_server_is_hosted(server))
         if error is not None:
             return tool_error(error)
         # Only a tool annotated readOnlyHint=True is replayed after session expiry; a 401 is always
