@@ -177,6 +177,62 @@ def test_external_worker_adopts_execution_and_runs_payload_once(
     assert not stderr_capture.exists()
 
 
+@pytest.mark.parametrize(
+    "payload_fields, expected_context",
+    [
+        ({"extra_prompt": "Summarize only the newest items."}, "Summarize only the newest items."),
+        ({}, "Include the summary table."),
+        ({"extra_prompt": ""}, None),
+        ({"extra_prompt": 42}, "Include the summary table."),
+    ],
+    ids=["explicit", "legacy", "empty", "non-string"],
+)
+def test_external_worker_payload_preserves_run_context(
+    tmp_path, monkeypatch, caplog, payload_fields, expected_context,
+):
+    import cron.scheduler as scheduler
+
+    job = {
+        "id": "job-1", "execution_id": "exec-1", "prompt": "Summarize the items.",
+        "manual_run_prompt": "Include the summary table.",
+        "manual_run_at": "2026-10-18T00:00:00+00:00",
+    }
+    payload = tmp_path / "payload.json"
+    payload.write_text(json.dumps({
+        "job": job, "profile_home": str(tmp_path / "home"), **payload_fields,
+    }), encoding="utf-8")
+    monkeypatch.setattr(
+        "cron.executions.adopt_claimed_execution",
+        lambda execution_id: {"id": execution_id, "status": "running"},
+    )
+    monkeypatch.setattr(
+        scheduler, "_run_with_fire_claim_heartbeat", lambda job, run: run(None),
+    )
+    prompts = []
+
+    def prepare_prompt(job, *, extra_prompt, **kwargs):
+        early, prompt = scheduler._prepare_job_prompt(
+            job, job["id"], "Summary", extra_prompt, None,
+        )
+        assert early is None
+        prompts.append(prompt)
+        return True
+
+    monkeypatch.setattr(scheduler, "_run_one_job_body", prepare_prompt)
+
+    assert scheduler._run_external_worker_payload(payload, tmp_path / "exec-1.ready") is True
+
+    assert len(prompts) == 1
+    assert job["prompt"] in prompts[0]
+    if expected_context is None:
+        assert "## Run Context" not in prompts[0]
+    else:
+        assert f"## Run Context\n{expected_context}" in prompts[0]
+        assert expected_context not in caplog.text
+    if isinstance(payload_fields.get("extra_prompt"), str):
+        assert job["manual_run_prompt"] not in prompts[0]
+
+
 def test_external_worker_ack_is_never_observable_half_written(tmp_path, monkeypatch):
     """The gateway polls ``ack_path.exists()`` then reads it (#107184, #116164 form 1): the ack
     must appear atomically with its full body, or the parent logs "unreadable acknowledgement"
@@ -648,6 +704,33 @@ def test_launch_external_worker_pin_extends_the_sanitized_env_not_os_environ(
     assert "PYTHONPATH" not in worker_env_mod.pin_hermes_tree_on_pythonpath({}, repo_root)
 
 
+@pytest.mark.parametrize("extra_prompt", [None, "", "Summarize only the newest items."])
+def test_manual_run_prompt_is_serialized_for_external_worker(
+    tmp_path, monkeypatch, caplog, extra_prompt,
+):
+    import cron.scheduler as scheduler
+    from tools.process_registry import GatewayChildDispatch
+
+    job = {"id": "job-1", "execution_id": "exec-1", "prompt": "Summarize the items."}
+    monkeypatch.setattr(scheduler, "_get_hermes_home", lambda: tmp_path)
+    monkeypatch.setattr(
+        "tools.process_registry.restart_safe_gateway_child_argv",
+        lambda command, **kwargs: GatewayChildDispatch("degraded", command),
+    )
+    _, payloads, _, _ = _stub_external_worker_launch(scheduler, monkeypatch)
+
+    assert scheduler.run_one_job(job, extra_prompt=extra_prompt) is True
+
+    assert len(payloads) == 1
+    if extra_prompt is None:
+        assert "extra_prompt" not in payloads[0]
+    else:
+        assert payloads[0]["extra_prompt"] == extra_prompt
+        if extra_prompt:
+            assert extra_prompt not in caplog.text
+    assert "extra_prompt" not in job
+
+
 def test_shared_run_path_hands_gateway_fire_to_external_worker(monkeypatch):
     import cron.scheduler as scheduler
 
@@ -659,7 +742,7 @@ def test_shared_run_path_hands_gateway_fire_to_external_worker(monkeypatch):
 
     assert scheduler.run_one_job(job, adapters={"discord": object()}) is True
 
-    launch.assert_called_once_with(job)
+    launch.assert_called_once_with(job, extra_prompt=None)
     run.assert_not_called()
 
 
@@ -748,7 +831,7 @@ def test_gateway_tool_run_without_adapter_objects_hands_off(monkeypatch):
 
     created.assert_called_once_with("tool-job", source="direct", scheduled_instant=None)
     assert job["execution_id"] == "exec-tool"
-    launch.assert_called_once_with(job)
+    launch.assert_called_once_with(job, extra_prompt=None)
     run.assert_not_called()
 
 
