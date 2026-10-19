@@ -1,0 +1,30 @@
+{
+  "0.26.0": {
+    "never-opened": {
+      "exit": 0,
+      "stdout": "{\"success\":true,\"data\":{\"sessions\":[]}}\n"
+    },
+    "live": {
+      "exit": 0,
+      "stdout": "{\"success\":true,\"data\":{\"sessions\":[\"probe\"]}}\n"
+    },
+    "closed": {
+      "exit": 0,
+      "stdout": "{\"success\":true,\"data\":{\"sessions\":[]}}\n"
+    }
+  },
+  "0.38.1": {
+    "never-opened": {
+      "exit": 0,
+      "stdout": "{\"success\":true,\"data\":{\"sessions\":[]}}\n"
+    },
+    "live": {
+      "exit": 0,
+      "stdout": "{\"success\":true,\"data\":{\"sessions\":[\"probe\"]}}\n"
+    },
+    "closed": {
+      "exit": 0,
+      "stdout": "{\"success\":true,\"data\":{\"sessions\":[]}}\n"
+    }
+  }
+}
