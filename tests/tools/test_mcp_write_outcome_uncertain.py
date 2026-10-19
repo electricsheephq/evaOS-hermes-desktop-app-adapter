@@ -76,7 +76,7 @@ def test_write_post_502_is_uncertain_without_replay(invoke, caplog):
     {"status": 502, "stale": True, "opaque": False},
     {"status": 502, "stale": True},
     {"status": 502, "stale": True, "fail": False},
-    {"status": 502, "read_only": True},
+    {"status": 500, "read_only": True},
     {"status": 400},
     {"status": 502, "method": "GET"},
     {"status": 502, "opaque": False},
