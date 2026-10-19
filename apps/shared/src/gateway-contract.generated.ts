@@ -32,6 +32,30 @@ export interface UsageBar {
   fill_fraction: number
 }
 export type UsageBarKind = 'plan' | 'topup'
+export interface AccountUsageResult {
+  snapshots: AccountUsageSnapshotModel[]
+}
+/** One provider's quota card. On failure ``windows`` is empty, ``details`` holds one sentence and ``error`` one of auth_expired / rate_limited / timeout / unavailable / not_oauth. */
+export interface AccountUsageSnapshotModel {
+  provider: string
+  plan: string | null
+  details: string[]
+  windows: AccountUsageWindowModel[]
+  error: string | null
+  available: boolean
+  source: string
+  fetched_at: string
+  title: string
+  unavailable_reason: string | null
+}
+/** ``account_usage_view.serialize_window``: percents clamped to 0..100 server-side; ``remaining_percent`` is ``100 - used_percent`` when the provider gives none. */
+export interface AccountUsageWindowModel {
+  label: string
+  used_percent: number | null
+  remaining_percent: number | null
+  reset_at: string | null
+  detail: string | null
+}
 /** ``_serialize_billing_state`` (money as strings); the ``except`` fallback emits only ``ok / logged_in / free_tier / error``, so everything else is optional. */
 export interface BillingStateResult {
   ok: boolean
@@ -4686,6 +4710,8 @@ export type ConnectorErrorReason = 'INVALID_PARAMS' | 'NOT_OWNER' | 'UNSUPPORTED
 
 // ── Client→server methods ──
 export interface RpcMethods {
+  /** Provider quota snapshots (not Nous — see usage.bars); a provider without a credential is omitted. */
+  'account.usage': { params: ProfileParams; result: AccountUsageResult }
   /** Registry-wide background process summary for ``/agents``. */
   'agents.list': { params: AgentsListParams; result: AgentsListResult }
   /** Replay the approvals still waiting on this session (reconnect / polling). */
@@ -5163,6 +5189,7 @@ export interface RpcMethods {
 }
 export type RpcMethod = keyof RpcMethods
 export const RPC_METHODS = [
+  'account.usage',
   'agents.list',
   'approval.pending',
   'approval.received',
