@@ -25,7 +25,7 @@ def test_managed_exec_survives_idle_timeout_without_launching_unverified_session
     _managed_route(monkeypatch)
     monkeypatch.setattr(bu_cli, "_find_cli", lambda: ["browser-use"])
     monkeypatch.setattr(bu_cli, "_keepalive_period_s", lambda: 0.1, raising=False)
-    monkeypatch.setattr(bt_cloud, "_get_browser_engine", lambda: "auto")
+    monkeypatch.setattr(bt_cloud, "_get_browser_engine", lambda: "lightpanda")
     monkeypatch.setattr(bt_cloud, "_is_headed_mode", lambda: False)
     monkeypatch.setattr(bt_session, "_bot_desktop_attach_port", lambda info: None)
     monkeypatch.setattr(bt_session, "_prepare_session_socket_dir", lambda name: str(tmp_path))
@@ -39,9 +39,15 @@ def test_managed_exec_survives_idle_timeout_without_launching_unverified_session
     idle_timeout = 2.0
 
     def resolve(key, command, args=None, **kwargs):
-        monkeypatch.setitem(bt._active_sessions, key, {"session_name": "probe"})
+        info = {"session_name": "probe"}
+        monkeypatch.setitem(bt._active_sessions, key, info)
         state.update(key=key, last_activity=time.monotonic())
-        return {"success": True, "data": {"cdpUrl": "ws://127.0.0.1:47000/devtools/browser/probe"}}
+        _, result = bt_session._dispatch_browser_command(
+            key, info, "agent-browser", command, args or [], 7, "chrome")
+        return result
+
+    monkeypatch.setattr(bt_session, "_spawn_and_collect", lambda *args: {
+        "success": True, "data": {"cdpUrl": "ws://127.0.0.1:47000/devtools/browser/probe"}})
 
     monkeypatch.setattr(bt_session, "_run_browser_command", resolve)
 
@@ -53,6 +59,7 @@ def test_managed_exec_survives_idle_timeout_without_launching_unverified_session
             pass
 
     def spawn(argv, env, socket_dir, tag):
+        assert argv[argv.index("--engine") + 1] == "chrome"
         command = argv[-2:]
         calls.append(command)
         if command == ["session", "list"]:
@@ -96,6 +103,13 @@ def test_managed_exec_survives_idle_timeout_without_launching_unverified_session
             calls.clear()
             assert bt_session._keepalive_managed_browser(state["key"], 7)["success"] is False
             assert calls == [["session", "list"]], (version, response, calls)
+        # An unrecorded launch identity must never be guessed from global config.
+        bt._active_sessions[state["key"]].pop("managed_engine", None)
+        calls.clear()
+        with monkeypatch.context() as missing_engine:
+            missing_engine.setattr(bt_cloud, "_get_browser_engine", lambda: "auto")
+            assert bt_session._keepalive_managed_browser(state["key"], 7)["success"] is False
+            assert calls == []
 
 
 def test_registry_unnamed_managed_calls_use_different_task_daemons(tmp_path, monkeypatch):

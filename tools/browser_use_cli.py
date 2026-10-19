@@ -778,7 +778,15 @@ def _run_cli_killing_process_group(cmd, code, env, timeout):
 
 def _keepalive_period_s() -> float:
     from tools.browser_tool import BROWSER_SESSION_INACTIVITY_TIMEOUT
-    return max(5.0, min(30.0, BROWSER_SESSION_INACTIVITY_TIMEOUT / 3))
+    from tools.browser_tool_session import _agent_browser_command_env
+    period = max(5.0, min(30.0, BROWSER_SESSION_INACTIVITY_TIMEOUT / 3))
+    env = _quiet(lambda: _agent_browser_command_env(""), {})
+    idle_ms = env.get("AGENT_BROWSER_IDLE_TIMEOUT_MS", "")
+    try:
+        idle_s = float(idle_ms) / 1000
+    except (TypeError, ValueError):
+        return period
+    return min(period, max(0.01, idle_s / 4)) if idle_s > 0 else period
 
 
 @contextlib.contextmanager

@@ -791,6 +791,8 @@ def _dispatch_browser_command(
     spawn_command, spawn_args, stdin_payload = _shim_safe_args(argv[0], command, args)
     cmd_parts = argv + backend_args + ["--json", spawn_command] + spawn_args
 
+    # Preserve overrides (notably Lightpanda's Chrome fallback) for later heartbeats.
+    session_info["managed_engine"] = engine
     try:
         result = _unwrap_batch_result(
             _spawn_and_collect(task_id, session_info, cmd_parts, command, engine, timeout, stdin_payload), command)
@@ -811,7 +813,9 @@ def _keepalive_managed_browser(task_id: str, timeout: int) -> Dict[str, Any]:
     if session_info is None:
         return {"success": False}
 
-    engine = _cloud._get_browser_engine()
+    engine = session_info.get("managed_engine")
+    if not engine:
+        return {"success": False, "skipped": "engine_unrecorded"}
     if engine == "lightpanda":
         return {"success": False, "skipped": "lightpanda"}
 
@@ -832,7 +836,8 @@ def _keepalive_managed_browser(task_id: str, timeout: int) -> Dict[str, Any]:
                 stdout, _ = _read_command_output_files(*paths)
                 return proc.returncode, stdout
             except subprocess.TimeoutExpired:
-                proc.kill()
+                from agent.deadline import kill_process_tree
+                kill_process_tree(proc.pid)
                 with contextlib.suppress(subprocess.TimeoutExpired):
                     proc.wait(timeout=2)
                 raise
