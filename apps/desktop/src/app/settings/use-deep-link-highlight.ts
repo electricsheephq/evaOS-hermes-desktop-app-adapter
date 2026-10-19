@@ -15,12 +15,19 @@ interface DeepLinkHighlightOptions {
 // is none, and this degrades to an inert [empty params, no-op setter] instead of
 // crashing. Router presence is stable for a mounted instance's lifetime, so the
 // try/catch never changes the hook count between renders (rules-of-hooks safe).
-function useOptionalSearchParams(): ReturnType<typeof useSearchParams> {
+export function useOptionalSearchParams(): ReturnType<typeof useSearchParams> {
   try {
     return useSearchParams()
   } catch {
     return [new URLSearchParams(), () => undefined]
   }
+}
+
+function isEditing(active: Element | null): boolean {
+  return (
+    active instanceof HTMLElement &&
+    (active.isContentEditable || active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement)
+  )
 }
 
 // Deep-link from the command palette (?<param>=<id>): once the target row is
@@ -60,13 +67,19 @@ export function useDeepLinkHighlight({
       const element = document.getElementById(elementId(target))
 
       if (element) {
-        element.scrollIntoView({ behavior: 'smooth', block })
+        // The target can mount a moment after the user has started typing (a
+        // deep-linked form opens right under its row): never scroll away from or
+        // take focus off a field they are editing. The flash still shows.
+        if (!isEditing(document.activeElement)) {
+          element.scrollIntoView({ behavior: 'smooth', block })
 
-        if (!element.hasAttribute('tabindex')) {
-          element.tabIndex = -1
+          if (!element.hasAttribute('tabindex')) {
+            element.tabIndex = -1
+          }
+
+          element.focus({ preventScroll: true })
         }
 
-        element.focus({ preventScroll: true })
         element.classList.add('setting-field-highlight')
         window.setTimeout(() => element.classList.remove('setting-field-highlight'), 1600)
 

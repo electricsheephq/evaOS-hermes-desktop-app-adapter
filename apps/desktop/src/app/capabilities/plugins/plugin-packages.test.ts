@@ -36,6 +36,30 @@ describe('mergePluginPackages', () => {
     expect(rows[0].agent?.name).toBe('hermes-media-studio')
   })
 
+  it('joins a bundled (vendored) desktop half to the agent row of the same plugin id', () => {
+    const rows = mergePluginPackages(
+      [desktop({ id: 'fish-audio', kind: 'bundled', name: 'Fish Audio' })],
+      [agent({ name: 'fish-audio', has_desktop_half: true })]
+    )
+
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ kind: 'both', name: 'Fish Audio', desktopMissing: false })
+    expect(rows[0].agent?.name).toBe('fish-audio')
+  })
+
+  it('keeps a bundled desktop plugin on its own row when no agent half of that id declares one', () => {
+    const lone = mergePluginPackages(
+      [desktop({ id: 'radio', kind: 'bundled', name: 'Radio' })],
+      [agent({ name: 'radio' })]
+    )
+
+    const absent = mergePluginPackages([desktop({ id: 'radio', kind: 'bundled', name: 'Radio' })], [])
+
+    expect(lone.map(row => row.kind).sort()).toEqual(['agent', 'desktop'])
+    expect(absent).toHaveLength(1)
+    expect(absent[0]).toMatchObject({ kind: 'desktop', agentMissingInProfile: false })
+  })
+
   it('a desktop half whose agent half is absent from THIS profile offers the install-here affordance', () => {
     const rows = mergePluginPackages([desktop({ id: 'media', packageName: 'hermes-media-studio' })], [])
 
