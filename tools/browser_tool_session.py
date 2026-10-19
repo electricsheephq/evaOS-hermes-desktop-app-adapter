@@ -848,9 +848,10 @@ def _keepalive_managed_browser(task_id: str, timeout: int) -> Dict[str, Any]:
             result = None
         data = result.get("data") if isinstance(result, dict) and result.get("success") is True else None
         sessions = data.get("sessions") if isinstance(data, dict) else None
-        if isinstance(sessions, list) and all(isinstance(name, str) for name in sessions):
-            if session_info["session_name"] not in sessions:
-                return {"success": False, "skipped": "session_gone"}
+        if not isinstance(sessions, list) or not all(isinstance(name, str) for name in sessions):
+            return {"success": False, "skipped": "session_unverified"}
+        if session_info["session_name"] not in sessions:
+            return {"success": False, "skipped": "session_gone"}
         code, _ = command("get", "cdp-url")
         return {"success": code == 0}
 
